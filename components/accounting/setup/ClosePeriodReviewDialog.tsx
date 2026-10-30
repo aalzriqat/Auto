@@ -1,4 +1,5 @@
 "use client";
+import { SUPPLIER_PAYABLES_RECON_DATE_WARNING, SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING } from "@/convex/utils/closeWarnings";
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
@@ -36,6 +37,8 @@ import { periodLabel } from "./types";
  * as sent.
  */
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
+  [SUPPLIER_PAYABLES_RECON_DATE_WARNING]: "ClosePeriodWarnSupplierPayablesReconDate",
+  [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING]: "ClosePeriodWarnSupplierRecoverablesReconFamily",
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
   [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",

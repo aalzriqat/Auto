@@ -16,6 +16,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { supplierReceivableView } from "./supplierReceivables";
+import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -51,7 +52,7 @@ const ENTITLEMENT = 9_500;
 const MARGIN = SALE_PRICE - ENTITLEMENT;
 const SCALE = 1000;
 
-async function seed(tag: string) {
+async function seed(tag: string, withOpening = false) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `SR ${tag}`, createdAt: Date.now() })
@@ -97,6 +98,18 @@ async function seed(tag: string) {
   const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
   await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
+  if (withOpening) {
+    await t.run(ctx => ctx.db.patch(roleId, { isSystemOwnerRole: true }));
+    const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
+    const retained = accounts.find(account => account.systemKey === "RETAINED_EARNINGS");
+    if (!retained) throw new Error("Missing retained earnings fixture");
+    const accountId = await asUser.mutation(api.chartOfAccounts.create, { orgId, code: "2998", name: "Synthetic opening payable",
+      type: "LIABILITY", normalBalance: "CREDIT", isControlAccount: true, allowManualPosting: false });
+    await asUser.mutation(api.accountingCutover.postOpeningBalanceDirect, { orgId, expectedCurrency: "JOD", asOfDate: Date.UTC(fiscalYear, 0, 1),
+      lines: [{ accountId: retained._id, debitMinor: 30_000, creditMinor: 0 }, { accountId, debitMinor: 0, creditMinor: 30_000 }],
+      allocations: [{ kind: "OTHER_PAYABLE", rowKey: "dated-payable", accountId, amountMinor: 30_000, counterpartyName: "Synthetic creditor", title: "Synthetic obligation" }] });
+  }
+
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
@@ -121,6 +134,73 @@ async function seed(tag: string) {
 
   return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, vehicleId, saleId, receivable };
 }
+
+test("shared supplier control refuses DIRECT commission even after its row is deleted or a recovery offset hides it", () => withFrozenScheduler(async () => {
+  const s = await seed("closure-shared", true);
+  await settleScheduledOnly(s.t, s.orgId);
+  const before = await s.t.run(async ctx => ({ lines: await ctx.db.query("journalLines").collect(), journals: await ctx.db.query("journalEntries").collect() }));
+  expect(before.lines.some(line => line.debitMinor === 3_000_000)).toBe(true);
+  const check = () => s.asUser.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId });
+  expect(await check()).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "SOURCE_FAMILY_UNSUPPORTED", isReconciled: false, currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+  const checklistArgs = { orgId: s.orgId, periodId: (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId }))[0]._id };
+  expect((await s.asUser.query(api.accountingPeriods.closeChecklist, checklistArgs)).warnings).toContain(
+    "Supplier recoverables reconciliation could not be completed: the control account includes source families outside supplier cost recoveries. Reconcile the whole control account manually.");
+  await s.t.run(async ctx => {
+    await ctx.db.delete(s.receivable._id);
+    await ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, origin: "OPENING", openingBalanceDraftId: (await ctx.db.query("openingBalanceDrafts").first())!._id,
+      openingRowKey: "synthetic-offset", title: "Synthetic offset tamper", purpose: "CLAIM", sourcedFromName: "Synthetic supplier",
+      amountDueMinor: 3_000_000, amountRecoveredMinor: 0, receiptSeq: 0, currency: "JOD", status: "OPEN", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now() });
+  });
+  expect(await check()).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "SOURCE_FAMILY_UNSUPPORTED", isReconciled: false });
+  const checklist = await s.asUser.query(api.accountingPeriods.closeChecklist, checklistArgs);
+  expect(checklist.warnings.some(warning => warning.startsWith("Unexplained opening-balance reconciliation difference: supplier recoverables"))).toBe(false);
+  expect(await s.t.run(async ctx => ({ lines: await ctx.db.query("journalLines").collect(), journals: await ctx.db.query("journalEntries").collect() }))).toEqual(before);
+}));
+
+test("later native payable cannot conceal a cancelled opening at a historical cutoff", () => withFrozenScheduler(async () => {
+  const year = new Date().getUTCFullYear();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(year, 5, 1));
+  try {
+    const s = await seed("closure-payable", true);
+    await settleScheduledOnly(s.t, s.orgId);
+    await s.t.run(async ctx => {
+      const opening = (await ctx.db.query("vehicleSupplierPayables").collect()).find(row => row.origin === "OPENING");
+      if (!opening) throw new Error("Missing opening payable fixture");
+      await ctx.db.patch(opening._id, { status: "CANCELLED" });
+    });
+    clock.mockReturnValue(Date.UTC(year, 5, 10));
+    const vehicleId = await s.t.run(ctx => ctx.db.insert("vehicles", { orgId: s.orgId, vin: "VINLATERPAYABLE", make: "Toyota", model: "Camry", year: 2024,
+      mileage: 0, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 35, status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Synthetic supplier", sourceCost: 30 }));
+    const saleId = await s.asUser.mutation(api.sales.create, { orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 35, saleDate: Date.now(), status: "COMPLETED", supplierSettlementRoute: "THROUGH_DEALERSHIP", idempotencyKey: "later-payable" });
+    await settleScheduledOnly(s.t, s.orgId);
+    clock.mockReturnValue(Date.UTC(year, 5, 20));
+    const args = { orgId: s.orgId, toDate: Date.UTC(year, 5, 5) };
+    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, args)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
+    expect((await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId })).byCurrency.JOD.discrepancyMinor).toBe(30_000);
+    const payable = await s.t.run(ctx => ctx.db.query("vehicleSupplierPayables").withIndex("by_sale", q => q.eq("saleId", saleId)).unique());
+    if (!payable) throw new Error("Missing native payable fixture");
+    await s.asUser.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId: payable._id, idempotencyKey: "later-native-payment" });
+    await settleScheduledOnly(s.t, s.orgId);
+    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId, toDate: Date.UTC(year, 5, 15) })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
+  } finally { clock.mockRestore(); }
+}));
+
+test("a cancelled DIRECT sale still refuses unsupported supplier family after its GL nets to zero", () => withFrozenScheduler(async () => {
+  const s = await seed("closure-reversed", true);
+  await settleScheduledOnly(s.t, s.orgId);
+  await s.asManager.mutation(api.sales.update, { orgId: s.orgId, saleId: s.saleId, status: "CANCELLED" });
+  await settleScheduledOnly(s.t, s.orgId);
+  const before = await s.t.run(async ctx => ({ lines: await ctx.db.query("journalLines").collect(), journals: await ctx.db.query("journalEntries").collect() }));
+  expect(before.journals.some(journal => journal.status === "REVERSED")).toBe(true);
+  const account = await s.t.run(ctx => ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q => q.eq("orgId", s.orgId).eq("systemKey", "RECEIVABLE_FROM_SUPPLIERS")).unique());
+  expect(account).not.toBeNull();
+  expect(before.lines.filter(line => line.accountId === account?._id).reduce((total, line) => total + line.debitMinor - line.creditMinor, 0)).toBe(0);
+  expect(await s.asUser.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId })).toMatchObject({
+    status: "UNAVAILABLE", unavailableReason: "SOURCE_FAMILY_UNSUPPORTED", isReconciled: false, unexplainedOpeningDifference: null,
+  });
+  expect(await s.t.run(async ctx => ({ lines: await ctx.db.query("journalLines").collect(), journals: await ctx.db.query("journalEntries").collect() }))).toEqual(before);
+}));
 
 /** Net movement per system key across the org's posted ledger. */
 async function ledger(

@@ -1,6 +1,7 @@
 import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
@@ -960,7 +961,7 @@ export async function computePrepaidRecognitionShortfall(
  */
 export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE" | "AS_OF_DATE_UNSUPPORTED";
   /** Present on AVAILABLE results (SCRUM-858); see OpeningDifferenceReport. */
   unexplainedOpeningDifference?: OpeningDifferenceReport;
 };
@@ -1109,13 +1110,17 @@ export async function computeSupplierPayablesReconciliation(
   } = {}
 ): Promise<SupplierPayablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const unavailable = (unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"): SupplierPayablesReconciliationResult => ({
+  const unavailable = (unavailableReason: NonNullable<SupplierPayablesReconciliationResult["unavailableReason"]>): SupplierPayablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
     isReconciled: false,
     status: "UNAVAILABLE",
     unavailableReason,
   });
+
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailable("AS_OF_DATE_UNSUPPORTED");
 
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
   // The outbox and draft reads are independent, so they run together; the verdicts below are
@@ -1161,8 +1166,8 @@ export async function computeSupplierPayablesReconciliation(
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
   const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
-  const cutoff=toDate ?? Date.now();
   for (const p of rows) {
+    if (p.createdAt > cutoff || p.updatedAt > cutoff) return unavailable("AS_OF_DATE_UNSUPPORTED");
     const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
     if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
     if (balance.accountId) controlAccounts.add(balance.accountId);
@@ -1215,7 +1220,7 @@ export type OpeningDifferenceReport = {
 
 export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE" | "AS_OF_DATE_UNSUPPORTED";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE" | "AS_OF_DATE_UNSUPPORTED" | "SOURCE_FAMILY_UNSUPPORTED";
   unexplainedOpeningDifference: OpeningDifferenceReport;
 };
 
@@ -1254,7 +1259,7 @@ const openingFamilyReconciliationValidator = v.object({
   })),
   isReconciled: v.boolean(),
   status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
-  unavailableReason: v.optional(v.union(v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"), v.literal("AS_OF_DATE_UNSUPPORTED"))),
+  unavailableReason: v.optional(v.union(v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"), v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("SOURCE_FAMILY_UNSUPPORTED"))),
   unexplainedOpeningDifference: v.union(v.null(), v.object({ label: v.object({ en: v.string(), ar: v.string() }), currencies: v.array(v.string()) })),
 });
 
@@ -1284,10 +1289,10 @@ async function hasQueuedPosting(ctx: QueryCtx, orgId: Id<"organizations">): Prom
 }
 
 /**
- * Accounts the POSTED opening named for the given allocation kinds. Deriving the GL control set
- * from the immutable opening — not from the subledger rows — keeps a deleted or cancelled row from
- * removing its own control account from the comparison. Null = the retained history is too large
- * to enumerate, which must not read as "no accounts".
+ * Discover controls from actual opening journal lines, then prove allocation coverage. Header
+ * allocations alone cannot establish completeness: losing an allocation and its materialized row
+ * must not hide the retained GL account. Ambiguous custom liabilities require coverage by every
+ * declared family before selecting the payable subset. Null means classification is unverifiable.
  */
 async function openingAllocationAccounts(
   ctx: QueryCtx,
@@ -1300,11 +1305,73 @@ async function openingAllocationAccounts(
   if (source.status === "UNAVAILABLE" || (source.status === "ABSENT" && source.headers.length > 0)) return null;
   const accounts = new Set<Id<"chartOfAccounts">>();
   if (source.status === "AVAILABLE") {
-    for (const allocation of source.parent.allocations ?? []) {
-      if (kinds.has(allocation.kind) && "accountId" in allocation) accounts.add(allocation.accountId);
+    const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", source.journal._id)).take(101);
+    if (lines.length === 0 || lines.length > 100) return null;
+    const totals = new Map<Id<"chartOfAccounts">, number>();
+    for (const line of lines) {
+      if (line.orgId !== orgId || line.currency !== source.journal.currency || line.accountingDate !== source.journal.accountingDate ||
+        !Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
+      totals.set(line.accountId, (totals.get(line.accountId) ?? 0) + line.debitMinor - line.creditMinor);
+    }
+    for (const [accountId, netMinor] of totals) {
+      const account = await ctx.db.get(accountId);
+      if (!account || account.orgId !== orgId) return null;
+      // Custom equity is potentially allocated capital even if its declaration was lost.
+      const policy = openingPolicyForAccount(account, !account.systemKey && account.type === "EQUITY");
+      const ambiguousLiability = policy === "DECLARED_LIABILITY" && kinds.has("SUPPLIER_PAYABLE");
+      if (!policy || (!kinds.has(policy) && !ambiguousLiability)) continue;
+      const allocations = (source.parent.allocations ?? []).filter(row => row.accountId === accountId);
+      const allocatedMinor = allocations.reduce((sum, row) => sum + row.amountMinor, 0);
+      const expectedMinor = account.normalBalance === "DEBIT" ? netMinor : -netMinor;
+      if (allocations.length === 0 || allocations.some(row => !Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) ||
+        !Number.isSafeInteger(allocatedMinor) || allocatedMinor !== expectedMinor) return null;
+      if (allocations.some(row => kinds.has(row.kind))) accounts.add(accountId);
     }
   }
   return accounts;
+}
+
+/** Current mutable subledgers cannot be restated. Future effective activity is just as unsafe as
+ * a past request: the GL excludes it while the current subledger already includes it. This indexed
+ * probe conservatively refuses even future drafts; it is not a scan of the whole ledger. */
+async function reconciliationDateUnsupported(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, now: number): Promise<boolean> {
+  if (!Number.isFinite(cutoff) || cutoff < now) return true;
+  return (await ctx.db.query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
+}
+
+/** Prove family coverage independently of surviving supplier rows. All cumulative lines count,
+ * including REVERSED originals; a net-zero foreign family still cannot certify this subledger.
+ * The shared line budget bounds this additional scan, not the full report or close checklist. */
+async function supplierRecoveryFamilyRefusal(
+  ctx: QueryCtx, orgId: Id<"organizations">, controls: ReadonlySet<Id<"chartOfAccounts">>,
+): Promise<"OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null> {
+  let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const checked = new Map<Id<"journalEntries">, boolean>();
+  for (const accountId of controls) {
+    const lines = await ctx.db.query("journalLines").withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", accountId)).take(remaining + 1);
+    if (lines.length > remaining) return "OVER_LIMIT";
+    remaining -= lines.length;
+    for (const line of lines) {
+      if (!checked.has(line.journalEntryId)) {
+        const journal = await ctx.db.get(line.journalEntryId);
+        if (!journal || journal.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
+        if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
+        const original = journal.reversalOfJournalEntryId ? await ctx.db.get(journal.reversalOfJournalEntryId) : journal;
+        if (!original || original.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
+        let supported = original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId);
+        if (!supported && original.accountingEventId) {
+          const event = await ctx.db.get(original.accountingEventId);
+          supported = event?.orgId === orgId && event.journalEntryId === original._id &&
+            event.sourceType === original.sourceType && event.sourceId === original.sourceId &&
+            ((event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
+              (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts"));
+        }
+        checked.set(line.journalEntryId, supported);
+      }
+      if (checked.get(line.journalEntryId) === false) return "SOURCE_FAMILY_UNSUPPORTED";
+    }
+  }
+  return null;
 }
 
 async function addSystemAccount(
@@ -1344,7 +1411,7 @@ export async function computeEmployeeAdvancesReconciliation(
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
-  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const rows = await ctx.db
     .query("employeeAdvances")
@@ -1353,6 +1420,7 @@ export async function computeEmployeeAdvancesReconciliation(
   if (rows.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
   const subByCurrency = new Map<string, number>();
   for (const row of rows) {
+    if (row.date > cutoff || row.updatedAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
     // A deleted row is no longer a receivable; a written-off one has left the asset. Neither is
     // clamped away if the GL still carries it — that stays visible as a difference.
     if (row.isDeleted || row.status === "WRITTEN_OFF") continue;
@@ -1393,7 +1461,7 @@ export async function computeSupplierRecoverablesReconciliation(
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
-  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const rows: Array<Doc<"supplierCostRecoveries">> = [];
   // REVERSED is the one status whose source posting was reversed out of the GL, so it is excluded.
@@ -1408,11 +1476,14 @@ export async function computeSupplierRecoverablesReconciliation(
   }
   const subByCurrency = new Map<string, number>();
   for (const row of rows) {
+    if (row.createdAt > cutoff || row.updatedAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
     subByCurrency.set(row.currency, (subByCurrency.get(row.currency) ?? 0) + row.amountDueMinor - row.amountRecoveredMinor);
   }
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_RECOVERABLE"]));
   if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
+  const familyRefusal = await supplierRecoveryFamilyRefusal(ctx, orgId, controls);
+  if (familyRefusal) return unavailableFamilyResult(familyRefusal);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
@@ -1449,7 +1520,7 @@ export async function computePartnerCapitalReconciliation(
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
-  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const partners = await ctx.db
@@ -1467,7 +1538,10 @@ export async function computePartnerCapitalReconciliation(
       .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id))
       .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
     if (movements.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return unavailableFamilyResult("OVER_LIMIT");
-    for (const movement of movements) add(movement.currency, movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor);
+    for (const movement of movements) {
+      if (movement.occurredAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+      add(movement.currency, movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor);
+    }
   }
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["PARTNER_CAPITAL"]));
   if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");

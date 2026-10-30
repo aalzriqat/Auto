@@ -1,5 +1,38 @@
 # PR #710 reader remediation
 
+## Population remediation at reviewed head 25f89c5a
+
+Both seat reports were read in full. The assigned HIGH findings were independently reproduced before production edits: three lost-allocation cases returned AVAILABLE and reconciled, four future-opening cutoffs returned AVAILABLE against different populations, supplier payables accepted a past cutoff, a later native payable hid a cancelled opening at the historical cutoff, and a legitimate public DIRECT sale was labelled an unexplained opening difference by the recoverables reader. The DIRECT fixture uses the existing legacy-cash opt-out in `supplierReceivables.test.ts`, not a production flag change or proof that the route is currently pilot-enabled. Findings ACCEPTED; advisory remedies MODIFIED as follows.
+
+1. `openingAllocationAccounts` now enumerates the actual opening journal lines and verifies allocation coverage for each relevant control before selecting accounts. This reuses the existing opening account policy, including ambiguous custom liabilities and potential custom capital. Missing metadata returns `OPENING_SOURCE_UNAVAILABLE` even when its materialized row is gone. PR #714 was inspected as an independent-discovery precedent; its then-current declaration inventory also used allocations, so it was not copied as proof of completeness.
+2. One date guard covers all four readers. Past/non-finite cutoffs refuse. An indexed after-cutoff journal probe also refuses current or future requests that precede recorded future activity, including the omitted-date June 15 / June 17 opening case. Source timestamps and partner movement effective dates provide further refusal. A valid June 17 read reconciles. The probe conservatively refuses unrelated future journals and drafts too. This is containment, not historical reconstruction.
+3. Supplier recoverables now verifies cumulative control-account GL provenance independently of supplier rows. Posted and reversed original entries, plus reversal entries, remain in the inventory. Opening, expense-originated supplier recoveries and native recovery receipts are recognized by journal/event identities and event type plus source type. Other or unverifiable families return `SOURCE_FAMILY_UNSUPPORTED`; no amount is silently excluded. The shared scan has a 4,000-line budget, not a whole-checklist resource guarantee. A cancelled DIRECT sale still refuses when its GL nets to zero. A valid opening-recovery receipt still reconciles at 69,000 minor units.
+
+The close checklist has specific date and shared-family warnings in English and Arabic. The prior nested ternary was replaced by a reason map while adding the date case. Other unavailable reasons retain the existing family wording. The queued-payroll regression reproduced the new fourth warning before its expectation was updated; unacknowledged close still refuses and its original financial assertions remain.
+
+The invariant remains: compare independently discovered controls and complete, matching dated populations, or report a coded refusal. No journal, snapshot, plug or capital adjustment is written. The existing 13-area impact map below still applies, extended to native DIRECT sales, commission collections, deposit retention, sale cancellation, and their shared-control GL. Source and row deletion are adversarial corruption controls; native writers and reset/reversal behavior are unchanged. No migration, new spending path, command identity, schema, permission or financial activation switch was added. Employee fee-backed advances remain the explicitly deferred SCRUM-879 concern, not certified by this supplier-family fix.
+
+Five predicted failures were tested: allocation metadata selecting its own GL set; future activity bypassing date refusal; later payable activity offsetting an earlier defect; other source families creating or concealing a discrepancy; and reads changing accounting witnesses. Ledger snapshots around the read assertions remain unchanged.
+
+| Mutation control | Assertions that failed |
+| --- | --- |
+| Restore allocation-only account discovery | 3 lost-allocation tests. |
+| Disable shared date guard and source-date refusals | 4 future-opening tests, past/non-finite payable test, later native payable test, queued-payroll integration: 7. |
+| Bypass supplier family verification | DIRECT/deleted-row/offset case and cancelled zero-net case: 2. |
+| Reject the supported native recovery-receipt event type | Supported opening-receipt control: 1. |
+| Route date and family refusals to generic warnings | Payroll date-warning and DIRECT checklist assertions: 2. |
+| Corrupt both new English dictionary entries | Both exact server/dictionary tests: 2. |
+
+Each mutation restored original file bytes in `finally` and verified its SHA-256. The first dictionary-mutant command selected two existing render tests rather than the new dictionary assertions and survived; that was a selection gap, not a claim of mutation coverage. Rerunning the exact dictionary selector killed both intended assertions. The twelve backend cases have literal-title scenario records and certification-matrix bindings. The recurring independent-discovery and dated-population mistakes triggered the `correct` workflow; shared backend decisions and regressions provide in-scope prevention. Broader tooling/rule changes are not included.
+
+The advisory design attack checked cumulative reversed GL and bounded discovery. Advisory Standards and Spec checks do not replace either independent money seat. Both final-head seats must re-certify. Local Convex harness and jsdom results do not prove Convex platform behavior, OCC, live data parity or rendered EN/AR phone/desktop UI. No production inspection or write was performed.
+
+Official Convex validation and application-error documentation and IRS subsidiary balancing guidance linked below were checked live again. They support explicit coded refusal and independent populations at one date. The IRS text is supporting accounting practice, not a dealership-specific legal requirement. Documentation is not implementation proof.
+
+Final local run after the clean main `e99dc762` merge: six named suites passed 121 tests with one worker (49 closure readers, 21 supplier receivables, 17 dialog, 24 commission/payroll, 7 reversal, 3 rounding). The scenario validator passed 62 checks. Root `pnpm typecheck` passed and excludes Convex, apps, packages, dealer-worker and test-utils entry roots; `pnpm typecheck:convex` separately covers Convex/test-utils and excludes generated entry roots. Changed-file ESLint has zero errors and one existing dialog effect warning. No full suite or watcher ran. Both advisory axes found no additional blocker, read-only without rerunning tests. Baseline relocation moved the unchanged close call from 117:13 to 120:13; seven affected entries retain all causes, fingerprints, multiplicities and expiry, with fresh client/defining-file blob evidence. The requested contract-skew README remains absent; `BASELINE-IDENTITY.md` was followed and explicitly does not certify return contracts.
+
+The sections below preserve the earlier remediation history. The population behavior above supersedes their narrower three-reader date and header-only discovery descriptions.
+
 SCRUM-858, reviewed starting head `815714850e5558f1590bb0032a26c879fbc30e6a`.
 
 Invariant: a reconciliation compares GL and subledger at the same date, discovers GL controls independently of surviving subledger rows, and reports a difference or UNAVAILABLE when source evidence cannot support a match.

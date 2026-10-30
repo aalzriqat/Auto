@@ -20,7 +20,7 @@ const LABEL_AR = "فرق أرصدة افتتاحية غير مفسر قيد ال
 
 // Synthetic balances. Debits 170_000 = advance 100_000 + recoverable 50_000 + custom recoverable 20_000;
 // credits 170_000 = capital 80_000 + custom payable 30_000 + retained-earnings offset 60_000.
-async function fixture() {
+async function fixture(openingDate?: number) {
   await import("./accountingOutbox");
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
   registerRateLimiter(t);
@@ -66,7 +66,7 @@ async function fixture() {
   const customLiability = await owner.mutation(api.chartOfAccounts.create, { orgId, code: "1999",
     name: "Synthetic declared payable control", type: "LIABILITY", normalBalance: "CREDIT",
     currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false });
-  const payload = { orgId, expectedCurrency: "JOD", asOfDate,
+  const payload = { orgId, expectedCurrency: "JOD", asOfDate: openingDate ?? asOfDate,
     lines: [
       { accountId: advances._id, debitMinor: 100_000, creditMinor: 0 },
       { accountId: receivable._id, debitMinor: 50_000, creditMinor: 0 },
@@ -94,6 +94,80 @@ async function fixture() {
 }
 
 type Seed = Awaited<ReturnType<typeof fixture>>;
+
+// PR #710 fix-round: classification metadata cannot select its own GL population.
+function expectLostAllocationUnavailable(family: "payables" | "recoverables" | "partners", rowKey: string) {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture();
+  expect((await readers(seed))[family]).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  await seed.t.run(async (ctx) => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    if (!draft) throw new Error("Missing opening metadata fixture");
+    await ctx.db.patch(draft._id, { allocations: draft.allocations?.filter(row => row.rowKey !== rowKey) });
+    if (family === "partners") await ctx.db.delete(seed.partnerB);
+    else if (family === "payables") {
+      const row = await ctx.db.query("vehicleSupplierPayables").first();
+      if (!row) throw new Error("Missing custom payable");
+      await ctx.db.delete(row._id);
+    } else {
+      const row = (await ctx.db.query("supplierCostRecoveries").collect()).find(row => row.origin === "OPENING" && row.openingRowKey === rowKey);
+      if (!row) throw new Error("Missing custom recovery");
+      await ctx.db.delete(row._id);
+    }
+  });
+  const before = await ledger(seed);
+  expect((await readers(seed))[family]).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false });
+  expect(await ledger(seed)).toEqual(before);
+  });
+}
+test("lost allocation metadata cannot hide retained payables GL", () => expectLostAllocationUnavailable("payables", "pay-custom"));
+test("lost allocation metadata cannot hide retained recoverables GL", () => expectLostAllocationUnavailable("recoverables", "rec-custom"));
+test("lost allocation metadata cannot hide retained partners GL", () => expectLostAllocationUnavailable("partners", "cap-b"));
+
+function expectFutureOpeningUnavailable(endpoint: ReconciliationEndpoint | typeof api.accountingReports.supplierPayablesReconciliation) {
+  return withFrozenScheduler(async () => {
+  const year = new Date().getUTCFullYear();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(year, 5, 15));
+  try {
+    const openingDate = Date.UTC(year, 5, 17);
+    const seed = await fixture(openingDate);
+    expect(await seed.owner.query(endpoint, { orgId: seed.orgId, toDate: openingDate })).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+    const before = await ledger(seed);
+    for (const toDate of [undefined, Date.UTC(year, 5, 16)]) {
+      expect(await seed.owner.query(endpoint, { orgId: seed.orgId, toDate })).toMatchObject({
+        status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, currencies: [], byCurrency: {},
+      });
+    }
+    expect(await ledger(seed)).toEqual(before);
+  } finally { clock.mockRestore(); }
+  });
+}
+test("future-dated opening refuses earlier advances populations", () => expectFutureOpeningUnavailable(api.accountingReports.employeeAdvancesReconciliation));
+test("future-dated opening refuses earlier recoverables populations", () => expectFutureOpeningUnavailable(api.accountingReports.supplierRecoverablesReconciliation));
+test("future-dated opening refuses earlier partners populations", () => expectFutureOpeningUnavailable(api.accountingReports.partnerCapitalReconciliation));
+test("future-dated opening refuses earlier payables populations", () => expectFutureOpeningUnavailable(api.accountingReports.supplierPayablesReconciliation));
+
+test("supplier payables refuses past cutoffs and non-finite dates", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  for (const toDate of [Date.now() - 60_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId, toDate })).toMatchObject({
+      status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, currencies: [], byCurrency: {},
+    });
+  }
+}));
+
+test("an opening supplier recovery receipt stays in the supported family", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  const recovery = await seed.t.run(async ctx => (await ctx.db.query("supplierCostRecoveries").collect()).find(row => row.origin === "OPENING" && row.openingRowKey === "rec-custom"));
+  if (!recovery) throw new Error("Missing opening recovery fixture");
+  await seed.owner.mutation(api.supplierCostRecoveries.recordReceipt, { orgId: seed.orgId, recoveryId: recovery._id,
+    amountMinor: 1_000, method: "CASH", receivedDate: Date.now(), idempotencyKey: "closure-recovery-receipt" });
+  const before = await ledger(seed);
+  expect(await seed.owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: seed.orgId })).toMatchObject({
+    status: "AVAILABLE", isReconciled: true, byCurrency: { JOD: { glBalanceMinor: 69_000, subledgerBalanceMinor: 69_000, discrepancyMinor: 0 } }, unexplainedOpeningDifference: null,
+  });
+  expect(await ledger(seed)).toEqual(before);
+}));
 
 test("an orphan opening journal cannot hide a deleted custom payable", () => withFrozenScheduler(async () => {
   const seed = await fixture();

@@ -7,7 +7,7 @@ import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
 import { getPostedLines } from "./accountingReports";
-import { OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY } from "./utils/closeWarnings";
+import { OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY, SUPPLIER_PAYABLES_RECON_DATE_WARNING } from "./utils/closeWarnings";
 
 const postOpening = api.accountingCutover.postOpeningBalanceDirect;
 afterEach(() => { vi.useRealTimers(); });
@@ -345,7 +345,7 @@ test("queued native payroll keeps book debt until real posting and refuses a dam
   await seed.owner.mutation(api.payroll.approveRun, { orgId: seed.orgId, runId });
   vi.setSystemTime(Date.UTC(2026, 1, 1));
   const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.period._id });
-  expect(checklist.warnings).toEqual(Object.values(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY));
+    expect(checklist.warnings).toEqual([SUPPLIER_PAYABLES_RECON_DATE_WARNING, ...Object.values(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY)]);
   for (const reconciliation of [checklist.employeeAdvancesReconciliation, checklist.supplierRecoverablesReconciliation, checklist.partnerCapitalReconciliation]) {
     expect(reconciliation).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
   }
