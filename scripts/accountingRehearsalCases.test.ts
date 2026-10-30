@@ -16,6 +16,11 @@
  * exists for, and nothing here substitutes for it.
  */
 import { describe, expect, test, vi } from "vitest";
+// SCRUM-869: registered sales validators pull in the backend fixture graph. Load that dependency during
+// collection, rather than charging its cold Vite transforms to the first SCRUM-811 assertion (5.541 s
+// at 8d4df51b on 2026-10-30; main control: 0.255 s). Keep per-call registered validation below unchanged.
+// Vitest separates import time from test time: https://vitest.dev/guide/profiling-test-performance
+import "../convex/sales";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
