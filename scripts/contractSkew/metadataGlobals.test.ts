@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expect, test } from "vitest";
-import { installGlobals } from "./metadataGlobals.mjs";
+import { installConstructorGuards, installGlobals } from "./metadataGlobals.mjs";
 
 /** The host global object is the system boundary. Copy real descriptors so
  * setup can be tested without replacing the test runner's own globals. */
@@ -89,4 +89,63 @@ test("code-generation probes prove empty capability checks and refuse invented r
   expect(() => disabled.target.Function("")).toThrow("Code generation unavailable");
   expect(() => disabled.target.eval("")).toThrow("Code generation unavailable");
   expect(disabled.state.reason).toBe("");
+});
+
+
+test("constructor guards refuse native reflection and restore the host after synchronous inspection", () => {
+  const prototypes = [Function.prototype, Object.getPrototypeOf(async function(){}),
+    Object.getPrototypeOf(function*(){}), Object.getPrototypeOf(async function*(){})];
+  const owners = [...prototypes, Object, Reflect, Object.prototype];
+  const restoreDescriptors = Object.defineProperties;
+  const restoreDescriptor = Object.defineProperty;
+  const proxyDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Proxy");
+  if (!proxyDescriptor) throw new Error("Native Proxy unavailable");
+  const snapshots = owners.map((owner) => ({ owner, descriptors: Object.getOwnPropertyDescriptors(owner) }));
+  const probes = new Set<string>();
+  const outcomes: string[] = [];
+  const legacyLookup = (method: string, receiver: object, key: unknown, callback?: () => unknown): unknown => {
+    const candidate: unknown = Reflect.get(Object.prototype, method);
+    if (typeof candidate !== "function") throw new Error("Legacy reflection unavailable");
+    return Reflect.apply(candidate, receiver, callback ? [key, callback] : [key]);
+  };
+  const deny = (reason: string): never => { throw new Error(reason); };
+  try {
+    installConstructorGuards(deny, probes);
+    const operations = [
+      () => (async function(){}).constructor,
+      () => Reflect.set(prototypes[0], "constructor", function marker(){}),
+      () => Object.getOwnPropertyDescriptor(prototypes[1], "constructor"),
+      () => Reflect.getOwnPropertyDescriptor(prototypes[2], "constructor"),
+      () => Object.getOwnPropertyDescriptors(prototypes[3]),
+      () => legacyLookup("__lookupGetter__", {}, "constructor"),
+      () => legacyLookup("__lookupSetter__", {}, Object.assign(function key(){}, { toString: () => "constructor" })),
+      () => Object.getOwnPropertyDescriptor.toString(),
+      () => Object.defineProperty(prototypes[0], "constructor", { value: 0 }),
+      () => Object.defineProperties(prototypes[0], { constructor: { value: 0 } }),
+      () => Reflect.defineProperty(prototypes[0], "constructor", { value: 0 }),
+      () => legacyLookup("__defineGetter__", prototypes[0], "constructor", () => 0),
+      () => legacyLookup("__defineSetter__", prototypes[0], "constructor", () => undefined),
+      () => new Proxy(prototypes[0], {}),
+      () => Proxy.revocable(prototypes[1], {}),
+      () => Object.getOwnPropertyDescriptor(Proxy, "revocable")?.value(prototypes[2], {}),
+    ];
+    for (const operation of operations) {
+      try { operation(); outcomes.push("unexpected success"); }
+      catch (error) { outcomes.push(error instanceof Error ? error.message : "unknown failure"); }
+    }
+    outcomes.push(Object.getOwnPropertyDescriptor({ value: 42 }, "value")?.value === 42 ? "ordinary descriptor" : "wrong descriptor");
+    outcomes.push(legacyLookup("__lookupGetter__", { get value() { return 1; } }, "value") ? "ordinary getter" : "wrong getter");
+    outcomes.push((function example(){}).toString().includes("example") ? "ordinary source" : "wrong source");
+    outcomes.push(new Proxy({ value: 42 }, {}).value === 42 ? "ordinary proxy" : "wrong proxy");
+    outcomes.push(Proxy.revocable({ value: 42 }, {}).proxy.value === 42 ? "ordinary revocable" : "wrong revocable");
+    outcomes.push(Object.getOwnPropertyDescriptor(Proxy, "revocable")?.value === Proxy.revocable ? "revocable identity" : "wrong identity");
+    outcomes.push(Reflect.deleteProperty(prototypes[1], "constructor") ? "native deletion" : "wrong deletion");
+  } finally {
+    for (const { owner, descriptors } of snapshots) restoreDescriptors(owner, descriptors);
+    restoreDescriptor(globalThis, "Proxy", proxyDescriptor);
+  }
+  expect(outcomes).toEqual([...Array<string>(16).fill("dynamic function constructor"),
+    "ordinary descriptor", "ordinary getter", "ordinary source", "ordinary proxy", "ordinary revocable", "revocable identity", "native deletion"]);
+  expect([...probes]).toEqual(["Function.constructor"]);
+  expect(typeof Object.getOwnPropertyDescriptor(Function.prototype, "constructor")?.value).toBe("function");
 });

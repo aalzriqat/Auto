@@ -1349,3 +1349,66 @@ The exact 26-test Node command also passes on Windows Node 22.23.4.
 
 Final Node 22.23.4 focused rerun, including both fixed-input branches: **153
 passed** (120 renderer, 18 setup, 15 credential boundary), exit zero.
+
+
+### Constructor reflection closure after 30aa8548
+
+The first remediation's Tests workflow passed, and its Sonar check passed with
+82.0% new-code coverage. An advisory read during that wait reproduced a further
+constructor-guard problem: replacing native data properties with accessors made
+the guard's descriptor observable. The following correction supersedes that
+head's constructor implementation and the prior local final counts.
+
+- Constructor get/set now latch refusal immediately. The native configurable
+  flag stays true: deletion removes the replacement and cannot recover the
+  removed native constructor. A permanent control preserves the actual true
+  deletion result. Assignments and descriptor definitions refuse rather than
+  publishing synthetic accessor/data conversion results.
+- Object/Reflect descriptor and definition APIs fence the four guarded prototype
+  identities. Legacy lookup/definition paths refuse constructor and opaque keys,
+  including inherited lookups. Ordinary-object reflection delegates normally.
+- New Proxy and Proxy.revocable refuse those prototype targets, including the
+  descriptor-retrieved revocable factory, so aliases cannot forward around the
+  identity fence. Ordinary proxies and revocable-factory identity are preserved.
+- A realm-private WeakSet tracks synthetic code-generation probes and guarded
+  method wrappers. Native Function.prototype.toString refuses their source,
+  which is renderer code rather than deployment metadata. Ordinary function
+  source still delegates. A synchronous native-intrinsic unit test restores all
+  original descriptors and global Proxy in finally.
+
+Additional failing-first real-render evidence: **12 descriptor cases failed**;
+**5 redefinition cases failed**; **3 Proxy-alias cases failed**; the original
+method-source case failed, then **2 Function/eval source cases failed** while the
+method-source control passed after its correction. Independent native controls
+confirmed the descriptor/deletion/set results. Formal seat certification remains
+pending; advisory closure is not certification.
+
+References: ECMAScript [property-descriptor conversion](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-validateandapplypropertydescriptor)
+and [Proxy forwarding](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-proxy-object-internal-methods-and-internal-slots-getownproperty-p).
+The earlier Convex analyzer citation and per-entry isolation model remain.
+
+Final local Node 22.21.1 focused run: **185 passed** (151 renderer, 19 setup,
+15 credential boundary). Exact CI Node command passes **26/26**. Detector checkJs,
+root typecheck and changed-file ESLint pass; the root excludes convex/. Scoped
+parent-only coverage is **89.67% lines**, 87.24% statements, 81.30% functions, so
+that scoped coverage command still exits nonzero at repository-global thresholds.
+No threshold/configuration was overridden. It covers **89/97 = 91.75%** of this
+remediation's added executable lines against 98689acc, and **391/435 = 89.89%** of
+PR-added executable lines in the five renderer files against 43feaa4f. These
+numbers count the unmeasured child helper as zero and exclude cli.mjs; they are
+not the whole-PR Sonar result.
+
+Final full-render measurement: **10.695s before -> 92.109s after** on Windows
+Node 26.4.0, single elapsed runs subject to concurrent workstation load, below the
+20-minute timeout. Current-alias-final.json records 329 entries, 1,349 evaluations,
+zero env keys/enumerations, the same five unavailable Node modules and 1,017
+exports. All complete registration records equal the before-render records.
+The final saved-spec replay still exits **7**, with **6 FIXED, 0 stillFails,
+0 UNPROVEN**, zero evidence drift/incomplete coverage and no ALSO PRESENT.
+This remains supplied-file evidence, not production verification.
+
+The previous cloud's only open minor issue, S6353, requested `\d` instead of
+`[0-9]` in the concurrency flag regex. That equivalent ASCII-digit form is fixed
+without changing accepted arguments or exit behavior. No NOSONAR, Sonar config,
+workflow, credential pin, classifier or global completeness change is used.
+New-head CI and Sonar are checked after the follow-up push.

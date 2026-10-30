@@ -665,3 +665,95 @@ test.each([0, 17, 1.5])("invalid concurrency %s publishes no output", async (con
   expect(await runRenderCurrentSpec(output, root, concurrency)).toBe(1);
   expect(fs.existsSync(output)).toBe(false);
 });
+
+// Constructor reflection must not turn the guard's descriptor into metadata.
+test.each([
+  ['ordinary', 'function(){}'], ['async', 'async function(){}'],
+  ['generator', 'function*(){}'], ['async generator', 'async function*(){}'],
+].flatMap(([name, fn]) => [
+  [`Object descriptor ${name}`, fn, 'Object.getOwnPropertyDescriptor(prototype, "constructor")'],
+  [`Reflect descriptor ${name}`, fn, 'Reflect.getOwnPropertyDescriptor(prototype, "constructor")'],
+  [`all descriptors ${name}`, fn, 'Object.getOwnPropertyDescriptors(prototype).constructor'],
+]))("constructor descriptor regression: %s refuses guard-dependent metadata", async (_name, fn, descriptor) => {
+  const native = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(async function(){}), "constructor");
+  expect(native?.get).toBeUndefined();
+  expect(typeof native?.value).toBe("function");
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/reflection.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+const prototype = Object.getPrototypeOf(${fn});
+let args = {}; try { const descriptor = ${descriptor}; args = descriptor.get ? { label: v.string() } : {}; } catch {}
+export const read = queryGeneric({ args, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "reflection:read" }])).toEqual(["reflection:read"]);
+  expect(spec.evaluation.modules.find((entry) => entry.file === "reflection.ts")?.capabilityProbes)
+    .toContain("Function.constructor");
+});
+
+test.each(['__lookupGetter__', '__lookupSetter__'].flatMap((method) => [
+  [method, '"constructor"'], [method, 'new String("constructor")'],
+  [method, 'Object.assign(function key(){}, { toString: () => "constructor" })'],
+]))("legacy constructor reflection %s refuses even when caught", async (method, key) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/legacy.ts"), `import { queryGeneric } from "convex/server";
+try { Object.prototype.${method}.call(Object.create(Object.getPrototypeOf(async function(){})), ${key}); } catch {}
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "legacy:read" }])).toEqual(["legacy:read"]);
+});
+
+test("native constructor deletion preserves the actual result", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/deletion.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+const deleted = Reflect.deleteProperty(Object.getPrototypeOf(async function(){}), "constructor");
+export const read = queryGeneric({ args: { deleted: v.literal(deleted) }, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(spec.functions.find((fn) => fn.identifier === "deletion.js:read")?.args).toEqual({ type: "object",
+    value: { deleted: { fieldType: { type: "literal", value: true }, optional: false } } });
+});
+
+test("native constructor assignment refuses instead of manufacturing a failed-set result", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/assignment.ts"), `import { queryGeneric } from "convex/server";
+try { Reflect.set(Object.getPrototypeOf(function(){}), "constructor", function marker(){}); } catch {}
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "assignment:read" }])).toEqual(["assignment:read"]);
+});
+
+test.each(["Object.getOwnPropertyDescriptor", "Function", "eval"])("guarded callable %s cannot fabricate native function source", async (callable) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/source.ts"), `import { queryGeneric } from "convex/server";
+let source = ""; try { source = Object.getPrototypeOf(function(){}).toString.call(${callable}); } catch {}
+export const read = queryGeneric({ args: {}, handler: () => source });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "source:read" }])).toEqual(["source:read"]);
+});
+
+test.each([
+  'Object.defineProperty(prototype, "constructor", { value: 0 })',
+  'Object.defineProperties(prototype, { constructor: { value: 0 } })',
+  'Reflect.defineProperty(prototype, "constructor", { value: 0 })',
+  'Object.prototype.__defineGetter__.call(prototype, "constructor", function(){ return 0; })',
+  'Object.prototype.__defineSetter__.call(prototype, "constructor", function(){})',
+])("constructor redefinition refuses synthetic descriptor state: %s", async (operation) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/redefinition.ts"), `import { queryGeneric } from "convex/server";
+const prototype = Object.getPrototypeOf(function(){});
+try { ${operation}; } catch {}
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "redefinition:read" }]))
+    .toEqual(["redefinition:read"]);
+});
+
+test.each([
+  'new Proxy(prototype, {})',
+  'Proxy.revocable(prototype, {}).proxy',
+  'Object.getOwnPropertyDescriptor(Proxy, "revocable").value(prototype, {}).proxy',
+])("constructor prototype proxy aliases refuse: %s", async (alias) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/proxyAlias.ts"), `import { queryGeneric } from "convex/server";
+const prototype = Object.getPrototypeOf(async function(){});
+try { const alias = ${alias}; Object.getOwnPropertyDescriptor(alias, "constructor"); } catch {}
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "proxyAlias:read" }]))
+    .toEqual(["proxyAlias:read"]);
+});

@@ -48,7 +48,7 @@ function removeFailedOutput(files) {
 
 if (isRunDirectly(import.meta.url)) {
   const args = process.argv.slice(2);
-  const valid = args.length === 1 || (args.length === 3 && args[1] === "--concurrency" && /^[1-9][0-9]?$/.test(args[2]));
+  const valid = args.length === 1 || (args.length === 3 && args[1] === "--concurrency" && /^[1-9]\d?$/.test(args[2]));
   if (!valid) process.exit(2);
   process.exit(await runRenderCurrentSpec(args[0], process.cwd(), Number(args[2] ?? 4)));
 }

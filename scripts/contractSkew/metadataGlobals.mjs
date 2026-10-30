@@ -1,3 +1,7 @@
+// Tracked stand-ins and native-method wrappers never supply native function source.
+const guardedCallables = new WeakSet();
+const defineIntrinsicProperty = Object.defineProperty;
+
 /** Install a world's inputs before importing any bundled module. */
 export function installGlobals({ target, deny, world, reads }) {
   // Node initializes these lazily through Undici, which itself needs Buffer.
@@ -128,6 +132,7 @@ function installRuntime(target, deny, runtime, probes) {
     },
   });
   const guardedEval = new Proxy(evalProbe, reflectionDenials(deny, "dynamic evaluation reflection"));
+  for (const callable of [generated, functionProbe, guardedEval]) guardedCallables.add(callable);
   for (const [key, value] of Object.entries({ Function: functionProbe, eval: guardedEval, navigator })) {
     Object.defineProperty(target, key, { configurable: true, get() { probes.add(key); return value; } });
   }
@@ -146,6 +151,7 @@ function installInputGuards(target, deny) {
     apply: () => deny("clock"), construct: () => deny("clock"),
     get: (target, key) => key === "UTC" ? target.UTC : () => deny("clock"),
   });
+  guardedCallables.add(target.Date);
   const math = Object.create(Object.getPrototypeOf(target.Math), Object.getOwnPropertyDescriptors(target.Math));
   math.random = () => deny("randomness");
   Object.defineProperty(target, "Math", { configurable: true, value: math });
@@ -160,14 +166,68 @@ function installInputGuards(target, deny) {
 /** Called only inside the disposable realm: these are that realm's intrinsics. */
 export function installConstructorGuards(deny, probes) {
   const refuse = () => { probes.add("Function.constructor"); return deny("dynamic function constructor"); };
-  const constructor = new Proxy(function () {}, {
-    apply: refuse, construct: refuse, ...reflectionDenials(deny, "dynamic constructor reflection"),
-  });
-  for (const prototype of [Function.prototype, Object.getPrototypeOf(async function () {}),
-    Object.getPrototypeOf(function* () {}), Object.getPrototypeOf(async function* () {})]) {
-    Object.defineProperty(prototype, "constructor", { configurable: false, get() {
-      probes.add("Function.constructor");
-      return constructor;
-    } });
+  const prototypes = new Set([Function.prototype, Object.getPrototypeOf(async function () {}),
+    Object.getPrototypeOf(function* () {}), Object.getPrototypeOf(async function* () {})]);
+  guardConstructorReflection(prototypes, refuse);
+  guardPrototypeAliases(prototypes, refuse);
+  for (const prototype of prototypes) {
+    // Preserve native deletion semantics. Removing a guard cannot recover the
+    // native constructor it replaced; assignment must latch instead of failing silently.
+    defineIntrinsicProperty(prototype, "constructor", { configurable: true, get: refuse, set: refuse });
   }
+}
+
+/** The guard's accessor descriptor is not deployment metadata. */
+function guardConstructorReflection(prototypes, refuse) {
+  const sourceDescriptor = Object.getOwnPropertyDescriptor(Function.prototype, "toString");
+  if (!sourceDescriptor || typeof sourceDescriptor.value !== "function") throw new Error("Native callable reflection unavailable");
+  /** @type {Array<[object, string]>} */
+  const methods = [[Object, "getOwnPropertyDescriptor"], [Reflect, "getOwnPropertyDescriptor"],
+    [Object, "getOwnPropertyDescriptors"], [Object, "defineProperty"], [Object, "defineProperties"],
+    [Reflect, "defineProperty"], [Object.prototype, "__lookupGetter__"], [Object.prototype, "__lookupSetter__"],
+    [Object.prototype, "__defineGetter__"], [Object.prototype, "__defineSetter__"]];
+  for (const [owner, key] of methods) {
+    const legacy = key.startsWith("__");
+    const original = Reflect.get(owner, key);
+    if (typeof original !== "function") throw new Error("Native constructor reflection unavailable");
+    const guarded = new Proxy(original, { apply(method, receiver, args) {
+      // Refuse opaque legacy keys rather than executing coercion differently
+      // from native ToPropertyKey; constructor lookups can walk inherited guards.
+      const constructorLookup = legacy && (["object", "function"].includes(typeof args[0]) || args[0] === "constructor");
+      if (prototypes.has(legacy ? receiver : args[0]) || constructorLookup) return refuse();
+      return Reflect.apply(method, receiver, args);
+    } });
+    guardedCallables.add(guarded);
+    defineIntrinsicProperty(owner, key, { ...Object.getOwnPropertyDescriptor(owner, key), value: guarded });
+  }
+  const sourceGuard = new Proxy(sourceDescriptor.value, { apply(method, receiver, args) {
+    if (guardedCallables.has(receiver)) return refuse();
+    return Reflect.apply(method, receiver, args);
+  } });
+  guardedCallables.add(sourceGuard);
+  defineIntrinsicProperty(Function.prototype, "toString", { ...sourceDescriptor, value: sourceGuard });
+}
+
+/** Native proxy aliases must not bypass the prototype identity fence. */
+function guardPrototypeAliases(prototypes, refuse) {
+  const nativeProxy = Proxy;
+  const revocable = new nativeProxy(nativeProxy.revocable, { apply(method, receiver, args) {
+    if (prototypes.has(args[0])) return refuse();
+    return Reflect.apply(method, receiver, args);
+  } });
+  const guarded = new nativeProxy(nativeProxy, {
+    construct(method, args, newTarget) {
+      if (prototypes.has(args[0])) return refuse();
+      return Reflect.construct(method, args, newTarget);
+    },
+    get: (method, key, receiver) => key === "revocable" ? revocable : Reflect.get(method, key, receiver),
+    getOwnPropertyDescriptor(method, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(method, key);
+      return key === "revocable" && descriptor ? { ...descriptor, value: revocable } : descriptor;
+    },
+    ...writeDenials(refuse, "proxy constructor mutation"),
+  });
+  guardedCallables.add(guarded);
+  guardedCallables.add(revocable);
+  defineIntrinsicProperty(globalThis, "Proxy", { configurable: true, writable: true, value: guarded });
 }
