@@ -488,6 +488,13 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toBe(DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE);
   });
 
+  it("SCRUM-858 OPENING_INVENTORY_SOURCED_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_INVENTORY_SOURCED_REFUSED");
+    const { OPENING_INVENTORY_SOURCED_REFUSED_MESSAGE } = await import("../convex/utils/openingInventoryContainment");
+    expect(enEntry).toBe(OPENING_INVENTORY_SOURCED_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
   it("SCRUM-858 OPENING_DEPOSIT_PAYOUT_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
     const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_PAYOUT_REFUSED");
     const { OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");

@@ -1,0 +1,72 @@
+{
+  "id": "opening-bank-no-opening-unsafe-reference-is-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.bankAccounts",
+      "input": {
+        "openingBalanceMinor": [
+          "NaN",
+          "fractional",
+          "unsafe-integer",
+          "Infinity"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "openingPosted": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "OPENING_PROOF_UNAVAILABLE"
+    },
+    {
+      "observable": "banks",
+      "value": []
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": null
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": null
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "without an opening unsafe reference balances make the figures unavailable"
+  },
+  "matrixRow": "OB-G5",
+  "fingerprint": "5a8782a97c48ac7a1a8c1259ce6d0172afd2b82427ff1dc76c0d1591139b0c8d",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "d0cc86b9f0a74a3f4796df701ced3792b280affd"
+  }
+}

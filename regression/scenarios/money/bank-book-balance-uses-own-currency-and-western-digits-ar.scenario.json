@@ -1,0 +1,65 @@
+{
+  "id": "bank-book-balance-uses-own-currency-and-western-digits-ar",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "locale": "ar",
+        "currency": "USD",
+        "balanceMinor": 12345,
+        "organizationCurrency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "locale": "ar",
+        "currency": "JOD",
+        "balanceMinor": 1,
+        "organizationCurrency": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "usd.shownContains",
+      "value": "123.45"
+    },
+    {
+      "observable": "jod.shownContains",
+      "value": "0.001"
+    },
+    {
+      "observable": "anyArabicIndicDigit",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "Arabic: USD 123.45 and one JOD fils keep Western digits, each in its own currency and precision"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "281807c2b6acc4de1fe01faa2c09b49a69a881393f1627ce06c72c68d3368da2"
+}

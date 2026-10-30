@@ -1,0 +1,104 @@
+{
+  "id": "opening-two-banks-each-reconcile-to-their-own-posted-line",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ],
+        "cashMinor": 1000000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "statedA": 4000000,
+        "statedB": 3000000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "target": "each"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.status",
+      "value": "OK"
+    },
+    {
+      "observable": "bankA.differenceMinor",
+      "value": 0
+    },
+    {
+      "observable": "bankB.differenceMinor",
+      "value": 0
+    },
+    {
+      "observable": "bankLinesTotalMinor",
+      "value": 7000000
+    },
+    {
+      "observable": "controlOpeningMinor",
+      "value": 7000000
+    },
+    {
+      "observable": "unattributedOpeningMinor",
+      "value": 0
+    },
+    {
+      "observable": "unexplainedOpeningDifference",
+      "value": "null"
+    },
+    {
+      "observable": "bookBalanceA.minor",
+      "value": 4000000
+    },
+    {
+      "observable": "bookBalanceB.minor",
+      "value": 3000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "two banks with distinct openings each reconcile to their own posted line and to the bank control, with no difference"
+  },
+  "matrixRow": "OB-G1",
+  "fingerprint": "c7076373ab171dd8a701692a877c47a186d7d74f2241b23d2221871433c47e77"
+}

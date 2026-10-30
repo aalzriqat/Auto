@@ -1,0 +1,76 @@
+{
+  "id": "opening-sixty-owned-opens-with-forty-five-consigned-in-the-showroom",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "OPENING_STOCK",
+        "ownedCars": 60
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "consignedCars": 45,
+        "soldOwnedCars": 10
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 60,
+        "perVinCost": "true"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "allocations.count",
+      "value": 60
+    },
+    {
+      "observable": "inventoryControl.debit",
+      "value": "sumOfPerVinCost"
+    },
+    {
+      "observable": "vehicleInventoryReconciliation.isReconciled",
+      "value": "true"
+    },
+    {
+      "observable": "consignedCars.openingMarkers",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "sixty owned cars open when the organization also holds forty-five consigned and ten sold cars"
+  },
+  "matrixRow": "OB-C1",
+  "fingerprint": "c519d65a62bfb4cd42c35a80e2b21609d43abf40aedc53d77c6468090780c655"
+}

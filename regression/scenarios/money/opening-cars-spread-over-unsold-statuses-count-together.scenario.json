@@ -1,0 +1,63 @@
+{
+  "id": "opening-cars-spread-over-unsold-statuses-count-together",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 60,
+        "status": "AVAILABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 60,
+        "status": "IN_REPAIR"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-reviewed-opening-allocation-limit"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "owned cars spread over several unsold statuses count together against the limit"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "e4d16b4d5c4e011e2ed90bffb323d84f99ea7082ecfb5cfae7231a28c8d09f74"
+}

@@ -16,6 +16,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { computeBankOpeningReconciliation } from "./accounting/bankOpeningReconciliation";
 import { BANK_AGGREGATE_LAYOUT, bankAggregateNamespace, readAttributionRanges, readControlRanges } from "./accounting/bankLineAggregate";
 
 export const list = query({
@@ -197,6 +198,43 @@ export const getBookBalance = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return await computeBookBalance(ctx, args.orgId, args.asOf ?? Date.now(), BOOK_BALANCE_READ_BUDGET);
+  },
+});
+
+/**
+ * SCRUM-858 S5 (owner ruling c23884): per-bank opening reconciliation. Each bank's posted opening line against the
+ * balance the dealer stated for it, the Σ of bank lines against the bank control's opening debit, and any
+ * difference under the owner's label. Read-only: it posts nothing and changes no balance.
+ */
+export const openingReconciliation = query({
+  args: { orgId: v.id("organizations") },
+  returns: v.object({
+    status: v.union(v.literal("OK"), v.literal("NO_OPENING"), v.literal("OPENING_PROOF_UNAVAILABLE")),
+    currency: v.union(v.string(), v.null()),
+    asOfDate: v.union(v.number(), v.null()),
+    banks: v.array(v.object({
+      bankAccountId: v.id("bankAccounts"),
+      name: v.string(),
+      currency: v.string(),
+      openingLineMinor: v.union(v.number(), v.null()),
+      referenceOpeningMinor: v.number(),
+      differenceMinor: v.union(v.number(), v.null()),
+    })),
+    controlOpeningMinor: v.union(v.number(), v.null()),
+    bankLinesTotalMinor: v.union(v.number(), v.null()),
+    unattributedOpeningMinor: v.union(v.number(), v.null()),
+    unexplainedOpeningDifference: v.union(v.object({
+      label: v.object({ en: v.string(), ar: v.string() }),
+      currencies: v.array(v.object({
+        currency: v.string(),
+        differenceMinor: v.number(),
+        absoluteDifferenceMinor: v.number(),
+      })),
+    }), v.null()),
+  }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    return await computeBankOpeningReconciliation(ctx, args.orgId);
   },
 });
 

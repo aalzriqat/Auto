@@ -1,0 +1,53 @@
+{
+  "id": "opening-owned-car-in-repair-counts-and-needs-tracked-import",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 1,
+        "status": "IN_REPAIR",
+        "purchasePriceJod": 9000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-tracked-opening-import"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "an owned car held in repair or inspection is counted by the cap and by the tracked-import check"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "37d370b843c75fb78006443f27740bd34e7919dc53b74a670c78c0c19e1b63fb"
+}

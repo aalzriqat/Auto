@@ -1,0 +1,65 @@
+{
+  "id": "opening-offsetting-bank-differences-still-raise-the-report",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "statedA": 4100000,
+        "statedB": 2900000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unexplainedOpeningDifference.JOD.netMinor",
+      "value": 0
+    },
+    {
+      "observable": "unexplainedOpeningDifference.JOD.absoluteMinor",
+      "value": 200000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "two offsetting bank differences still raise the report: the net is zero but the absolute difference is not"
+  },
+  "matrixRow": "OB-G3",
+  "fingerprint": "35a2195725f4c8160df422b4aaf6abd13b3490a26fc91576c1c0b4c3a2153d42"
+}
