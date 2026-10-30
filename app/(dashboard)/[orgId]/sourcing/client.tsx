@@ -26,6 +26,7 @@ type SourcingPayable = Doc<"vehicleSupplierPayables"> & {
   customerName: string | null;
   paidByName: string | null | undefined;
   daysOutstanding: number;
+  settlementAmountMinor: number | null;
   /** Server verdict from the same predicate markPaid enforces; absent means no VAT. */
   vatReclassAllowed?: boolean;
 };
@@ -133,7 +134,7 @@ export function SourcingClient() {
   const vatAllowed = payDialogPayable?.vatReclassAllowed === true;
 
   const handleMarkPaid = async () => {
-    if (!activeOrgId || !payDialogPayable) return;
+    if (!activeOrgId || !payDialogPayable || payDialogPayable.settlementAmountMinor == null) return;
     if (bankMethod && (!bankAccountId || paymentBanks?.truncated || !paymentBanks?.banks.some((bank) => bank._id === bankAccountId))) {
       toast.error(locale === "ar" ? "اختر الحساب المصرفي الذي خرجت منه دفعة المورد." : "Choose the bank account this supplier payment leaves.");
       return;
@@ -156,6 +157,7 @@ export function SourcingClient() {
       await markPaid({
         orgId: activeOrgId,
         payableId: payDialogPayable._id,
+        expectedSettlementAmountMinor: payDialogPayable.settlementAmountMinor,
         paymentNotes: paymentNotes.trim() || undefined,
         paymentMethod,
         bankAccountId: bankMethod ? bankAccountId! : undefined,

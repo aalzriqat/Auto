@@ -346,6 +346,8 @@ export const AppErrorCode = {
   // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
   // under ServerError_<code>.
   CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
+  SUPPLIER_AMOUNT_PRECISION: "SUPPLIER_AMOUNT_PRECISION",
+  SUPPLIER_PAYMENT_CHANGED: "SUPPLIER_PAYMENT_CHANGED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

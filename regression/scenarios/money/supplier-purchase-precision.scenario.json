@@ -1,0 +1,67 @@
+{
+  "id": "supplier-purchase-precision",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum880-precision-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "cases": [
+          {
+            "currency": "JOD",
+            "purchasePrice": 128.0005
+          },
+          {
+            "currency": "USD",
+            "purchasePrice": 128.001
+          }
+        ],
+        "sourceType": "STOCK",
+        "purchasePaymentMethod": "ON_ACCOUNT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusalCode",
+      "value": "SUPPLIER_AMOUNT_PRECISION"
+    },
+    {
+      "observable": "newVehicles",
+      "value": 0
+    },
+    {
+      "observable": "newAccountingEvents",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcingPayables.test.ts",
+    "testName": "SCRUM-880: new JOD and USD purchases refuse excess precision before acquisition"
+  },
+  "matrixRow": "SCRUM-486-SUPPLIER-PURCHASE-PRECISION",
+  "sourceGlobs": [
+    "convex/sourcingPayables.ts",
+    "convex/utils/supplierPaymentAmounts.ts",
+    "convex/vehicles.ts",
+    "convex/vehicleEdits.ts",
+    "convex/utils/saleCompletion.ts"
+  ],
+  "fingerprint": "1abf88b58261904dc10f1df9f5d38778946bd3306e9b46727f5258ffda1e0404"
+}

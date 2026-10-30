@@ -40,6 +40,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { internal } from "./_generated/api";
 import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
+import { assertVehicleCostPrecision, requireSupplierAmountMinor } from "./utils/supplierPaymentAmounts";
 import { settlementView, deriveSettlementStatus } from "./utils/supplierSettlement";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
@@ -207,6 +208,7 @@ export async function postVehicleAcquisitionIfOwned(
 
   const now = Date.now();
   const currency = await getOrgCurrency(ctx, args.orgId);
+  requireSupplierAmountMinor(args.purchasePrice, currency);
   const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
     args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
   if (bankMethod) {
@@ -1039,6 +1041,7 @@ export const create = mutation({
     // an on-account purchase must name its creditor (AP-Suppliers credit and the
     // supplier payable need a name).
     const isSourced = assertVehicleIntake(args) === "SOURCED";
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
     // stable placeholder so schema uniqueness stays valid. Users update it when
@@ -1405,6 +1408,8 @@ export const update = mutation({
       nextStatus: args.status,
     });
     await assertVehicleImagesAllowed(ctx, args.imageIds);
+
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
 
     // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
     // when this patch CHANGES the type, the supplier or the cost — an existing
@@ -2213,7 +2218,7 @@ export const correctAcquisitionCost = mutation({
     // be stored as typed but posted rounded, so the vehicle and the ledger would disagree by
     // the rounding. Refused before any write.
     try {
-      assertMajorAmountRepresentable(args.newCost, currency, "New purchase cost");
+      requireSupplierAmountMinor(args.newCost, currency);
     } catch (error) {
       console.error(error);
       throwAppError(
@@ -3040,6 +3045,7 @@ export const createSourced = mutation({
     // name here is the server's snapshot, so a client-typed name can never reach the vehicle.
     const supplier = await snapshotSupplier(ctx, submitted.orgId, submitted.sourcedSupplierId);
     const args = { ...submitted, sourcedFromName: supplier.name };
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {
@@ -3894,8 +3900,10 @@ export const importBulk = mutation({
     // for NaN — so NaN passed straight into vehicles and vehicleValuations. Every
     // numeric field is validated up front, before any row is written, so a bad
     // cell fails the whole import rather than half-applying it.
+    const costCurrency = await getOrgCurrency(ctx, args.orgId);
     for (const row of args.vehicles) {
       assertFiniteNumber(row.year, "year");
+      assertVehicleCostPrecision(row, costCurrency);
       assertFiniteNumber(row.sellingPrice, "selling price");
       if (row.mileage !== undefined) assertFiniteNumber(row.mileage, "mileage");
       if (row.purchasePrice !== undefined) assertFiniteNumber(row.purchasePrice, "purchase price");

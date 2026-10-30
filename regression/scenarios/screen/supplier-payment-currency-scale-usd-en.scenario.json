@@ -1,6 +1,6 @@
 {
   "id": "supplier-payment-currency-scale-usd-en",
-  "fingerprint": "621ff7a224d7522518d4e56701758806790e40eec110adcad7cedeefecf71667",
+  "fingerprint": "3c4ba16a1122b7e21982fac1ffa8762ebf1558cef83df0cc0e42e8b140e326d3",
   "domain": "screen",
   "level": "backend",
   "status": "active",
@@ -20,15 +20,16 @@
         "renderer": "jsdom",
         "locale": "en",
         "currency": "USD",
-        "amountDue": 9250.5,
+        "amountDue": 9999,
         "vatAllowed": true,
-        "taxAmount": "12.34"
+        "taxAmount": "12.34",
+        "settlementAmountMinor": 925050
       }
     }
   ],
   "expected": [
     {
-      "observable": "amountDue.groupedNumberParts",
+      "observable": "settlementAmountMinor.groupedNumberParts",
       "value": [
         "9",
         "250",
@@ -36,15 +37,15 @@
       ]
     },
     {
-      "observable": "amountDue.currencySuffix",
+      "observable": "settlementAmountMinor.currencySuffix",
       "value": "USD"
     },
     {
-      "observable": "amountDue.digits",
+      "observable": "settlementAmountMinor.digits",
       "value": "latn"
     },
     {
-      "observable": "amountDue.direction",
+      "observable": "settlementAmountMinor.direction",
       "value": "ltr"
     },
     {

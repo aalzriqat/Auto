@@ -32,7 +32,7 @@ test.each(["en", "ar"] as const)("%s supplier payment requires a selected bank",
     const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
     const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | null>(null);
     return <SupplierPaymentDialog
-      payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, currency: "JOD" }}
+      payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, settlementAmountMinor: 100000, currency: "JOD" }}
       open isPaying={false} notes="" paymentMethod={paymentMethod} bankAccountId={bankAccountId}
       bankOptions={{ banks: [{ _id: "bank_1" as Id<"bankAccounts">, name: "Operating", currency: "JOD" }], truncated: false }}
       taxAmount="" vatAllowed t={(key) => key} onOpenChange={() => undefined} onNotesChange={() => undefined}

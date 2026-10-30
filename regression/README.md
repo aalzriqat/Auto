@@ -15,15 +15,24 @@ the Arabic RTL dialog. The library's `backend` level selects Vitest here; these
 are screen checks, with no backend calls or browser layout certification.
 `bugRef.failingFirst` identifies the commit where all four assertions failed.
 
-The dialog renders one formatted figure, `payable.amountDue`; its optional VAT
-field renders the supplied input string. The display reuses
-`lib/moneyDisplay.formatMoneyAmount`, keeps the ISO currency suffix, and follows
-that formatter's existing whole-number policy. Currency precision follows
+The dialog renders one authoritative figure, `payable.settlementAmountMinor`;
+its optional VAT field renders the supplied input string. The display uses
+`lib/moneyDisplay.formatExactMinorAmount`, keeps the ISO currency suffix, and
+follows the existing whole-number policy. Integer formatting preserves every
+minor unit even near the safe-integer limit. Currency precision follows
 [ECMA-402 Intl.NumberFormat](https://tc39.es/ecma402/#sec-currencydigits) and
 [ISO 4217 List One](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml):
 JOD has three minor-unit digits and USD has two. Both entries were checked on
 2026-10-29. The records cite SCRUM-760's standing consistency ruling; the exact
 scale and Latin-digit requirements are recorded in SCRUM-880.
+
+The SCRUM-880 money records bind public-function tests in
+`convex/sourcingPayables.test.ts`: display/posting equality, strict JOD/USD
+precision refusal at purchase and settlement, writer coverage, stale
+confirmation, legacy cumulative residue, and canonical new instalments.
+The SCRUM-486 rows and investigation boundary are in
+`docs/architecture/scrum880-supplier-payment-precision.md`. These are serial
+`convex-test` checks, not platform or production certification.
 
 ## RT11-DOORS pilot containment
 

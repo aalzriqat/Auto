@@ -1,0 +1,50 @@
+{
+  "id": "supplier-payment-precision-refusal-ar",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum880-precision-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierPaymentDialog.render",
+      "input": {
+        "locale": "ar",
+        "currency": "JOD",
+        "settlementAmountMinor": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "confirmDisabled",
+      "value": true
+    },
+    {
+      "observable": "localizedPrecisionAlert",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "components/sourcing/SupplierPaymentDialog.money.test.tsx",
+    "testName": "SCRUM-880: AR invalid settlement shows a localized refusal and disables payment"
+  },
+  "sourceGlobs": [
+    "components/sourcing/SupplierPaymentDialog.tsx",
+    "lib/i18n/domains/common.ts"
+  ],
+  "fingerprint": "df8d2a84aa8bac3292c0f033c0acd5ef57132c8031c81271526a02936fe9a4bb"
+}

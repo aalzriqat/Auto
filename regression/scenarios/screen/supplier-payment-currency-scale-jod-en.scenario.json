@@ -1,6 +1,6 @@
 {
   "id": "supplier-payment-currency-scale-jod-en",
-  "fingerprint": "e2cc3d252b16a47a021ccbd3146fa855dc94c6b7d03d4513a3ae0857df304931",
+  "fingerprint": "d83060f4d678309d423176e9fba5548d0cd833d912fb63598069dd14356278f9",
   "domain": "screen",
   "level": "backend",
   "status": "active",
@@ -20,15 +20,16 @@
         "renderer": "jsdom",
         "locale": "en",
         "currency": "JOD",
-        "amountDue": 9250.5,
+        "amountDue": 9999,
         "vatAllowed": true,
-        "taxAmount": "12.345"
+        "taxAmount": "12.345",
+        "settlementAmountMinor": 9250500
       }
     }
   ],
   "expected": [
     {
-      "observable": "amountDue.groupedNumberParts",
+      "observable": "settlementAmountMinor.groupedNumberParts",
       "value": [
         "9",
         "250",
@@ -36,15 +37,15 @@
       ]
     },
     {
-      "observable": "amountDue.currencySuffix",
+      "observable": "settlementAmountMinor.currencySuffix",
       "value": "JOD"
     },
     {
-      "observable": "amountDue.digits",
+      "observable": "settlementAmountMinor.digits",
       "value": "latn"
     },
     {
-      "observable": "amountDue.direction",
+      "observable": "settlementAmountMinor.direction",
       "value": "ltr"
     },
     {
