@@ -33,6 +33,14 @@ Final local run after the clean main `e99dc762` merge: six named suites passed 1
 
 The sections below preserve the earlier remediation history. The population behavior above supersedes their narrower three-reader date and header-only discovery descriptions.
 
+### CI fixture follow-up after fa17f4d19
+
+Tests run `41122887534`, slice 1/4 job `124293636862`, failed nine Phase 1 cases. The same nine failures reproduced locally before editing `accountingPhase1.test.ts`. Those fixtures close January 2026 after that period ends without acknowledging the newly required supplier-payables date warning. Eight successful plain-close fixtures and the owner-override fixture now acknowledge only that exact warning. The close/lock test asserts the coded refusal and exact warning, proves an unacknowledged close still refuses, and keeps the original CLOSED/LOCKED assertions. Other permission, blocker, reopen and posting assertions remain. No production source or acknowledgement gate changed.
+
+An AST census enumerated 38 direct close invocations across 22 matching tracked Convex test files. Named aliases are outside that census. Other unacknowledged callers were inspected; the scoped Phase 2, release-rehearsal, collections and deferred-cheque checks passed (5 selected plus the separately selected D3 case). They use current-period fixtures or deliberately assert refusals. The Phase 1 suite passed 43/43 after correction. Disabling the date refusal and disabling close acknowledgement enforcement each killed the new close/lock assertions, with source bytes restored and hashes matched. A thirteenth scenario record binds this historical-close acknowledgement case. This repeats the earlier payroll fixture adaptation class, so `correct` was applied to the caller census and regression rather than weakening a production gate or adding unrelated tooling.
+
+Final follow-up run: 164 tests passed across seven named suites, plus 62 scenario-validator checks (226 total). Convex typecheck passed; root compilation and production-source lint evidence from fa17f4d19 still apply because this follow-up changes test/scenario/docs only. The Phase 1 file has zero lint errors and four pre-existing explicit-any warnings. Both advisory deltas found no weakening. The Spec advisory corrected the new record's actor to Finance Admin and recorded its fixture permission grant before lock; its fingerprint was regenerated and the 62-check validator passed again. Fresh fetch and bare merge were up to date, with identity/evidence still 928 matched/checked and no drift or stale evidence.
+
 SCRUM-858, reviewed starting head `815714850e5558f1590bb0032a26c879fbc30e6a`.
 
 Invariant: a reconciliation compares GL and subledger at the same date, discovers GL controls independently of surviving subledger rows, and reports a difference or UNAVAILABLE when source evidence cannot support a match.

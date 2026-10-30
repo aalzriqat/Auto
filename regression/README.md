@@ -2,6 +2,8 @@
 
 PR #710 population remediation adds twelve backend records for lost opening allocations, future openings, unsupported payable dates, later-payable offsets, shared supplier control families and the supported opening-recovery receipt control. They bind literal test titles, preserve ledger immutability, and cite the existing SCRUM-858 owner ruling. The DIRECT-sale fixtures reuse the pre-existing legacy-cash opt-out in `supplierReceivables.test.ts`; no pilot switch or opt-out census changes. Local execution does not prove current pilot availability, platform behavior or OCC.
 
+A thirteenth record pins the Phase 1 historical-close fixture integration: the new date warning must be shown and acknowledged before close, then the original close/lock behavior remains. Both the date guard and acknowledgement requirement have killed mutation controls.
+
 `scenarios/**/*.scenario.json` hold one record per scenario; `rulings.json` is a
 public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
