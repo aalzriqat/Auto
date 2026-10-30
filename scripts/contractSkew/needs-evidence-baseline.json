@@ -5294,7 +5294,7 @@
       "rationale": "Vehicle image upload forwards File.type as mimeType to a required native string. The checker sees string, but detector field-value evidence remains UNKNOWN. This acknowledgement does not certify MIME correctness or file acceptance.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5309,7 +5309,7 @@
       "rationale": "Vehicle image upload forwards File.size as sizeInBytes to a required native number. The measured checker type matches the primitive intent; detector proof remains absent. No claim is made about resource limits or actual uploaded bytes.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5324,7 +5324,7 @@
       "rationale": "Image deletion asserts the selected storageId string as _storage ID. Native deleteImage requires that namespace. The cast and image-list provenance do not perform namespace validation; acknowledge the explicit unresolved storage-ID finding.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5339,7 +5339,7 @@
       "rationale": "Vehicle update removes raw form bankAccountId, then settlement optionally supplies selectedAcquisitionBank._id only when acquisition banking is needed. Native bankAccounts ID is optional. This intentional selected-option path has no known invalid literal, but namespace remains unverified.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5354,7 +5354,7 @@
       "rationale": "Vehicle update overrides imageIds with the component's string array asserted as _storage IDs. Native update expects an optional array of _storage IDs. Array element namespace is not established by the assertion and remains the precise debt.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5369,7 +5369,7 @@
       "rationale": "Edit-request payload explicitly overrides imageIds with strings asserted as _storage IDs. Native payload.imageIds is an optional _storage ID array. The element namespace is still unverified; matching outer payload structure is not ID proof.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
     },
     {
       "surface": "web",
@@ -5384,7 +5384,7 @@
       "rationale": "Direct create idempotencyKeyRef is initialized with vehicle-create UUID before invocation. Native required string is consistent; retain static ref proof debt without certifying financial/retry behavior.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5399,7 +5399,7 @@
       "rationale": "Direct create bankAccountId comes from settlement's selectedAcquisitionBank?._id only when acquisition bank is needed. Native optional bankAccounts ID permits omission; server-row provenance does not establish runtime namespace proof.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5414,7 +5414,7 @@
       "rationale": "Direct create imageIds is asserted Id<_storage>[] from client image strings. Native optional array of storage IDs is observed; array cast cannot validate each storage namespace.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicles.ts\",\"f7ba897983f811c653bac5327cbf87de2df95efd\"]]"
     },
     {
       "surface": "web",
@@ -5429,7 +5429,7 @@
       "rationale": "Request-create payload.bankAccountId comes from conditional selected acquisition bank row. Native payload leaf is optional bankAccounts ID; runtime namespace/provenance remains unresolved.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
     },
     {
       "surface": "web",
@@ -5444,7 +5444,7 @@
       "rationale": "Request-create payload.imageIds[*] is supplied via array assertion to storage IDs. Native payload allows optional array<_storage ID>; the cast does not validate each element namespace.",
       "issue": "SCRUM-711",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-711 implementer source review: form strings recover only the matching typed picker or stored document supplier ID; explicit optional inspectionStatus type preserves existing payload contents and removes opaque-spread uncertainty. Native current validator comparison proves all six skew calls fixed. Fresh production report retains these 11 UNKNOWN paths with matching identities, causes and fingerprints; they remain unproven. No expiry extension or independent certification is claimed; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"f1a7554821ce88c5bac940d89eebef1cc5483244\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
+      "renewal": "SCRUM-866 PR725 follow-up review: read components/vehicles/VehicleDialog.tsx and its diff against d17b8e0d. Only the stale-ID mismatch toast changes to SupplierSelectionStale; supplier provenance, payloads, call positions and backend contracts are unchanged. Read remaining eleven UNKNOWN paths against their existing rationale and defining backend validators; preserve reviewed uncertainty, expiry 2026-12-01, fingerprints, causes and multiplicity. This is source-blob attribution, not runtime or release certification.; evidence-blobs [[\"components/vehicles/VehicleDialog.tsx\",\"24ac13cb05a8bba2de579d56c94d807f49ffd23f\"],[\"convex/vehicleEdits.ts\",\"6a1a304a36527fbf50bb26e414668edbeea6ec3c\"]]"
     },
     {
       "surface": "web",

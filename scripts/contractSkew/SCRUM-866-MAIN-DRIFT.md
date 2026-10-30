@@ -1,9 +1,10 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-This change clears the 12 baseline differences. It does **not** establish the
-full deploy-fixes-it proof required by AGENTS.md: four vehicle calls remain
-mechanically unproven even against native current argument validators. Do not
-use this change as a release authorization.
+This PR clears the original 12 baseline differences and incorporates #726.
+The final baseline contains **928 entries**. A native comparison proves the six
+reported calls fixed against three current modules; it is not a full current
+spec or release authorization. CI supplies no `--current` spec and may still
+print these calls as unproven in its deploy-fixes-it line.
 
 ## Evidence boundary
 
@@ -12,13 +13,17 @@ use this change as a release authorization.
   downloaded with `gh run view --log` and `gh run download`.
 - Recorded deployed source: `6c71a7654bc8fc11b37b4b57ac52dbb71ecae592`.
   This is the workflow's deployment record, not a source hash read from Convex.
-- A fresh workstation-account metadata read addressed
+- The historical first-commit workstation-account metadata read addressed
   `https://clever-mockingbird-719.convex.cloud` and reproduced the same 11
   breaking findings at six call sites and the same 12 baseline differences.
-- No product code, detector, threshold, schema, expiry policy or workflow changes.
-  No deployment, mutation, merge or reviewer-seat certification.
+- Product code changes in #726 establish supplier-ID provenance in VehicleDialog;
+  this follow-up corrects its stale-selection toast in English and Arabic.
+  Detector, thresholds, schema, expiry policy and workflows are unchanged.
+  This report claims no deployment, production mutation or reviewer-seat certification.
 
 ## Twelve differences and their treatment
+
+Historical first-commit evidence (`1e6b7e9b`), before #726:
 
 All rows are on the `web` surface. `callSiteId` is the file column followed by
 the `line:column` column. These are distinct contract-path findings, not twelve
@@ -46,8 +51,9 @@ five additions retain the production report's exact identity, cause,
 fingerprint and multiplicity. Each has an individual review statement and
 `evidence-blobs` for its client and defining backend file, produced by
 `renewBaselineReviewed.mjs --blob-evidence`. Expiry stays at **2026-12-01**,
-matching the existing debt review window. The other 1,005 records are unchanged.
-Final baseline: **1,010** entries. No bulk renewal.
+matching the existing debt review window. At that first commit, 1,005 records
+were unchanged and the intermediate baseline contained 1,010 entries. The final
+count after #726 is 928, as verified below. No bulk expiry extension.
 
 ## Six deploy-proof calls
 
@@ -61,31 +67,66 @@ For a stronger diagnostic, a temporary one-worker Vitest test imported the real
 registered exports from `convex/financingEconomics.ts`, `convex/vehicles.ts` and
 `convex/vehicleEdits.ts`; it rendered their native `exportArgs()` and compared
 the same six calls extracted from the two client files. It invoked no handler.
-Result: **6 calls, 0 current breaks; 2 fixed, 0 still-failing, 4 unproven**.
+After #726: **6 calls, 0 current breaks; 6 fixed, 0 still-failing, 0 unproven**.
 The three-module spec is scoped evidence, not a complete current spec for the
-global CLI. The temporary diagnostic is not part of the permanent test suite.
+global CLI. The temporary diagnostic is not part of the permanent test suite. The rerun
+uses the four relocated VehicleDialog call identities shown below.
 
 | callSiteId | functionId | Production failure | Current source / native comparison verdict |
 | --- | --- | --- | --- |
 | components/applications/cockpit/DealCockpit.tsx:915:5 | financingEconomics:supplierConcessionBasis | Missing function | Public query at financingEconomics.ts:3386; orgId and applicationId validators match. FIXED in native current comparison. |
 | components/applications/cockpit/DealCockpit.tsx:3806:17 | financingEconomics:resolveAppraisalGap | supplierGapShareMinor, observedSupplierEntitlementMinor, observedSupplierName undeclared | Current mutation at financingEconomics.ts:3070 declares optional number/number/string. FIXED in native current comparison. |
-| components/vehicles/VehicleDialog.tsx:442:17 | vehicles:update | sourcedSupplierId, purchaseSupplierId undeclared | Current update at vehicles.ts:1348 accepts optional suppliers IDs. No current break; both ID values remain TYPE_UNKNOWN, hence UNPROVEN. |
-| components/vehicles/VehicleDialog.tsx:453:17 | vehicleEdits:requestUpdate | payload.sourcedSupplierId undeclared | Current requestUpdate payload accepts optional suppliers ID. No current break; ID value remains TYPE_UNKNOWN, hence UNPROVEN. |
-| components/vehicles/VehicleDialog.tsx:467:31 | vehicles:create | sourcedSupplierId, purchaseSupplierId undeclared | Current create at vehicles.ts:929 accepts optional suppliers IDs. No current break; both values remain TYPE_UNKNOWN, hence UNPROVEN. |
-| components/vehicles/VehicleDialog.tsx:480:17 | vehicleEdits:requestCreate | payload.sourcedSupplierId, payload.purchaseSupplierId undeclared | Current requestCreate at vehicleEdits.ts:148 accepts optional suppliers IDs. No current break; both values remain TYPE_UNKNOWN, hence UNPROVEN. |
+| components/vehicles/VehicleDialog.tsx:464:17 | vehicles:update | sourcedSupplierId, purchaseSupplierId undeclared | Current update at vehicles.ts:1348 accepts optional suppliers IDs. FIXED: picker/stored-document supplier IDs are recovered by parseSupplierId without casts. |
+| components/vehicles/VehicleDialog.tsx:475:17 | vehicleEdits:requestUpdate | payload.sourcedSupplierId undeclared | Current requestUpdate payload accepts optional suppliers ID. FIXED: parseSupplierId preserves the supplier-ID provenance in the request payload. |
+| components/vehicles/VehicleDialog.tsx:489:31 | vehicles:create | sourcedSupplierId, purchaseSupplierId undeclared | Current create at vehicles.ts:929 accepts optional suppliers IDs. FIXED: parseSupplierId preserves supplier-ID provenance; the concrete inspection payload type preserves spread proof. |
+| components/vehicles/VehicleDialog.tsx:502:17 | vehicleEdits:requestCreate | payload.sourcedSupplierId, payload.purchaseSupplierId undeclared | Current requestCreate at vehicleEdits.ts:148 accepts optional suppliers IDs. FIXED: parseSupplierId preserves supplier-ID provenance; the concrete inspection payload type preserves spread proof. |
 
-The four vehicle calls cast form values to `Id<"suppliers">`. Such a cast is not
-runtime validation or a proof that an opaque value belongs to that table. The
-existing comparator preserves that uncertainty. Suppressing these findings or
-treating a baseline review as ACCEPTED would weaken the control. No product
-mismatch was found in the inspected current contracts; runtime success and full
-value provenance remain unproved. SCRUM-711 remains open for that proof.
-This refusal is intentional and already covered by
-`assertionProvenance.test.ts`: direct, conditional, aliased, destructured and
-spread assertions cannot manufacture same-table ID evidence. The form schema
-itself declares the supplier IDs as optional strings in `vehicle.schema.ts`.
+## #726 supplier provenance and follow-up
+
+Squashed commit `d17b8e0dbb15157598f23d7c1eada5fbfc992070` adds
+`parseSupplierId` and retains IDs supplied only by the picker or stored vehicle.
+It recovers the typed ID only when the form string matches that retained ID;
+a mismatch refuses submission. There are no supplier-ID casts in these four
+calls. Table and tenant validation remain server responsibilities. A concrete
+inspection payload type also preserves ID proof across the payload spread.
+`VehicleDialog.tsx` changed by **+29 -5** in #726. The PR also extends the
+existing `VehicleDialog.buyout.test.tsx` with supplier-provenance cases.
+
+Compared with `1e6b7e9b`, the baseline diff removes **93** records and re-adds
+**11** relocated records, a net reduction of **82**: **1,010 → 928** entries.
+These are diff record counts, not 93 retired findings: relocation accounts for
+the eleven re-additions. This follow-up changes only the mismatch toast to
+`SupplierSelectionStale`: “Select the supplier again, then save.” /
+“اختر المورد مرة أخرى ثم احفظ.” Both mismatch assertions now expect that key.
+The bilingual source is `lib/i18n/domains/vehicles.ts`; it generates both EN
+and AR dictionaries. The eleven remaining VehicleDialog entries were refreshed
+with `renewBaselineReviewed.mjs --blob-evidence` after reviewing the one-line
+toast diff. Their identities, fingerprints, causes, multiplicity and expiry
+(2026-12-01) are unchanged. No call-site relocation was needed in this follow-up.
+
+Count commands (PowerShell; rerun at the landing commit):
+
+```powershell
+(Get-Content scripts/contractSkew/needs-evidence-baseline.json -Raw | ConvertFrom-Json).entries.Count
+# 928
+$lines = git diff --unified=0 1e6b7e9b..HEAD -- scripts/contractSkew/needs-evidence-baseline.json
+($lines | Select-String '^-      "callSiteId":').Count
+# 93
+($lines | Select-String '^\+      "callSiteId":').Count
+# 11
+git diff 1e6b7e9b..d17b8e0d --numstat -- components/vehicles/VehicleDialog.tsx
+# 29  5  components/vehicles/VehicleDialog.tsx
+```
+
+The native diagnostic is separate proof of these six calls against three
+modules only. The production workflow supplies no `--current` spec, so its CI
+deploy-fixes-it line may still report these calls unproven. Neither that
+workflow gap nor full release certification is closed by this PR.
 
 ## Reproduction and verification
+
+The 1,010-entry outputs in this section are historical first-commit results,
+not final-head counts. Final follow-up checks are recorded below.
 
 Install was started first: `pnpm install --frozen-lockfile`, exit 0 (pnpm
 10.28.1, Node 26.4.0; CI pins pnpm 11.13.0 and Node 22.21.1).
@@ -140,10 +181,28 @@ full suite passes all 26 files: 1,279 passed, one existing skip, exit 0. A prior
 collected no files and exited 1; the actual 26-file invocation uses
 `pnpm exec vitest run scripts/contractSkew --maxWorkers=1`.
 
-No new regression test is claimed: the change is evidence data and this report;
-the detector's existing refusal behavior remains unchanged. The four outstanding
-value-provenance obligations and missing full current spec prevent the release
-exception from being certified here.
+Follow-up verification:
+
+```text
+pnpm exec vitest run components/vehicles/VehicleDialog lib/i18n/keyCoverage.test.ts --maxWorkers=1
+3 files passed; 24 tests passed; exit 0
+# Before the toast fix: buyout suite 2 failed / 10 passed, both mismatch keys.
+node scripts/contractSkew/checkBaselineIdentity.mjs
+928 baseline entries matched; exit 0; backend finding identity not checked
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 56e4f8586c978ccf2c570be83f3a23c269b9fdac
+928 renewed entries checked; 0 unrenewed, 0 stale, 0 malformed, 0 missing; exit 0
+pnpm exec eslint components/vehicles/VehicleDialog.tsx components/vehicles/VehicleDialog.buyout.test.tsx lib/i18n/domains/vehicles.ts
+0 errors, 83 warnings; exit 0
+pnpm typecheck
+tsc --noEmit; exit 0 (root project excludes convex/)
+git diff --check
+exit 0
+```
+
+The existing buyout tests now assert the stale-selection message for both
+supplier mismatch paths. No production mutation, deployment, screen audit,
+explorer swarm or full application suite was run for this follow-up. Component
+tests do not prove desktop/mobile layout or Arabic RTL rendering.
 
 ## Source references
 
@@ -165,14 +224,13 @@ exception from being certified here.
 ## Reproduce the scoped native diagnostic
 
 Save the following as `scripts/contractSkew/scrum866Diagnostic.test.ts` in a
-disposable checkout at the reviewed base. Download the CI artifact into
+disposable checkout at the final PR head. Download the CI artifact into
 `<os.tmpdir()>/scrum866-artifacts40990172031` first, then run
 `pnpm exec vitest run scripts/contractSkew/scrum866Diagnostic.test.ts --maxWorkers=1`.
 It writes its scoped comparison and rendered argument spec to the temp directory.
 Expected output fields: `callCount: 6`, `current.breaking: []`,
-`classification.callOutcomes: { fixed: 2, stillFails: 0, unproven: 4 }`.
-The assertions establish six calls and zero current breaks; the written
-classification must also be inspected. Remove the temporary test afterward.
+`classification.callOutcomes: { fixed: 6, stillFails: 0, unproven: 0 }`.
+The assertions establish six calls, zero current breaks and six fixed outcomes. Remove the temporary test afterward.
 
 ```ts
 // Temporary local diagnostic; removed before staging.
@@ -189,6 +247,13 @@ import { classifyBreaking } from "./classify.mjs";
 
 test("inspect the six skew calls against native current validators", () => {
   const sourceReport = JSON.parse(fs.readFileSync(path.join(os.tmpdir(), "scrum866-artifacts40990172031/contract-skew-report/skew-report.json"), "utf8"));
+  const relocated = { '442:17': '464:17', '453:17': '475:17', '467:31': '489:31', '480:17': '502:17' };
+  for (const finding of sourceReport.breaking) {
+    if (finding.file !== 'components/vehicles/VehicleDialog.tsx') continue;
+    for (const [before, after] of Object.entries(relocated)) {
+      finding.siteId = finding.siteId.replace(':' + before, ':' + after);
+    }
+  }
   const sites = new Set<string>(sourceReport.breaking.map((f: { siteId: string }) => f.siteId));
   const files = [...new Set<string>(sourceReport.breaking.map((f: { file: string }) => f.file))].map((file) => path.resolve(file));
   const extracted = extractClientCalls(files, path.resolve("tsconfig.json"));
@@ -200,11 +265,14 @@ test("inspect the six skew calls against native current validators", () => {
   }));
   const current = compareContracts(calls, { functions });
   const classification = classifyBreaking(sourceReport.breaking, { currentResult: current });
-  const diagnostic = { source: "56e4f858 native exportArgs; three modules only; six-call comparison only", callCount: calls.length, current, classification };
+  const diagnostic = { source: "PR725 follow-up native exportArgs; three modules only; six-call comparison only", callCount: calls.length, current, classification };
   fs.writeFileSync(path.join(os.tmpdir(), "scrum866-six-current.json"), JSON.stringify(diagnostic, null, 2));
   fs.writeFileSync(path.join(os.tmpdir(), "scrum866-three-modules-current.json"), JSON.stringify({ functions }, null, 2));
   console.log(JSON.stringify({ calls: calls.length, breaking: current.breaking, outcomes: classification.callOutcomes, uncertain: classification.uncertain }));
   expect(calls).toHaveLength(6);
   expect(current.breaking).toEqual([]);
+  expect(classification.callOutcomes).toEqual({ fixed: 6, stillFails: 0, unproven: 0 });
 }, 60_000);
 ```
+
+Toast wording follows [W3C error identification guidance](https://www.w3.org/WAI/WCAG22/Understanding/error-identification): describe the problem and give a corrective action.

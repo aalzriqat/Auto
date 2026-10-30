@@ -56,6 +56,7 @@ const workspaceMessages = defineBilingualMessages({
   AddVehicleProgress: ["Add vehicle progress", "تقدم إضافة المركبة"],
   WizardStepProgress: ["Step {current} of {total}", "الخطوة {current} من {total}"],
   SourceDealerRequired: ["Source dealer is required", "اسم معرض المورد مطلوب"],
+  SupplierSelectionStale: ["Select the supplier again, then save.", "اختر المورد مرة أخرى ثم احفظ."],
   SalesActivity: ["Sales Activity", "نشاط المبيعات"],
   Operations: ["Operations", "العمليات"],
   VehicleDetailsSections: ["Vehicle details sections", "أقسام تفاصيل المركبة"],

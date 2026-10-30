@@ -126,7 +126,7 @@ describe("buying out a saved consignment car", () => {
     save();
     await waitFor(() => expect(vi.mocked(toast.error).mock.calls.length + updateSpy().mock.calls.length).toBeGreaterThan(0));
     expect(updateSpy()).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith("SourceDealerRequired");
+    expect(toast.error).toHaveBeenCalledWith("SupplierSelectionStale");
   });
 
   test("a newly picked supplier replaces the stored ID without sending its name", async () => {
@@ -149,7 +149,7 @@ describe("buying out a saved consignment car", () => {
     await waitFor(() => expect(vi.mocked(toast.error).mock.calls.length + updateSpy().mock.calls.length).toBeGreaterThan(0));
     if (tampered) {
       expect(updateSpy()).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalledWith("PurchaseSupplierNameRequired");
+      expect(toast.error).toHaveBeenCalledWith("SupplierSelectionStale");
     } else {
       expect(updateSpy().mock.calls[0][0]).toMatchObject({ purchaseSupplierId: "sup_picked", purchasePrice: 8200 });
       expect(updateSpy().mock.calls[0][0]).not.toHaveProperty("purchaseSupplierName");

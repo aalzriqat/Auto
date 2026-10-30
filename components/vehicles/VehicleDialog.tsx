@@ -422,7 +422,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       const sourcedSupplierId = parseSupplierId(rawSourcedSupplierId, supplierIds.sourcedSupplierId);
       const purchaseSupplierId = parseSupplierId(rawPurchaseSupplierId, supplierIds.purchaseSupplierId);
       if (sourcedSupplierId === null || purchaseSupplierId === null) {
-        toast.error(t(sourcedSupplierId === null ? "SourceDealerRequired" : "PurchaseSupplierNameRequired"));
+        toast.error(t("SupplierSelectionStale"));
         return;
       }
       // A posted vehicle's cost fields are never submitted: the backend lock refuses
