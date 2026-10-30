@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
+import { assertNotOpeningDepositPayout } from "./openingDepositContainment";
 import { assertVehicleNotDeleted } from "./vehicleLiveness";
 import { requireActorPermission } from "./tenancy";
 import { PERMISSIONS } from "./permissions";
@@ -418,7 +419,10 @@ export async function releaseAllVehiclesForDeposit(
   deposit: Doc<"deposits">,
   options: { exactDepositReader?: boolean } = {}
 ): Promise<void> {
-  await maybeReleaseVehicleHold(ctx, deposit.vehicleId, options);
+  // An opening deposit may be held against the customer alone, with no vehicle to release.
+  if (deposit.vehicleId !== undefined) {
+    await maybeReleaseVehicleHold(ctx, deposit.vehicleId, options);
+  }
 
   const secondaryHolds = await ctx.db
     .query("depositVehicleHolds")
@@ -442,7 +446,7 @@ export async function reactivateAllVehiclesForDeposit(
   ctx: MutationCtx,
   deposit: Doc<"deposits">
 ): Promise<void> {
-  await syncVehicleHoldStatus(ctx, deposit.vehicleId);
+  if (deposit.vehicleId !== undefined) await syncVehicleHoldStatus(ctx, deposit.vehicleId);
 
   const secondaryHolds = await ctx.db
     .query("depositVehicleHolds")
@@ -890,6 +894,9 @@ export async function payOutDepositSlice(
 ): Promise<void> {
   if (args.amountMinor <= 0) return;
 
+  // SCRUM-858 S1: an opening deposit carries no vehicle slice, but the executor refuses it anyway.
+  assertNotOpeningDepositPayout(args.deposit);
+
   // SCRUM-411 P2-02: the money leaves here, so the payment-to-the-finance-company check lives
   // at the executor, so no caller can skip it.
   await assertDepositNotInLiveForward(ctx, args.deposit, args.holdId);
@@ -1075,6 +1082,9 @@ export async function releaseHeldDeposit(
   if (!deposit || deposit.orgId !== args.orgId) {
     throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
   }
+  // SCRUM-858 S1: an opening deposit can only be applied to a sale. Refused here, at the
+  // executor and before any write, so no entry point (release, sale close) can skip it.
+  assertNotOpeningDepositPayout(deposit);
   if (deposit.status !== "HELD") {
     throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "This deposit has already been resolved.");
   }
@@ -1210,7 +1220,7 @@ export async function releaseHeldDeposit(
 
   if (args.resolution === "REFUNDED") {
     const [vehicle, customer] = await Promise.all([
-      ctx.db.get(deposit.vehicleId),
+      deposit.vehicleId === undefined ? Promise.resolve(null) : ctx.db.get(deposit.vehicleId),
       ctx.db.get(deposit.customerId),
     ]);
     const vehicleLabel = vehicle

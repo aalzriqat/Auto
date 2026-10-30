@@ -15,6 +15,13 @@ export const SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING =
 
 export const SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING =
   "Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.";
+/**
+ * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
+ * the period end because deposit activity is dated after it. Server text is the acknowledgement key,
+ * like the two above; the close dialog translates it at display time only.
+ */
+export const CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING =
+  "Customer deposits reconciliation could not be completed as of the period end: deposit activity was recorded after that date, and the deposit side cannot be restated to it. Review customer deposits manually.";
 
 /**
  * SCRUM-858 — owner ruling 2026-10-28: a subledger-to-GL difference in an

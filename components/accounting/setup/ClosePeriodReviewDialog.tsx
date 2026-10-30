@@ -21,6 +21,7 @@ import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
+  CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
@@ -46,6 +47,7 @@ const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances",
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables",
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningReconUnavailablePartnerCapital",
+  [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
 };
 
 function displayWarning(warning: string, t: Translate): string {

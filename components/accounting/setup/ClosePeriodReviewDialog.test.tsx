@@ -11,6 +11,7 @@ import { dictionaries } from "@/lib/i18n/dictionaries";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
+  CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
@@ -186,5 +187,29 @@ describe("ClosePeriodReviewDialog opening-balance reconciliation warnings", () =
     fireEvent.click(screen.getByRole("button", { name: (dictionaries.ar as Record<string, string>).ClosePeriod }));
     await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
     expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual(OPENING_WARNINGS.map(([text]) => text));
+  });
+});
+describe("ClosePeriodReviewDialog customer deposits warning (SCRUM-858 F2)", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.close.mockResolvedValue(undefined);
+    mocks.checklist = { canClose: true, blockers: [], warnings: [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING] };
+  });
+  afterEach(cleanup);
+
+  test("renders the unavailable-comparison warning in Arabic and English, and acknowledges the raw server text", async () => {
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    expect(en.ClosePeriodWarnCustomerDepositsReconUnavailable).toBe(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+    expect(ar.ClosePeriodWarnCustomerDepositsReconUnavailable).toBeTruthy();
+    expect(ar.ClosePeriodWarnCustomerDepositsReconUnavailable).not.toBe(en.ClosePeriodWarnCustomerDepositsReconUnavailable);
+
+    renderDialog("ar");
+    expect(screen.getByText(ar.ClosePeriodWarnCustomerDepositsReconUnavailable)).toBeTruthy();
+    expect(screen.queryByText(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: ar.ClosePeriod }));
+    await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
+    expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual([CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]);
   });
 });

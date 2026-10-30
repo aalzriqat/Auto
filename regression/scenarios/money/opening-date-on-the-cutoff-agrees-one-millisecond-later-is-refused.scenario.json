@@ -1,0 +1,75 @@
+{
+  "id": "opening-date-on-the-cutoff-agrees-one-millisecond-later-is-refused",
+  "fingerprint": "ad4ab6a439a0e9a21d5dd17014bfb912430c070d8422faa9148f224c32a7b1fb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "asOfDate": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "asOfDate": "cutoff-plus-1ms"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "onCutoff.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "oneMsLater.status",
+      "value": "UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "cutoff equality for the opening date: an opening dated ON the cutoff agrees, one millisecond later is refused"
+  },
+  "matrixRow": "OB-B15"
+}

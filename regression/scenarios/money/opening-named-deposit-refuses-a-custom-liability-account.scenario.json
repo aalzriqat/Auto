@@ -1,0 +1,67 @@
+{
+  "id": "opening-named-deposit-refuses-a-custom-liability-account",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "type": "LIABILITY",
+        "code": "2999",
+        "control": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY",
+        "amountMinor": 100000,
+        "account": "custom"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "draft.refused",
+      "value": true
+    },
+    {
+      "observable": "afterRefusal.drafts",
+      "value": 0
+    },
+    {
+      "observable": "afterRefusal.depositRows",
+      "value": 0
+    },
+    {
+      "observable": "afterRefusal.journals",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a named opening deposit cannot sit on a custom liability account"
+  },
+  "matrixRow": "OB-B3",
+  "fingerprint": "46d94cdc6e7c664a8008e141a54f04965dcca27e6d70f064fbeeb3b7887cc782"
+}

@@ -1,0 +1,94 @@
+{
+  "id": "opening-named-deposit-materialises-held-rows-only-after-approval",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY",
+        "amountMinor": 100000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 50000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "beforeApproval.depositRows",
+      "value": 0
+    },
+    {
+      "observable": "beforeApproval.journals",
+      "value": 0
+    },
+    {
+      "observable": "afterApproval.depositRows",
+      "value": 2
+    },
+    {
+      "observable": "afterApproval.journals",
+      "value": 1
+    },
+    {
+      "observable": "afterApproval.journalLines",
+      "value": 2
+    },
+    {
+      "observable": "afterApproval.paymentRows",
+      "value": 0
+    },
+    {
+      "observable": "afterApproval.holdRows",
+      "value": 0
+    },
+    {
+      "observable": "afterApproval.depositStatus",
+      "value": "HELD"
+    },
+    {
+      "observable": "afterApproval.holdActive",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a named opening deposit materialises one HELD native row per customer only after accountant approval, with no cash, payment, voucher or extra GL line"
+  },
+  "matrixRow": "OB-B1",
+  "fingerprint": "4e6862e2a54488a759a3786a8e0a5a8b013866e50899965489e5a165868183f9"
+}

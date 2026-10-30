@@ -472,6 +472,41 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(enEntry).toBe(DEPOSIT_OTHER_TREATMENT_DISABLED_MESSAGE);
   });
 
+  it("SCRUM-858 OPENING_DEPOSIT_PAYOUT_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_PAYOUT_REFUSED");
+    const { OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_PAYOUT_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
+  it("SCRUM-858 OPENING_DEPOSIT_REVERSAL_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_REVERSAL_REFUSED");
+    const { OPENING_DEPOSIT_REVERSAL_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_REVERSAL_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
+  it("SCRUM-858 OPENING_DEPOSIT_DIRECT_POST_REFUSED resolves in ar and en, and EN equals the backend message", async () => {
+    const { enEntry, arEntry } = await expectCodedEntry("OPENING_DEPOSIT_DIRECT_POST_REFUSED");
+    const { OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_DIRECT_POST_REFUSED_MESSAGE);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
+  it.each([
+    "OPENING_DEPOSIT_CUSTOMER_NOT_FOUND",
+    "OPENING_DEPOSIT_CUSTOMER_UNAVAILABLE",
+    "OPENING_DEPOSIT_SECURITY_NAMES_VEHICLE",
+    "OPENING_DEPOSIT_VEHICLE_NOT_FOUND",
+    "OPENING_DEPOSIT_VEHICLE_NOT_HOLDABLE",
+    "OPENING_DEPOSIT_DUPLICATE_RESERVATION",
+  ] as const)("SCRUM-858 %s resolves in ar and en, and EN equals the backend message", async (code) => {
+    const { enEntry, arEntry } = await expectCodedEntry(code);
+    const { OPENING_DEPOSIT_ROW_MESSAGES } = await import("../convex/utils/openingDepositContainment");
+    expect(enEntry).toBe(OPENING_DEPOSIT_ROW_MESSAGES[code]);
+    expect(arEntry).not.toBe(enEntry);
+  });
+
   it("SCRUM-413 OWNER_NAMED_ROLE_LOCKED resolves to its dictionary entry in ar and en, and EN equals the roles.ts message", async () => {
     const { enEntry } = await expectCodedEntry("OWNER_NAMED_ROLE_LOCKED");
     expect((await roleMessageConst("OWNER_NAMED_ROLE_LOCKED_MESSAGE")).message).toBe(enEntry);
