@@ -1,0 +1,77 @@
+{
+  "id": "opening-bucket-crowded-by-deleted-rows-fails-closed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedCars": 101,
+        "status": "AVAILABLE",
+        "isDeleted": "true"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "ownedCars": 1,
+        "acquisitionPosting": "OPENING_STOCK",
+        "costMinor": 8000000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "POSTED"
+    },
+    {
+      "observable": "inventory.reconciled",
+      "value": true
+    },
+    {
+      "observable": "inventory.glBalanceMinor",
+      "value": 8000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "a bucket crowded by deleted rows still opens its live imported owned car"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "d7dbfb282c77028b7b12533b157c43e12b7457d50036352437db1e536915b5ee",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "d0cc86b9f0a74a3f4796df701ced3792b280affd"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "id": "opening-bank-panel-shows-a-dash-for-a-currency-of-unknown-scale",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "locale": "en",
+        "usdBankCurrency": "XXX"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bankRow.amounts",
+      "value": "dash"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "a bank currency whose scale is unknown shows a dash instead of crashing or guessing a scale"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "f60d586f7b3bd9fd0586ad4b30d55b3da4d0ea28061a95105903b48fc6d4f695"
+}
