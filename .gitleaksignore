@@ -28,3 +28,12 @@ fd9b600387d145e607072200d7409e7af51027ac:convex/dealCustodyAccounting.test.ts:ge
 # foo.clerk.accounts.dev. Publishable keys are public by design and this one
 # names no real Clerk instance; generic-api-key matched it on entropy.
 cec5f13009eda47dbe6e773a7634ed00cd971ef2:lib/offlineSwarmClerk.test.ts:generic-api-key:14
+
+# SCRUM-858 S1: commit 603e7a436 (the failing-first RED commit) gave the opening-deposit
+# test rows the rowKey literals dep-reservation-1 and dep-reservation-2. These are synthetic
+# fixture row keys with no credential meaning; generic-api-key matched them on entropy beside
+# the word "key". Later commits renamed them to opening-deposit-row-N, so only this historical
+# commit carries them.
+603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:161
+603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:270
+603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:327

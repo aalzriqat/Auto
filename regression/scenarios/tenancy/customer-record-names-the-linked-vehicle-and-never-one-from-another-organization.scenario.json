@@ -1,0 +1,55 @@
+{
+  "id": "customer-record-names-the-linked-vehicle-and-never-one-from-another-organization",
+  "fingerprint": "050082801d7e40aaeef0ce82767034c0e1fa8aed5d0cc789de4eb53728c72fa7",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "deposit": "reservation-own-car"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "deposit": "reservation-foreign-vehicle"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ownCar.vehicleDesc",
+      "value": "year-make-model"
+    },
+    {
+      "observable": "foreignCar.vehicleDesc",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "customers.getRelations names the linked vehicle for the screen, and never one from another organization (round-2 P2)"
+  },
+  "matrixRow": "OB-B12"
+}

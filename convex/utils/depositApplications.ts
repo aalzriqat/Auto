@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import { isOpeningDeposit, refuseOpeningDepositReversal } from "./openingDepositContainment";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import {
@@ -296,6 +297,14 @@ export async function reverseDepositApplicationsForSale(
     .query("depositApplications")
     .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
     .collect();
+
+  // SCRUM-858 S1: refused for the whole sale before the first write, so no application is left
+  // half-reversed. An opening deposit cannot go back to a refund decision in the pilot.
+  for (const application of applications) {
+    if (application.orgId !== args.orgId || application.status === "REVERSED") continue;
+    const deposit = await ctx.db.get(application.depositId);
+    if (deposit && isOpeningDeposit(deposit)) refuseOpeningDepositReversal();
+  }
 
   const reversed: ReversedApplication[] = [];
   for (const application of applications) {

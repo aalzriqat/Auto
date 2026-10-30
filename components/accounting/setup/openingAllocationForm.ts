@@ -2,12 +2,17 @@ import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
 
 export type OpeningAllocationKind = "CUSTOMER_RECEIVABLE" | "EMPLOYEE_ADVANCE" | "PARTNER_CAPITAL" | "PREPAID_EXPENSE" | "VEHICLE_INVENTORY" |
-  "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "EMPLOYEE_COMMISSION" | "UNALLOCATED_LIABILITY";
+  "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "EMPLOYEE_COMMISSION" | "UNALLOCATED_LIABILITY" |
+  "CUSTOMER_DEPOSIT";
 
 const openingAllocationKinds = new Set<string>([
   "CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "PARTNER_CAPITAL", "PREPAID_EXPENSE", "VEHICLE_INVENTORY",
   "SUPPLIER_RECOVERABLE", "SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY",
+  "CUSTOMER_DEPOSIT",
 ]);
+
+/** SCRUM-858 S1: the two named opening deposit types. */
+export type OpeningDepositKind = "SECURITY" | "RESERVATION";
 
 export function isOpeningAllocationKind(kind: string): kind is OpeningAllocationKind {
   return openingAllocationKinds.has(kind);
@@ -38,10 +43,15 @@ type OpeningAllocationFields = {
   attestedUnexpiredBenefit?: boolean;
   counterpartyName?: string;
   purpose?: "CLAIM" | "REFUNDABLE_DEPOSIT" | "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT";
+  /** CUSTOMER_DEPOSIT only. A security deposit never names a vehicle; a reservation may. */
+  depositKind?: OpeningDepositKind;
+  depositVehicleId?: Id<"vehicles"> | "";
+  /** Display snapshot only, like partyLabel. */
+  depositVehicleLabel?: string;
 };
 
 export type OpeningAllocationDraft = OpeningAllocationFields & (
-  | { kind: "CUSTOMER_RECEIVABLE"; partyId: Id<"customers"> | "" }
+  | { kind: "CUSTOMER_RECEIVABLE" | "CUSTOMER_DEPOSIT"; partyId: Id<"customers"> | "" }
   | { kind: "EMPLOYEE_ADVANCE" | "EMPLOYEE_COMMISSION"; partyId: Id<"users"> | "" }
   | { kind: "VEHICLE_INVENTORY"; partyId: Id<"vehicles"> | "" }
   | { kind: "PARTNER_CAPITAL"; partyId: Id<"partnerEquity"> | "" }
@@ -74,7 +84,7 @@ export function groupOpeningAllocations(
     const kind = allowedKinds[0];
     const creditNormal = choice.policy === "DECLARED_LIABILITY" || kind === "PARTNER_CAPITAL" ||
       kind === "SUPPLIER_PAYABLE" || kind === "OTHER_PAYABLE" || kind === "EMPLOYEE_COMMISSION" ||
-      kind === "UNALLOCATED_LIABILITY";
+      kind === "UNALLOCATED_LIABILITY" || kind === "CUSTOMER_DEPOSIT";
     const prior = groups.get(line.accountId);
     groups.set(line.accountId, {
       accountId: choice.accountId, kind, allowedKinds,
@@ -115,6 +125,22 @@ function customerReceivablePayload(row: OpeningAllocationDraft, base: Allocation
   return { ...base, kind: "CUSTOMER_RECEIVABLE", customerId: row.partyId, title, dueDate };
 }
 
+function customerDepositPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
+  if (row.kind !== "CUSTOMER_DEPOSIT" || !row.partyId) return null;
+  const title = row.title.trim();
+  if (!title || title.length > 200) return null;
+  if (row.depositKind === "SECURITY") {
+    // A security deposit is a guarantee, not a reservation of a car: it cannot name a VIN.
+    if (row.depositVehicleId) return null;
+    return { ...base, kind: "CUSTOMER_DEPOSIT", customerId: row.partyId, depositKind: "SECURITY", title };
+  }
+  if (row.depositKind === "RESERVATION") {
+    return { ...base, kind: "CUSTOMER_DEPOSIT", customerId: row.partyId, depositKind: "RESERVATION", title,
+      ...(row.depositVehicleId ? { vehicleId: row.depositVehicleId } : {}) };
+  }
+  return null;
+}
+
 function prepaidExpensePayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
   const title = row.title.trim();
   const startYearMonth = row.startYearMonth ?? "";
@@ -152,6 +178,7 @@ function unallocatedLiabilityPayload(row: OpeningAllocationDraft, base: Allocati
 function openingAllocationRowPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
   switch (row.kind) {
     case "CUSTOMER_RECEIVABLE": return customerReceivablePayload(row, base);
+    case "CUSTOMER_DEPOSIT": return customerDepositPayload(row, base);
     case "EMPLOYEE_ADVANCE":
       if (!row.partyId) return null;
       if (row.note.length > 500) return null;
@@ -182,7 +209,7 @@ export function buildOpeningAllocationPayload(rows: OpeningAllocationDraft[], cu
   const payload: AllocationPayload = [];
   for (const row of rows) {
     const amountMinor = parseOpeningMoneyMinor(row.amount, currency);
-    const requiresParty = ["CUSTOMER_RECEIVABLE", "EMPLOYEE_ADVANCE", "PARTNER_CAPITAL", "VEHICLE_INVENTORY", "EMPLOYEE_COMMISSION"].includes(row.kind);
+    const requiresParty = ["CUSTOMER_RECEIVABLE", "CUSTOMER_DEPOSIT", "EMPLOYEE_ADVANCE", "PARTNER_CAPITAL", "VEHICLE_INVENTORY", "EMPLOYEE_COMMISSION"].includes(row.kind);
     if (amountMinor === null || amountMinor <= 0 || requiresParty && !row.partyId ||
         !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(row.rowKey) || keys.has(row.rowKey)) return null;
     keys.add(row.rowKey);

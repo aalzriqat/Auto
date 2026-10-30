@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import {
+  CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "@/convex/utils/closeWarnings";
@@ -127,5 +128,30 @@ describe("ClosePeriodReviewDialog supplier payables warnings", () => {
       SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
       UNKNOWN_WARNING,
     ]);
+  });
+});
+
+describe("ClosePeriodReviewDialog customer deposits warning (SCRUM-858 F2)", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.close.mockResolvedValue(undefined);
+    mocks.checklist = { canClose: true, blockers: [], warnings: [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING] };
+  });
+  afterEach(cleanup);
+
+  test("renders the unavailable-comparison warning in Arabic and English, and acknowledges the raw server text", async () => {
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    expect(en.ClosePeriodWarnCustomerDepositsReconUnavailable).toBe(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
+    expect(ar.ClosePeriodWarnCustomerDepositsReconUnavailable).toBeTruthy();
+    expect(ar.ClosePeriodWarnCustomerDepositsReconUnavailable).not.toBe(en.ClosePeriodWarnCustomerDepositsReconUnavailable);
+
+    renderDialog("ar");
+    expect(screen.getByText(ar.ClosePeriodWarnCustomerDepositsReconUnavailable)).toBeTruthy();
+    expect(screen.queryByText(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: ar.ClosePeriod }));
+    await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
+    expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual([CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]);
   });
 });

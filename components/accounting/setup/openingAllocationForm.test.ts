@@ -122,3 +122,55 @@ test("custom liability groups use the server allowlist and sum credit lines on o
   expect(openingAllocationTotalsMatch([row], groups.slice(0, 1), "JOD")).toBe(true);
   expect(openingAllocationTotalsMatch([{ ...row, purpose: "CUSTOMER_DEPOSIT" }], groups.slice(0, 1), "JOD")).toBe(false);
 });
+// SCRUM-858 S1 (ruling SCRUM-858#c23884): named opening deposits.
+test("named opening deposits serialize the customer, the deposit type and only a reservation's vehicle", () => {
+  const deposit = { rowKey: "dep-1", kind: "CUSTOMER_DEPOSIT", accountId: "deposits" as Id<"chartOfAccounts">,
+    partyId: "customer-1" as Id<"customers">, partyLabel: "Synthetic customer", amount: "500.000",
+    title: "Reservation taken before launch", dueDate: "", note: "", depositKind: "RESERVATION", depositVehicleId: "" } as const;
+  const target: OpeningAllocationGroup[] = [{ accountId: "deposits" as Id<"chartOfAccounts">, kind: "UNALLOCATED_LIABILITY",
+    allowedKinds: ["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"], allowedPurposes: ["CUSTOMER_DEPOSIT"],
+    journalMinor: 800_000, label: "2100 · Customer deposits" }];
+  // A reservation without a car is customer credit and sends no vehicleId.
+  expect(buildOpeningAllocationPayload([deposit as OpeningAllocationDraft], "JOD")).toEqual([
+    { kind: "CUSTOMER_DEPOSIT", rowKey: "dep-1", accountId: "deposits", amountMinor: 500_000, customerId: "customer-1",
+      depositKind: "RESERVATION", title: "Reservation taken before launch" }]);
+  const named = { ...deposit, depositVehicleId: "vehicle-1" as Id<"vehicles"> } as OpeningAllocationDraft;
+  expect(buildOpeningAllocationPayload([named], "JOD")).toEqual([
+    { kind: "CUSTOMER_DEPOSIT", rowKey: "dep-1", accountId: "deposits", amountMinor: 500_000, customerId: "customer-1",
+      depositKind: "RESERVATION", vehicleId: "vehicle-1", title: "Reservation taken before launch" }]);
+  const security = { ...deposit, rowKey: "dep-2", depositKind: "SECURITY", amount: "300.000", title: "Security held" } as OpeningAllocationDraft;
+  expect(buildOpeningAllocationPayload([security], "JOD")).toEqual([
+    { kind: "CUSTOMER_DEPOSIT", rowKey: "dep-2", accountId: "deposits", amountMinor: 300_000, customerId: "customer-1",
+      depositKind: "SECURITY", title: "Security held" }]);
+  // Both rows reconcile to the one control account, which takes the named family.
+  expect(openingAllocationTotalsMatch([named, security], target, "JOD")).toBe(true);
+  expect(openingAllocationTotalsMatch([named], target, "JOD")).toBe(false);
+});
+
+test("a named opening deposit is refused locally when it lacks a customer, a type or a title, or a security deposit names a car", () => {
+  const deposit = { rowKey: "dep-1", kind: "CUSTOMER_DEPOSIT", accountId: "deposits" as Id<"chartOfAccounts">,
+    partyId: "customer-1" as Id<"customers">, partyLabel: "", amount: "5.000", title: "Held",
+    dueDate: "", note: "", depositKind: "RESERVATION", depositVehicleId: "" } as const;
+  for (const invalid of [
+    { ...deposit, partyId: "" },
+    { ...deposit, depositKind: undefined },
+    { ...deposit, title: "   " },
+    { ...deposit, title: "x".repeat(201) },
+    { ...deposit, depositKind: "SECURITY", depositVehicleId: "vehicle-1" },
+  ]) expect(buildOpeningAllocationPayload([invalid as unknown as OpeningAllocationDraft], "JOD")).toBeNull();
+});
+
+test("the server's customer-deposit allowance makes the Customer Deposits control a credit-normal group of both families", () => {
+  const groups = groupOpeningAllocations([
+    { accountId: "deposits", debitMinor: 0, creditMinor: 800_000, label: "2100 · Customer deposits" },
+  ], [{ accountId: "deposits" as Id<"chartOfAccounts">, policy: "UNALLOCATED_LIABILITY",
+    allowedKinds: ["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"], allowedPurposes: ["CUSTOMER_DEPOSIT"] }]);
+  expect(groups).toEqual([{ accountId: "deposits", kind: "UNALLOCATED_LIABILITY", journalMinor: 800_000,
+    label: "2100 · Customer deposits", allowedKinds: ["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"],
+    allowedPurposes: ["CUSTOMER_DEPOSIT"] }]);
+  // A custom declared-liability account that the server lists CUSTOMER_DEPOSIT for is credit-normal too.
+  const declared = groupOpeningAllocations([
+    { accountId: "custom", debitMinor: 0, creditMinor: 1_000, label: "2199" },
+  ], [{ accountId: "custom" as Id<"chartOfAccounts">, policy: "DECLARED_LIABILITY", allowedKinds: ["CUSTOMER_DEPOSIT"] }]);
+  expect(declared[0]?.journalMinor).toBe(1_000);
+});

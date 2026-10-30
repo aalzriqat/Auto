@@ -1,0 +1,49 @@
+{
+  "id": "customer-dialog-shows-no-deposit-section-without-the-sales-permission",
+  "fingerprint": "02c5ac5ae979ae0f314a821b80a4e8db6f81cf2f933750701995b04a1c1037d9",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "customerReader",
+        "org": "A"
+      },
+      "action": "CustomerDetailsDialog.dealsTab",
+      "input": {
+        "payloadCarriesDepositRows": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "depositSection.rendered",
+      "value": false
+    },
+    {
+      "observable": "amountsOnScreen",
+      "value": 0
+    },
+    {
+      "observable": "emptyStateClaim",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/customers/CustomerDetailsDialog.deposits.test.tsx",
+    "testName": "a customer reader WITHOUT the sales permission sees no deposit section and no amount, even if the payload carried rows"
+  },
+  "matrixRow": "OB-B12"
+}

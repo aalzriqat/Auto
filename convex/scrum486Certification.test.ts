@@ -2057,7 +2057,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       // that source shape, then require the same legacy receipt exclusion.
       await s.t.run(async (ctx) => {
         const deposit = await ctx.db.get(depositId);
-        if (!deposit) throw new Error("Missing test deposit");
+        if (!deposit?.vehicleId) throw new Error("Missing test deposit");
         const holdId = await ctx.db.insert("depositVehicleHolds", {
           orgId: s.orgId, depositId, vehicleId: deposit.vehicleId,
           active: false, createdAt: Date.now(),
