@@ -832,6 +832,7 @@ export async function main(env = process.env) {
   const { runRehearsalCases, candidateNamesReceiptBank, candidateCommandNamesBank } = await import("./accountingRehearsalCases.mjs");
   const fd1Bank = fd1BankContractInputs({ env, cwd: process.cwd() });
   const context = {
+    rehearsalEvent: env.EVENT_NAME,
     candidateFinanceReceiptNamesBank: candidateNamesReceiptBank(fd1Bank.candidateSource),
     candidateDirectFeeNamesBank: candidateCommandNamesBank(fd1Bank.directFeeSource, "recordDirectFeePayment"),
     candidateChequeClearNamesBank: candidateCommandNamesBank(fd1Bank.chequeSource, "clearCheque"),

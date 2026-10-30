@@ -106,7 +106,7 @@ test("cleanup observation refuses a foreign deletion request before returning ev
 
 let listPrimaryOrgNames: () => Promise<string[]> = async () => [];
 
-async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation" | "deletion-throws", priorOrgs = 0) {
+async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation" | "deletion-throws", priorOrgs = 0, rehearsalEvent?: string) {
   const { t, baseline, primary, approver } = await setup();
   const sdk = (actor: typeof primary) => async (kind: "query" | "mutation", name: string, args: Record<string, unknown>) =>
     kind === "query" ? await actor.query(makeFunctionReference<"query">(name), args)
@@ -151,7 +151,7 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
   const createdRehearsalOrgIds: string[] = [];
   for (let index = 0; index < priorOrgs; index += 1)
     createdRehearsalOrgIds.push(await primary.mutation(api.organizations.create, { name: `Prior rehearsal org ${index}` }));
-  await runCleanupRehearsalCases({ orgId: baseline.orgId, results, config: { convexUrl: CLOUD },
+  await runCleanupRehearsalCases({ orgId: baseline.orgId, results, config: { convexUrl: CLOUD }, rehearsalEvent,
     createdRehearsalOrgIds, qaIdentities: { primaryClerkUserId: PRIMARY.clerkUserId, approverClerkUserId: APPROVER.clerkUserId },
     salesMust: sdk(primary), approverMust: sdk(approver), previewCall, recordCase, unproven });
   return results;
@@ -163,6 +163,22 @@ test("cleanup cloud callbacks execute real fixture, reset and scheduled worker h
     expect.objectContaining({ id: "S858-CLEANUP-HISTORY", status: "PASS" }),
     expect.objectContaining({ id: "S858-CLEANUP-SPLIT", status: "PASS" }),
   ]);
+});
+
+test.each(["repository_dispatch", "workflow_run"])("SCRUM-883 %s runs reference cleanup and truthfully records large discovery coverage", async rehearsalEvent => {
+  const results = await executeCallbacks(undefined, 0, rehearsalEvent);
+  expect(results.map(result => result.status)).toEqual(["PASS", "PASS"]);
+  const names = await listPrimaryOrgNames();
+  expect(names).toContain("QA TEST cleanup SPLIT-REFERENCE");
+  if (rehearsalEvent === "workflow_run") {
+    expect(names).not.toContain("QA TEST cleanup SPLIT-DISCOVERY");
+    expect(results[1]?.detail).toMatchObject({ discovery: {
+      status: "NOT_RUN", reason: "Large retained-history fixture runs only at release; PR rehearsal excludes it (SCRUM-883).",
+    }, reference: { phase: "REFERENCE", stateUnchanged: true } });
+  } else {
+    expect(names).toContain("QA TEST cleanup SPLIT-DISCOVERY");
+    expect(results[1]?.detail).toMatchObject({ discovery: { phase: "DISCOVERY", stateUnchanged: true } });
+  }
 });
 
 test("cleanup cases stay inside the 12-organization fixture bound after eight earlier rehearsal organizations", async () => {
