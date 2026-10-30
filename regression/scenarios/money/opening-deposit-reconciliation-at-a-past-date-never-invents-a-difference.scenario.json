@@ -1,0 +1,99 @@
+{
+  "id": "opening-deposit-reconciliation-at-a-past-date-never-invents-a-difference",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r2-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "datedAfter": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "atCutoff.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "atCutoff.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "atCutoff.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "atCutoff.currencies",
+      "value": "EMPTY"
+    },
+    {
+      "observable": "current.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "current.discrepancyMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a reservation opened, then applied to a LATER sale, reconciles at a date before that sale without inventing a difference (F2 repro)"
+  },
+  "matrixRow": "OB-B10",
+  "fingerprint": "ee6c1d95f8cb55725a7cafcb3b8d1399574dea1d6538b6fe4a5c98ae78d7b853"
+}
