@@ -71,11 +71,15 @@ import { createImportClosure } from "./importClosure.mjs";
 import { identityOf } from "./baseline.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 
+const DEFAULT_IO = Object.freeze({ log: console.log, error: console.error });
+
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 // Inputs every closure includes: dependency pins, and the schema (clients reach it only via the excluded generated dataModel).
 const IMPLICIT_INPUTS = ["package.json", "pnpm-lock.yaml", "convex/schema.ts"];
-const PATH_TOKEN = /[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/g;
+// Scan each maximal token once; anchoring the extension match prevents retries at every character.
+const PATH_TOKEN = /[\w@()[\]/.-]+/g;
+const PATH_WITH_EXTENSION = /^[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/;
 
 /**
  * Mechanical renewal keeps its existing module-id policy. Evidence attribution
@@ -99,7 +103,9 @@ export function backendModuleOf(functionId) {
 export function rationalePaths(rationale) {
   const found = [];
   for (const token of String(rationale).match(PATH_TOKEN) ?? []) {
-    let candidate = token;
+    const match = PATH_WITH_EXTENSION.exec(token);
+    if (!match) continue;
+    let candidate = match[0];
     while (candidate.startsWith("(") && count(candidate, "(") > count(candidate, ")")) candidate = candidate.slice(1);
     if (!found.includes(candidate)) found.push(candidate);
   }
@@ -349,7 +355,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * @param {string} [root]  the repository to check; every path option must stay inside it
  * @returns {number} the process exit code
  */
-export function main(argv, io = { log: console.log, error: console.error }, root = REPO_ROOT) {
+export function main(argv, io = DEFAULT_IO, root = REPO_ROOT) {
   try {
     return run(argv, io, root);
   } catch (error) {

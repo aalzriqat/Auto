@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
@@ -191,6 +192,32 @@ describe("backendModuleOf / rationalePaths", () => {
       "scripts/a.mjs",
     ]);
   });
+
+  test.each([
+    ["", []],
+    [".ts x.TS file.tsxSuffix file.ts_ file.ts9", []],
+    ["a.ts b.tsx c.js d.jsx e.mjs f.cjs g.json h.md i.yml j.yaml", ["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.cjs", "g.json", "h.md", "i.yml", "j.yaml"]],
+    ["a.ts-more a.ts_suffix a.ts9 a.tsé", ["a.ts"]],
+    ["a.ts!b.js", ["a.ts", "b.js"]],
+    ["a.ts/b.js a.ts/b.invalid", ["a.ts/b.js", "a.ts"]],
+    ["a.ts.b.js.invalid", ["a.ts.b.js"]],
+    ["a.ts a.ts", ["a.ts"]],
+    ["((app/(dashboard)/[id]/page.tsx)", ["app/(dashboard)/[id]/page.tsx"]],
+    ["@scope/pkg/file.test.ts ../lib/a.mjs", ["@scope/pkg/file.test.ts", "../lib/a.mjs"]],
+  ])("preserves path-token boundaries in %j", (text, expected) => {
+    expect(rationalePaths(text)).toEqual(expected);
+  });
+
+  test("a long token without a valid extension completes within a bounded subprocess", () => {
+    const moduleUrl = pathToFileURL(path.resolve("scripts/contractSkew/renewBaselineReviewed.mjs")).href;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `import { rationalePaths } from ${JSON.stringify(moduleUrl)};
+       const input = "a".repeat(500_000) + ".tsxSuffix";
+       if (JSON.stringify(rationalePaths(input)) !== "[]") process.exit(1);`,
+    ], { timeout: 5_000, encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  }, 10_000);
 });
 
 describe("narrow renewal evidence (SCRUM-866 round 9)", () => {
