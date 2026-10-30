@@ -3045,7 +3045,6 @@ export const createSourced = mutation({
     // name here is the server's snapshot, so a client-typed name can never reach the vehicle.
     const supplier = await snapshotSupplier(ctx, submitted.orgId, submitted.sourcedSupplierId);
     const args = { ...submitted, sourcedFromName: supplier.name };
-    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {
@@ -3063,6 +3062,7 @@ export const createSourced = mutation({
     assertFiniteNumber(args.mileage, "mileage");
     // SCRUM-717 (D-45): the shared shape rule — supplier named, cost positive.
     assertSourcedShape(args.sourcedFromName, args.sourceCost);
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
     // The ranges are lifted from CreateVehicleSchema, the schema the `create`
     // path does run, so the two entry points accept the same numbers. They are
     // deliberately not stricter than it: `sellingPrice: 0` is legal there and
@@ -3903,7 +3903,6 @@ export const importBulk = mutation({
     const costCurrency = await getOrgCurrency(ctx, args.orgId);
     for (const row of args.vehicles) {
       assertFiniteNumber(row.year, "year");
-      assertVehicleCostPrecision(row, costCurrency);
       assertFiniteNumber(row.sellingPrice, "selling price");
       if (row.mileage !== undefined) assertFiniteNumber(row.mileage, "mileage");
       if (row.purchasePrice !== undefined) assertFiniteNumber(row.purchasePrice, "purchase price");
@@ -3918,6 +3917,22 @@ export const importBulk = mutation({
       // PURCHASE refuses the file), so this only adds what was silently guessed.
       if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
       assertVehicleIntakeSourceShape(row);
+    }
+
+    // Preserve the purchase-cost refusal before checking currency precision.
+    // Both validations run for the whole batch before any writes.
+    if (postsAcquisitions) {
+      const negativeCost = args.vehicles.filter(
+        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
+      );
+      if (negativeCost.length > 0) {
+        throw new ConvexError(
+          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
+        );
+      }
+    }
+    for (const row of args.vehicles) {
+      assertVehicleCostPrecision(row, costCurrency);
     }
 
     // The import wizard supplies an import and source-row identity. For that
@@ -4129,20 +4144,6 @@ export const importBulk = mutation({
       // file legitimately re-presents rows that never posted.
       const wouldCapitalize = (row: { sourceType?: string; purchasePrice?: number }) =>
         parseVehicleSourceType(row.sourceType) !== "SOURCED" && (row.purchasePrice ?? 0) > 0;
-
-      // (0) A NEGATIVE COST IS NOT A PURCHASE. `assertFiniteNumber` above rejects
-      // NaN and Infinity but not sign, and `wouldCapitalize` tests `> 0`, so a
-      // negative price slips past BOTH: the row is inserted, nothing posts, and
-      // the import reports success having created exactly the uncapitalized
-      // inventory row SCRUM-59 exists to prevent.
-      const negativeCost = args.vehicles.filter(
-        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
-      );
-      if (negativeCost.length > 0) {
-        throw new ConvexError(
-          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
-        );
-      }
 
       // (1) TWO ROWS IN THIS FILE THAT ARE THE SAME CAR. The per-row dedup below
       // reads this mutation's own writes, so the second row silently resolves to

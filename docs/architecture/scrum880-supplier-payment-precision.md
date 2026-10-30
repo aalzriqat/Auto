@@ -92,6 +92,32 @@ evidence, not cloud, concurrency or production certification.
 
 ## Existing settlement regression coverage
 
+### Preserve the existing invalid-cost refusals
+
+The next CI run exposed two validation-order regressions. The precision guard
+refused NaN in `createSourced` before the existing finite "supplier cost" check,
+and refused a negative purchase import before its "cannot cost less than nothing"
+check. Both failures reproduced in the full named test files with one worker.
+The inputs were still refused, but callers received the wrong refusal.
+
+`createSourced` now checks finite values and the consignment shape before
+precision. Bulk import validates finite values, then the existing negative-cost
+rule for PURCHASE batches, then precision for every row. These checks remain
+before writes. Neither existing error assertion changed. The tests additionally
+check that no payable or accounting event survives. The negative import also
+checks inventory balance, command evidence, and finance-company creation.
+
+The invariant and writer map above are unchanged. The regression checks cover
+NaN, negative costs, positive excess precision, valid JOD/USD settlement, and
+batch refusal without financial effects. Convex's documented Float64 support
+includes NaN and Infinity, so a number validator alone cannot enforce this
+domain contract. No error is caught and converted to success.
+
+CI slice 2 also logged a missing `usePaginatedQuery` mock export while rendering
+`ProfitApprovalGate`. Its failing-test summary named the NaN test, not that
+component test. The component file passes its six tests locally and its source
+matches `origin/main`; no component or mock was changed for that stderr.
+
 CI exposed two existing assertions in `financedConsignedSettlement.test.ts`:
 one required historical floating-point residue to persist, and one required the
 old prose error. Both failures were reproduced locally. The revised test
@@ -104,7 +130,8 @@ errors or warnings. No production logic changed in this follow-up.
 
 [Convex mutations](https://docs.convex.dev/functions/mutation-functions) support
 atomic validation and writes; [return validation](https://docs.convex.dev/functions/validation)
-checks the query's runtime contract. [ECMA-402 CurrencyDigits](https://tc39.es/ecma402/#sec-currencydigits)
+checks the query's runtime contract. [Convex data types](https://docs.convex.dev/database/types)
+document Float64 support for NaN and Infinity. [ECMA-402 CurrencyDigits](https://tc39.es/ecma402/#sec-currencydigits)
 defines currency precision. SIX's [ISO 4217 List One](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml)
 was retrieved on 2026-10-30 with PowerShell after the browser rejected its XML
 content type: JOD 3, USD 2. [Faithful representation](https://standards.aasb.gov.au/node/336)

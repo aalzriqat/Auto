@@ -3230,6 +3230,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(vehicles).toHaveLength(0);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    const effects = await t.run(async (ctx) => ({
+      payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(),
+      companies: await ctx.db.query("financeCompanies").collect(),
+    }));
+    expect(effects).toEqual({ payables: [], events: [], commands: [], companies: [] });
   });
 
   test("a REVERSED acquisition does not count as proof the car is capitalized", async () => {
