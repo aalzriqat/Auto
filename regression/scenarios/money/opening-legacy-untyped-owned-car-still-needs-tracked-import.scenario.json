@@ -1,0 +1,57 @@
+{
+  "id": "opening-legacy-untyped-owned-car-still-needs-tracked-import",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "ownedLegacyCars": 1,
+        "sourceType": "absent",
+        "purchasePriceJod": 9000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "REFUSED-tracked-opening-import"
+    },
+    {
+      "observable": "writes.journalsLinesDraftsEventsMarkers",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "an owned car with no sourceType (legacy row) is still counted and still needs its tracked import"
+  },
+  "matrixRow": "OB-C3",
+  "fingerprint": "160b757cb00f3dd92bc6b7783b7b5e13fc50084dc02592fa59b14c76c320a258"
+}

@@ -1,0 +1,87 @@
+{
+  "id": "opening-later-receipt-moves-only-its-bank-not-the-opening-report",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.laterReceipt",
+      "input": {
+        "bank": "A",
+        "amountMinor": 250000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {
+        "target": "each"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bookBalanceA.minor",
+      "value": 4250000
+    },
+    {
+      "observable": "bookBalanceB.minor",
+      "value": 3000000
+    },
+    {
+      "observable": "report.afterEqualsBefore",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "a later receipt on one bank moves only that bank's book balance and leaves the opening reconciliation unchanged"
+  },
+  "matrixRow": "OB-G4",
+  "fingerprint": "79fe060154288ff593bff51ada543d2a94f0f1e1e44135c0f4ec94fb75c5f9fe"
+}

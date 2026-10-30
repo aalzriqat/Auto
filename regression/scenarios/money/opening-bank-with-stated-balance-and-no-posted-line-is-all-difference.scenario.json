@@ -1,0 +1,71 @@
+{
+  "id": "opening-bank-with-stated-balance-and-no-posted-line-is-all-difference",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s5-opening-banks",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "bankLines": [
+          {
+            "bank": "A",
+            "debitMinor": 4000000
+          },
+          {
+            "bank": "B",
+            "debitMinor": 3000000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "extraBankC": {
+          "statedMinor": 250000,
+          "postedLine": "none"
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bankC.openingLineMinor",
+      "value": 0
+    },
+    {
+      "observable": "bankC.differenceMinor",
+      "value": 250000
+    },
+    {
+      "observable": "unexplainedOpeningDifference.JOD.netMinor",
+      "value": 250000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBankReconciliation.scrum858.test.ts",
+    "testName": "a bank with a stated opening balance but no posted opening line reports the whole amount as the difference"
+  },
+  "matrixRow": "OB-G3",
+  "fingerprint": "1e5a892c28864fb706731951b266a9d4e9d1b66fa4098e04a0f2351e685c3cfa"
+}

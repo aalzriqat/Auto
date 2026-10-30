@@ -1,0 +1,56 @@
+{
+  "id": "opening-bank-panel-formats-each-bank-in-its-own-currency-en",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr715-round2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "bankAccounts.openingReconciliation",
+      "input": {
+        "locale": "en",
+        "jodBankMinor": 4000001,
+        "usdBankMinor": 12345,
+        "jodDifferenceMinor": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "usdRow.fractionDigits",
+      "value": 2
+    },
+    {
+      "observable": "jodRow.fractionDigits",
+      "value": 3
+    },
+    {
+      "observable": "jodDifference.shownAs",
+      "value": "0.001"
+    },
+    {
+      "observable": "usdRow.mentionsJod",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.test.tsx",
+    "testName": "English: each bank amount uses the bank's own currency and precision"
+  },
+  "matrixRow": "OB-G10",
+  "fingerprint": "86399075816b57ce5cc6b3f9c76cb0d362489490d5f60714b613864f9b30b06e"
+}

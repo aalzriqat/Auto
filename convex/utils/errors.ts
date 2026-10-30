@@ -359,6 +359,9 @@ export const AppErrorCode = {
   CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
   SUPPLIER_AMOUNT_PRECISION: "SUPPLIER_AMOUNT_PRECISION",
   SUPPLIER_PAYMENT_CHANGED: "SUPPLIER_PAYMENT_CHANGED",
+  // SCRUM-858 S2 (owner, SCRUM-858 c23884): see convex/utils/openingInventoryContainment.ts.
+  // Translated under ServerError_<code>.
+  OPENING_INVENTORY_SOURCED_REFUSED: "OPENING_INVENTORY_SOURCED_REFUSED",
 } as const;
 
 export type AppErrorCode = typeof AppErrorCode[keyof typeof AppErrorCode];

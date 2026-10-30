@@ -1,0 +1,84 @@
+{
+  "id": "opening-vehicle-list-shows-owned-cost-and-markers-not-consigned",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-opening-inventory",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "OPENING_STOCK",
+        "ownedCars": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "seed.vehicles",
+      "input": {
+        "consignedCars": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "vehicleInventoryRows": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.list",
+      "input": {
+        "numItems": 20
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ownedCar.purchasePrice",
+      "value": "perVinCost"
+    },
+    {
+      "observable": "ownedCar.openingBalanceDraftId",
+      "value": "set"
+    },
+    {
+      "observable": "ownedCar.openingStockImportId",
+      "value": "cap-screen"
+    },
+    {
+      "observable": "consignedCar.openingBalanceDraftId",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingInventoryCap.scrum858.test.ts",
+    "testName": "an opened owned car lists with its cost and opening markers, and a consigned car does not"
+  },
+  "matrixRow": "OB-C1",
+  "fingerprint": "7f0c6acde1e9693f4dcd2e70253c36773e7eafc8b78b52a51883859a65dd17f1"
+}

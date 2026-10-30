@@ -8,20 +8,20 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, LoadingAccountingState, scaleForCurrency } from "./AccountingTabShared";
 import { BankAccountsTable } from "./bankAccounts/BankAccountsTable";
+import { BankOpeningReconciliationPanel } from "./bankAccounts/BankOpeningReconciliationPanel";
 import { CreateBankAccountDialog } from "./bankAccounts/CreateBankAccountDialog";
 import { ReconciliationPanel } from "./bankAccounts/ReconciliationPanel";
+import { formatMinorAmount } from "./reports/FinancialReportShared";
 import { dateInputToMs, defaultCreateBankAccountForm, type CreateBankAccountFormState } from "./bankAccounts/types";
 
 export function BankAccountsTab() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { code: orgCurrency } = useCurrency();
-  const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState<CreateBankAccountFormState>(defaultCreateBankAccountForm(orgCurrency));
@@ -29,12 +29,26 @@ export function BankAccountsTab() {
 
   const accounts = useQuery(api.bankAccounts.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const bookBalance = useQuery(api.bankAccounts.getBookBalance, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const openingReconciliation = useQuery(api.bankAccounts.openingReconciliation, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createAccount = useMutation(api.bankAccounts.create);
   const setReconciliationTarget = useMutation(api.bankAccounts.setReconciliationTarget);
   const deactivateAccount = useMutation(api.bankAccounts.deactivate);
 
-  const canManageFinance = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // Each bank states its own currency, so an amount is formatted with that currency and its own minor-unit precision
+  // (ISO 4217: JOD 3, USD 2), through the repo's minor-unit formatter. The numbering system is pinned to latn
+  // (ECMA-402 `-u-nu-latn`) so Arabic keeps Western digits. A currency whose scale AutoFlow cannot vouch for shows a
+  // dash, never a guessed scale.
+  const moneyLocale = locale === "ar" ? "ar-u-nu-latn" : "en-US";
+  const formatBankMinor = (minor: number, currency: string) => {
+    try {
+      return formatMinorAmount(minor, currency, moneyLocale);
+    } catch {
+      return "—";
+    }
+  };
+
+  const canManageFinance =!permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   async function runAction(actionName: string, action: () => Promise<unknown>, successMessage: string) {
     setBusyAction(actionName);
@@ -109,10 +123,17 @@ export function BankAccountsTab() {
             </p>
           ) : (
             <p className="text-2xl font-semibold text-foreground">
-              {formatCurrency(bookBalance.balanceMinor / Math.pow(10, scaleForCurrency(bookBalance.currency)))}
+              {formatBankMinor(bookBalance.balanceMinor, bookBalance.currency)}
             </p>
           )}
         </div>
+      )}
+
+      {openingReconciliation && (
+        <BankOpeningReconciliationPanel
+          reconciliation={openingReconciliation}
+          formatMinor={formatBankMinor}
+        />
       )}
 
       <BankAccountsTable
