@@ -10,7 +10,7 @@ import { bundleForMetadata, evaluateBundles, refusePatchedConvex } from "./metad
  * incompatible upgrade must throw, never publish partial evidence.
  * @param {string} root
  */
-export async function renderCurrentSpec(root) {
+export async function renderCurrentSpec(root, concurrency = 4) {
   const require = createRequire(path.join(root, "package.json"));
   refusePatchedConvex(root, require);
   const convexPackage = require.resolve("convex/package.json");
@@ -27,7 +27,7 @@ export async function renderCurrentSpec(root) {
   const evaluatedModules = [];
   const evaluation = { staticallyRefusedModules: 0, differentialRefusedFunctions: 0, evaluations: 0, modules: evaluatedModules };
   const relatives = files.map((file) => path.relative(dir, file).replaceAll("\\", "/"));
-  const results = await evaluateBundles(bundles, relatives);
+  const results = await evaluateBundles(bundles, relatives, concurrency);
   for (const [index, relative] of relatives.entries()) {
     const result = results[index];
     evaluation.staticallyRefusedModules += result.staticRefused ? 1 : 0;

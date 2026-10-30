@@ -1,10 +1,9 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-**Current result, 2026-10-30 completeness investigation:** `changelog.ts` was
-incorrectly refused for pure `Date.UTC` conversion. Its correction renders the
-six previously absent called functions. The global completeness rule remains:
-per-function independence failed a host-object contamination reproduction.
-See the final section for the current proof, exact refusals and limitations.
+**Current remediation, 2026-10-30:** each entry loads in a fresh, explicitly
+capped child process. Every load-time env read refuses that entry. Native
+function constructors are guarded. Global completeness remains. The final
+section supersedes historical shared-realm and finite-env-sampling descriptions.
 
 The original baseline PR cleared 12 differences and incorporated #726.
 The final baseline contains **928 entries**. A native comparison proves the six
@@ -1219,3 +1218,134 @@ not available locally, so its closure still requires the next cloud analysis.
 References: [Node execFile cwd/args](https://nodejs.org/docs/latest-v22.x/api/child_process.html#child_processexecfilefile-args-options-callback),
 [Sonar S8707](https://sonarsource.github.io/rspec/#/rspec/S8707/javascript),
 [Sonar S5906](https://sonarsource.github.io/rspec/#/rspec/S5906/typescript).
+
+
+## PR #727 review remediation at 98689acc (2026-10-30)
+
+### Isolation model and official sources
+
+Convex analyzes one `to_analyze` module in a fresh V8 context. Checked backend
+[db914cf0, analyze.rs:283](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/crates/isolate/src/environment/analyze.rs#L283)
+calls `get_or_create_fresh_context` before `run_analyze(..., to_analyze)` at line
+287. The 1.42.1-era source has the same model at
+[50920350, analyze.rs:282](https://github.com/get-convex/convex-backend/blob/50920350f3b85a39bfe518a369f2fd087f3bf4cf/crates/isolate/src/environment/analyze.rs#L282).
+This is the latest analyze.rs commit before the npm registry's 1.42.1 publication
+(2026-06-29 21:50:08 UTC), an era comparison rather than a claim that the SDK pins
+a deployed backend revision. Both source files were fetched and read. Imports of
+one entry share its realm; unrelated entries do not. Both old host-contamination
+test expectations now match this model. Global completeness remains independent.
+
+The renderer uses four concurrent lanes by default, configurable with
+`renderCurrentSpec.mjs <output> --concurrency <1-16>`. Each evaluation uses
+`execFile(process.execPath, ["--max-old-space-size=256", fixedHelper])`, an exclusive
+temporary cwd, fixed world.json, no shell, a 30-second timeout and 32 MiB output
+bound. Guards install before importing exactly one entry. Emitted bytes remain
+native and import resolution confined. All lanes settle before cleanup, even on
+systemic failure. Children receive no copied host env; an explicit coverage run
+may pass only the output-only NODE_V8_COVERAGE path. App code sees guarded process.
+
+A worker implementation was rejected in advisory review: the parent's V8 heap
+flag overrides Worker resourceLimits even with empty execArgv and env. The
+workflow's 6144 MiB parent setting defeated the worker cap. Child arguments
+provide an independent 256 MiB old-space setting; that number is not total RSS.
+See [Worker resourceLimits](https://nodejs.org/api/worker_threads.html#new-workerfilename-options),
+[execFile options](https://nodejs.org/docs/latest-v22.x/api/child_process.html#child_processexecfilefile-args-options-callback)
+and [Node old-space option](https://nodejs.org/docs/latest-v22.x/api/cli.html#--max-old-space-sizesize-in-mib).
+
+Finite env sampling is removed. Property reads, membership, descriptors,
+enumeration, prototype/extensibility inspection and writes latch entry-wide
+refusal even when caught. No SDK, Zod or NODE_ENV allowlist exists. Convex permits
+[deployment-specific env values](https://docs.convex.dev/production/environment-variables#using-environment-variables-in-dev-and-prod-deployments).
+Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction prototype
+constructors are guarded before import. Calls and Reflect.construct record a
+probe and refuse. Global Function/eval stand-ins still support empty capability
+checks; non-empty source/generated results refuse. Navigator, empty-code and Zod
+worlds remain when their probes are recorded. Clocks/entropy refuse directly and
+need no samples.
+
+### Findings and failing-first evidence
+
+| Finding | Before correction | After correction |
+| --- | --- | --- |
+| REGION=eu outside samples | library export published; missing-evidence assertion fails | env read refuses entry |
+| Unrelated TextEncoder mutation | alone number; combined incorrectly string | both number |
+| Refused first entry reads FEATURE_FLAG | cached library lets good.js:read publish | each entry independently reads env and refuses |
+| Shared args corrupted before Date.now | corrected string expectation fails on old renderer | sibling string remains intact |
+| Date.now(); corrupt() | already isolated-correct string; not an independently reproduced defect under Convex's model | retained ordering control |
+| Four native constructors, direct and Reflect.construct | eight cases publish caught constructor use | eight refuse and record Function.constructor |
+| Env prototype/extensibility reflection (advisory) | two caught reads publish evidence | both refuse |
+
+`renderCurrentSpec.test.ts` first red run: **11 failed, 2 passed**. Separate
+TextEncoder red run: **1 failed**, expected number but received string. Env
+reflection red run: **2 failed**. These exercise the real native bundler/loader.
+The first TextEncoder fixture lacked discovery's required module syntax; it was
+corrected before accepting its red evidence. A passing control is not claimed as
+a failing reproduction. The tests also preserve benign capability-probe FIXED,
+navigator-branch UNPROVEN and global completeness after an absent called export.
+
+### Full-render measurement and saved-spec proof
+
+Single Windows Node 26.4.0 renders with parent old-space 6144 MiB measured
+**10.695 seconds before** and **71.693 seconds after** process isolation. The
+after run included concurrent local validation; these are elapsed measurements,
+not a controlled performance comparison or Linux CI timing. The timed path
+includes native bundling, temporary writes, actual child imports/metadata reads
+and cleanup. The job timeout is 20 minutes. Both renders completed with 1,017
+exports and the same five unavailable Node modules: collectionReminderActions,
+email, pushSend, socialPosting and whatsappSend. The after render performed
+1,349 evaluations with zero env keys/enumerations, zero static refusals and zero
+differential refusals. SDK/Zod imports needed no exception.
+
+Product source identity against 43feaa4f remains intact across convex, app,
+components, packages, lib and apps/mobile. Saved deployed-spec replay using
+current-isolation-final.json exits **7**: **6 FIXED, 0 stillFails, 0 UNPROVEN**,
+11 revision-skew breaks, zero evidence drift/coverage-incomplete causes and no
+ALSO PRESENT. This is SUPPLIED_FILE evidence using existing deployed.json, not a
+fresh production read or release approval.
+
+The native bundler, static app-input refusal, patched-SDK refusal, version pin,
+use-node path, systemic failure refusal and global completeness rule remain.
+No workflow, classifier, exit code or ALSO PRESENT rule changed. Validation and
+new-head CI results are recorded in the PR. Formal seats must re-review the new
+head; advisory Standards/Spec checks are not those seats. No merge/deploy occurs.
+
+
+### Local validation of the remediation
+
+- Full one-worker contract-skew sweep: 28 files, 1,416 passed, zero failed, one
+  pre-existing fetchSpec skip. The known Windows CRLF shebang issue was handled
+  by the existing bounded file-by-file runner, which temporarily normalizes the
+  same three scripts and restores their exact bytes in finally; no script diff.
+  A combined all-files coverage attempt was stopped during collection; it is not
+  passing evidence. The full sweep itself completed successfully.
+- Focused renderer/setup/credential-boundary run: 152 passed. Its scoped coverage
+  command exits nonzero against the repository-wide 90% line/statement and 85%
+  function thresholds: 87.28% lines, 84.96% statements, 76.92% functions. The child
+  helper is zero in the parent-only LCOV. Thresholds were not overridden.
+- PR-added source lines against 43feaa4f in those five renderer files measure
+  350/400 = 87.5% from that LCOV, counting unmeasured helper lines as zero. This
+  scoped local number excludes unchanged-in-this-remediation cli.mjs; the actual
+  whole-PR Sonar result is checked separately, never inferred from this number.
+- Exact CI Node command `node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs`:
+  26 passed, zero failed/skipped, including benign-probe FIXED, navigator-branch
+  UNPROVEN and whole-spec completeness.
+- Root `pnpm typecheck` and `pnpm typecheck:contract-skew` pass. The root excludes
+  convex/; the latter checks detector .mjs files. Changed-file ESLint passes.
+  Cached official SonarJS/native analyzer rules plus no-await-in-loop report no
+  issues in the changed runtime/renderer files. No suppression/config changes.
+- Advisory Standards/Spec rechecks closed the worker-heap and env-reflection
+  findings. An executed equivalent capped child under a 6144 MiB parent reports
+  369,098,752 bytes total V8 heap (352 MiB), unlike the rejected worker's 6 GiB.
+  This corroborates child flag separation, not total RSS or production parity.
+
+The standalone code-review claim remains limited to this implementing session's
+self-review and the named advisory rechecks. Formal review seats remain pending.
+
+
+The fixed-input regression retains both original branches: a valid fixed cwd
+input ignores an invalid extra CLI path, and missing cwd input refuses rather
+than reading that path. Both pass after adapting the payload to one entry.
+The exact 26-test Node command also passes on Windows Node 22.23.4.
+
+Final Node 22.23.4 focused rerun, including both fixed-input branches: **153
+passed** (120 renderer, 18 setup, 15 credential boundary), exit zero.

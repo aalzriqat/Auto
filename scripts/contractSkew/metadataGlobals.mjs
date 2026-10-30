@@ -9,14 +9,15 @@ export function installGlobals({ target, deny, world, reads }) {
   const record = (key) => {
     if (typeof key !== "string") return deny("unsupported environment key");
     reads.keys.add(key);
+    return deny("environment read");
   };
-  // JSON null represents an enumerated key whose value is undefined.
-  const values = Object.fromEntries(Object.entries(world.env ?? {}).map(([key, value]) => [key, value ?? undefined]));
-  const env = new Proxy(Object.assign(Object.create(null), values), {
-    get: (target, key) => { record(key); return target[key]; },
-    ownKeys: (target) => { reads.enumerations++; return Reflect.ownKeys(target); },
-    has: (target, key) => { record(key); return Object.hasOwn(target, key); },
-    getOwnPropertyDescriptor: (target, key) => { record(key); return Reflect.getOwnPropertyDescriptor(target, key); },
+  const env = new Proxy(Object.create(null), {
+    get: (_target, key) => record(key),
+    ownKeys: () => { reads.enumerations++; return deny("environment enumeration"); },
+    has: (_target, key) => record(key),
+    getOwnPropertyDescriptor: (_target, key) => record(key),
+    getPrototypeOf: () => deny("environment reflection"),
+    isExtensible: () => deny("environment reflection"),
     ...writeDenials(deny, "environment write"),
   });
   const processProxy = new Proxy({ env }, {
@@ -153,5 +154,20 @@ function installInputGuards(target, deny) {
   }
   for (const key of ["File", "Buffer", "module", "exports", "require", "global", "fetch", "setTimeout", "setInterval", "setImmediate", "WebAssembly"]) {
     Object.defineProperty(target, key, { configurable: true, get: () => deny(`unavailable global ${key}`) });
+  }
+}
+
+/** Called only inside the disposable realm: these are that realm's intrinsics. */
+export function installConstructorGuards(deny, probes) {
+  const refuse = () => { probes.add("Function.constructor"); return deny("dynamic function constructor"); };
+  const constructor = new Proxy(function () {}, {
+    apply: refuse, construct: refuse, ...reflectionDenials(deny, "dynamic constructor reflection"),
+  });
+  for (const prototype of [Function.prototype, Object.getPrototypeOf(async function () {}),
+    Object.getPrototypeOf(function* () {}), Object.getPrototypeOf(async function* () {})]) {
+    Object.defineProperty(prototype, "constructor", { configurable: false, get() {
+      probes.add("Function.constructor");
+      return constructor;
+    } });
   }
 }

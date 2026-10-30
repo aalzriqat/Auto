@@ -5,7 +5,7 @@ import { isRunDirectly } from "./runDirectly.mjs";
 import { resolveInside } from "./baselineFile.mjs";
 
 /** @param {string | undefined} candidate @param {string} [root] */
-export async function runRenderCurrentSpec(candidate, root = process.cwd()) {
+export async function runRenderCurrentSpec(candidate, root = process.cwd(), concurrency = 4) {
   if (!candidate) {
     console.error("Usage: node scripts/contractSkew/renderCurrentSpec.mjs <output.json>");
     return 2;
@@ -22,7 +22,7 @@ export async function runRenderCurrentSpec(candidate, root = process.cwd()) {
     // Never let a previous run's complete file survive a failed render.
     fs.rmSync(output, { force: true });
     fs.rmSync(temporary, { force: true });
-    const spec = await renderCurrentSpec(path.resolve(root));
+    const spec = await renderCurrentSpec(path.resolve(root), concurrency);
     // Exclusive creation also refuses a dangling symlink introduced after resolution.
     fs.writeFileSync(temporary, JSON.stringify(spec), { flag: "wx" });
     fs.renameSync(temporary, output);
@@ -47,5 +47,8 @@ function removeFailedOutput(files) {
 }
 
 if (isRunDirectly(import.meta.url)) {
-  process.exit(await runRenderCurrentSpec(process.argv[2]));
+  const args = process.argv.slice(2);
+  const valid = args.length === 1 || (args.length === 3 && args[1] === "--concurrency" && /^[1-9][0-9]?$/.test(args[2]));
+  if (!valid) process.exit(2);
+  process.exit(await runRenderCurrentSpec(args[0], process.cwd(), Number(args[2] ?? 4)));
 }

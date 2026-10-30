@@ -29,15 +29,17 @@ test("world setup preserves the host, same-realm intrinsics and pure UTC convers
   expect(() => target.Math.random()).toThrow("randomness");
 });
 
-test("environment reads record only the world's keys, descriptors and enumeration", () => {
-  const { target, reads } = runtime({ env: { PRESENT: "value", UNDEFINED: null } });
-  expect(target.process.env.PRESENT).toBe("value");
-  expect(target.process.env.UNDEFINED).toBeUndefined();
-  expect("PRESENT" in target.process.env).toBe(true);
-  expect(Object.getOwnPropertyDescriptor(target.process.env, "PRESENT")?.value).toBe("value");
-  expect(Object.keys(target.process.env)).toEqual(["PRESENT", "UNDEFINED"]);
-  expect([...reads.keys]).toEqual(["PRESENT", "UNDEFINED"]);
-  expect(reads.enumerations).toBe(1);
+test.each([
+  ["environment read", (g: typeof globalThis) => g.process.env.PRESENT],
+  ["environment read", (g: typeof globalThis) => "PRESENT" in g.process.env],
+  ["environment read", (g: typeof globalThis) => Object.getOwnPropertyDescriptor(g.process.env, "PRESENT")],
+  ["environment enumeration", (g: typeof globalThis) => Reflect.ownKeys(g.process.env)],
+])("environment access always refuses: %s", (reason, operation) => {
+  const { target, reads, state } = runtime();
+  expect(() => operation(target)).toThrow(reason);
+  expect(state.reason).toBe(reason);
+  if (reason === "environment read") expect([...reads.keys]).toEqual(["PRESENT"]);
+  else expect(reads.enumerations).toBe(1);
 });
 
 test.each([

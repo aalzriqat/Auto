@@ -33,20 +33,24 @@ test("a malformed registered export refuses metadata instead of publishing a par
   expect(() => functionMetadata({ file: "invalid.ts", exports: { malformed } })).toThrow("Unrecognized registered export");
 });
 
-test.each([true, false])("world input stays fixed to cwd despite an extra CLI path, fixed file exists=%s", (exists) => {
+test.each([true, false])("realm input stays fixed to cwd despite an extra CLI path, exists=%s", (exists) => {
   const { root, sandbox } = fixture();
   const outside = path.join(sandbox, "outside-world.json");
-  const emptyWorld = JSON.stringify({ modules: { paths: [], forbidden: {}, root }, entries: [], world: {} });
-  fs.writeFileSync(outside, exists ? "not a world" : emptyWorld);
-  if (exists) fs.writeFileSync(path.join(root, "world.json"), emptyWorld);
+  const moduleFile = path.join(root, "empty.js");
+  fs.writeFileSync(moduleFile, "export {};");
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  fs.writeFileSync(outside, "not realm input");
+  if (exists) fs.writeFileSync(path.join(root, "world.json"), JSON.stringify({
+    modules: { paths: [moduleFile], forbidden: {}, root }, entry: { file: "empty.ts", reason: "" }, world: {},
+  }));
   const child = spawnSync(process.execPath, [path.resolve("scripts/contractSkew/metadataWorld.mjs"), outside], {
     cwd: root, encoding: "utf8", timeout: 30_000,
   });
   expect(child.error).toBeUndefined();
   expect(child.status, child.stderr).toBe(exists ? 0 : 1);
-  if (exists) expect(JSON.parse(child.stdout)).toEqual([]);
+  if (exists) expect(JSON.parse(child.stdout).functions).toEqual([]);
   else expect(child.stderr).toContain("world.json");
-  expect(fs.readFileSync(outside, "utf8")).toBe(exists ? "not a world" : emptyWorld);
+  expect(fs.readFileSync(outside, "utf8")).toBe("not realm input");
 });
 
 function fixture() {
@@ -90,13 +94,13 @@ export const read = queryGeneric({ args: { timestamp: v.literal(timestamp) }, ha
     value: { timestamp: { fieldType: { type: "literal", value: 1577836800000 }, optional: false } } });
 });
 
-test("a failed entry sharing mutated chunks leaves the render incomplete", async () => {
+test.each(["corrupt(); Date.now();", "Date.now(); corrupt();"])("a refused entry cannot corrupt a sibling: %s", async (operation) => {
   const { root } = fixture();
   fs.writeFileSync(path.join(root, "convex/sharedArgs.ts"), `import { v } from "convex/values";
 export const args = { label: v.string() };
 export function corrupt() { args.label = v.number(); }`);
   fs.writeFileSync(path.join(root, "convex/aaBroken.ts"), `import { args, corrupt } from "./sharedArgs";
-corrupt(); Date.now(); export { args };`);
+${operation} export { args };`);
   fs.writeFileSync(path.join(root, "convex/good.ts"), `import { queryGeneric } from "convex/server";
 import { args } from "./sharedArgs";
 export const read = queryGeneric({ args, handler: () => null });`);
@@ -110,17 +114,17 @@ export const read = queryGeneric({ args, handler: () => null });`);
   const spec = await renderCurrentSpec(root);
   expect(spec.unavailableModules).toEqual([{ file: "aaBroken.ts", reason: "clock" }]);
   expect(spec.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual({ type: "object",
-    value: { label: { fieldType: { type: "number" }, optional: false } } });
+    value: { label: { fieldType: { type: "string" }, optional: false } } });
   expect(missingCurrentFunctions(spec, [{ identifier: "aaBroken:read" }])).toEqual(["aaBroken:read"]);
 });
 
 test.each([
-  ['process.env.NODE_ENV === "production" ? {} : { label: v.string() }', false],
-  ['(process.env.IGNORED, { label: v.string() })', true],
-  ['Object.keys(process.env).length ? {} : { label: v.string() }', false],
-  ['"NODE_ENV" in process.env ? {} : { label: v.string() }', false],
-  ['Object.getOwnPropertyDescriptor(process.env, "NODE_ENV") ? {} : { label: v.string() }', false],
-])("library load-time env is compared per function: %s", async (args, stable) => {
+  ['process.env.NODE_ENV === "production" ? {} : { label: v.string() }'],
+  ['(process.env.IGNORED, { label: v.string() })'],
+  ['Object.keys(process.env).length ? {} : { label: v.string() }'],
+  ['"NODE_ENV" in process.env ? {} : { label: v.string() }'],
+  ['Object.getOwnPropertyDescriptor(process.env, "NODE_ENV") ? {} : { label: v.string() }'],
+])("library load-time env refuses every registration: %s", async (args) => {
   const { root } = fixture();
   const pkg = path.join(root, "node_modules/library-args");
   fs.mkdirSync(pkg, { recursive: true });
@@ -132,12 +136,10 @@ import { args } from "library-args";
 export const read = queryGeneric({ args, handler: () => null });
 export const unaffected = queryGeneric({ args: {}, handler: () => null });`);
   const spec = await renderCurrentSpec(root);
-  expect(missingCurrentFunctions(spec, [{ identifier: "library:read" }])).toEqual(stable ? [] : ["library:read"]);
-  expect(missingCurrentFunctions(spec, [{ identifier: "library:unaffected" }])).toEqual([]);
-  expect(spec.evaluation.differentialRefusedFunctions).toBe(stable ? 0 : 1);
-  if (stable) expect(spec.functions.find((fn) => fn.identifier === "library.js:read")?.args).toEqual({
-    type: "object", value: { label: { fieldType: { type: "string" }, optional: false } },
-  });
+  expect(missingCurrentFunctions(spec, [{ identifier: "library:read" }, { identifier: "library:unaffected" }]))
+    .toEqual(["library:read", "library:unaffected"]);
+  expect(spec.unavailableModules.find((entry) => entry.file === "library.ts")?.reason).toMatch(/environment/);
+  expect(spec.evaluation.differentialRefusedFunctions).toBe(0);
 });
 
 test.each([
@@ -150,9 +152,11 @@ test.each([
   ['Object.setPrototypeOf(process.env, {});', "environment write"],
   ['Object.preventExtensions(process.env);', "environment write"],
   ['process.env[Symbol.iterator];', "unsupported environment key"],
-  ['for (let i = 0; i < 33; i++) process.env["KEY_" + i];', "environment key budget exceeded"],
-  ['if (process.env.NODE_ENV) process.env.SECOND;', "environment keys changed across worlds"],
+  ['for (let i = 0; i < 33; i++) process.env["KEY_" + i];', "environment read"],
+  ['if (process.env.NODE_ENV) process.env.SECOND;', "environment read"],
   ['Object.getOwnPropertyDescriptor(navigator ?? {}, "platform");', "unsupported navigator probe"],
+  ['Object.getPrototypeOf(process.env);', "environment reflection"],
+  ['Object.isExtensible(process.env);', "environment reflection"],
 ])("unsupported library env operation discards module evidence: %s", async (operation, reason) => {
   const { root } = fixture();
   const pkg = path.join(root, "node_modules/library-refusal");
@@ -167,7 +171,7 @@ export const read = queryGeneric({ args, handler: () => null });`);
   expect(missingCurrentFunctions(spec, [{ identifier: "library:read" }])).toEqual(["library:read"]);
 });
 
-test("a library error in a differential world discards the render", async () => {
+test("an env-dependent library error refuses its entry before reading a value", async () => {
   const { root } = fixture();
   const pkg = path.join(root, "node_modules/library-error");
   fs.mkdirSync(pkg, { recursive: true });
@@ -177,7 +181,8 @@ export const args = {};`);
   fs.writeFileSync(path.join(root, "convex/library.ts"), `import { queryGeneric } from "convex/server";
 import { args } from "library-error";
 export const read = queryGeneric({ args, handler: () => null });`);
-  await expect(renderCurrentSpec(root)).rejects.toThrow("world failed");
+  const spec = await renderCurrentSpec(root);
+  expect(spec.unavailableModules).toEqual([{ file: "library.ts", reason: "environment read" }]);
 });
 
 test.each([
@@ -594,4 +599,69 @@ test("CLI refuses an output outside its repository without changing that file", 
   } finally {
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
+});
+
+// SCRUM-866 review regressions: each entry must prove its own registration.
+test.each([
+  ["REGION", 'process.env.REGION === "eu" ? {} : { label: v.string() }', false],
+  ["refused entry env", 'process.env.FEATURE_FLAG ? {} : { label: v.string() }', true],
+])("review regression: %s refuses all evidence on an env read", async (_name, args, first) => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/review-env");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `import { v } from "convex/values"; export const args = ${args};`);
+  if (first) fs.writeFileSync(path.join(root, "convex/aaFirst.ts"), 'import { args } from "review-env"; Date.now(); export { args };');
+  fs.writeFileSync(path.join(root, "convex/good.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "review-env"; export const read = queryGeneric({ args, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "good:read" }])).toEqual(["good:read"]);
+  expect(spec.unavailableModules.find((entry) => entry.file === "good.ts")?.reason).toMatch(/environment/);
+});
+
+test("review regression: TextEncoder side effects stay in the importing entry", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/good.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values"; export const read = queryGeneric({
+args: { label: TextEncoder.__seat2Flag ? v.string() : v.number() }, handler: () => null });`);
+  const alone = await renderCurrentSpec(root);
+  fs.writeFileSync(path.join(root, "convex/aaSideEffect.ts"), 'export {}; TextEncoder.__seat2Flag = true;');
+  const together = await renderCurrentSpec(root);
+  const expected = { type: "object", value: { label: { fieldType: { type: "number" }, optional: false } } };
+  expect(alone.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual(expected);
+  expect(together.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual(expected);
+});
+
+test.each([
+  ['ordinary', '(() => {}).constructor'],
+  ['async', '(async function(){}).constructor'],
+  ['generator', '(function*(){}).constructor'],
+  ['async generator', '(async function*(){}).constructor'],
+].flatMap(([name, constructor]) => [
+  [name, `${constructor}("return Object.hasOwn(this, 'Buffer')")`],
+  [`Reflect.construct ${name}`, `Reflect.construct(${constructor}, ["return Object.hasOwn(this, 'Buffer')"])`],
+]))("review regression: native %s constructor refuses even when caught", async (_name, expression) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/constructor.ts"), `import { queryGeneric } from "convex/server";
+try { ${expression}; } catch {} export const read = queryGeneric({ args: {}, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "constructor:read" }])).toEqual(["constructor:read"]);
+  expect(spec.evaluation.modules.find((entry) => entry.file === "constructor.ts")?.capabilityProbes).toContain("Function.constructor");
+});
+
+test.each([1, 4])("CLI concurrency %s preserves metadata and cleans temporary realms", (concurrency) => {
+  const { root, output } = fixture();
+  const run = spawnSync(process.execPath, [path.resolve("scripts/contractSkew/renderCurrentSpec.mjs"), output,
+    "--concurrency", String(concurrency)], { cwd: root, encoding: "utf8", timeout: 30_000,
+    env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=6144" } });
+  expect(run.error).toBeUndefined();
+  expect(run.status, run.stderr).toBe(0);
+  expect(JSON.parse(fs.readFileSync(output, "utf8")).functions).toHaveLength(4);
+  expect(fs.readdirSync(path.join(root, "node_modules/.cache"))).toEqual([]);
+});
+
+test.each([0, 17, 1.5])("invalid concurrency %s publishes no output", async (concurrency) => {
+  const { root, output } = fixture();
+  expect(await runRenderCurrentSpec(output, root, concurrency)).toBe(1);
+  expect(fs.existsSync(output)).toBe(false);
 });

@@ -4,10 +4,9 @@ import path from "node:path";
 import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
 import { functionMetadata } from "./currentSpec.mjs";
-import { installGlobals } from "./metadataGlobals.mjs";
+import { installConstructorGuards, installGlobals } from "./metadataGlobals.mjs";
 
-// The parent fixes cwd to its exclusive world directory. No CLI-supplied path
-// can select a different input file, even when this helper is invoked directly.
+// Only the parent's exclusive cwd selects input; argv cannot name another file.
 const input = JSON.parse(fs.readFileSync(path.join(process.cwd(), "world.json"), "utf8"));
 const write = process.stdout.write.bind(process.stdout);
 const finish = process.exit.bind(process);
@@ -27,21 +26,16 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   if (forbidden.has(url)) return deny(forbidden.get(url));
   return nextResolve(specifier, context);
 } });
+installConstructorGuards(deny, reads.capabilityProbes);
 installGlobals({ target: globalThis, deny, world: input.world, reads });
 
-/** Imports must be sequential: the denial latch and probe records belong to
- * the active entry, and each world deliberately shares its native ESM cache. */
+/** Exactly one entry and its actual imports run in this fresh realm. */
 async function readEntry(entry) {
-  state.reason = "";
-  reads.keys.clear();
-  reads.enumerations = 0;
-  reads.capabilityProbes.clear();
   if (entry.reason) return { functions: [], reason: entry.reason, keys: [], enumerations: 0, capabilityProbes: [] };
   try {
     const url = pathToFileURL(path.join(input.modules.root, entry.file.replace(/\.[^.]+$/, ".js"))).href;
     const exports = await import(url);
     const functions = functionMetadata({ file: entry.file, exports });
-    if (reads.keys.size > 32) state.reason ||= "environment key budget exceeded";
     return report(state.reason ? [] : functions);
   } catch (error) {
     if (error instanceof Error && "metadataReason" in error && typeof error.metadataReason === "string") {
@@ -58,9 +52,4 @@ function report(functions) {
     capabilityProbes: [...reads.capabilityProbes], error: "" };
 }
 
-const results = await input.entries.reduce(async (previous, entry) => {
-  const completed = await previous;
-  completed.push(await readEntry(entry));
-  return completed;
-}, Promise.resolve([]));
-write(JSON.stringify(results), () => finish(0));
+write(JSON.stringify(await readEntry(input.entry)), () => finish(0));

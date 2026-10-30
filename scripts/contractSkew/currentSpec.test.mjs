@@ -104,7 +104,7 @@ a({ label: "new" }); b({}); }`);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("SCRUM-866 host-object contamination makes per-function independence unsound; the global rule refuses", async () => {
+test("SCRUM-866 entry isolation preserves sibling metadata; the global rule still refuses missing calls", async () => {
   const root = fixture();
   const flag = "__scrum866HostIsolationProbe";
   assert.equal(Object.hasOwn(TextEncoder, flag), false);
@@ -121,9 +121,9 @@ export const read = queryGeneric({ args: {}, handler: () => null });`);
     const together = await renderCurrentSpec(root);
     assert.equal(Object.hasOwn(TextEncoder, flag), false, "worlds must never mutate the parent process");
     assert.deepEqual(together.unavailableModules, [{ file: "aaBad.ts", reason: "clock" }]);
-    // Modules share objects within a world; process isolation prevents parent
-    // contamination, while global completeness still refuses partial evidence.
-    assert.equal(argsOf(together)?.value.label.fieldType.type, "string");
+    // Convex analyzes each entry in a fresh context (analyze.rs:283).
+    // Missing called entries still trigger the global completeness refusal.
+    assert.equal(argsOf(together)?.value.label.fieldType.type, "number");
     fs.mkdirSync(path.join(root, "app"));
     fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
 declare const api: { good: { read: unknown }, aaBad: { read: unknown } };
@@ -156,10 +156,12 @@ test("an unreviewed Convex SDK version refuses before module evaluation", async 
 
 /** @type {Array<[string, string, {fixed: number, stillFails: number, unproven: number}, boolean?]>} */
 const environmentCases = [
+  ["library benign capability probe is FIXED", `(typeof navigator !== "undefined", (() => { try { new Function(""); } catch {} })(), { label: v.string() })`, { fixed: 1, stillFails: 0, unproven: 0 }, true],
+  ["library navigator branch is UNPROVEN", `navigator?.userAgent?.includes("Cloudflare") ? {} : { label: v.string() }`, { fixed: 0, stillFails: 0, unproven: 1 }, true],
   ["environment-blind normal metadata is FIXED", '{ label: v.string() }', { fixed: 1, stillFails: 0, unproven: 0 }],
   ["NODE_ENV-conditioned metadata is UNPROVEN", 'process.env.NODE_ENV === "production" ? {} : { label: v.string() }', { fixed: 0, stillFails: 0, unproven: 1 }],
   ["library NODE_ENV-conditioned metadata is UNPROVEN", 'process.env.NODE_ENV === "production" ? {} : { label: v.string() }', { fixed: 0, stillFails: 0, unproven: 1 }, true],
-  ["library environment read with independent args is FIXED", '(process.env.NODE_ENV, { label: v.string() })', { fixed: 1, stillFails: 0, unproven: 0 }, true],
+  ["library environment read with independent args is UNPROVEN", '(process.env.NODE_ENV, { label: v.string() })', { fixed: 0, stillFails: 0, unproven: 1 }, true],
 ];
 for (const [scenario, args, expected, library = false] of environmentCases) {
   test(scenario, async () => {

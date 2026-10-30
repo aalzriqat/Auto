@@ -5,7 +5,6 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
 import { resolveInside } from "./baselineFile.mjs";
 
 /** @typedef {{identifier: string, functionType: string, visibility: {kind: string}, args: unknown}} FunctionMetadata */
@@ -177,8 +176,9 @@ function staticRefusal(bundles, file) {
   return "";
 }
 
-/** Evaluate all entries together, in a fresh, bounded process for each world. */
-export async function evaluateBundles(bundles, files) {
+/** Fresh processes mirror Convex's per-module analyzer contexts. Pool size bounds memory. */
+export async function evaluateBundles(bundles, files, concurrency = 4) {
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16) throw new Error("Invalid metadata concurrency (1-16)");
   const entries = files.map((file) => ({ file, reason: staticRefusal(bundles, file) }));
   const cache = resolveInside(bundles.root, "node_modules/.cache", "metadata temporary directory");
   resolveInside(bundles.root, path.dirname(cache), "metadata temporary parent");
@@ -186,27 +186,42 @@ export async function evaluateBundles(bundles, files) {
   resolveInside(bundles.root, fs.realpathSync(cache), "metadata temporary directory");
   const directory = fs.mkdtempSync(path.join(fs.realpathSync(cache), "metadata-worlds-"));
   try {
-    const coverage = process.env.NODE_V8_COVERAGE && path.resolve(process.env.NODE_V8_COVERAGE);
-    const evaluateWorld = (modules, world) => runWorld({ directory, modules, entries, world, coverage });
     const probe = writeModules(directory, "probe", bundles.probe, bundles.ts);
     const deployment = writeModules(directory, "deployment", bundles.deployment, bundles.ts);
-    const baseline = await evaluateWorld(probe, {});
-    const keys = new Set(baseline.filter((result) => !result.reason).flatMap((result) => result.keys));
-    if (baseline.some((result) => result.enumerations) && !keys.size) keys.add("__AUTOFLOW_ENV_PROBE__");
-    const worlds = runtimeWorlds([...keys]);
-    // Worlds are independent, but serial execution bounds total child memory to
-    // one 1024 MiB heap. Entries inside each world share module/global state.
-    const results = await worlds.reduce(async (previous, world) => {
-      const completed = await previous;
-      completed.push(await evaluateWorld(probe, world));
-      return completed;
-    }, Promise.resolve(/** @type {WorldEntry[][]} */ ([])));
-    const deployed = await evaluateWorld(deployment, {});
-    return entries.map((entry, index) => compareWorlds(entry, baseline[index],
-      [...results.map((world) => world[index]), deployed[index]], keys));
+    const results = new Array(entries.length);
+    let next = 0;
+    // Each lane awaits its child's exit before starting the next one. Await all
+    // lanes even on failure, so cleanup cannot race an in-flight module import.
+    /** @returns {Promise<void>} */
+    const evaluateNext = async () => {
+      if (next >= entries.length) return;
+      const index = next++;
+      results[index] = await evaluateEntry(entries[index], probe, deployment, directory);
+      return evaluateNext();
+    };
+    const lanes = Array.from({ length: Math.min(concurrency, entries.length) }, evaluateNext);
+    const settled = await Promise.allSettled(lanes);
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+    return results;
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+}
+
+async function evaluateEntry(entry, probe, deployment, directory) {
+  if (entry.reason) return { functions: [], reason: entry.reason, staticRefused: true, evaluations: 0 };
+  const baseline = await runWorld(directory, probe, entry, {});
+  if (baseline.reason) return compareWorlds(baseline, []);
+  const worlds = runtimeWorlds(baseline.capabilityProbes);
+  // Sequential worlds within a lane keep the total live-child count bounded.
+  const results = await worlds.reduce(async (previous, world) => {
+    const completed = await previous;
+    completed.push(await runWorld(directory, probe, entry, world));
+    return completed;
+  }, Promise.resolve(/** @type {WorldEntry[]} */ ([])));
+  results.push(await runWorld(directory, deployment, entry, {}));
+  return compareWorlds(baseline, results);
 }
 
 /** Native emitted bytes stay unchanged; only the enclosing ESM package is new. */
@@ -242,47 +257,50 @@ function unsupportedModuleSyntax(ts, text) {
   return reason;
 }
 
-/** No shell, inherited NODE_OPTIONS, credentials or arbitrary Node flags. */
-async function runWorld({ directory, modules, entries, world, coverage }) {
-  const input = path.join(directory, "world.json");
-  fs.writeFileSync(input, JSON.stringify({ modules, entries, world }));
-  // Node's coverage collector runs before globals are replaced. Allow only its
-  // output path for measurement; never inherit the host env.
-  const env = coverage ? { NODE_V8_COVERAGE: coverage } : {};
-  const { stdout } = await promisify(execFile)(process.execPath,
-    ["--max-old-space-size=1024", fileURLToPath(new URL("./metadataWorld.mjs", import.meta.url))],
-    { cwd: directory, env, shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
-  const result = /** @type {WorldEntry[]} */ (JSON.parse(stdout));
-  if (!Array.isArray(result) || result.length !== entries.length) throw new Error("Incomplete metadata world");
-  for (const entry of result) {
-    if (entry.error) throw new Error(entry.error);
+/** Fixed executable/args, empty env and an independent cap: worker resourceLimits
+ * inherit the parent's V8 old-space flag, so cannot bound this renderer's realms.
+ * https://nodejs.org/docs/latest-v22.x/api/child_process.html#child_processexecfilefile-args-options-callback
+ */
+async function runWorld(directory, modules, entry, world) {
+  const cwd = fs.mkdtempSync(path.join(directory, "realm-"));
+  try {
+    fs.writeFileSync(path.join(cwd, "world.json"), JSON.stringify({ modules, entry, world }), { flag: "wx" });
+    // Coverage is an output-only measurement path; no parent values reach app code.
+    const coverage = process.env.NODE_V8_COVERAGE;
+    const env = coverage ? { NODE_V8_COVERAGE: path.resolve(coverage) } : {};
+    const { stdout } = await promisify(execFile)(process.execPath,
+      ["--max-old-space-size=256", fileURLToPath(new URL("./metadataWorld.mjs", import.meta.url))],
+      { cwd, env, shell: false, windowsHide: true, timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
+    const result = /** @type {WorldEntry} */ (JSON.parse(stdout));
+    if (!result || !Array.isArray(result.functions)) throw new Error("Incomplete metadata world");
+    if (result.error) throw new Error(result.error);
+    return result;
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
   }
-  return result;
 }
 
-/** Probe supported runtime capabilities independently from grouped env values. */
-function runtimeWorlds(keys) {
-  const values = ["production", "development", "test", "true", "false", "1", "0", "", randomUUID()];
-  /** @type {Array<{env: Record<string, string | null>, runtime?: {userAgent?: string, evalThrows?: boolean}, zodConfig?: boolean}>} */
-  const worlds = keys.length ? values.map((value) => ({ env: Object.fromEntries(keys.map((key) => [key, value])) })) : [];
-  if (keys.length) worlds.push({ env: Object.fromEntries(keys.map((key) => [key, null])) });
-  worlds.push({ env: {}, runtime: { evalThrows: true } },
-    { env: {}, runtime: { userAgent: "Cloudflare-Workers", evalThrows: false } },
-    { env: {}, runtime: { userAgent: "Mozilla/5.0", evalThrows: false } },
-    { env: {}, zodConfig: true });
+/** Only recorded capability probes need variation. Clocks/entropy already refuse.
+ * Empty code-generation probes, navigator and Zod config still need differential
+ * checks; environment reads always refuse instead of sampling values.
+ */
+function runtimeWorlds(probes) {
+  const worlds = [];
+  if (probes.some((key) => ["Function", "eval"].includes(key))) worlds.push({ runtime: { evalThrows: true } });
+  if (probes.some((key) => key.startsWith("navigator"))) {
+    worlds.push({ runtime: { userAgent: "Cloudflare-Workers" } }, { runtime: { userAgent: "Mozilla/5.0" } });
+  }
+  if (probes.includes("__zod_globalConfig")) worlds.push({ zodConfig: true });
   return worlds;
 }
 
-/** A refusal or new environment key in any world removes the entry's evidence. */
-function compareWorlds(entry, baseline, worlds, knownKeys) {
-  if (entry.reason) return { functions: [], reason: entry.reason, staticRefused: true, evaluations: 0 };
+/** Any refusal removes the entry; capability differences remove differing functions. */
+function compareWorlds(baseline, worlds) {
   const all = [baseline, ...worlds];
-  const reason = all.find((world) => world.reason)?.reason ?? "";
+  const failure = all.find((world) => world.reason)?.reason ?? "";
   const keys = new Set(all.flatMap((world) => world.keys));
-  const newKeys = [...keys].some((key) => !knownKeys.has(key));
   const refused = new Set();
   for (const world of worlds) compareFunctions(baseline.functions, world.functions, refused);
-  const failure = reason || (newKeys ? "environment keys changed across worlds" : "");
   return { functions: failure ? [] : worlds.at(-1).functions.filter((fn) => !refused.has(fn.identifier)),
     reason: failure, differentialRefused: [...refused], evaluations: all.length,
     environmentKeys: [...keys], enumerations: all.reduce((sum, world) => sum + world.enumerations, 0),
