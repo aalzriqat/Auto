@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
 import {
+  CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "@/convex/utils/closeWarnings";
@@ -34,6 +35,7 @@ import { periodLabel } from "./types";
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
 };
 
 function displayWarning(warning: string, t: Translate): string {

@@ -12,6 +12,7 @@ import { Doc, type Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertNotOpeningDepositPayout } from "./utils/openingDepositContainment";
 import {
   DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED,
   refuseDepositOtherTreatment,
@@ -174,7 +175,8 @@ async function vehiclesHeldByDeposit(
   deposit: Doc<"deposits">
 ): Promise<Array<Id<"vehicles">>> {
   const seen = new Map<string, Id<"vehicles">>();
-  seen.set(String(deposit.vehicleId), deposit.vehicleId);
+  // An opening deposit may be held against the customer alone (no vehicle).
+  if (deposit.vehicleId !== undefined) seen.set(String(deposit.vehicleId), deposit.vehicleId);
   for await (const hold of ctx.db
     .query("depositVehicleHolds")
     .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))) {
@@ -286,7 +288,7 @@ export const release = mutation({
           args.orgId,
           "deposit.released",
           { actorName, amount: String(deposit.amount) },
-          { link: `/${args.orgId}/vehicles?highlightId=${deposit.vehicleId}` }
+          { link: `/${args.orgId}/vehicles?highlightId=${deposit.vehicleId ?? ""}` }
         );
 
         return args.depositId;
@@ -308,6 +310,9 @@ export const voidDeposit = mutation({
     if (!deposit || deposit.orgId !== args.orgId || deposit.isDeleted === true) {
       throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
     }
+    // SCRUM-858 S1: a void reverses the receipt, and an opening deposit has none (its cash is in
+    // the opening lines). Refused before any write.
+    assertNotOpeningDepositPayout(deposit);
     if (deposit.status !== "HELD") {
       throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "Only HELD deposits can be voided.");
     }

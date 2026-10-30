@@ -1,0 +1,53 @@
+{
+  "id": "supplier-due-payable-funding-instant-without-amount-is-not-received",
+  "fingerprint": "c1cd5089205cdec14b9b9dad3ea3dd06b5332741a4832c2c4bbd1e13a89b6497",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "FINANCED",
+        "fundedAt": "-20d",
+        "fundedAmount": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "FINANCIER_FUNDING_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an instant with no recorded amount is not a received funding"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

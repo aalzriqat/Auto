@@ -1,0 +1,79 @@
+{
+  "id": "opening-deposit-with-a-missing-draft-is-unavailable-and-period-close-warns",
+  "fingerprint": "4ac3c88f5a58718baf7926e3ed75535a6a0c42179cbd180425a75ecb245722c2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY"
+      }
+    },
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "ctx.db.delete",
+      "input": {
+        "table": "openingBalanceDrafts"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.getCloseChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    },
+    {
+      "observable": "closeChecklist.warns",
+      "value": true
+    },
+    {
+      "observable": "journalWrites",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "an opening deposit whose draft is gone cannot be dated: UNAVAILABLE as OPENING_SOURCE_UNAVAILABLE, and period close still warns"
+  },
+  "matrixRow": "OB-B16"
+}

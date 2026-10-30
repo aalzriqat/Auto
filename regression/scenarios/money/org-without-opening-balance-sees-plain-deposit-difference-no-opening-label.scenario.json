@@ -1,0 +1,57 @@
+{
+  "id": "org-without-opening-balance-sees-plain-deposit-difference-no-opening-label",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "harness.insertSubledgerDepositWithoutGl",
+      "input": {
+        "amountMinor": 10000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 10000
+    },
+    {
+      "observable": "reconciliation.unexplainedOpeningDifference",
+      "value": null
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "an organization with no opening balance still sees a plain difference, never the opening-balance label"
+  },
+  "matrixRow": "OB-B8",
+  "fingerprint": "ca53ac64b27a4dd602bb5f33dfd347c5086f783d4949cf110fd993b97782148d"
+}

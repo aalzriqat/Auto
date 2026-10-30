@@ -1,0 +1,79 @@
+{
+  "id": "deposit-activity-stamp-on-the-cutoff-is-included-one-millisecond-later-is-refused",
+  "fingerprint": "15da2548af115154c46921bab439811ef589592c88c81cd11ea20f4b709f5208",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "stamp": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "stamp": "cutoff-plus-1ms"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {
+        "toDate": "cutoff"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "onCutoff.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "oneMsLater.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "oneMsLater.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "cutoff equality: a stamp ON the cutoff is included, one millisecond later is refused"
+  },
+  "matrixRow": "OB-B15"
+}

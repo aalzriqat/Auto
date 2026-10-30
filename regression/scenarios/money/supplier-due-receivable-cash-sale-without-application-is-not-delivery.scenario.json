@@ -1,0 +1,48 @@
+{
+  "id": "supplier-due-receivable-cash-sale-without-application-is-not-delivery",
+  "fingerprint": "d6b786502d10feffff526e237c1c6dacdcbe94ab75e41076130a4d4f6a8242e8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "financingType": "CASH",
+        "saleStatus": "COMPLETED",
+        "application": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "DELIVERY_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a CASH sale completed without a deal application has no handover record: not delivery"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

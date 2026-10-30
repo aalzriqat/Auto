@@ -66,6 +66,11 @@ status: v.union(
     ),
 reversedAt: v.optional(v.number()),
 reversedBy: v.optional(v.id("users")),
+/**
+ * SCRUM-869 S3a (widen-only): the due date agreed with the supplier, epoch ms. Optional in
+ * storage forever. No door writes it in S3a; absent means "no agreed date" (SCRUM-869#c23883).
+ */
+agreedDueDate: v.optional(v.number()),
 createdBy: v.id("users"),
 createdAt: v.number(),
 updatedAt: v.number(),
@@ -1751,6 +1756,13 @@ export default defineSchema({
     disputeReason: v.optional(v.string()),
     disputedAt: v.optional(v.number()),
     disputedBy: v.optional(v.id("users")),
+    /**
+     * SCRUM-869 S3a (widen-only): the due date agreed with the supplier, epoch ms. Optional in
+     * storage forever (rows written before it stay valid). No door writes it in S3a; the due-date
+     * reader treats an absent value as "no agreed date" and falls to the ownership-model trigger
+     * (owner ruling SCRUM-869#c23883).
+     */
+    agreedDueDate: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
     cancelledBy: v.optional(v.id("users")),
     createdBy: v.id("users"),
@@ -4194,7 +4206,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
 
   deposits: defineTable({
     orgId: v.id("organizations"),
-    vehicleId: v.id("vehicles"),
+    vehicleId: v.optional(v.id("vehicles")),
     customerId: v.id("customers"),
     quoteId: v.optional(v.id("quotes")),
     reservationId: v.optional(v.id("vehicleReservations")),
@@ -4313,6 +4325,27 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
      * operation may act on, and nothing else.
      */
     singleVehicleCommitmentClaimId: v.optional(v.id("vehicleCommitmentClaims")),
+
+    /**
+     * SCRUM-858 S1 (owner ruling c23884) — A DEPOSIT THAT WAS ALREADY HELD ON THE
+     * OPENING DATE, named per customer.
+     *
+     * Absent on every ordinary deposit. When "OPENING" the row was created by the
+     * approved opening-balance poster and by nothing else: the cash is already
+     * inside the opening cash/bank lines, so this row has no quote, no payment,
+     * no voucher and no receipt journal of its own. The liability is the opening
+     * journal's credit to Customer Deposits.
+     *
+     * The row is consumed by the ordinary sale-application route and may NOT be
+     * refunded, forfeited or voided while the pilot containment holds; see
+     * convex/utils/openingDepositContainment.ts. `vehicleId` is absent for a
+     * security deposit and for a reservation that names no VIN (customer credit
+     * that can only be applied).
+     */
+    origin: v.optional(v.literal("OPENING")),
+    openingBalanceDraftId: v.optional(v.id("openingBalanceDrafts")),
+    openingRowKey: v.optional(v.string()),
+    openingDepositKind: v.optional(v.union(v.literal("SECURITY"), v.literal("RESERVATION"))),
 
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),

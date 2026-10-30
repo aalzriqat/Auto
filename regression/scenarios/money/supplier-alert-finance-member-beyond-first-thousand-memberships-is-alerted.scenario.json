@@ -1,0 +1,51 @@
+{
+  "id": "supplier-alert-finance-member-beyond-first-thousand-memberships-is-alerted",
+  "fingerprint": "ab2a23fb0e1db0fd4837858c35882d604133da3846eafa13d1acd1793eaaa68f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d",
+        "extra": "1000-sales-then-finance"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 4
+    },
+    {
+      "observable": "lateFinanceMemberAlerts",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a finance member who is the 1,005th membership is still alerted"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

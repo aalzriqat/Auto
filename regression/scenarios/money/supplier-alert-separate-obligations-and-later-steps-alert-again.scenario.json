@@ -1,0 +1,48 @@
+{
+  "id": "supplier-alert-separate-obligations-and-later-steps-alert-again",
+  "fingerprint": "1643d3b1bd94cfd276a8b14e31f4d625351c009b0a3a2f40432db6de4d0fc431",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "obligations": 2,
+        "agreedDue": "+3d",
+        "sweepDays": "0_3"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsAfterDay0",
+      "value": 6
+    },
+    {
+      "observable": "alertsAfterDay3",
+      "value": 12
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "two obligations alert separately, and a later step of the same obligation alerts again"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

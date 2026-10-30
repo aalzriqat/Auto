@@ -1,0 +1,43 @@
+{
+  "id": "supplier-due-payable-paid-and-cancelled-are-not-outstanding",
+  "fingerprint": "1e80e4720de8ba02815182c67ebd6e78411ae2edf4ba8aef4c84bdb530042760",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "paid": 1,
+        "cancelled": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "paid and cancelled payables are not outstanding"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

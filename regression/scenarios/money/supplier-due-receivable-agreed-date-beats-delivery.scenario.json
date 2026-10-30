@@ -1,0 +1,51 @@
+{
+  "id": "supplier-due-receivable-agreed-date-beats-delivery",
+  "fingerprint": "cd7b9937ee5aff3f52f7f34714a7faff1004d33193afb7eef24d90624e6a2086",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "handedOver": "-70d",
+        "agreedDue": "-3d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "AGREED_DATE"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 3
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_1_30"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an agreedDueDate on the receivable beats the delivery trigger"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

@@ -1,0 +1,85 @@
+{
+  "id": "opening-deposit-sale-cancellation-refuses-with-coded-error-before-any-write",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "sales.update",
+      "input": {
+        "status": "CANCELLED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "cancel.errorCode",
+      "value": "OPENING_DEPOSIT_REVERSAL_REFUSED"
+    },
+    {
+      "observable": "afterRefusal.writes",
+      "value": 0
+    },
+    {
+      "observable": "afterRefusal.depositRowsUnchanged",
+      "value": true
+    },
+    {
+      "observable": "afterRefusal.salesUnchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "cancelling a sale that applied an opening deposit refuses with a coded error before any write"
+  },
+  "matrixRow": "OB-B7",
+  "fingerprint": "bba2931814c0188ac7a3042307ba275c149a895a8f3adaaf1d8769727638ea76"
+}

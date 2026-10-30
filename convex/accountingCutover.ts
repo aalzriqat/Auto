@@ -46,6 +46,7 @@ import { openingAllocationValidator } from "./utils/openingAllocationValidators"
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
 import { orgResetState } from "./utils/orgResetGeneration";
+import { hasNamedOpeningDeposit, refuseOpeningDepositDirectPost } from "./utils/openingDepositContainment";
 
 /**
  * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
@@ -486,6 +487,11 @@ async function postOpeningBalanceDraft(
 ): Promise<Id<"journalEntries">> {
   const { orgId, draft, approverId, autoApproved } = args;
 
+  // SCRUM-858 c23884: named deposits post only through the accountant approval route. Checked here,
+  // ahead of every write, so no caller can reach a self-approved post of one (defence in depth for
+  // `postOpeningBalanceDirect`, which also refuses at its own boundary).
+  if (autoApproved && hasNamedOpeningDeposit(draft.allocations)) refuseOpeningDepositDirectPost();
+
   // The read-only preflight is repeated here in the posting transaction. The
   // wrapper is unwrapped before any write, preserving the original refusal and
   // Convex's uncaught-exception rollback behavior.
@@ -622,6 +628,10 @@ export const postOpeningBalanceDirect = mutation({
         "Only an owner can post an opening balance without a second approver. Save it for approval instead."
       );
     }
+
+    // SCRUM-858 c23884: a named customer deposit needs an accountant's approval before it posts, so
+    // this route (which self-approves) refuses it before the first read-for-write.
+    if (hasNamedOpeningDeposit(args.allocations)) refuseOpeningDepositDirectPost();
 
     // Before the draft insert AND before the post — this route does both in one
     // mutation, so it is the one where a late refusal would be worst.
@@ -760,7 +770,7 @@ type PendingOpeningParty = { partyId: string | null; partyName: string | null; p
 async function pendingOpeningCustomer(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  allocation: Extract<OpeningDraftAllocation, { kind: "CUSTOMER_RECEIVABLE" }>,
+  allocation: Extract<OpeningDraftAllocation, { kind: "CUSTOMER_RECEIVABLE" | "CUSTOMER_DEPOSIT" }>,
 ): Promise<PendingOpeningParty> {
   let partyName: string | null = null;
   let partyDetail: string | null = null;
@@ -932,7 +942,7 @@ export const listPendingOpeningBalanceDrafts = query({
           let partyName: string | null = null;
           let partyDetail: string | null = null;
           let partyAvailable = false;
-          if (allocation.kind === "CUSTOMER_RECEIVABLE") {
+          if (allocation.kind === "CUSTOMER_RECEIVABLE" || allocation.kind === "CUSTOMER_DEPOSIT") {
             ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningCustomer(ctx, args.orgId, allocation));
           } else if (isRemainingOpeningKind(allocation.kind) && allocation.kind !== "EMPLOYEE_COMMISSION") {
             partyName = "counterpartyName" in allocation ? allocation.counterpartyName : null;
@@ -950,11 +960,20 @@ export const listPendingOpeningBalanceDrafts = query({
           } else if (allocation.kind === "PARTNER_CAPITAL") {
             ({ partyId, partyName, partyDetail, partyAvailable } = await pendingOpeningPartner(ctx, args.orgId, allocation));
           }
+          // SCRUM-858 S1: the approver sees the deposit type and the named car, not just a customer and an amount.
+          let depositVehicleLabel: string | null | undefined;
+          if (allocation.kind === "CUSTOMER_DEPOSIT" && allocation.vehicleId) {
+            const vehicle = await ctx.db.get(allocation.vehicleId);
+            depositVehicleLabel = vehicle?.orgId === args.orgId
+              ? [vehicle.vin, vehicle.year, vehicle.make, vehicle.model].join(" ") : null;
+          }
           return {
             rowKey: allocation.rowKey,
             kind: allocation.kind,
             allocationStatus,
             purpose: "purpose" in allocation ? allocation.purpose : undefined,
+            depositKind: allocation.kind === "CUSTOMER_DEPOSIT" ? allocation.depositKind : undefined,
+            depositVehicleLabel,
             accountId: allocation.accountId,
             accountCode: account?.orgId === args.orgId ? account.code : null,
             accountName: account?.orgId === args.orgId ? account.name : null,
@@ -1039,6 +1058,7 @@ export const openingBalanceStatus = query({
     canSelectCustomers: boolean;
     canSelectEmployees: boolean;
     canSelectPartners: boolean;
+    canSelectVehicles: boolean;
     currency: string;
   }> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -1070,6 +1090,8 @@ export const openingBalanceStatus = query({
       canSelectEmployees: canEnter && (isOwner || (role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL) &&
         role.permissions.includes(PERMISSIONS.VIEW_USERS))),
       canSelectPartners: canEnter,
+      // SCRUM-858 S1: a reservation deposit may name a vehicle; the picker reads vehicles.selectorOptions.
+      canSelectVehicles: canEnter && (isOwner || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES)),
       // The form converts entered amounts to minor units, and the scale is
       // per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise). Returned here so the
       // client uses the org's real currency rather than assuming one — getting
@@ -1120,7 +1142,9 @@ function openingAllocationAvailability(kind: string, available: boolean): "AVAIL
 }
 
 function openingCandidateKinds(policy: OpeningAccountChoicePolicy): RemainingOpeningKind[] {
-  if (policy === "DECLARED_LIABILITY") return ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY"];
+  if (policy === "DECLARED_LIABILITY") return ["SUPPLIER_PAYABLE", "OTHER_PAYABLE", "EMPLOYEE_COMMISSION", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"];
+  // The native Customer Deposits account takes the named family as well as the unnamed pool.
+  if (policy === "UNALLOCATED_LIABILITY") return ["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"];
   return isRemainingOpeningKind(policy) ? [policy] : [];
 }
 
@@ -1254,7 +1278,7 @@ async function postedOpeningCustomerReceivable(
 
 async function postedOpeningRemainingDocument(
   ctx: QueryCtx,
-  request: Readonly<{ orgId: Id<"organizations">; result: OpeningDraftResult | undefined; openingReader: OpeningSettlementReader; recordAvailable: boolean }>,
+  request: Readonly<{ orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; rowKey: string; result: OpeningDraftResult | undefined; openingReader: OpeningSettlementReader; recordAvailable: boolean }>,
 ): Promise<{documentId: string | null; recordAvailable: boolean}> {
   const { orgId, result, openingReader } = request;
   let { recordAvailable } = request;
@@ -1275,6 +1299,16 @@ async function postedOpeningRemainingDocument(
     } catch {
       recordAvailable = false;
     }
+  } else if (result?.kind === "CUSTOMER_DEPOSIT") {
+    documentId = result.depositId;
+    const deposit = await ctx.db.get(result.depositId);
+    recordAvailable =
+      recordAvailable &&
+      deposit?.orgId === orgId &&
+      deposit.origin === "OPENING" &&
+      deposit.openingBalanceDraftId === request.draftId &&
+      deposit.openingRowKey === request.rowKey &&
+      deposit.isDeleted !== true;
   } else if (result?.kind === "EMPLOYEE_COMMISSION") {
     documentId = result.openingCommissionLiabilityId;
     recordAvailable =
@@ -1307,9 +1341,15 @@ async function postedOpeningRemaining(
     partyId = allocation.userId;
     const employee = await ctx.db.get(allocation.userId);
     partyName = employee?.name ?? employee?.email ?? null;
+  } else if (allocation.kind === "CUSTOMER_DEPOSIT") {
+    partyId = allocation.customerId;
+    const customer = await ctx.db.get(allocation.customerId);
+    partyName = customer?.orgId === orgId ? `${customer.firstName} ${customer.lastName}`.trim() : null;
   }
   ({ documentId, recordAvailable } = await postedOpeningRemainingDocument(ctx, {
     orgId,
+    draftId: draft._id,
+    rowKey: allocation.rowKey,
     result,
     openingReader,
     recordAvailable,

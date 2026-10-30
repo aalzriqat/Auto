@@ -1,0 +1,52 @@
+{
+  "id": "supplier-due-payable-cash-sale-without-application-has-no-due-date",
+  "fingerprint": "49a7021b922d666a4fb3e3532374ae53edac1f08a2636568a8fef1c43225d30c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "CASH",
+        "application": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "CLEARED_PROCEEDS_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a CASH sale recorded without a deal application has no due date either"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}
