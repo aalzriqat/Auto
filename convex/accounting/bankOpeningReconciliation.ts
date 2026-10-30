@@ -58,11 +58,12 @@ function withoutOpening(
   status: "NO_OPENING" | "OPENING_PROOF_UNAVAILABLE",
   banks: Doc<"bankAccounts">[],
 ): BankOpeningReconciliation {
+  const hasUnsafeReference = banks.some((bank) => !Number.isSafeInteger(bank.openingBalanceMinor));
   return {
-    status,
+    status: hasUnsafeReference ? "OPENING_PROOF_UNAVAILABLE" : status,
     currency: null,
     asOfDate: null,
-    banks: banks.map((bank) => ({
+    banks: (hasUnsafeReference ? [] : banks).map((bank) => ({
       bankAccountId: bank._id,
       name: bank.name,
       currency: bank.currency,

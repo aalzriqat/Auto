@@ -16,6 +16,8 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
+import { prepareOpeningAllocations } from "./accounting/openingAllocations";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -59,7 +61,7 @@ async function seed() {
     if (!found) throw new Error(`Missing system account ${key}`);
     return found._id;
   };
-  return { t, orgId, owner, accountId };
+  return { t, orgId, userId, owner, accountId };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
 
@@ -210,11 +212,16 @@ describe("SCRUM-858 S2 owned opening inventory", () => {
     const s = await seed();
     expect(await importOwned(s, 100, "cap-hundred")).toMatchObject({ inserted: 100, skipped: 0 });
     await insertSourced(s, 30);
+    // Both explicit false and legacy unset deletion fields count at the boundary.
+    const owned = await ownedVehicles(s);
+    await s.t.run(async (ctx) => {
+      for (const vehicle of owned.slice(0, 50)) await ctx.db.patch(vehicle._id, { isDeleted: false });
+    });
 
     await postOpening(s, await ownedVehicles(s));
 
     expect(await s.t.run(async (ctx) => (await ctx.db.query("journalEntries").collect()).length)).toBe(1);
-  });
+  }, 30_000);
 
   test("more than one hundred owned unsold cars refuse with the limit message before any write", async () => {
     const s = await seed();
@@ -383,7 +390,7 @@ describe("SCRUM-858 S2 owned opening inventory", () => {
     ).rejects.toThrow(/reviewed opening allocation limit/i);
   });
 
-  test("a bucket crowded past the limit by soft-deleted rows fails closed instead of hiding an owned car", async () => {
+  test("a bucket crowded by deleted rows still opens its live imported owned car", async () => {
     const s = await seed();
     for (let index = 0; index < 101; index++) {
       await s.t.run((ctx) =>
@@ -398,17 +405,65 @@ describe("SCRUM-858 S2 owned opening inventory", () => {
         }),
       );
     }
-    await expect(
-      s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
-        orgId: s.orgId,
-        expectedCurrency: "JOD",
-        asOfDate: Date.now(),
-        lines: [
-          { accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 },
-          { accountId: s.accountId("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000 },
-        ],
-      }),
-    ).rejects.toThrow(/reviewed opening allocation limit/i);
+    expect(await importOwned(s, 1, "cap-deleted-crowd")).toMatchObject({ inserted: 1, skipped: 0 });
+    const owned = await ownedVehicles(s);
+    expect(owned).toHaveLength(1);
+
+    await postOpening(s, owned);
+
+    expect(await s.owner.query(api.accountingReports.vehicleInventoryReconciliation, { orgId: s.orgId })).toMatchObject({
+      isReconciled: true,
+      byCurrency: { JOD: { glBalanceMinor: 8_000_000, subledgerBalanceMinor: 8_000_000 } },
+    });
+  });
+
+  test("the inventory candidate reader returns at most 101 live documents across all buckets", async () => {
+    const s = await seed();
+    await s.t.run(async (ctx) => {
+      for (let index = 0; index < 1_000; index++) {
+        await ctx.db.insert("vehicles", { orgId: s.orgId, ...BASE_VEHICLE, status: "AVAILABLE", sourceType: "STOCK", isDeleted: true });
+      }
+      for (const sourceType of ["STOCK", undefined] as const) {
+        for (const status of unsoldStatuses) {
+          for (let index = 0; index < 10; index++) {
+            await ctx.db.insert("vehicles", {
+              orgId: s.orgId, ...BASE_VEHICLE, status, sourceType,
+              isDeleted: index % 2 === 0 ? false : undefined,
+            });
+          }
+        }
+      }
+    });
+    let candidateDocuments = 0;
+    // Pass-through telemetry of real harness DB returns, not platform scan/billing evidence.
+    function recordQuery(target: object): object {
+      return new Proxy(target, { get(object, key) {
+        const member: unknown = Reflect.get(object, key);
+        if (typeof member !== "function") return member;
+        return (...args: unknown[]) => {
+          const returned: unknown = Reflect.apply(member, object, args);
+          if (key === "take" || key === "collect") return Promise.resolve(returned).then((rows: unknown) => {
+            if (!Array.isArray(rows)) throw new Error("Expected document array");
+            candidateDocuments += rows.length;
+            return rows;
+          });
+          return returned && typeof returned === "object" ? recordQuery(returned) : returned;
+        };
+      } });
+    }
+    await expect(s.t.run(async (ctx) => {
+      const db = new Proxy(ctx.db, { get(target, key) {
+        if (key === "query") return (table: Parameters<QueryCtx["db"]["query"]>[0]) =>
+          table === "vehicles" ? recordQuery(target.query(table)) : target.query(table);
+        const member: unknown = Reflect.get(target, key);
+        return typeof member === "function" ? member.bind(target) : member;
+      } });
+      await prepareOpeningAllocations({ ...ctx, db }, {
+        orgId: s.orgId, actorId: s.userId, currency: "JOD", asOfDate: Date.now(),
+        lines: [{ accountId: s.accountId("VEHICLE_INVENTORY"), debitMinor: 1_000, creditMinor: 0 }],
+      });
+    })).rejects.toThrow(/reviewed opening allocation limit/i);
+    expect(candidateDocuments).toBe(101);
   });
 });
 

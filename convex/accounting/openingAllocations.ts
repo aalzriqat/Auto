@@ -104,9 +104,9 @@ const UNSOLD_VEHICLE_STATUSES = [
 /**
  * SCRUM-858 S2 (owner ruling c23884): the organization's OWNED, unsold vehicles. A legacy row with no
  * `sourceType` is owned stock. Consigned (SOURCED) and sold vehicles are never read, so a showroom holding 60 owned
- * and 45 consigned cars opens normally. Each (sourceType, status) bucket is read up to one past the limit; a bucket
- * that fills it, or a total past the limit, refuses rather than risk an unseen owned car (this includes a bucket
- * crowded by soft-deleted rows, which fails closed).
+ * and 45 consigned cars opens normally. The index excludes deleted rows before the cap. Missing optional deletion
+ * fields sort before false in Convex, so legacy live rows count too. Across all 12 buckets this reader returns at
+ * most 101 candidate documents; import-evidence reads have their own bounds.
  */
 async function listOwnedUnsoldVehicles(
   ctx: QueryCtx | MutationCtx,
@@ -117,15 +117,12 @@ async function listOwnedUnsoldVehicles(
     for (const status of UNSOLD_VEHICLE_STATUSES) {
       const rows = await ctx.db
         .query("vehicles")
-        .withIndex("by_org_sourceType_status", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", sourceType).eq("status", status),
+        .withIndex("by_org_sourceType_status_isDeleted", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", sourceType).eq("status", status).lte("isDeleted", false),
         )
-        .take(OPENING_OWNED_CAR_LIMIT + 1);
-      owned.push(...rows.filter((vehicle) => !vehicle.isDeleted));
-      if (
-        rows.length > OPENING_OWNED_CAR_LIMIT ||
-        owned.length > OPENING_OWNED_CAR_LIMIT
-      ) {
+        .take(OPENING_OWNED_CAR_LIMIT + 1 - owned.length);
+      owned.push(...rows);
+      if (owned.length > OPENING_OWNED_CAR_LIMIT) {
         throw new ConvexError(
           "Existing vehicle stock exceeds the reviewed opening allocation limit.",
         );

@@ -26,16 +26,36 @@
         "role": "owner",
         "org": "A"
       },
+      "action": "vehicles.importBulk",
+      "input": {
+        "ownedCars": 1,
+        "acquisitionPosting": "OPENING_STOCK",
+        "costMinor": 8000000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
       "action": "accountingCutover.postOpeningBalanceDirect",
       "input": {
-        "vehicleInventoryRows": 0
+        "vehicleInventoryRows": 1
       }
     }
   ],
   "expected": [
     {
       "observable": "result",
-      "value": "REFUSED-reviewed-opening-allocation-limit"
+      "value": "POSTED"
+    },
+    {
+      "observable": "inventory.reconciled",
+      "value": true
+    },
+    {
+      "observable": "inventory.glBalanceMinor",
+      "value": 8000000
     }
   ],
   "rulings": [
@@ -46,8 +66,12 @@
   ],
   "impl": {
     "file": "convex/openingInventoryCap.scrum858.test.ts",
-    "testName": "a bucket crowded past the limit by soft-deleted rows fails closed instead of hiding an owned car"
+    "testName": "a bucket crowded by deleted rows still opens its live imported owned car"
   },
   "matrixRow": "OB-C3",
-  "fingerprint": "175eb4aae2435e4dcf63ddc060ba5d464e3f39542624e08752448dd5c23f810e"
+  "fingerprint": "d7dbfb282c77028b7b12533b157c43e12b7457d50036352437db1e536915b5ee",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "d0cc86b9f0a74a3f4796df701ced3792b280affd"
+  }
 }

@@ -332,6 +332,21 @@ describe("SCRUM-858 S5 per-bank opening reconciliation", () => {
     expect(reconciliation.unexplainedOpeningDifference).toBeNull();
   });
 
+  test("without an opening unsafe reference balances make the figures unavailable", async () => {
+    for (const referenceMinor of [Number.NaN, 0.5, 2 ** 53, Number.POSITIVE_INFINITY]) {
+      const s = await seed();
+      const bankA = await bank(s, "Bank A", 4_000_000, true);
+      await s.t.run((ctx) => ctx.db.patch(bankA, { openingBalanceMinor: referenceMinor }));
+
+      const reconciliation = await s.owner.query(api.bankAccounts.openingReconciliation, { orgId: s.orgId });
+
+      expect(reconciliation.status).toBe("OPENING_PROOF_UNAVAILABLE");
+      expect(reconciliation.banks).toEqual([]);
+      expect(reconciliation.controlOpeningMinor).toBeNull();
+      expect(reconciliation.unexplainedOpeningDifference).toBeNull();
+    }
+  });
+
   test("after a financial reset the retained opening header is not read as a current opening", async () => {
     const s = await seed();
     const bankA = await bank(s, "Bank A", 4_000_000, true);
@@ -566,6 +581,7 @@ describe("SCRUM-858 S5 the report refuses figures it cannot prove", () => {
     expect(result.status).toBe("OPENING_PROOF_UNAVAILABLE");
     expect(result.unexplainedOpeningDifference).toBeNull();
     expect(result.controlOpeningMinor).toBeNull();
+    expect(result.banks.every((row) => Number.isSafeInteger(row.referenceOpeningMinor))).toBe(true);
     expect(result.banks.every((row) => row.openingLineMinor === null && row.differenceMinor === null)).toBe(true);
     expect(JSON.stringify(result)).not.toContain("Infinity");
   }

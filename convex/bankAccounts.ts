@@ -208,6 +208,30 @@ export const getBookBalance = query({
  */
 export const openingReconciliation = query({
   args: { orgId: v.id("organizations") },
+  returns: v.object({
+    status: v.union(v.literal("OK"), v.literal("NO_OPENING"), v.literal("OPENING_PROOF_UNAVAILABLE")),
+    currency: v.union(v.string(), v.null()),
+    asOfDate: v.union(v.number(), v.null()),
+    banks: v.array(v.object({
+      bankAccountId: v.id("bankAccounts"),
+      name: v.string(),
+      currency: v.string(),
+      openingLineMinor: v.union(v.number(), v.null()),
+      referenceOpeningMinor: v.number(),
+      differenceMinor: v.union(v.number(), v.null()),
+    })),
+    controlOpeningMinor: v.union(v.number(), v.null()),
+    bankLinesTotalMinor: v.union(v.number(), v.null()),
+    unattributedOpeningMinor: v.union(v.number(), v.null()),
+    unexplainedOpeningDifference: v.union(v.object({
+      label: v.object({ en: v.string(), ar: v.string() }),
+      currencies: v.array(v.object({
+        currency: v.string(),
+        differenceMinor: v.number(),
+        absoluteDifferenceMinor: v.number(),
+      })),
+    }), v.null()),
+  }),
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return await computeBankOpeningReconciliation(ctx, args.orgId);
