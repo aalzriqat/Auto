@@ -104,6 +104,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # Trusted checked-out main only, with no Convex credential in this step.
+      # A failed/timed-out render must not hand partial or stale evidence to --current.
+      - name: Render the current commit's native argument spec
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: |
+          if ! timeout 180s node scripts/contractSkew/renderCurrentSpec.mjs current-spec.json; then
+            rm -f current-spec.json current-spec.json.tmp
+            echo "::warning::Current spec unavailable; retaining UNPROVEN deploy-fix classification."
+          fi
+
       # Which commit is actually deployed? `deploy-production.yml` asserts that
       # its `commit_sha` input equals main's tip, twice, and fails the run if it
       # does not — so for a SUCCESSFUL run the run's own head_sha and the
@@ -140,10 +151,14 @@ jobs:
           DEPLOYED_SHA: ${{ steps.deployed.outputs.sha }}
         run: |
           set +e
+          current_args=()
+          if [ -f current-spec.json ]; then
+            current_args=(--current current-spec.json)
+          fi
           if [ -n "$DEPLOYED_SHA" ]; then
-            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json --deployed-sha "$DEPLOYED_SHA"
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json --deployed-sha "$DEPLOYED_SHA" "${current_args[@]}"
           else
-            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json
+            node scripts/contractSkew/cli.mjs --mode production --json skew-report.json "${current_args[@]}"
           fi
           code=$?
           set -e
@@ -179,7 +194,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: contract-skew-report
-          path: skew-report.json
+          path: |
+            skew-report.json
+            current-spec.json
           retention-days: 30
           if-no-files-found: ignore
 
