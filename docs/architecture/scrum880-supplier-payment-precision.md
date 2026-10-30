@@ -94,6 +94,8 @@ evidence, not cloud, concurrency or production certification.
 | SCRUM-486-SUPPLIER-INSTALMENTS | new fractional instalments stay canonical before the final payment |
 | SCRUM-486-SUPPLIER-ORIGINAL-ENTITLEMENT | SCRUM-880: finalization preserves original supplier entitlement %s, in financedConsignedSettlement.test.ts |
 | SCRUM-486-SUPPLIER-LEGACY-COST-EDIT | unchanged legacy costs allow unrelated direct and requested vehicle edits |
+| SCRUM-486-SUPPLIER-CASH-DIRECT-PRECISION | the supplier receivable equals the journal's margin, to the minor unit, in consignedReporting.test.ts |
+| SCRUM-486-SUPPLIER-CASH-THROUGH-PRECISION | the supplier payable is stored at the currency's scale, in consignedReporting.test.ts |
 
 ## Existing settlement regression coverage
 
@@ -165,7 +167,7 @@ blocking unchanged legacy edits or accepting changed invalid ones, and dropping
 a payable schema variant. A schema test pins both ordered variants and their
 optional NATIVE and required OPENING origins, matching list's destructuring.
 
-Final local validation passed 543 tests across the seven PR test files plus
+Initial local validation passed 543 tests across the seven PR test files plus
 moneyDisplay.test.ts and scenarioRecord.test.ts, with one worker. The backend
 and root TypeScript projects passed separately. Root excludes Convex, test-utils,
 apps, packages and dealer-worker. The backend project covers Convex and test-utils
@@ -178,6 +180,30 @@ entitlement, dropping the stored-row argument at each of the three edit doors,
 inverting either cost-change comparison, and adding a third payable schema
 variant. Each source file was restored from its exact pre-mutation bytes before
 the final passing run. These are implementer checks, not independent seats.
+
+The first pushed head, 428840638, then failed CI slice 1 in two older
+consignedReporting.test.ts cases. Both seeded sourceCost 9500.5002 JOD and
+required completion to round it. Local reproduction gave two failures and 55
+passes. That contract conflicts with the new original-entitlement refusal.
+Both invalid inputs are retained as exact coded refusals, with unchanged
+vehicle, sales, supplier subledgers, events, pending events, journals, lines and
+commands. The same key then completes after the fixture cost is made valid.
+The original 3000.201 receivable assertion is retained and strengthened with
+an actual 3000201-fils journal debit. A 9500.501 valid payable control retains
+all three decimal places. No production guard or original refusal assertion
+was weakened. Removing the guard makes both updated tests fail. These two
+cash routes also have permanent scenario records and matrix rows.
+
+The correct skill was invoked for the repeated test-contract drift, following
+the earlier financed-settlement assertions and these two reporting cases.
+The prevention is in executable refusal and valid-control checks at both cash
+routes. Broader CI or agent-policy changes are outside this task.
+
+The final expanded run passed 600 tests with zero pending tests in ten named
+files, adding consignedReporting.test.ts to the earlier nine-file manifest.
+The reporting-file ESLint check has zero warnings or errors. The additional
+guard-removal mutation fails both cash-route assertions. Production source is
+byte-identical to 428840638 throughout this test-contract follow-up.
 
 Scope remains the requested fixes. Other LOW findings belong to SCRUM-879.
 No production row count, backend-connected dialog verification, OCC proof,
