@@ -378,3 +378,86 @@ trusted main, as this task requires. A live GitHub read confirmed the
 `main` branch. Separate steps share a runner and are not a sandbox; the design
 does not claim isolation from compromised trusted-main code or dependencies.
 No formal review-seat certificate is claimed.
+
+## PR #727 Sonar remediation, 2026-10-30
+
+The native renderer now separates namespace-source generation, registered-export
+metadata and module discovery into named functions. Templates are no longer
+nested, and path separator replacement uses `replaceAll` with a string. The
+explicit sort comparator preserves the original UTF-16 string ordering instead
+of depending on the host locale. All 1,032 exports remain byte-identical to the
+pre-refactor render (SHA-256
+`844db08d79c7ed7435b428782d3ec2bc82ac00e8cc8189b3087de01becd2e404`).
+
+The CLI reuses `baselineFile.mjs`'s `resolveInside` helper for its output,
+parent directory and temporary path. It rejects lexical and real-path escapes
+before filesystem mutation. The parent check covers a missing output beneath
+a directory junction. Safe stale files are removed, and temporary creation uses
+`wx` so a dangling file symlink or competing entry cannot redirect the write.
+Failure returns non-success and the comparison continues without current
+evidence. Neither Sonar configuration nor a workflow changed in this follow-up.
+
+`renderCurrentSpec.test.ts` adds real SDK/filesystem Vitest coverage alongside
+the retained Node tests: complete metadata, callable kinds and aliases, sort
+order and discovery exclusions, failed imports/registration/validators, SDK
+refusal, partial-current rejection, missing-current UNPROVEN, output traversal,
+junctions, stale cleanup and exclusive temporary creation. The path regression
+failed before the fix (expected exit 1, received 0). The temporary-file race
+regression also failed before exclusive creation (expected 1, received 0).
+
+Final local results:
+
+```text
+pnpm exec vitest run scripts/contractSkew/renderCurrentSpec.test.ts --maxWorkers=1 --coverage --coverage.include=scripts/contractSkew/currentSpec.mjs --coverage.include=scripts/contractSkew/renderCurrentSpec.mjs --coverage.reportsDirectory=node_modules/.cache/scrum866-sonar-coverage
+20 passed, 0 failed, 0 skipped
+Lines 86/88 (97.72%); statements 98/102 (96.07%)
+Branches 55/58 (94.82%); functions 17/18 (94.44%)
+currentSpec.mjs: lines 61/62 (98.38%)
+renderCurrentSpec.mjs: lines 25/26 (96.15%)
+
+pnpm exec vitest run scripts/contractSkew/<each test file> --maxWorkers=1
+27 files passed; 1299 tests passed, 1 existing skip, 0 failed
+node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
+18 passed, 0 failed, 0 skipped
+pnpm exec vitest run scripts/intelligence/convexCredentialBoundary.test.ts --maxWorkers=1
+15 passed; workflow unchanged, no fingerprint re-pin
+pnpm typecheck:contract-skew
+exit 0; dedicated detector checkJs project
+pnpm typecheck
+exit 0; root project excludes convex/
+pnpm exec eslint scripts/contractSkew/currentSpec.mjs scripts/contractSkew/renderCurrentSpec.mjs scripts/contractSkew/renderCurrentSpec.test.ts
+exit 0, no warnings
+git diff --check
+exit 0
+```
+
+The unchanged client/backend sources are still those at `43feaa4f`. A fresh
+workstation-account production metadata read, with expected deployment identity
+`clever-mockingbird-719`, returns exit 7: 11 proven breaks, 0 unclassified,
+`{ fixed: 6, stillFails: 0, unproven: 0 }`, no other cause and zero baseline
+drift. All 11 finding records equal the previously saved live report. A separate
+saved-spec replay agrees. No handlers, production mutations or deploy ran.
+
+Advisory Standards and Spec inspections closed their findings: imported values
+use `unknown` with narrowing, and temporary files use exclusive creation. These
+are advisory inspections, not certification seats. Local cached SonarJS rules
+reproduce both S3776 findings, S4624 and S7781 before the fix and report zero
+after. The typed local S2871 adapter failed internally, so it provides no verdict;
+the explicit comparator, deterministic-order test and full-output equality are
+the local evidence for sorting. The cloud quality gate must run on the pushed
+head; local coverage is scoped to the two renderer files, not a cloud gate claim.
+Windows file-symlink creation is unavailable (`EPERM`); directory-junction and
+exclusive-creation controls ran. The full Vitest run used per-file processes
+and local LF normalization of two unchanged shebang files, preserving their git
+blobs and restoring their checkout line endings afterward.
+
+Design sources: Sonar's [S3776](https://rules.sonarsource.com/javascript/RSPEC-3776/),
+[S4624](https://rules.sonarsource.com/javascript/RSPEC-4624/),
+[S7781](https://rules.sonarsource.com/javascript/RSPEC-7781/) and
+[S2871](https://rules.sonarsource.com/javascript/RSPEC-2871/) documentation was
+read from the cached official JavaScript plugin's rule HTML because the public
+rule site was unavailable. The [S8707 rule metadata](https://sonarcloud.io/api/rules/show?organization=aalzriqat&key=jssecurity%3AS8707)
+was reachable, but its full description was unavailable. Its requested
+resolve/relative pattern is the existing confinement helper's documented
+contract. Node documents [path.resolve and path.relative](https://nodejs.org/api/path.html#pathrelativefrom-to)
+and [exclusive file flags](https://nodejs.org/api/fs.html#file-system-flags).

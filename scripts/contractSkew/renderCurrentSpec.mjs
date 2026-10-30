@@ -2,26 +2,50 @@ import fs from "node:fs";
 import path from "node:path";
 import { renderCurrentSpec } from "./currentSpec.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
+import { resolveInside } from "./baselineFile.mjs";
 
-if (isRunDirectly(import.meta.url)) {
-  const output = process.argv[2];
-  if (!output) {
+/** @param {string | undefined} candidate @param {string} [root] */
+export async function runRenderCurrentSpec(candidate, root = process.cwd()) {
+  if (!candidate) {
     console.error("Usage: node scripts/contractSkew/renderCurrentSpec.mjs <output.json>");
-    process.exit(2);
+    return 2;
   }
-  const temporary = `${output}.tmp`;
+  /** @type {string[]} */
+  const cleanup = [];
   try {
+    const output = resolveInside(root, candidate, "current spec output");
+    // Check the existing parent too: a missing leaf can hide a junction escape.
+    resolveInside(root, path.dirname(output), "current spec output directory");
+    cleanup.push(output);
+    const temporary = resolveInside(root, `${output}.tmp`, "temporary current spec");
+    cleanup.push(temporary);
     // Never let a previous run's complete file survive a failed render.
     fs.rmSync(output, { force: true });
-    const spec = await renderCurrentSpec(path.resolve("."));
-    fs.writeFileSync(temporary, JSON.stringify(spec));
+    fs.rmSync(temporary, { force: true });
+    const spec = await renderCurrentSpec(path.resolve(root));
+    // Exclusive creation also refuses a dangling symlink introduced after resolution.
+    fs.writeFileSync(temporary, JSON.stringify(spec), { flag: "wx" });
     fs.renameSync(temporary, output);
     console.log(`Current spec rendered: ${spec.functions.length} registered functions (native exportArgs; no handlers invoked).`);
-    process.exit(0);
+    return 0;
   } catch {
-    fs.rmSync(output, { force: true });
-    fs.rmSync(temporary, { force: true });
+    removeFailedOutput(cleanup);
     console.error("Current spec unavailable: native render failed; no current evidence will be used.");
-    process.exit(1);
+    return 1;
   }
+}
+
+/** @param {string[]} files */
+function removeFailedOutput(files) {
+  for (const file of files) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      console.error("Current spec cleanup failed; discard current evidence.");
+    }
+  }
+}
+
+if (isRunDirectly(import.meta.url)) {
+  process.exit(await runRenderCurrentSpec(process.argv[2]));
 }
