@@ -312,6 +312,7 @@ import type * as utils_supplierDueAlertPlan from "../utils/supplierDueAlertPlan.
 import type * as utils_supplierDueDates from "../utils/supplierDueDates.js";
 import type * as utils_supplierNames from "../utils/supplierNames.js";
 import type * as utils_supplierObligationDue from "../utils/supplierObligationDue.js";
+import type * as utils_supplierPaymentAmounts from "../utils/supplierPaymentAmounts.js";
 import type * as utils_supplierRegistry from "../utils/supplierRegistry.js";
 import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
@@ -657,6 +658,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierDueDates": typeof utils_supplierDueDates;
   "utils/supplierNames": typeof utils_supplierNames;
   "utils/supplierObligationDue": typeof utils_supplierObligationDue;
+  "utils/supplierPaymentAmounts": typeof utils_supplierPaymentAmounts;
   "utils/supplierRegistry": typeof utils_supplierRegistry;
   "utils/supplierSettlement": typeof utils_supplierSettlement;
   "utils/tenancy": typeof utils_tenancy;
