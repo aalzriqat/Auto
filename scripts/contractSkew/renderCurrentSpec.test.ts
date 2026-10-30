@@ -39,6 +39,102 @@ afterEach(() => {
 });
 
 test.each([
+  ['process.env.NODE_ENV === "production" ? {} : { label: v.string() }', false],
+  ['(process.env.IGNORED, { label: v.string() })', true],
+  ['Object.keys(process.env).length ? {} : { label: v.string() }', false],
+  ['"NODE_ENV" in process.env ? {} : { label: v.string() }', false],
+  ['Object.getOwnPropertyDescriptor(process.env, "NODE_ENV") ? {} : { label: v.string() }', false],
+])("library load-time env is compared per function: %s", async (args, stable) => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/library-args");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "library-args", main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `import { v } from "convex/values";
+export const args = ${args};`);
+  fs.writeFileSync(path.join(root, "convex/library.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "library-args";
+export const read = queryGeneric({ args, handler: () => null });
+export const unaffected = queryGeneric({ args: {}, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "library:read" }])).toEqual(stable ? [] : ["library:read"]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "library:unaffected" }])).toEqual([]);
+  expect(spec.evaluation.differentialRefusedFunctions).toBe(stable ? 0 : 1);
+  if (stable) expect(spec.functions.find((fn) => fn.identifier === "library.js:read")?.args).toEqual({
+    type: "object", value: { label: { fieldType: { type: "string" }, optional: false } },
+  });
+});
+
+test.each([
+  ['process.env.KEY = "value";', "environment write"],
+  ['Object.defineProperty(process.env, "KEY", { value: "value" });', "environment write"],
+  ['delete process.env.KEY;', "environment write"],
+  ['process.env = {};', "process write"],
+  ['Object.defineProperty(process, "env", { value: {} });', "process write"],
+  ['delete process.env;', "process write"],
+  ['Object.setPrototypeOf(process.env, {});', "environment write"],
+  ['Object.preventExtensions(process.env);', "environment write"],
+  ['process.env[Symbol.iterator];', "unsupported environment key"],
+  ['for (let i = 0; i < 33; i++) process.env["KEY_" + i];', "environment key budget exceeded"],
+  ['if (process.env.NODE_ENV) process.env.SECOND;', "environment keys changed across worlds"],
+])("unsupported library env operation discards module evidence: %s", async (operation, reason) => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/library-refusal");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `try { ${operation} } catch {} export const args = {};`);
+  fs.writeFileSync(path.join(root, "convex/library.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "library-refusal";
+export const read = queryGeneric({ args, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(spec.unavailableModules).toEqual([{ file: "library.ts", reason }]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "library:read" }])).toEqual(["library:read"]);
+});
+
+test("a library error in a differential world discards the render", async () => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/library-error");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+  fs.writeFileSync(path.join(pkg, "index.js"), `if (process.env.NODE_ENV === "production") throw Error("world failed");
+export const args = {};`);
+  fs.writeFileSync(path.join(root, "convex/library.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "library-error";
+export const read = queryGeneric({ args, handler: () => null });`);
+  await expect(renderCurrentSpec(root)).rejects.toThrow("world failed");
+});
+
+test.each([
+  'const args = (process.env.IGNORED, {});',
+  'const { env } = process; const args = env.NODE_ENV === "production" ? {} : { label: v.string() };',
+  'const args = globalThis.process.env.NODE_ENV === "production" ? {} : { label: v.string() };',
+  'const args = globalThis["process"].env.NODE_ENV === "production" ? {} : { label: v.string() };',
+  'const args = globalThis.__zod_globalConfig ? {} : { label: v.string() };',
+  'const g = globalThis; const p = g.process; void p.env.IGNORED; const args = {};',
+  'const g = globalThis; const p = g["process"]; void p.env.IGNORED; const args = {};',
+])("repo-local imports refuse top-level environment reads: %s", async (definition) => {
+  const { root } = fixture();
+  fs.mkdirSync(path.join(root, "lib"));
+  fs.writeFileSync(path.join(root, "lib/args.ts"), `import { v } from "convex/values";
+${definition} export { args };`);
+  fs.writeFileSync(path.join(root, "convex/local.ts"), `import { queryGeneric } from "convex/server";
+import { args } from "../lib/args";
+export const read = queryGeneric({ args, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "local:read" }])).toEqual(["local:read"]);
+  expect(spec.unavailableModules.find((entry) => entry.file === "local.ts")?.reason).toMatch(/static.*lib\/args.ts:2/);
+  expect(spec.evaluation.staticallyRefusedModules).toBe(1);
+});
+
+test("Zod fresh global config does not suppress unrelated Convex argument evidence", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/zod.ts"), `import { queryGeneric } from "convex/server";
+import { z } from "zod";
+const label = z.string();
+export const read = queryGeneric({ args: {}, handler: () => label.parse("ok") });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "zod:read" }])).toEqual([]);
+});
+
+test.each([
   'process.env.NODE_ENV === "production" ? {} : { label: v.string() }',
   'Object.keys(process.env).length ? {} : { label: v.string() }',
   'Date.now() > 0 ? { label: v.string() } : {}',
@@ -161,6 +257,30 @@ export const read = ${kind}Generic({ args, handler: () => process.env.HANDLER_ON
       type: "object", value: { convex: { fieldType: { type: "string" }, optional: false } },
     });
   }
+});
+
+test("static refusal follows each platform's conditional workspace import graph", async () => {
+  const { root } = fixture();
+  const pkg = path.join(root, "packages/runtime-args");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.mkdirSync(path.join(root, "node_modules"));
+  fs.symlinkSync(pkg, path.join(root, "node_modules/runtime-args"), "junction");
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ exports: {
+    browser: "./browser.ts", node: "./node.ts",
+  } }));
+  fs.writeFileSync(path.join(pkg, "browser.ts"), 'const ignored = process.env.UNUSED; export const args = {};');
+  fs.writeFileSync(path.join(pkg, "node.ts"), 'export const args = {};');
+  fs.mkdirSync(path.join(root, "lib"));
+  fs.writeFileSync(path.join(root, "lib/args.ts"), 'export { args } from "runtime-args";');
+  for (const [name, directive, kind] of [["browserGraph", "", "query"], ["nodeGraph", '"use node";', "action"]]) {
+    fs.writeFileSync(path.join(root, `convex/${name}.ts`), `${directive}
+import { ${kind}Generic } from "convex/server";
+import { args } from "../lib/args";
+export const read = ${kind}Generic({ args, handler: () => null });`);
+  }
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "browserGraph:read" }])).toEqual(["browserGraph:read"]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "nodeGraph:read" }])).toEqual([]);
 });
 
 test.each(["package", "workspace"])("patched Convex in %s refuses even at the pinned version", async (location) => {

@@ -23,14 +23,24 @@ export async function renderCurrentSpec(root) {
   const bundles = await bundleForMetadata({ root, dir, files, convexPackage, require });
   const functions = [];
   const unavailableModules = [];
+  /** @type {Array<{file: string, evaluations: number, environmentKeys: string[], enumerations: number, differentialRefused: string[]}>} */
+  const evaluatedModules = [];
+  const evaluation = { staticallyRefusedModules: 0, differentialRefusedFunctions: 0, evaluations: 0, modules: evaluatedModules };
   for (const file of files) {
     const relative = path.relative(dir, file).replaceAll("\\", "/");
     const result = await evaluateBundle(bundles, relative, functionMetadata);
+    evaluation.staticallyRefusedModules += result.staticRefused ? 1 : 0;
+    evaluation.differentialRefusedFunctions += result.differentialRefused?.length ?? 0;
+    evaluation.evaluations += result.evaluations;
+    evaluation.modules.push({ file: relative, evaluations: result.evaluations,
+      environmentKeys: result.environmentKeys ?? [], enumerations: result.enumerations ?? 0,
+      differentialRefused: result.differentialRefused ?? [] });
     if (result.reason) unavailableModules.push({ file: relative, reason: result.reason });
     else functions.push(...result.functions);
   }
   console.warn(`Current spec: ${unavailableModules.length} module(s) UNPROVEN under environment-blind evaluation (no evidence from those modules).`);
-  const spec = { functions, unavailableModules };
+  console.warn(`Current spec: ${evaluation.staticallyRefusedModules} statically refused modules; ${evaluation.differentialRefusedFunctions} differential function refusals; ${evaluation.evaluations} evaluations.`);
+  const spec = { functions, unavailableModules, evaluation };
   if (!functions.length || specProblems(spec).length) throw new Error("Incomplete or invalid native argument spec");
   return spec;
 }

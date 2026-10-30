@@ -113,18 +113,27 @@ test("an unreviewed Convex SDK version refuses before module evaluation", async 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-/** @type {Array<[string, string, {fixed: number, stillFails: number, unproven: number}]>} */
+/** @type {Array<[string, string, {fixed: number, stillFails: number, unproven: number}, boolean?]>} */
 const environmentCases = [
   ["environment-blind normal metadata is FIXED", '{ label: v.string() }', { fixed: 1, stillFails: 0, unproven: 0 }],
   ["NODE_ENV-conditioned metadata is UNPROVEN", 'process.env.NODE_ENV === "production" ? {} : { label: v.string() }', { fixed: 0, stillFails: 0, unproven: 1 }],
+  ["library NODE_ENV-conditioned metadata is UNPROVEN", 'process.env.NODE_ENV === "production" ? {} : { label: v.string() }', { fixed: 0, stillFails: 0, unproven: 1 }, true],
+  ["library environment read with independent args is FIXED", '(process.env.NODE_ENV, { label: v.string() })', { fixed: 1, stillFails: 0, unproven: 0 }, true],
 ];
-for (const [scenario, args, expected] of environmentCases) {
+for (const [scenario, args, expected, library = false] of environmentCases) {
   test(scenario, async () => {
     const root = fixture();
     try {
+      if (library) {
+        const pkg = path.join(root, "node_modules/fixture-args");
+        fs.mkdirSync(pkg, { recursive: true });
+        fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ main: "index.js" }));
+        fs.writeFileSync(path.join(pkg, "index.js"), `import { v } from "convex/values"; export const args = ${args};`);
+      }
       fs.writeFileSync(path.join(root, "convex/unstable.ts"), `import { queryGeneric } from "convex/server";
 import { v } from "convex/values";
-export const read = queryGeneric({ args: ${args}, handler: () => process.env.HANDLER_ONLY });`);
+${library ? 'import { args } from "fixture-args";' : ""}
+export const read = queryGeneric({ args: ${library ? "args" : args}, handler: () => process.env.HANDLER_ONLY });`);
       fs.mkdirSync(path.join(root, "app"));
       fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
 declare const api: { unstable: { read: unknown } };

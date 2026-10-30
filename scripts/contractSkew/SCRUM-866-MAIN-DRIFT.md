@@ -1,9 +1,11 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-**Current result, 2026-10-30 Seat 2 remediation:** the environment-blind native
-ESM renderer leaves all six calls **UNPROVEN**. The historical FIXED results
-below are superseded as current-spec evidence. See the final section for the
-179 refused modules, native bundler mechanism and verification boundary.
+**Current result, 2026-10-30 differential follow-up:** all six calls remain
+**UNPROVEN**. Environment reads are now recorded and compared, and app inputs
+receive static refusal. Zod actually first reads a global configuration object,
+not `process.env`. After its initialization succeeds, its `navigator` capability
+probe still meets the unchanged unknown-global refusal. See the final section
+for the measured counts, source locations and residual sampling limits.
 
 The original baseline PR cleared 12 differences and incorporated #726.
 The final baseline contains **928 entries**. A native comparison proves the six
@@ -588,3 +590,187 @@ Sonar/CI, formal /simplify and independent certification seats remain unverified
 in this implementer session. No screen audit, explorer swarm, merge, backend
 deployment or production data mutation is claimed. The original six-FIXED proof
 must not be carried forward as certification of this renderer.
+
+## Recorded environments and differential evaluation, 2026-10-30
+
+### Source finding and bounded design
+
+Installed Zod **4.6.6** does not cause the first refusal through an environment
+variable. Its emitted `v4/core/core.js:135–136` reads
+`globalThis.__zod_globalConfig`, initializes it when absent and exports the
+shared configuration object. It controls parsing configuration, including the
+JIT switch (`v4/core/schemas.js:1194`, `util.js:220`), memoization and error
+customization. `v4/core/registries.js:50–51` similarly initializes
+`globalThis.__zod_globalRegistry`, the shared schema metadata registry.
+These are global object properties, not `process.env` keys.
+
+The source therefore requires one adjustment to the proposed design: each
+evaluation explicitly starts those two properties absent, in the fresh VM
+realm, and permits their initialization. An additional world starts the config
+as an empty object. App references to either property refuse statically.
+Other unknown globals and the existing clock, randomness, locale, dynamic
+import, import-meta and external-module refusals remain in place. This is no
+claim about preexisting configuration in a long-lived deployment runtime.
+
+The environment Proxy records string keys read through property access,
+membership and descriptors, and counts enumeration. It receives no workstation
+environment values. Environment or process mutations, including caught writes,
+refuse the entry. Symbol keys are unsupported and refuse. Errors still discard
+evidence, including errors that occur only in a differential world.
+
+The TypeScript compiler API inspects app inputs before tree shaking and
+constant folding. A top-level process reference, environment read in a
+registration object, or unsupported global-object capture refuses evidence
+from that entry. Function bodies are deferred. The native esbuild metafile
+traces each entry's repository-local import closure, including symlinked
+workspace packages. Each platform retains its own graph, so a Node conditional
+export cannot overwrite the isolate's dependencies. `node_modules` libraries
+use differential evaluation instead. Unsupported global captures and process
+references can conservatively refuse app code even when its args are stable.
+
+The probe bundle preserves environment reads through Convex's production
+`NODE_ENV` define. For each entry, a fresh empty world records keys. All recorded
+keys are then grouped and receive each of `production`, `development`, `test`,
+`true`, `false`, `1`, `0`, the empty string and one random UUID string. Another
+world enumerates those keys with undefined values. Enumeration with no recorded
+keys also gets one synthetic key, so `Object.keys(process.env).length` is not
+silently certified from two empty enumerations. A newly reached key in a later
+world refuses the module, rather than leaving that key untested. More than
+32 keys also refuses. The maximum is **13 evaluations per entry**, including
+the fresh-config control and the unchanged deployment bundle. An entry without
+environment observations needs three evaluations. The unchanged production
+bundle alone supplies published metadata.
+
+Full registration records, including native `exportArgs()` JSON and export
+presence, are compared. A changed function loses its evidence while an unchanged
+sibling can remain eligible. Native Convex bundling, the SDK version pin,
+patched-SDK refusal, credential boundary and partial-current completeness check
+are unchanged.
+
+Design sources: the [TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
+documents AST traversal, and [esbuild metafiles](https://esbuild.github.io/api/#metafile)
+identify resolved input dependencies. The [Convex bundling documentation](https://docs.convex.dev/functions/bundling)
+and installed Convex 1.42.1 `src/bundler/debugBundle.ts:16–97` establish the native
+options and production define. [Zod 4.6.6 core source](https://github.com/colinhacks/zod/blob/v4.6.6/packages/zod/src/v4/core/core.ts)
+and the installed emitted files above establish its global initialization.
+[Node VM documentation](https://nodejs.org/api/vm.html) defines fresh contexts,
+ESM linking and evaluation timeouts; VM evaluation is not a security sandbox.
+
+### Repository proof and exact refusals
+
+The client and backend source trees still equal `43feaa4f`:
+`git diff --name-only 43feaa4f -- convex app components packages lib apps/mobile`
+is empty. Across **329 discovered modules**, the render reports:
+
+| Measurement | Result |
+| --- | ---: |
+| Modules refused statically | 0 |
+| Functions refused by differential comparison | 0 |
+| Total VM evaluations | 629 |
+| Retained registered exports | 39 |
+| Modules refused by unchanged runtime guards | 179 |
+| Of those: `unavailable global navigator` | 174 |
+| Of those: `unavailable global require` | 4 |
+| Of those: `external module` | 1 |
+
+The local render took approximately **10 seconds**, including native bundle
+construction. It uses up to four native esbuild builds (deployment and probe
+for each of two runtime groups). No backend I/O or handler invocation occurs
+in rendering. These are measured local counts, not a CI or deployment-runtime
+performance claim. Module diagnostics retain the recorded keys, enumeration
+counts, evaluations and function-specific differential refusals.
+
+The next real refusal is `zod/v4/core/util.js:224`:
+`typeof navigator !== "undefined"` followed by the Cloudflare user-agent check.
+This is Zod's `allowsEval` JIT capability check, reached while constructing
+schemas. The global guard latches that access even when `typeof` masks the
+thrown exception. It was retained rather than granting an unproven runtime
+global. All six calls consequently remain unproven:
+
+| Call | Exact module refusal |
+| --- | --- |
+| `financingEconomics:supplierConcessionBasis` | `financingEconomics.ts`: unavailable global `navigator`, Zod `util.js:224` |
+| `financingEconomics:resolveAppraisalGap` | `financingEconomics.ts`: same refusal |
+| `vehicles:update` | `vehicles.ts`: same refusal |
+| `vehicleEdits:requestUpdate` | `vehicleEdits.ts`: same refusal |
+| `vehicles:create` | `vehicles.ts`: same refusal |
+| `vehicleEdits:requestCreate` | `vehicleEdits.ts`: same refusal |
+
+The completeness check finds **643 called functions absent** and discards the
+entire partial spec. Both the saved deployed-spec replay and a fresh,
+identity-checked workstation-account production metadata read exit **7**, with
+11 unclassified findings and `{ fixed: 0, stillFails: 0, unproven: 6 }`.
+The eleven finding identities equal the original saved report across function,
+call site, path, dimension, severity and detail. All **928 baseline entries**
+match; drift, coverage gaps and additional causes are empty. No release pass,
+deployment, production mutation or independent seat certification is claimed.
+
+Reproduction uses the existing saved proof files in `node_modules/.cache/scrum866-proof`:
+
+```powershell
+node --experimental-vm-modules scripts/contractSkew/renderCurrentSpec.mjs node_modules/.cache/scrum866-proof/current-differential.json
+node scripts/contractSkew/cli.mjs --mode production --spec node_modules/.cache/scrum866-proof/deployed.json --current node_modules/.cache/scrum866-proof/current-differential.json --json node_modules/.cache/scrum866-proof/report-differential.json --deployed-sha 6c71a7654bc8fc11b37b4b57ac52dbb71ecae592
+# expected comparison exit: 7, six UNPROVEN
+```
+
+### Residual risk
+
+Differential sampling is finite evidence, not a proof for every environment.
+A library that branches on an exact secret value outside the sample set can
+evade it. Grouping keys also misses mixed-value conditions such as
+`A === "production" && B === "development"`, even though both values occur
+individually in the sample set. Dynamic keys reached in tested worlds refuse;
+keys hidden behind an untested value remain outside the observation. The static
+audit is conservative syntax analysis, not whole-program alias or call-flow
+verification. Fresh Zod configuration and module initialization do not establish
+long-lived runtime state, concurrency or deployment equivalence. These limits
+must accompany any later use of this metadata as evidence.
+
+### Validation of this follow-up
+
+```text
+pnpm exec vitest run scripts/contractSkew/<each test file> --maxWorkers=1
+27 files passed; 1,358 tests passed, zero failed, 1 existing skipped
+
+pnpm exec vitest run scripts/contractSkew/renderCurrentSpec.test.ts scripts/intelligence/convexCredentialBoundary.test.ts --maxWorkers=1 --coverage --coverage.include=scripts/contractSkew/currentSpec.mjs --coverage.include=scripts/contractSkew/renderCurrentSpec.mjs --coverage.include=scripts/contractSkew/metadataBundle.mjs --coverage.reportsDirectory=node_modules/.cache/scrum866-differential-coverage
+94 passed (79 renderer, 15 credential boundary), zero failures/skips
+Source lines 271/277 = 97.83%; functions 65/73 = 89.04%
+Added executable source lines versus 7f3c9d9c: 95/96 = 98.96%
+
+node --experimental-vm-modules --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
+22 passed, zero failed/skipped
+
+pnpm typecheck:contract-skew
+exit 0; dedicated detector checkJs project, including .mjs
+pnpm typecheck
+exit 0; root project excludes convex/
+pnpm lint
+exit 0; zero errors, 4,350 existing warnings
+pnpm exec eslint scripts/contractSkew/currentSpec.mjs scripts/contractSkew/metadataBundle.mjs scripts/contractSkew/currentSpec.test.mjs scripts/contractSkew/renderCurrentSpec.test.ts
+exit 0; zero warnings
+git diff --check
+exit 0
+```
+
+Added-line coverage intersects zero-context diff hunks against LCOV DA records
+for the two changed renderer source files. It is local measured coverage, not
+a new-head Sonar verdict. The first coverage attempt passed 75 tests but failed
+the unchanged 85% function threshold (84.84%); additional mutation, key-budget
+and newly reached-key controls exercise the previously untested safety paths.
+The final coverage command exits zero with every configured threshold met.
+
+The initial seven added controls failed against the previous implementation.
+The platform-specific graph regression also failed before its fix. Five
+process/environment mutation controls failed before mutation traps were added.
+Node end-to-end controls now prove the fixture-library conditional is UNPROVEN
+and the library with an irrelevant environment read is FIXED. The existing
+normal-case and conditional-export controls remain green.
+
+The 27-file sweep uses separate one-worker processes and temporarily normalizes
+three unchanged Windows shebang files to LF, then restores their exact original
+bytes in a finally block. None is in this change. Advisory read-only inspection
+identified the per-platform graph, captured-global alias and process-mutation
+gaps. Their fixes were inspected for closure; this is not a reviewer seat or a
+formal simplify run. New-head cloud CI/Sonar and independent certification are
+pending. Product code, credential policy and workflow files are unchanged in
+this follow-up. The pilot, screen audit and explorer swarm were not certified.

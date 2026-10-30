@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { createRequire } from "node:module";
+import { randomUUID } from "node:crypto";
+
+/** @typedef {{identifier: string, functionType: string, visibility: {kind: string}, args: unknown}} FunctionMetadata */
 
 /** Refuse a content-patched SDK even when its version still matches. */
 export function refusePatchedConvex(root, require) {
@@ -39,6 +42,8 @@ export async function bundleForMetadata({ root, dir, files, convexPackage, requi
   const groups = entryPointGroups(dir, files, ts);
   const deployment = new Map();
   const probe = new Map();
+  const staticReads = new Map();
+  const dependencies = new Map();
   for (const platform of ["browser", "node"]) {
     if (!groups[platform].length) continue;
     const options = { dir, entryPoints: groups[platform], platform, generateSourceMaps: true,
@@ -48,14 +53,21 @@ export async function bundleForMetadata({ root, dir, files, convexPackage, requi
     const passes = [[deployment, false], [probe, true]];
     for (const [target, audit] of passes) {
       const plugins = [serverOnlyPlugin, wasmPlugin];
-      // NODE_ENV is otherwise folded away before the throwing Proxy can see it.
+      // NODE_ENV is otherwise folded away before the recording Proxy can see it.
       // This second, conservative probe is never used as current metadata.
-      if (audit) plugins.push(environmentProbe(ts));
+      if (audit) plugins.push(environmentProbe(ts, root, staticReads));
       const result = await innerEsbuild({ ...options, plugins });
       recordSources(result.outputFiles, target);
+      if (audit) {
+        const graph = new Map();
+        for (const [input, info] of Object.entries(result.metafile.inputs)) {
+          graph.set(path.resolve(input), info.imports.filter((item) => !item.external).map((item) => path.resolve(item.path)));
+        }
+        for (const file of groups[platform]) dependencies.set(path.resolve(file), graph);
+      }
     }
   }
-  return { deployment, probe };
+  return { deployment, probe, staticReads, dependencies, dir };
 }
 
 /** Keep emitted ESM bytes unchanged; source maps are not executable modules. */
@@ -88,11 +100,16 @@ function entryPointGroups(dir, files, ts) {
 }
 
 /** Preserve env accesses through Convex's NODE_ENV constant folding. */
-function environmentProbe(ts) {
+function environmentProbe(ts, root, staticReads) {
   return { name: "environment-blind-probe", setup(builder) {
     builder.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, (args) => {
       const text = fs.readFileSync(args.path, "utf8");
       const source = ts.createSourceFile(args.path, text, ts.ScriptTarget.Latest, true);
+      const relative = path.relative(root, args.path);
+      if (!relative.startsWith("..") && !relative.split(path.sep).includes("node_modules")) {
+        const location = topLevelInput(ts, source);
+        if (location) staticReads.set(path.resolve(args.path), `${relative.replaceAll("\\", "/")}:${location}`);
+      }
       const edits = [];
       function visit(node) {
         if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
@@ -113,33 +130,126 @@ function environmentProbe(ts) {
   } };
 }
 
+/** Refuse app input references outside function bodies, before tree shaking. */
+function topLevelInput(ts, source) {
+  let location = 0;
+  function visit(node) {
+    if (location) return;
+    // Declarations/parameters are still inspected; function bodies are not run.
+    if (node.parent && ts.isFunctionLike(node.parent) && node.parent.body === node) return;
+    const inputNames = ["process", "__zod_globalConfig", "__zod_globalRegistry"];
+    const computedInput = ts.isElementAccessExpression(node) &&
+      ["globalThis", "global"].includes(node.expression.getText(source)) &&
+      (!ts.isStringLiteral(node.argumentExpression) || inputNames.includes(node.argumentExpression.text));
+    // Capturing the global object enables aliases/reflection that cannot be
+    // certified by this syntax-only audit; direct intrinsic access stays usable.
+    const capturedGlobal = ts.isIdentifier(node) && ["globalThis", "global"].includes(node.text) &&
+      !((ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) && node.parent.expression === node);
+    if (computedInput || capturedGlobal || (ts.isIdentifier(node) && inputNames.includes(node.text) &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node && node.text === "process" &&
+          !["globalThis", "global"].includes(node.parent.expression.getText(source))))) {
+      location = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  return location;
+}
+
+/** Trace each entry's input closure, not shared emitted-chunk membership. */
+function staticRefusal(bundles, file) {
+  const entry = path.resolve(bundles.dir, file);
+  const graph = bundles.dependencies.get(entry);
+  if (!graph?.has(entry)) return "static dependency graph unavailable";
+  const pending = [entry];
+  const visited = new Set();
+  for (let index = 0; index < pending.length; index++) {
+    const input = pending[index];
+    if (visited.has(input)) continue;
+    visited.add(input);
+    if (bundles.staticReads.has(input)) return `static environment input: ${bundles.staticReads.get(input)}`;
+    pending.push(...(graph.get(input) ?? []));
+  }
+  return "";
+}
+
 /**
  * Fresh context/cache per entry and per pass. Evaluate native ESM unchanged,
  * with an emitted-chunk-only linker, never host package resolution.
  * vm is an evaluator for trusted main, not a security sandbox.
+ * @returns {Promise<{functions: FunctionMetadata[], reason: string, evaluations: number,
+ * staticRefused?: boolean, differentialRefused?: string[], environmentKeys?: string[], enumerations?: number}>}
  */
 export async function evaluateBundle(bundles, file, metadata) {
   if (typeof vm.SourceTextModule !== "function") throw new Error("Native ESM metadata evaluation requires --experimental-vm-modules");
+  const reason = staticRefusal(bundles, file);
+  if (reason) return { functions: [], reason, staticRefused: true, evaluations: 0 };
   const entry = path.resolve("out", file.replace(/\.[^.]+$/, ".js"));
-  const probe = await evaluatePass({ modules: bundles.probe, entry, file, metadata });
-  return probe.reason ? probe : evaluatePass({ modules: bundles.deployment, entry, file, metadata });
+  const options = { entry, file, metadata };
+  const baseline = await evaluatePass({ ...options, modules: bundles.probe });
+  if (baseline.reason) return { ...baseline, environmentKeys: [...baseline.keys], evaluations: 1 };
+  return differentialEvaluation(bundles, options, baseline);
+}
+
+/** Group keys to bound probing; discovering a new key in a world refuses. */
+async function differentialEvaluation(bundles, options, baseline) {
+  const keys = [...baseline.keys];
+  if (baseline.enumerations && !keys.length) keys.push("__AUTOFLOW_ENV_PROBE__");
+  if (keys.length > 32) return { functions: [], reason: "environment key budget exceeded", evaluations: 1 };
+  const values = ["production", "development", "test", "true", "false", "1", "0", "", randomUUID()];
+  const worlds = keys.length || baseline.enumerations ? values.map((value) => Object.fromEntries(keys.map((key) => [key, value]))) : [];
+  // Enumerated keys are present even when their values are undefined.
+  if (keys.length || baseline.enumerations) worlds.push(Object.fromEntries(keys.map((key) => [key, undefined])));
+  // Supported Zod globals own fresh realm state. Probe preinitialized
+  // configuration as well as Zod's own initialization path.
+  worlds.push({});
+  const refused = new Set();
+  let evaluations = 1;
+  let enumerations = baseline.enumerations;
+  for (const [index, world] of worlds.entries()) {
+    const result = await evaluatePass({ ...options, modules: bundles.probe, world, zodConfig: index === worlds.length - 1 });
+    evaluations++;
+    enumerations += result.enumerations;
+    if (result.reason) return { functions: [], reason: result.reason, evaluations, environmentKeys: keys, enumerations };
+    if ([...result.keys].some((key) => !keys.includes(key))) {
+      return { functions: [], reason: "environment keys changed across worlds", evaluations, environmentKeys: [...new Set([...keys, ...result.keys])], enumerations };
+    }
+    compareFunctions(baseline.functions, result.functions, refused);
+  }
+  const deployed = await evaluatePass({ ...options, modules: bundles.deployment });
+  evaluations++;
+  enumerations += deployed.enumerations;
+  if (deployed.reason) return { functions: [], reason: deployed.reason, evaluations, environmentKeys: keys, enumerations };
+  compareFunctions(baseline.functions, deployed.functions, refused);
+  return { functions: deployed.functions.filter((fn) => !refused.has(fn.identifier)), reason: "",
+    differentialRefused: [...refused], evaluations, environmentKeys: keys, enumerations };
+}
+
+/** Compare full registration records, including exportArgs JSON and presence. */
+function compareFunctions(baseline, current, refused) {
+  const first = new Map(baseline.map((fn) => [fn.identifier, JSON.stringify(fn)]));
+  const next = new Map(current.map((fn) => [fn.identifier, JSON.stringify(fn)]));
+  for (const id of new Set([...first.keys(), ...next.keys()])) {
+    if (first.get(id) !== next.get(id)) refused.add(id);
+  }
 }
 
 /** Any denial, even caught by module code, invalidates this entire entry. */
-async function evaluatePass({ modules, entry, file, metadata }) {
+async function evaluatePass({ modules, entry, file, metadata, world = {}, zodConfig = false }) {
   const state = { reason: "" };
+  const reads = { keys: new Set(), enumerations: 0 };
   const deny = (reason) => {
     state.reason ||= reason;
     throw new Error("Deployment-dependent module evaluation");
   };
-  const context = metadataContext(deny);
+  const context = metadataContext(deny, world, reads, zodConfig);
   try {
     const namespace = await evaluateEntry(modules, context, deny, entry);
     const functions = metadata({ file, exports: namespace });
-    return { functions: state.reason ? [] : functions, reason: state.reason };
+    return { functions: state.reason ? [] : functions, reason: state.reason, ...reads };
   } catch (error) {
     if (!state.reason) throw error;
-    return { functions: [], reason: state.reason };
+    return { functions: [], reason: state.reason, ...reads };
   }
 }
 
@@ -166,17 +276,28 @@ async function evaluateEntry(modules, context, deny, entry) {
 }
 
 /** Read nothing from the calling process; permit handlers to remain uncalled. */
-function metadataContext(deny) {
-    const env = new Proxy({}, {
-      get: () => deny("environment read"), ownKeys: () => deny("environment enumeration"),
-      has: () => deny("environment membership"), getOwnPropertyDescriptor: () => deny("environment descriptor"),
+function metadataContext(deny, world, reads, zodConfig) {
+    const record = (key) => {
+      if (typeof key !== "string") return deny("unsupported environment key");
+      reads.keys.add(key);
+    };
+    const env = new Proxy(Object.assign(Object.create(null), world), {
+      get: (target, key) => { record(key); return target[key]; },
+      ownKeys: (target) => { reads.enumerations++; return Reflect.ownKeys(target); },
+      has: (target, key) => { record(key); return Object.hasOwn(target, key); },
+      getOwnPropertyDescriptor: (target, key) => { record(key); return Reflect.getOwnPropertyDescriptor(target, key); },
       set: () => deny("environment write"),
+      defineProperty: () => deny("environment write"), deleteProperty: () => deny("environment write"),
+      setPrototypeOf: () => deny("environment write"), preventExtensions: () => deny("environment write"),
     });
     const { context, protect } = environmentContext(deny, {
       process: new Proxy({ env }, {
         get: (_target, key) => key === "env" ? env : deny("process input"),
         ownKeys: () => deny("process enumeration"), has: () => deny("process membership"),
         getOwnPropertyDescriptor: () => deny("process descriptor"),
+        set: () => deny("process write"), defineProperty: () => deny("process write"),
+        deleteProperty: () => deny("process write"), setPrototypeOf: () => deny("process write"),
+        preventExtensions: () => deny("process write"),
       }),
       console: new Proxy({}, { get: () => () => {} }),
       TextEncoder, TextDecoder, URL, URLSearchParams, Request, Response, Headers,
@@ -186,6 +307,8 @@ function metadataContext(deny) {
       __denyInput: deny,
     });
     vm.runInContext(`
+      globalThis.__zod_globalConfig = ${zodConfig ? "{}" : "undefined"};
+      globalThis.__zod_globalRegistry = undefined;
       Date = new Proxy(Date, { apply() { __denyInput("clock"); }, construct() { __denyInput("clock"); },
         get() { return () => __denyInput("clock"); } });
       Math.random = () => __denyInput("randomness");
@@ -218,6 +341,6 @@ function environmentContext(deny, globals) {
     traps.get = (target, key) => Reflect.has(target, key) ? Reflect.get(target, key) : deny(`unavailable global ${String(key)}`);
     traps.has = () => deny("global membership");
     traps.ownKeys = () => deny("global enumeration");
-    traps.getOwnPropertyDescriptor = () => deny("global descriptor");
+    traps.getOwnPropertyDescriptor = (target, key) => typeof key === "string" && ["__zod_globalConfig", "__zod_globalRegistry"].includes(key) ? Reflect.getOwnPropertyDescriptor(target, key) : deny("global descriptor");
   } };
 }
