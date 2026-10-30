@@ -14,7 +14,7 @@ import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAcco
 import { supplierPayableVatReclassAllowed } from "./utils/vehicleOwnership";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import schema from "./schema";
-import { requireSupplierAmountMinor, requireSupplierSettlementAmountMinor, supplierSettlementAmountMinor } from "./utils/supplierPaymentAmounts";
+import { requireSupplierAmountMajor, requireSupplierAmountMinor, requireSupplierSettlementAmountMinor, supplierSettlementAmountMinor } from "./utils/supplierPaymentAmounts";
 
 const [nativePayable, openingPayable] = schema.tables.vehicleSupplierPayables.validator.members;
 const payableListFields = {
@@ -344,6 +344,10 @@ export const markPaid = mutation({
         // already posted, leaving the account short by exactly what had been
         // paid so far.
         const settlementAmountMinor = requireSupplierSettlementAmountMinor(payable);
+        const paidInFull = requireSupplierAmountMajor(
+          requireSupplierAmountMinor(payable.amountPaid ?? 0, payable.currency) + settlementAmountMinor,
+          payable.currency,
+        );
         if (args.expectedSettlementAmountMinor !== undefined && args.expectedSettlementAmountMinor !== settlementAmountMinor) {
           throwAppError(AppErrorCode.SUPPLIER_PAYMENT_CHANGED,
             "The amount outstanding has changed. Close and reopen the payment dialog before confirming.");
@@ -382,7 +386,7 @@ export const markPaid = mutation({
           // paid. Left at zero, `settlementView` would have to keep special-
           // casing this row forever to avoid reporting a settled supplier as
           // still owed the lot.
-          amountPaid: payable.amountDue,
+          amountPaid: paidInFull,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
           paidBy: user._id,
@@ -514,7 +518,6 @@ export const recordPartialPayment = mutation({
         // fils. The supplier had been paid in full and nothing could record it.
         const dueMinor = toMinorUnits(payable.amountDue, payable.currency);
         const projectedMinor = toMinorUnits(alreadyPaid, payable.currency) + paymentMinor;
-        const projected = fromMinorUnits(projectedMinor, payable.currency);
         // Paying a supplier more than he is owed is a real error with real
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
@@ -523,6 +526,7 @@ export const recordPartialPayment = mutation({
             `That would pay ${fromMinorUnits(projectedMinor, payable.currency)} against ${fromMinorUnits(dueMinor, payable.currency)} owed. Reduce the amount, or correct the entitlement first.`
           );
         }
+        const projected = requireSupplierAmountMajor(projectedMinor, payable.currency);
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
         if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);

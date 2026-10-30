@@ -209,6 +209,78 @@ Scope remains the requested fixes. Other LOW findings belong to SCRUM-879.
 No production row count, backend-connected dialog verification, OCC proof,
 migration, deployment or fresh two-seat certification is claimed here.
 
+## Round 5: cumulative storage and trade-in regression closure
+
+Invariant: cumulative paid minor units equal the sum of posted payments, and
+cash credited cannot exceed the payable entitlement. A trade-in's stored
+purchase price must equal its inventory debit and receivable credit.
+
+The accumulation finding was independently reproduced through public mutations:
+after paying 9007199254740.988 JOD against 9007199254740.990, a further 0.001
+resolved with the old amountPaid and a 0.001 return remainder. That new integer
+total cannot survive the existing major-unit Number storage. The new boundary
+requires a safe, nonnegative integer, converts using the existing money helper,
+and checks conversion back against the original integer before patching or
+posting. It refuses with the existing SUPPLIER_AMOUNT_PRECISION EN/AR error.
+The same boundary supplies markPaid's stored total. Its pre-existing validated
+amountDue already makes that particular guard redundant; removing only the
+markPaid call is an equivalent mutant, not a claimed defect caught by a test.
+No schema migration, new spending route or deferred operation is enabled.
+
+Writer enumeration: tracked non-test Convex TypeScript, including nested paths,
+was searched for amountPaid writes. The two actual nonzero patches are markPaid
+and recordPartialPayment in sourcingPayables; the latter's returned amountPaid
+is not a third writer. Opening allocations initialize zero. Schema, settlement
+views and vehicle correction responses are declarations/read projections. The
+existing reader, authorization, history, audit and reversal map above remains
+applicable: refusal throws inside idempotency and rolls back the command too.
+
+Five predicted failures shaped verification: an intermediate total loses one
+fils; the last partial payment bypasses validation; full settlement bypasses
+the same boundary; trade-in conversion silently rounds; and localized text
+names the wrong field. The advisory design attack agreed with bounded refusal
+and identified the existing cash-containment test opt-out as an evidence limit.
+
+Before production edits, the new accumulation assertion failed because the
+payment resolved instead of refusing; both trade-in completion assertions failed
+because the error was SUPPLIER_AMOUNT_PRECISION with supplier-payment wording.
+The dedicated TRADE_IN_VALUE_PRECISION code now names the trade-in value in EN
+and AR; it shares exactMinor with supplier validation, without changing supplier
+wording. Both public doors, sales.create and sales.completeDraft, assert full
+table equality on refusal, then retry the same completion key with 128.001 and
+assert purchasePrice 128.001 and actual 128001-fils inventory/receivable lines.
+These tests use accountingVehicleInventory's existing cash-containment opt-out;
+they do not certify a reachable pilot trade-in workflow or enable one.
+
+Source mutation checks: replacing the cumulative storage boundary with
+fromMinorUnits fails the lost-fils assertion. Replacing the trade-in guard with
+toMinorUnits makes both completion assertions fail because completion succeeds.
+Each source was restored from a byte copy, with matching SHA-256 hashes. The
+restored targeted run passes all four new checks. Supplier positive controls
+settle through both final partial payment and markPaid and assert literal total
+cash credits of 9007199254740990 fils. Refusal checks include command, payable,
+event and journal state via all-table snapshots; they cover removals too.
+
+| SCRUM-486 row | Permanent executable check |
+| --- | --- |
+| SCRUM-486-SUPPLIER-CUMULATIVE-ROUNDTRIP | sourcingPayables: cumulative supplier payments refuse a lost fils before posting |
+| SCRUM-486-TRADE-IN-PRECISION-CREATE | accountingVehicleInventory: create refuses fractional trade-in value atomically with field-specific EN/AR text |
+| SCRUM-486-TRADE-IN-PRECISION-DRAFT | accountingVehicleInventory: draft refuses fractional trade-in value atomically with field-specific EN/AR text |
+
+LOW advisories remain SCRUM-879. No production row count, backend-connected UI,
+platform/OCC proof, independent final-head certification or deployment is claimed.
+Current Convex mutation docs, Adyen minor-unit guidance and Fowler Money were
+re-fetched on 2026-10-31. Bounded refusal preserves the current storage contract;
+lossless integer storage would require a separately reviewed schema migration.
+
+Final local validation: 685 tests passed in eleven named files with one worker;
+both TypeScript projects passed. Root typechecking excludes Convex, test-utils,
+apps, packages and dealer-worker entry roots; the Convex project covers Convex
+and test-utils with generated entry roots excluded. Changed-file ESLint has
+zero errors and two pre-existing explicit-any warnings in the inventory suite.
+The library initially refused malformed new records; corrected fingerprints
+and separate literal executable titles pass its existing checks unchanged.
+
 ## Sources
 
 [Convex mutations](https://docs.convex.dev/functions/mutation-functions) support

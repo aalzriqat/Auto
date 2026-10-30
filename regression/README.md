@@ -127,6 +127,17 @@ Four phone-audit screen records bind the delayed-dismissal, persistent-drawer, a
 
 Their `SCRUM-760#description` digest now covers the entire approved October 25 Markdown description returned by Atlassian Rovo, including the published backlog reconciliation and web-only pilot clarification, whitespace-normalized by `digestRulingText`; comments and paraphrases are excluded. The snapshot and all four references were refreshed together on 2026-10-25 to digest `786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69`. The phone-browser screen oracles and their fingerprints remain unchanged; mobile-app exclusion does not exclude phone-sized web capture. Original causal evidence removes only the observed-removal assertion; the added DOM self-attack leaves a visible dialog with aria-hidden=true and reproduces a false pass before includeHidden. It is not a claim that aria-hidden caused the original production-like obstruction, nor that an older commit executed tests that did not yet exist.
 
+## Supplier accumulation and trade-in precision (SCRUM-880 round 5)
+
+Three records bind the cumulative lost-fils refusal and both public trade-in
+completion doors. The supplier check asserts unchanged state on refusal and
+literal total cash credits after a corrected final payment. Trade-in checks
+assert unchanged state, field-specific EN/AR errors and matching vehicle cost,
+inventory debit and receivable credit. Each door has its own literal test title
+for executable-library binding. Trade-in tests retain the existing legacy cash
+fixture containment opt-out; no pilot reachability or runtime certification is
+claimed. Matrix rows are in the SCRUM-880 architecture note.
+
 ## Supplier concession records (SCRUM-766 PR-C)
 
 Fourteen backend records bind exact titles in `convex/supplierConcession.scrum766c.test.ts` (ten money, four permission). They cite SCRUM-407#c21031 (consigned financed economics), SCRUM-760#description (pilot scope) and, for the permission records, SCRUM-760#c22465 (R-PERMISSION). The rulings that govern them are SCRUM-760 c23812 (ruling 3: the concession is in the pilot, for SOURCED vehicles only, split against the server-computed total net shortfall) and SCRUM-766 c23841 (the owner approved the commission basis M = K - E_eff - contra, 77.5 in the worked example, and accepted Q2-Q8 as implemented). All fourteen records cite c23812, and the commission record also cites c23841; both are in `rulings.json` with a whole-comment digest (the convention above), refreshed 2026-10-28 with `refreshRulings.mjs`. The digest covers all eleven rulings in c23812, so a change to any of them changes it.  A ruling change updates these records in the same change.  Harness evidence only.

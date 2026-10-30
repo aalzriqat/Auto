@@ -14,8 +14,50 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+test("SCRUM-880: cumulative supplier payments refuse a lost fils before posting", async () => {
+  const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(9007199254740.990);
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 9007199254740.988, paymentMethod: "CASH", idempotencyKey: "large-first",
+  });
+  const before = await dbSnapshot(t, Object.keys(schema.tables));
+  await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 0.001, paymentMethod: "CASH", idempotencyKey: "large-final",
+  })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+  expect(await dbSnapshot(t, Object.keys(schema.tables))).toEqual(before);
+  const offered = (await asOwner.query(api.sourcingPayables.list, { orgId })).find(p => p._id === payableId);
+  expect(offered?.settlementAmountMinor).toBe(2);
+  // Same command key remains usable after the atomic refusal. A representable
+  // final total settles without crediting more cash than the entitlement.
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 0.002, paymentMethod: "CASH", idempotencyKey: "large-final",
+  });
+  expect((await t.run(ctx => ctx.db.get(payableId)))?.amountPaid).toBe(9007199254740.990);
+  const cash = await accountBySystemKey("CASH_ON_HAND");
+  const credits = await t.run(async ctx => (await ctx.db.query("journalLines").collect())
+    .filter(line => line.accountId === cash?._id).map(line => line.creditMinor));
+  expect(credits.map(BigInt).reduce((sum, credit) => sum + credit, 0n)).toBe(9007199254740990n);
+});
+
+test("SCRUM-880: markPaid preserves the exact accumulated total at the safe integer boundary", async () => {
+  const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(9007199254740.990);
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 9007199254740.988, paymentMethod: "CASH", idempotencyKey: "large-first",
+  });
+  await asOwner.mutation(api.sourcingPayables.markPaid, {
+    orgId, payableId, expectedSettlementAmountMinor: 2, paymentMethod: "CASH", idempotencyKey: "large-mark",
+  });
+  const row = await t.run(ctx => ctx.db.get(payableId));
+  expect(row?.amountPaid).toBe(9007199254740.990);
+  expect(row?.status).toBe("PAID");
+  const cash = await accountBySystemKey("CASH_ON_HAND");
+  const credits = await t.run(async ctx => (await ctx.db.query("journalLines").collect())
+    .filter(line => line.accountId === cash?._id).map(line => line.creditMinor));
+  expect(credits.map(BigInt).reduce((sum, credit) => sum + credit, 0n)).toBe(9007199254740990n);
+});
 
 test("a non-finance manager cannot read sourcing financial queues", async () => {
   const { t, orgId, asOwner } = await seedDealerWithPayable();

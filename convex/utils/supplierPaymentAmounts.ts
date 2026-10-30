@@ -4,6 +4,9 @@ import { fromMinorUnits, supportedCurrencyScale, toMinorUnits } from "./money";
 export const SUPPLIER_AMOUNT_PRECISION_MESSAGE =
   "Purchase and supplier payment amounts must match the currency's decimal places. Correct the amount before paying.";
 
+export const TRADE_IN_VALUE_PRECISION_MESSAGE =
+  "The trade-in value must match the currency's decimal places. Correct the trade-in value before completing the sale.";
+
 /** No rounding of a stored entitlement or caller-supplied purchase amount. */
 function exactMinor(amount: number, currency: string): number | null {
   const scale = supportedCurrencyScale(currency);
@@ -17,6 +20,26 @@ export function requireSupplierAmountMinor(amount: number, currency: string): nu
   const minor = exactMinor(amount, currency);
   if (minor === null) {
     throwAppError(AppErrorCode.SUPPLIER_AMOUNT_PRECISION, SUPPLIER_AMOUNT_PRECISION_MESSAGE);
+  }
+  return minor;
+}
+
+/** Refuse a paid total that the existing major-unit storage cannot preserve. */
+export function requireSupplierAmountMajor(minor: number, currency: string): number {
+  if (!Number.isSafeInteger(minor) || minor < 0 || supportedCurrencyScale(currency) === null) {
+    throwAppError(AppErrorCode.SUPPLIER_AMOUNT_PRECISION, SUPPLIER_AMOUNT_PRECISION_MESSAGE);
+  }
+  const major = fromMinorUnits(minor, currency);
+  if (exactMinor(major, currency) !== minor) {
+    throwAppError(AppErrorCode.SUPPLIER_AMOUNT_PRECISION, SUPPLIER_AMOUNT_PRECISION_MESSAGE);
+  }
+  return major;
+}
+
+export function requireTradeInValueMinor(amount: number, currency: string): number {
+  const minor = exactMinor(amount, currency);
+  if (minor === null) {
+    throwAppError(AppErrorCode.TRADE_IN_VALUE_PRECISION, TRADE_IN_VALUE_PRECISION_MESSAGE);
   }
   return minor;
 }

@@ -59,7 +59,7 @@ import {
 } from "./supplierConcession";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
-import { requireSupplierAmountMinor } from "./supplierPaymentAmounts";
+import { requireSupplierAmountMinor, requireTradeInValueMinor } from "./supplierPaymentAmounts";
 import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -2143,7 +2143,7 @@ async function applySaleCompletionSideEffects(
       );
     }
 
-    const tradeInValueMinor = requireSupplierAmountMinor(args.tradeInValue, prepared.currency);
+    const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
     tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,
