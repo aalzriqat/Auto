@@ -1,0 +1,50 @@
+{
+  "id": "rt11-competing-legacypayment",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "saleLinkedReceivable": true,
+        "amount": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.code",
+      "value": "SALE_DEBT_RECEIPT_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "legacyPayment cannot use legacy sale debt and changes no app table"
+  },
+  "fingerprint": "09237d1e6a640f33885382f7b1e3050068240807e29dd63f7aa45d332ec18523"
+}

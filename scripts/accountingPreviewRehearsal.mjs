@@ -731,14 +731,17 @@ export function fd1BankContractInputs({ env, cwd, readText = (file) => readFileS
  *     past its bound (run 40521502331: S858-CLEANUP-HISTORY and S858-CLEANUP-SPLIT failed for exactly this reason).
  *     It uses only organizations it creates itself, so it does not need the baseline period that P1 closed.
  *
+ *  4. `runPilotRoutes`: ruling 11 cancellation/restoration cases also create fresh QA organizations and MANAGER
+ *     memberships, so they run after cleanup, alongside the independent U-RET fixtures.
  * Any new case that creates organizations or QA memberships must run after `runCleanup`, not before it.
  * @param {() => string[]} createdRehearsalOrgIds read at the moment cleanup starts, never earlier
- * @param {{ runCases: () => Promise<void>, runCleanup: (createdRehearsalOrgIds: string[]) => Promise<void>, runUnwind: () => Promise<void> }} runners
+ * @param {{ runCases: () => Promise<void>, runCleanup: (createdRehearsalOrgIds: string[]) => Promise<void>, runUnwind: () => Promise<void>, runPilotRoutes: () => Promise<void> }} runners
  */
 export async function runRehearsalSequence(createdRehearsalOrgIds, runners) {
   await runners.runCases();
   await runners.runCleanup(createdRehearsalOrgIds());
   await runners.runUnwind();
+  await runners.runPilotRoutes();
 }
 
 /* c8 ignore start — the orchestration below only runs inside CI against a preview. */
@@ -850,7 +853,7 @@ export async function main(env = process.env) {
     fireConcurrentReleases,
   };
   const { runCleanupRehearsalCases } = await import("./accountingCleanupRehearsal.mjs");
-  const { runUnwindRehearsalCases } = await import("./accountingUnwindRehearsal.mjs");
+  const { runUnwindRehearsalCases, runPilotRouteRehearsalCases } = await import("./accountingUnwindRehearsal.mjs");
   await runRehearsalSequence(() => [...createdRehearsalOrgIds], {
     runCases: () => runRehearsalCases(context),
     runCleanup: ids => runCleanupRehearsalCases({ ...context,
@@ -859,6 +862,7 @@ export async function main(env = process.env) {
       createdRehearsalOrgIds: ids,
     }),
     runUnwind: () => runUnwindRehearsalCases(context),
+    runPilotRoutes: () => runPilotRouteRehearsalCases(context),
   });
 
   evidence.summary = summarize(results);

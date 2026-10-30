@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Does the rehearsal actually CATCH anything?
  *
@@ -2553,7 +2554,7 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(result?.status).toBe("FAIL");
     expect(result?.detail).toContain(reason);
   });
-  test("all old29 model cases execute while the three native-only callbacks remain explicitly unproven (U-RET runs after cleanup, not here)", async () => {
+  test("all old29 model cases execute while the three native-only callbacks remain explicitly unproven (U-RET and ruling 11 run after cleanup, not here)", async () => {
     const results = await runAgainst();
     const failures = results.filter((r) => r.status === "FAIL");
     expect(failures.map((f) => `${f.id}: ${f.detail}`)).toEqual([]);
@@ -2565,7 +2566,9 @@ describe("the rehearsal passes against a backend that behaves", () => {
     expect(summarize(results)).toMatchObject({total:32,passed:29,failed:0,unproven:3,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT"],complete:false});
     // And it actually ran the cases rather than finding nothing to do.
     // Cleanup callbacks, then U-RET, execute after this driver, in the trusted main entry point (runRehearsalSequence).
-    const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== "S858-CLEANUP-HISTORY" && id !== "S858-CLEANUP-SPLIT" && id !== "U-RET");
+    const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => ![
+      "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CANCEL-SALE", "CANCEL-CLOSED", "RESTORE-HELD", "RETURN-FC-CHEQUE",
+    ].includes(id));
     expect(originalIds).toHaveLength(32);
     expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());
   for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {

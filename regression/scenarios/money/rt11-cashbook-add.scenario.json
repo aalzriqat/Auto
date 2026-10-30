@@ -1,0 +1,50 @@
+{
+  "id": "rt11-cashbook-add",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "transactions.add",
+      "input": {
+        "historicalTransaction": true,
+        "amount": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.viewOnlyCashbook",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "retired manual cashbook add refuses with every app table unchanged"
+  },
+  "fingerprint": "94ff40535f5e63908f0075dec9de1088f891d45f663e08b0059956738a2e6777"
+}

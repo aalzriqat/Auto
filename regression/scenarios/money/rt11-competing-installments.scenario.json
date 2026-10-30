@@ -1,0 +1,50 @@
+{
+  "id": "rt11-competing-installments",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum760-pr696-ruling11",
+    "firstSeen": "2026-10-28"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "collections.createInstallmentPlan",
+      "input": {
+        "totalAmount": 100,
+        "installmentCount": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.schedulerChanged",
+      "value": 0
+    },
+    {
+      "observable": "refusal.code",
+      "value": "SALE_DEBT_COMPETING_RECEIVABLE_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    }
+  ],
+  "matrixRow": "RT11",
+  "impl": {
+    "file": "convex/pilotRouteMatrix.test.ts",
+    "testName": "installments cannot use legacy sale debt and changes no app table"
+  },
+  "fingerprint": "51abe06e27fc8ea1879cb73c9f91a3bca0a81ae2bf0d2f3dbe8f7e1cbfa4c76d"
+}
