@@ -90,6 +90,16 @@ evidence, not cloud, concurrency or production certification.
 | SCRUM-486-SUPPLIER-LEGACY-PAID | legacy excess precision in amountPaid is refused, including accumulated residue |
 | SCRUM-486-SUPPLIER-INSTALMENTS | new fractional instalments stay canonical before the final payment |
 
+## Existing settlement regression coverage
+
+CI exposed two existing assertions in `financedConsignedSettlement.test.ts`:
+one required historical floating-point residue to persist, and one required the
+old prose error. Both failures were reproduced locally. The revised test
+requires canonical `4.44`, retains the PAID/timestamp/cockpit checks, and requires
+the specific precision error code plus an unchanged payable after refusal.
+All 242 tests in that named file pass with one worker; its ESLint check has no
+errors or warnings. No production logic changed in this follow-up.
+
 ## Sources
 
 [Convex mutations](https://docs.convex.dev/functions/mutation-functions) support

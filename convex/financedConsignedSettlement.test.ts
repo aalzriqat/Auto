@@ -2967,8 +2967,8 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
    * The cockpit made it worse rather than better: judging the same row in minor
    * units it reported the supplier SETTLED while the payables screen and the
    * aging report reported PARTIALLY_PAID forever. Two screens, one supplier,
-   * opposite answers about whether he had been paid. Both sides of the
-   * comparison now agree.
+   * opposite answers about whether he had been paid. New instalments now
+   * accumulate in integer minor units, so both readers see a canonical total.
    */
   test("a payable paid in instalments that do not sum exactly is settled on both surfaces", async () => {
     const s = await seedDealership("payableResidue");
@@ -2996,8 +2996,8 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
     }
 
     const after = await s.t.run(async (ctx) => await ctx.db.get(payable._id));
-    // The residue is real; what must not happen is treating it as a debt.
-    expect(after!.amountPaid).not.toBe(4.44);
+    // Persist the exact representable total; do not create a legacy residue.
+    expect(after!.amountPaid).toBe(4.44);
     expect(after!.status).toBe("PAID");
     // And the settled timestamp must exist on a row that reports itself settled.
     expect(after!.paidAt).toBeDefined();
@@ -3025,15 +3025,18 @@ describe("settlement derived from sale-time facts, in integer minor units", () =
       )!
     );
 
+    const before = await s.t.run(async (ctx) => await ctx.db.get(payable._id));
     await expect(
       s.asApprover.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
         payableId: payable._id,
         amount: 0.0005,
       })
-      // Matched on the message: a bare `rejects.toThrow()` would also pass on an
-      // authorization or not-found failure, and prove nothing about the guard.
-    ).rejects.toThrow(/finer than the currency/i);
+      // Match the precision code so an authorization or not-found failure
+      // cannot stand in for the currency-scale guard.
+    ).rejects.toThrow(/SUPPLIER_AMOUNT_PRECISION/);
+    const after = await s.t.run(async (ctx) => await ctx.db.get(payable._id));
+    expect(after).toEqual(before);
   });
 
 
