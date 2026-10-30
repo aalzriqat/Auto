@@ -1,0 +1,81 @@
+{
+  "id": "supplier-alert-page-and-recipient-cursor-boundary-sends-each-once",
+  "fingerprint": "a0625d7d052969a1f33c3a32d881072194049589bc4bb6fa7fc54838c14e982f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "payables": 100,
+        "recipients": 23,
+        "chain": "followed"
+      }
+    },
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "payables": 100,
+        "recipients": 23,
+        "chain": "replayed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 2300
+    },
+    {
+      "observable": "distinctObligationRecipientPairs",
+      "value": 2300
+    },
+    {
+      "observable": "distinctRecipients",
+      "value": 23
+    },
+    {
+      "observable": "recipientCursorAtNextObligationPage",
+      "value": "reset"
+    },
+    {
+      "observable": "chain.transactionsAtMost",
+      "value": 12
+    },
+    {
+      "observable": "replay.newSends",
+      "value": 0
+    },
+    {
+      "observable": "replay.transactions",
+      "value": "same-as-first-walk"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "100 payables x 23 recipients: every (obligation, recipient) once, the cursor resets per page, the chain ends, a replay sends nothing"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

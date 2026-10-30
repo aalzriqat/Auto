@@ -1,0 +1,46 @@
+{
+  "id": "supplier-due-aging-last-representable-date-is-shown",
+  "fingerprint": "80e93b068f58f4d66b4d635fef26a87d9a828c4e9d4e2c5cdec7c767e8977209",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "paymentDueDate": "8.64e15"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "AGREED_DATE"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "CURRENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "the last instant a Date can hold is a date and is shown"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

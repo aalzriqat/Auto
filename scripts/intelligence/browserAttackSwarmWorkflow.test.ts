@@ -1,6 +1,7 @@
 import { readFileSync, mkdtempSync, writeFileSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
@@ -1119,17 +1120,22 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(workflow.permissions).toEqual({
       contents: "read",
     });
+    // SCRUM-757: `checks: read` only, so the arming assertion can see a standing
+    // success. These jobs never hold `checks: write`; only the two gate publishers do.
     expect(job("prepare").permissions).toEqual({
       contents: "read",
       actions: "read",
       "pull-requests": "read",
+      checks: "read",
       statuses: "write",
     });
     expect(job("candidate-build").permissions).toEqual({
       contents: "read",
+      checks: "read",
     });
     expect(job("trusted-e2e").permissions).toEqual({
       contents: "read",
+      checks: "read",
     });
     expect(job("attack-worker").permissions).toEqual({
       contents: "read",
@@ -1191,7 +1197,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
   });
 
   it("opening creation retries its identical native invocation within the existing five-attempt bound", () => {
-    const parent = realpathSync(path.resolve(process.cwd(), ".."));
+    const parent = realpathSync(tmpdir());
     const directory = realpathSync(mkdtempSync(path.join(parent, "opening-retry-")));
     if (path.dirname(directory) !== parent) throw new Error("Retry fixture escaped its workspace");
     const counter = path.join(directory, "count"), args = path.join(directory, "args"), delays = path.join(directory, "delays");

@@ -1,0 +1,59 @@
+{
+  "id": "supplier-due-receivable-financed-delivery-due-on-handover",
+  "fingerprint": "4a9b7e8a2ec43b8609a12d5c3ba9c37bb4d9d3e5dc0f1065acb2049c975cf675",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "handoverStatus": "HANDED_OVER",
+        "handedOver": "-70d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "DELIVERY_RECORDED"
+    },
+    {
+      "observable": "row.daysOverdue",
+      "value": 70
+    },
+    {
+      "observable": "row.bucket",
+      "value": "DAYS_61_90"
+    },
+    {
+      "observable": "row.outstandingMinor",
+      "value": 3000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "financed delivery recorded: due on handover and aged from it"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

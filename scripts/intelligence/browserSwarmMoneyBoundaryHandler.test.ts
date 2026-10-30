@@ -228,6 +228,15 @@ class World {
         if (a.sourceType !== "STOCK" || a.purchasePrice !== 15_000 || a.sellingPrice !== 20_000 || "sourceCost" in a) {
           throw new ConvexError("scenario sent a car other than the dealership's own stock");
         }
+        // SCRUM-54 / SCRUM-878: the product's own guard (convex/vehicles.ts postVehicleAcquisitionIfOwned ->
+        // requireActiveBankInCurrency). A bank-funded purchase names a bank that already exists, so the scenario
+        // must have created its bank BEFORE the car; a missing or unknown bank id is refused with the product's words.
+        if (
+          (a.purchasePaymentMethod === "BANK_TRANSFER" || a.purchasePaymentMethod === "CARD" || a.purchasePaymentMethod === "CHEQUE") &&
+          (this.paidFromBankId === null || a.bankAccountId !== this.paidFromBankId)
+        ) {
+          throw new ConvexError("Choose the bank account used to purchase this vehicle.");
+        }
         this.seeded.vehicle = this.id("veh");
         return this.seeded.vehicle;
       case "vehicles:get":
@@ -683,8 +692,36 @@ describe("SCRUM-350 MONEY_BOUNDARY handler: product answers that disagree with t
     expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
   });
 
+  it("names the one swarm bank, created first, as the vehicle's purchase bank and reuses it for the fee and the forward (SCRUM-878)", async () => {
+    const h = harness();
+    const result = await h.run();
+    expect(result.oracle.passed).toBe(true);
+    // The mission reaches its money oracle: the car, the sale and the ledger read all happened, not merely no throw.
+    expect(h.world.calls).toContain("owner:applications:finalizeDeal");
+    expect(h.evidence[0]).toMatchObject({ ledger: { complete: true }, violations: [], unjudged: [] });
+    const banks = h.world.argsOf.filter((entry) => entry.name === "bankAccounts:create");
+    expect(banks).toHaveLength(1);
+    expect(banks[0]?.args).toMatchObject({ currency: "JOD", openingBalanceMinor: 0 });
+    // The bank exists before the car that names it.
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeGreaterThanOrEqual(0);
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeLessThan(h.world.calls.indexOf("owner:vehicles:create"));
+    const create = h.world.argsOf.find((entry) => entry.name === "vehicles:create");
+    const pay = h.world.argsOf.find((entry) => entry.name === "financeDealCosts:recordDirectFeePayment");
+    const forward = h.world.argsOf.find((entry) => entry.name === "financeCompanyForward:recordFinanceCompanyForward");
+    expect(create?.args).toMatchObject({ purchasePaymentMethod: "BANK_TRANSFER", bankAccountId: expect.any(String) });
+    // One bank for all three payments.
+    expect(pay?.args.bankAccountId).toBe(create?.args.bankAccountId);
+    expect(forward?.args.bankAccountId).toBe(create?.args.bankAccountId);
+  });
+
+  it("is INCONCLUSIVE, and never creates the car, when the product refuses to create the purchase bank (SCRUM-878)", async () => {
+    const h = await inconclusive({ bankCreateRefused: true }, /refused to create the bank the vehicle purchase, the dealership-paid admin fee and the forward leave/);
+    expect(h.world.calls).not.toContain("owner:vehicles:create");
+    expect(h.world.calls).not.toContain("owner:applications:finalizeDeal");
+  });
+
   it("is INCONCLUSIVE, and never pays, forwards or finalizes, when the product refuses to create the bank the admin-fee payment names", async () => {
-    const h = await inconclusive({ bankCreateRefused: true }, /refused to create the bank the dealership-paid admin fee leaves/);
+    const h = await inconclusive({ bankCreateRefused: true }, /refused to create the bank the vehicle purchase, the dealership-paid admin fee and the forward leave/);
     expect(h.world.calls).toContain("owner:bankAccounts:create");
     expect(h.world.calls).not.toContain("owner:financeDealCosts:recordDirectFeePayment");
     expect(h.world.calls).not.toContain("manager:financeCompanyForward:recordFinanceCompanyForward");

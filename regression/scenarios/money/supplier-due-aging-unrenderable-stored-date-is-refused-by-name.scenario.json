@@ -1,0 +1,46 @@
+{
+  "id": "supplier-due-aging-unrenderable-stored-date-is-refused-by-name",
+  "fingerprint": "b159a707d46a06dcea7b17316ff7d81f546e0071631c26d95bf51862262c0b21",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "paymentDueDate": "1e20-1e20-NaN-Infinity"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refused.message",
+      "value": "not-a-renderable-instant"
+    },
+    {
+      "observable": "shownAsNoDueDate",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a stored due date of 1e20, -1e20, NaN or Infinity is refused by name, never shown as a date or as no date"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

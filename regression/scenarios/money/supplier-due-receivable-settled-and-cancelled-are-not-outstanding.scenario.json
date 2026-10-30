@@ -1,0 +1,43 @@
+{
+  "id": "supplier-due-receivable-settled-and-cancelled-are-not-outstanding",
+  "fingerprint": "b10b6e7963bddab733243d65ae142091a86e25d5efa61cdecc9e335e8cdd2ab2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "cancelled": 1,
+        "fullyReceived": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a cancelled receivable and a fully received one are not outstanding"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

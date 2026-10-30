@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { assertSafeRevision, isAncestor, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { resolveInside, writeBaselineAtomically } from "./baselineFile.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
@@ -24,6 +24,9 @@ const git = resolveGit();
 const toolDir = path.resolve(__dirname);
 const created: string[] = [];
 const originalCwd = process.cwd();
+// The CLI fixtures model local runs independently of the runner's GitHub event.
+beforeAll(() => vi.stubEnv("GITHUB_EVENT_NAME", undefined));
+afterAll(() => vi.unstubAllEnvs());
 afterEach(() => process.chdir(originalCwd));
 afterAll(() => {
   for (const dir of created) fs.rmSync(dir, { recursive: true, force: true });

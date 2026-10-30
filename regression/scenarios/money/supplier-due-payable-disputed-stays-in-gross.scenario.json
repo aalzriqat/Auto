@@ -1,0 +1,60 @@
+{
+  "id": "supplier-due-payable-disputed-stays-in-gross",
+  "fingerprint": "e1464951e428d34efa96172b6371958987bff8ca41879aa0650e29e68473dbb8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "disputed": 8000,
+        "other": 500,
+        "agreedDue": "-45d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "disputed.outstandingMinor",
+      "value": 8000000
+    },
+    {
+      "observable": "disputed.disputedMinor",
+      "value": 8000000
+    },
+    {
+      "observable": "disputed.bucket",
+      "value": "DAYS_31_60"
+    },
+    {
+      "observable": "total.grossMinor",
+      "value": 8500000
+    },
+    {
+      "observable": "total.disputedMinor",
+      "value": 8000000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a disputed payable is shown separately but stays in the gross outstanding and in its aging bucket"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

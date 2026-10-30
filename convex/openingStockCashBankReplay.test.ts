@@ -3,6 +3,7 @@
  * The balancing credit is test data only; it classifies no real opening difference.
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -228,7 +229,7 @@ describe("guide-required opening stock, bank, and cash replay", () => {
     });
     const vehicleId = listed.page[0]._id;
     await expect(owner.mutation(api.vehicles.update, {
-      orgId, vehicleId, sourceType: "SOURCED", sourcedFromName: "Synthetic Supplier", sourceCost: 8_000,
+      orgId, vehicleId, sourceType: "SOURCED", sourcedSupplierId: await supplierIdFor(t, orgId, "Synthetic Supplier"), sourceCost: 8_000,
     })).rejects.toThrow(/Opening stock cannot change or sell before/i);
     await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED" }));
     await expect(owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {

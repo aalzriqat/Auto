@@ -1,0 +1,52 @@
+{
+  "id": "supplier-due-payable-supplier-direct-disbursement-is-not-funding",
+  "fingerprint": "0ef509aa24d3567e693a49c5c5204739ff1d829ca637f27952230c8f822f5907",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "FINANCED",
+        "supplierDirectDisbursement": "-20d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "FINANCIER_FUNDING_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "the financier's payment to the supplier (direct route fact) is not the dealership's funding"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

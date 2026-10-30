@@ -1,0 +1,46 @@
+{
+  "id": "supplier-due-payable-future-agreed-date-is-current",
+  "fingerprint": "285a02cada89c80f6cbe00822da3a708d9ee2df907deeb0399c8c044049dd4bf",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "+5d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.daysOverdue",
+      "value": -5
+    },
+    {
+      "observable": "row.bucket",
+      "value": "CURRENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "an agreed date in the future is Current, with a negative day count"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

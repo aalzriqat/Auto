@@ -69,6 +69,33 @@ export async function readOrgCurrency(env: BoundaryMissionEnv): Promise<string |
 }
 
 /**
+ * SCRUM-54 / SCRUM-878: a bank-funded purchase and every bank-transfer payment name the physical bank the money left. This
+ * creates the one fresh zero-balance bank, in the organization's own denomination, through the product's command (never a
+ * pre-existing bank) on the disposable preview, and returns its id. The caller creates it BEFORE the car that names it and
+ * reuses the id for every later payment. The OWNER seat (`env.client`) creates it: the approver may lack MANAGE_FINANCE.
+ * `label` names the mission in the bank's name; `refused` completes "the product refused to create the bank ..." and keeps
+ * the mission's own INCONCLUSIVE wording, so a refused bank is never a pass.
+ */
+export function createSwarmBank(
+  env: BoundaryMissionEnv,
+  refusalIsInconclusive: MissionRefusal,
+  currency: string,
+  mission: { label: string; refused: string },
+): Promise<Id<"bankAccounts">> {
+  return refusalIsInconclusive(
+    () =>
+      env.client.mutation(api.bankAccounts.create, {
+        orgId: env.orgId as Id<"organizations">,
+        name: `Swarm ${mission.label} bank ${env.nonce}`,
+        currency,
+        openingBalanceMinor: 0,
+        openingBalanceDate: Date.now(),
+      }),
+    mission.refused,
+  );
+}
+
+/**
  * The MANAGER seat approves what the OWNER seat submits (a split dealership means no deal can be approved), then
  * a customer, the eligibility status and a finance company that accepts it. Null, with the mission unjudged,
  * when the approver signed in to another organization.

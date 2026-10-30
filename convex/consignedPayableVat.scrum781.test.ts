@@ -27,6 +27,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { postVehicleAcquisitionIfOwned } from "./vehicles";
+import { seedSupplier } from "../test-utils/supplierFixture";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const newTest = () => convexTestWithComponents(schema, MODULE_GLOB);
@@ -105,10 +106,11 @@ async function seedOwnedOnAccountPayable(t: T, orgId: Id<"organizations">, userI
       fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 12000, purchasePrice: 10000, status: "AVAILABLE",
     })
   );
+  const creditorId = await seedSupplier(t, { orgId, userId, displayName: "Wholesale Motors" });
   await t.run((ctx) =>
     postVehicleAcquisitionIfOwned(ctx, {
       orgId, vehicleId, isSourced: false, purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT",
-      supplierName: "Wholesale Motors", vehicleLabel: "2022 Toyota Corolla", vin: "S781OWNED0000001", actorId: userId,
+      creditor: { supplierId: creditorId, name: "Wholesale Motors", version: 1 }, vehicleLabel: "2022 Toyota Corolla", vin: "S781OWNED0000001", actorId: userId,
     })
   );
   const payable = await t.run(async (ctx) =>

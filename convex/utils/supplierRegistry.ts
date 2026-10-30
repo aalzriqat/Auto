@@ -56,6 +56,10 @@ export const SUPPLIER_ERROR = {
   IDENTITY_REQUIRED: "SUPPLIER_IDENTITY_REQUIRED",
   /** SCRUM-868 P1: an action on an existing record that carries no supplier id (old or name-only row). */
   IDENTITY_UNRESOLVED: "SUPPLIER_IDENTITY_UNRESOLVED",
+  /** SCRUM-868 P2 (N11): a vehicle's supplier link cannot change once money exists against it. */
+  LINK_FROZEN: "SUPPLIER_LINK_FROZEN",
+  /** SCRUM-868 P2 (N9): a supplier id was sent in a role the vehicle's shape does not have. */
+  ROLE_CONFLICT: "SUPPLIER_ROLE_CONFLICT",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
@@ -281,6 +285,31 @@ export async function snapshotSupplier(
   orgId: Id<"organizations">,
   supplierId: Id<"suppliers"> | null | undefined,
 ): Promise<SupplierSnapshot> {
+  return await readSupplierSnapshot(ctx, orgId, supplierId, false);
+}
+
+/**
+ * The snapshot for ONE caller: a proven replay of a command that already ran (the recorded evidence,
+ * not this call, is what created the records, and a replay writes nothing). It skips only the inactive
+ * refusal; the missing-id, foreign-organization and not-found refusals still apply, and the snapshot
+ * name is still the one the server reads. A NEW use goes through `snapshotSupplier`, never through here.
+ * It is a separate function, not a flag on `snapshotSupplier`, so that function keeps its fixed
+ * (ctx, orgId, supplierId) shape and no caller can pass a value that loosens a new use.
+ */
+export async function snapshotSupplierForProvenReplay(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | null | undefined,
+): Promise<SupplierSnapshot> {
+  return await readSupplierSnapshot(ctx, orgId, supplierId, true);
+}
+
+async function readSupplierSnapshot(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | null | undefined,
+  allowInactive: boolean,
+): Promise<SupplierSnapshot> {
   if (supplierId === undefined || supplierId === null) {
     throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "A supplier is required.");
   }
@@ -288,8 +317,25 @@ export async function snapshotSupplier(
   if (!supplier || supplier.orgId !== orgId) {
     throwSupplierError(SUPPLIER_ERROR.NOT_FOUND, SUPPLIER_NOT_FOUND_MESSAGE);
   }
-  refuseIfInactive(supplier);
+  if (!allowInactive) refuseIfInactive(supplier);
   return Object.freeze({ supplierId: supplier._id, name: supplier.displayName, version: supplier.version });
+}
+
+/**
+ * Any reader that carries a record's STORED supplier id into another record goes through this: the id is
+ * returned only when that supplier row exists in `orgId` (N6). A stored id that is missing or belongs to
+ * another organization (corruption, never a state a write here produces) is dropped, so it can never be
+ * copied into a new record; the name snapshot already on the source record still carries the history.
+ * Read-only. It lives here because only the supplier modules read the supplier tables.
+ */
+export async function ownedStoredSupplierId(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  storedId: Id<"suppliers"> | undefined,
+): Promise<Id<"suppliers"> | undefined> {
+  if (storedId === undefined) return undefined;
+  const row = await ctx.db.get("suppliers", storedId);
+  return row !== null && row.orgId === orgId ? storedId : undefined;
 }
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────

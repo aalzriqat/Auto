@@ -29,3 +29,20 @@ export const CRON_HEARTBEAT_JOBS = [
 ] as const;
 
 export type CronHeartbeatJob = typeof CRON_HEARTBEAT_JOBS[number];
+
+/**
+ * SCRUM-869 (PR #716 round 3): the durable failure signal of the supplier due-alert worker.
+ *
+ * A Convex mutation that throws rolls back everything it wrote, including any failure row it tried to
+ * write, so the worker cannot report its own failure; the action that runs it does, from a separate
+ * transaction, into `cronHeartbeats`. The job name is per organisation so that one organisation's
+ * later success can never hide another's failure. These names are deliberately NOT in
+ * `CRON_HEARTBEAT_JOBS`: that list drives the fixed-width Cron Status panel, and one name per
+ * organisation would not fit it. They are read by `adminSystem.listSupplierDueAlertFailures`, which
+ * pages the organisations.
+ */
+export const SUPPLIER_DUE_ALERT_JOB_PREFIX = "supplier-due-alerts:";
+
+export function supplierDueAlertJobName(orgId: string): string {
+  return `${SUPPLIER_DUE_ALERT_JOB_PREFIX}${orgId}`;
+}

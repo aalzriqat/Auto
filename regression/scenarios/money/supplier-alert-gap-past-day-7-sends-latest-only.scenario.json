@@ -1,0 +1,54 @@
+{
+  "id": "supplier-alert-gap-past-day-7-sends-latest-only",
+  "fingerprint": "68a0c3cb35bb717bc28ae92475ba486b6627ffa544b0edb5358736688cfbd943",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "sweepDays": "-3_6_10_10"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsAfterDay6",
+      "value": 6
+    },
+    {
+      "observable": "alertsAfterDay10",
+      "value": 9
+    },
+    {
+      "observable": "overdueAlertsAfterDay10",
+      "value": 3
+    },
+    {
+      "observable": "alertsAfterRerun",
+      "value": 9
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a gap past day 7 sends the day-7 alert once and none of the earlier skipped steps"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

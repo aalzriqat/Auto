@@ -1,0 +1,58 @@
+{
+  "id": "supplier-alert-unrenderable-dates-starve-nothing",
+  "fingerprint": "e303d7cea36e9223b9e5649d3b10249acf6a4c48b1650ce06d59ead814ad539c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "unrenderableRowsPerDateField": 1,
+        "value": "1e20",
+        "goodPayables": 52,
+        "goodReceivable": 1,
+        "goodRecovery": 1,
+        "otherOrgPayables": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreadableRowLogs",
+      "value": 5
+    },
+    {
+      "observable": "badOrgAlerts",
+      "value": 162
+    },
+    {
+      "observable": "otherOrgAlerts",
+      "value": 3
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "bad dates in every field starve nothing: later rows, pages, kinds and other organisations are still alerted"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "bfe3f3f75022245a57a406f1870cd747580cb156"
+  }
+}
