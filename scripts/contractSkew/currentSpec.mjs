@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { indexAllNamed, normalizeIdentifier, specProblems } from "./specIndex.mjs";
-import { bundleForMetadata, evaluateBundle, refusePatchedConvex } from "./metadataBundle.mjs";
+import { bundleForMetadata, evaluateBundles, refusePatchedConvex } from "./metadataBundle.mjs";
 
 /**
  * Native registration metadata uses exportArgs, a private SDK hook. An
@@ -26,9 +26,10 @@ export async function renderCurrentSpec(root) {
   /** @type {Array<{file: string, evaluations: number, environmentKeys: string[], enumerations: number, differentialRefused: string[], capabilityProbes: string[]}>} */
   const evaluatedModules = [];
   const evaluation = { staticallyRefusedModules: 0, differentialRefusedFunctions: 0, evaluations: 0, modules: evaluatedModules };
-  for (const file of files) {
-    const relative = path.relative(dir, file).replaceAll("\\", "/");
-    const result = await evaluateBundle(bundles, relative, functionMetadata);
+  const relatives = files.map((file) => path.relative(dir, file).replaceAll("\\", "/"));
+  const results = await evaluateBundles(bundles, relatives);
+  for (const [index, relative] of relatives.entries()) {
+    const result = results[index];
     evaluation.staticallyRefusedModules += result.staticRefused ? 1 : 0;
     evaluation.differentialRefusedFunctions += result.differentialRefused?.length ?? 0;
     evaluation.evaluations += result.evaluations;
@@ -52,7 +53,7 @@ export async function renderCurrentSpec(root) {
  */
 
 /** @param {{file: string, exports: Record<string, unknown>}} namespace */
-function functionMetadata(namespace) {
+export function functionMetadata(namespace) {
   const functions = [];
   for (const [name, fn] of Object.entries(namespace.exports)) {
     if (!isRegisteredFunction(fn)) continue;

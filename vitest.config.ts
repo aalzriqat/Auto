@@ -8,8 +8,6 @@ export default defineConfig({
     alias: { "@": path.resolve(__dirname, ".") },
   },
   test: {
-    // Contract metadata tests evaluate Convex's emitted ESM without CJS bindings.
-    execArgv: ["--experimental-vm-modules"],
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     // The only two variables convex/utils/env.ts's backendEnvSchema actually

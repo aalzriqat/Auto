@@ -108,7 +108,7 @@ jobs:
       # A failed/timed-out render must not hand partial or stale evidence to --current.
       - name: Render the current commit's native argument spec
         env:
-          NODE_OPTIONS: --max-old-space-size=6144 --experimental-vm-modules
+          NODE_OPTIONS: --max-old-space-size=6144
         run: |
           if ! timeout 180s node scripts/contractSkew/renderCurrentSpec.mjs current-spec.json; then
             rm -f current-spec.json current-spec.json.tmp

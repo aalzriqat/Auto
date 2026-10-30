@@ -119,8 +119,10 @@ export const read = queryGeneric({ args: { label: TextEncoder.${flag} ? v.string
 TextEncoder.${flag} = true; Date.now();
 export const read = queryGeneric({ args: {}, handler: () => null });`);
     const together = await renderCurrentSpec(root);
+    assert.equal(Object.hasOwn(TextEncoder, flag), false, "worlds must never mutate the parent process");
     assert.deepEqual(together.unavailableModules, [{ file: "aaBad.ts", reason: "clock" }]);
-    // A fresh VM and chunk cache did not undo the failed module's host write.
+    // Modules share objects within a world; process isolation prevents parent
+    // contamination, while global completeness still refuses partial evidence.
     assert.equal(argsOf(together)?.value.label.fieldType.type, "string");
     fs.mkdirSync(path.join(root, "app"));
     fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
@@ -198,7 +200,7 @@ test(`${scenario} publishes no partial spec, removes stale output, and leaves ev
   try {
     fs.writeFileSync(path.join(root, "convex/broken.ts"), source);
     fs.writeFileSync(path.join(root, "current.json"), '{"functions":[]}');
-    const run = spawnSync(process.execPath, ["--experimental-vm-modules", renderer, "current.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+    const run = spawnSync(process.execPath, [renderer, "current.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     assert.ifError(run.error);
     assert.equal(run.status, 1);
     assert.match(run.stderr, /Current spec unavailable/);

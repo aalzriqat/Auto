@@ -52,7 +52,7 @@ export const read = queryGeneric({ args: { timestamp: v.literal(timestamp) }, ha
     value: { timestamp: { fieldType: { type: "literal", value: 1577836800000 }, optional: false } } });
 });
 
-test("a failing entry cannot mutate another entry's validators through shared emitted chunks", async () => {
+test("a failed entry sharing mutated chunks leaves the render incomplete", async () => {
   const { root } = fixture();
   fs.writeFileSync(path.join(root, "convex/sharedArgs.ts"), `import { v } from "convex/values";
 export const args = { label: v.string() };
@@ -72,7 +72,8 @@ export const read = queryGeneric({ args, handler: () => null });`);
   const spec = await renderCurrentSpec(root);
   expect(spec.unavailableModules).toEqual([{ file: "aaBroken.ts", reason: "clock" }]);
   expect(spec.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual({ type: "object",
-    value: { label: { fieldType: { type: "string" }, optional: false } } });
+    value: { label: { fieldType: { type: "number" }, optional: false } } });
+  expect(missingCurrentFunctions(spec, [{ identifier: "aaBroken:read" }])).toEqual(["aaBroken:read"]);
 });
 
 test.each([
@@ -113,6 +114,7 @@ test.each([
   ['process.env[Symbol.iterator];', "unsupported environment key"],
   ['for (let i = 0; i < 33; i++) process.env["KEY_" + i];', "environment key budget exceeded"],
   ['if (process.env.NODE_ENV) process.env.SECOND;', "environment keys changed across worlds"],
+  ['Object.getOwnPropertyDescriptor(navigator ?? {}, "platform");', "unsupported navigator probe"],
 ])("unsupported library env operation discards module evidence: %s", async (operation, reason) => {
   const { root } = fixture();
   const pkg = path.join(root, "node_modules/library-refusal");
@@ -174,6 +176,8 @@ export const read = queryGeneric({ args: {}, handler: () => label.parse("ok") })
 test.each([
   ['navigator?.userAgent?.includes("Cloudflare") ? {} : { label: v.string() }', false],
   ['("navigator" in globalThis) ? {} : { label: v.string() }', false],
+  ['Object.getOwnPropertyDescriptor(globalThis, "navigator") ? {} : { label: v.string() }', false],
+  ['Object.getOwnPropertyDescriptor(navigator ?? {}, "userAgent")?.value?.includes("Cloudflare") ? {} : { label: v.string() }', false],
   ['(typeof navigator !== "undefined", (() => { try { new Function(""); } catch {} })(), { label: v.string() })', true],
   ['(() => { try { new Function(""); return {}; } catch { return { label: v.string() }; } })()', false],
   ['(globalThis.eval, { label: v.string() })', true],
@@ -210,6 +214,17 @@ export const read = queryGeneric({ args, handler: () => null });`);
   await expect(renderCurrentSpec(root)).rejects.toThrow("world failed");
 });
 
+test.each(["eval('true')", "new Function('return true')()", "new Function('')()", "new Function('').name === 'anonymous'"])("dynamic code results never become fabricated evidence: %s", async (expression) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/generated.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+let answer = false; try { answer = ${expression}; } catch {}
+export const read = queryGeneric({ args: answer ? {} : { label: v.string() }, handler: () => null });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "generated:read" }])).toEqual(["generated:read"]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "nested/functions:read" }])).toEqual([]);
+});
+
 test.each([
   'process.env.NODE_ENV === "production" ? {} : { label: v.string() }',
   'Object.keys(process.env).length ? {} : { label: v.string() }',
@@ -224,6 +239,8 @@ test.each([
   'performance.now() > 0 ? {} : { label: v.string() }',
   'typeof File === "undefined" ? { label: v.string() } : {}',
   'typeof Buffer === "undefined" ? { label: v.string() } : {}',
+  'typeof BroadcastChannel !== "undefined" ? { label: v.string() } : {}',
+  'typeof Deno === "undefined" ? { label: v.string() } : {}',
   'Date.parse("2020-01-01T00:00:00") > 0 ? { label: v.string() } : {}',
   'typeof module !== "undefined" ? { label: v.string() } : {}',
   'typeof exports !== "undefined" ? { label: v.string() } : {}',

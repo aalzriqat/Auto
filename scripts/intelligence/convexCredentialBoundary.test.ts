@@ -243,16 +243,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // Both comparison branches pass --current only when the complete render
     // exists; failed/timed-out output is deleted. Artifact also retains it.
     // Advisory Standards review inspected this boundary; no seat is claimed.
-    // SCRUM-866 Seat 2 remediation: only add --experimental-vm-modules to
-    // that credential-free render invocation. Native ESM avoids introducing
-    // CJS module/exports/require bindings into argument evaluation. No trigger,
-    // grant, checkout, environment, credential step or output path changed.
-    // SCRUM-866 follow-up adds only a 6144 MiB old-space limit to that same
-    // credential-free Node invocation, below the public runner's 16 GB RAM.
-    // SCRUM-866 Linux CI fix moves those same two Node flags into step-local
-    // NODE_OPTIONS, matching test.yml. No credential, grant, checkout, command
-    // body beyond the flags, timeout, cleanup or output path changed.
-    "5091acaf0dd9b3a330dfdd53ea61b67b61e267f06b84fab25afecd308b4f9136",
+    // SCRUM-866 Sonar remediation removes only --experimental-vm-modules
+    // from the credential-free render step's NODE_OPTIONS. Each runtime world
+    // now imports emitted ESM in a child process with an empty environment and
+    // a fixed 1024 MiB heap. The parent retains its 6144 MiB cap. No trigger,
+    // grant, checkout, credential step, timeout or output path changed.
+    "3b6e9a8bf7312b16213dd855a792b33791be877c7dc9121b95c3ff42b26f2b03",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales

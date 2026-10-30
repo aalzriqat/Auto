@@ -1110,3 +1110,76 @@ coverage-incomplete entries. The saved deployed spec remains SUPPLIED_FILE
 evidence. This change does not claim production
 runtime parity, independent seat certification, or pilot readiness. New-head
 Linux CI is checked after pushing; no merge or deployment is authorized here.
+
+
+## PR #727 Sonar remediation: native ESM process worlds (2026-10-30)
+
+The implementation based on `9e25dbc6` replaces VM string evaluation with
+`execFile(process.execPath, fixedArgs)`, without a shell. Each world loads all
+eligible modules through native `import()` of confined temporary file URLs.
+Only emitted files can resolve through the synchronous import hook. Each child
+has a 1024 MiB old-space cap, 30-second timeout and bounded output. Worlds run
+serially to bound aggregate memory. Independent native bundler passes use
+`Promise.all`; entry imports remain sequential because their probe records,
+denial latch and module cache share the world's state.
+
+The child installs the recording environment proxy and supported runtime probes
+before any bundled import. Unsupported globals, navigator descriptors, generated
+code results and callable reflection latch refusals, even when caught. Empty
+Function/eval capability checks remain supported without executing supplied code.
+Supported lazy web globals initialize before Buffer is denied. Direct setup tests
+use descriptor copies of the host object; the production caller passes actual
+`globalThis`. The host Math object is preserved.
+
+The SDK version pin, native Convex bundler, static app-input refusal, declared SDK
+patch refusal and global completeness check remain. Modules still share objects
+inside a world. A missing called function discards all current evidence. Process
+isolation prevents those objects from contaminating the parent or another world;
+this evaluates trusted source and is not a security sandbox.
+
+Removed `--experimental-vm-modules` from the workflows, Node tests and Vitest.
+The credential workflow pin changes for that flag removal only; the parent heap,
+triggers, grants, checkout, credential steps, timeouts and output paths remain.
+
+Local evidence:
+
+- Node 22.21.1 full contract-skew sweep: 27 files, 1,376 passed, one existing skip.
+  Three pre-existing CRLF shebang files were temporarily normalized and restored
+  by the bounded file-by-file runner. They have no content diff.
+- Combined native metadata/setup coverage run: 111 passed with one worker.
+  Direct setup tests subsequently pass 15 cases, with 93.33% line coverage.
+- CI-like LCOV measures 328/395 added executable source lines against `43feaa4f`,
+  or 83.04%, before the final two setup assertions increased measured coverage.
+  This includes unmeasured child-runner lines as zero; it is not a Sonar verdict.
+- CI's Node command, `node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs`,
+  passes 24/24 on Node 22.21.1. Credential boundary passes 15/15.
+- Root `pnpm typecheck` and detector `pnpm typecheck:contract-skew` pass. The root
+  project excludes `convex/`; the detector project checks these `.mjs` files.
+- Full lint passes with zero errors and 4,350 existing warnings; changed-file lint
+  passes. No suppression or Sonar configuration changes are used.
+- Local Sonar-equivalent checks reproduce all 14 original issues and report zero
+  on the fixed runtime files. The npm SonarJS rules plus the cached official
+  analyzer's external rules cover the syntax rules; ESLint `no-await-in-loop`
+  checks the S9382 condition. Separate typed copies reproduce S2871 and S4043
+  before the fix and zero after. This is scoped local analyzer evidence.
+- Actual Node 22 native rendering produces 1,017 exports, five unavailable Node
+  modules, zero static refusals and zero differential function refusals. The saved
+  43feaa4f proof still reports 6 FIXED, zero still-failing, zero UNPROVEN, 11 proven
+  breaks and zero coverage-incomplete entries. It remains SUPPLIED_FILE evidence,
+  not a fresh production read. Product source identity against 43feaa4f is intact.
+
+Failing-first checks caught parent TextEncoder contamination and fabricated
+Function/eval results. Advisory Standards/Spec review reproduced unsupported
+bare-global and navigator-descriptor regressions and verified their corrections.
+These are advisory checks, not formal seat certification of the eventual head.
+CI and SonarCloud must be checked after pushing. No merge or deploy is performed.
+
+Design references:
+
+- [Node child_process.execFile](https://nodejs.org/docs/latest-v22.x/api/child_process.html#child_processexecfilefile-args-options-callback): direct executable invocation, timeout and output bounds.
+- [Node dynamic import](https://nodejs.org/docs/latest-v22.x/api/esm.html#import-expressions) and [file URLs](https://nodejs.org/docs/latest-v22.x/api/esm.html#file-urls): native ESM loading.
+- [Node module.registerHooks](https://nodejs.org/docs/latest-v22.x/api/module.html#moduleregisterhooksoptions): synchronous loader hooks available since Node 22.15.0.
+- Sonar [S1523](https://sonarsource.github.io/rspec/#/rspec/S1523/javascript), [S9382](https://sonarsource.github.io/rspec/#/rspec/S9382/javascript), [S3776](https://sonarsource.github.io/rspec/#/rspec/S3776/javascript), [S2871](https://sonarsource.github.io/rspec/#/rspec/S2871/javascript) and [S4043](https://sonarsource.github.io/rspec/#/rspec/S4043/javascript).
+  The documentation pages were blocked by robots rules. Live official rule
+  metadata was retrieved with the SonarCloud rules API and the local rule
+  implementations were executed; unavailable prose is not claimed as checked.
