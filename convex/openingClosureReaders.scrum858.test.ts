@@ -5,7 +5,7 @@
 // Owner ruling 2026-10-28 (binding): a difference is REPORTED under the fixed label and NEVER
 // "resolved" by posting a journal, plug, clearing line or equity entry. Every tamper test therefore
 // asserts that the ledger is byte-for-byte unchanged after the reader ran.
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
@@ -94,6 +94,100 @@ async function fixture() {
 }
 
 type Seed = Awaited<ReturnType<typeof fixture>>;
+
+test("an orphan opening journal cannot hide a deleted custom payable", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.t.run(async (ctx) => {
+    const payable = await ctx.db.query("vehicleSupplierPayables").first();
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    if (!payable || !draft) throw new Error("Missing opening provenance fixture");
+    await ctx.db.delete(payable._id);
+    await ctx.db.delete(draft._id);
+  });
+  const before = await ledger(seed);
+  const result = await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId });
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false, currencies: [], byCurrency: {} });
+  expect(await ledger(seed)).toEqual(before);
+}));
+
+const datedReaders = [
+  ["employee advances", api.accountingReports.employeeAdvancesReconciliation],
+  ["supplier recoverables", api.accountingReports.supplierRecoverablesReconciliation],
+  ["partner capital", api.accountingReports.partnerCapitalReconciliation],
+] as const;
+
+test("missing payable provenance has a truthful close warning", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.t.run(async (ctx) => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    if (!draft) throw new Error("Missing opening fixture");
+    await ctx.db.delete(draft._id);
+  });
+  const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.periodId });
+  expect(checklist.warnings).toContain("Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.");
+  expect(checklist.warnings).not.toContain("Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.");
+}));
+
+async function expectHistoricalDatesUnavailable(endpoint: typeof datedReaders[number][1]) {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture();
+  for (const toDate of [Date.UTC(new Date().getUTCFullYear(), 0, 1) - 1, Date.now() - 60_000]) {
+    const result = await seed.owner.query(endpoint, { orgId: seed.orgId, toDate });
+    expect(result).toEqual({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+  }
+});
+}
+
+test("employee advances refuses unsupported historical dates including before cutover and intraday", () => expectHistoricalDatesUnavailable(api.accountingReports.employeeAdvancesReconciliation));
+test("supplier recoverables refuses unsupported historical dates including before cutover and intraday", () => expectHistoricalDatesUnavailable(api.accountingReports.supplierRecoverablesReconciliation));
+test("partner capital refuses unsupported historical dates including before cutover and intraday", () => expectHistoricalDatesUnavailable(api.accountingReports.partnerCapitalReconciliation));
+
+test("a later native draw and equal opening tamper cannot produce a historical match", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  const toDate = Date.UTC(new Date().getUTCFullYear(), 0, 2);
+  await seed.owner.mutation(api.partnerEquity.recordEquityMovement, {
+    orgId: seed.orgId, partnerId: seed.partnerA, type: "DRAW", amountMinor: 700,
+    paymentMethod: "CASH", idempotencyKey: "dated-reconciliation-draw", occurredAt: toDate + 86_400_000,
+  });
+  await settleScheduledOnly(seed.t, seed.orgId);
+  await seed.t.run(async (ctx) => {
+    await ctx.db.patch(seed.partnerA, { openingBalanceMinor: 50_700 });
+  });
+  const before = await ledger(seed);
+  const current = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId });
+  expect(current.byCurrency.JOD?.discrepancyMinor).toBe(-700);
+  expect(current.unexplainedOpeningDifference?.label.en).toBe(LABEL_EN);
+  const historical = await seed.owner.query(api.accountingReports.partnerCapitalReconciliation, { orgId: seed.orgId, toDate });
+  expect(historical).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, unexplainedOpeningDifference: null });
+  expect(await ledger(seed)).toEqual(before);
+}));
+
+async function expectGenericBoundaryError(endpoint: typeof datedReaders[number][1]) {
+  return withFrozenScheduler(async () => {
+  const seed = await fixture();
+  await seed.t.run(async (ctx) => {
+    // Duplicate system controls force the real indexed unique() read to reject asynchronously.
+    for (const systemKey of ["EMPLOYEE_ADVANCES", "RECEIVABLE_FROM_SUPPLIERS", "PARTNER_CAPITAL"]) {
+      const account = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q => q.eq("orgId", seed.orgId).eq("systemKey", systemKey)).unique();
+      if (!account) throw new Error("Missing boundary fixture account");
+      const { _id, _creationTime, ...fields } = account;
+      void _id; void _creationTime;
+      await ctx.db.insert("chartOfAccounts", fields);
+    }
+  });
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await expect(seed.owner.query(endpoint, { orgId: seed.orgId })).rejects.toThrow("An unexpected error occurred. Please try again later.");
+    expect(log).toHaveBeenCalled();
+  } finally {
+    log.mockRestore();
+  }
+});
+}
+
+test("employee advances logs unexpected async failures and exposes a generic boundary error", () => expectGenericBoundaryError(api.accountingReports.employeeAdvancesReconciliation));
+test("supplier recoverables logs unexpected async failures and exposes a generic boundary error", () => expectGenericBoundaryError(api.accountingReports.supplierRecoverablesReconciliation));
+test("partner capital logs unexpected async failures and exposes a generic boundary error", () => expectGenericBoundaryError(api.accountingReports.partnerCapitalReconciliation));
 
 async function ledger(seed: Seed) {
   return seed.t.run(async (ctx) => ({

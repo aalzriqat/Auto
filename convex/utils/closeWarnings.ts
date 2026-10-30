@@ -13,6 +13,9 @@ export const SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING =
 export const SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING =
   "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.";
 
+export const SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING =
+  "Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.";
+
 /**
  * SCRUM-858 — owner ruling 2026-10-28: a subledger-to-GL difference in an
  * organization that has an opening balance is REPORTED under this label. No
@@ -33,7 +36,7 @@ export const OPENING_DIFFERENCE_WARNING_BY_FAMILY = {
 } as const;
 
 export const OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY = {
-  EMPLOYEE_ADVANCES: "Employee advances reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, or there are too many records to verify. Resolve them, then re-check.",
-  SUPPLIER_RECOVERABLES: "Supplier recoverables reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, or there are too many records to verify. Resolve them, then re-check.",
-  PARTNER_CAPITAL: "Partner capital reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, or there are too many records to verify. Resolve them, then re-check.",
+  EMPLOYEE_ADVANCES: "Employee advances reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
+  SUPPLIER_RECOVERABLES: "Supplier recoverables reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
+  PARTNER_CAPITAL: "Partner capital reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
 } as const;

@@ -12,6 +12,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
   UNEXPLAINED_OPENING_DIFFERENCE_LABEL,
 } from "@/convex/utils/closeWarnings";
@@ -138,6 +139,7 @@ describe("ClosePeriodReviewDialog supplier payables warnings", () => {
  * screen in both languages, and each warning is acknowledged by its raw English server text.
  */
 const OPENING_WARNINGS: ReadonlyArray<readonly [string, string]> = [
+  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING, "ClosePeriodWarnSupplierPayablesReconOpeningSource"],
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES, "ClosePeriodWarnOpeningDiffSupplierPayables"],
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES, "ClosePeriodWarnOpeningDiffEmployeeAdvances"],
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES, "ClosePeriodWarnOpeningDiffSupplierRecoverables"],

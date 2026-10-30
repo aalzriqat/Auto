@@ -1196,7 +1196,8 @@ export const supplierPayablesReconciliation = query({
 /**
  * SCRUM-858 — subledger-to-GL readers for the opening-balance families that had none: staff
  * advances, supplier recoverables and partner capital. They follow the supplier-payables pattern
- * (current-state subledger, GL as of `toDate`) and add the owner-ruled difference label.
+ * and add the owner-ruled difference label. Past cutoffs are unavailable because these mutable
+ * subledgers cannot reconstruct historical state. A dated GL must not be compared to today's rows.
  *
  * Owner ruling 2026-10-28: a difference is REPORTED, never resolved. Nothing here writes; no
  * journal, plug, clearing line or equity entry is ever created to force the two sides to agree.
@@ -1209,7 +1210,7 @@ export type OpeningDifferenceReport = {
 
 export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE" | "AS_OF_DATE_UNSUPPORTED";
   unexplainedOpeningDifference: OpeningDifferenceReport;
 };
 
@@ -1239,8 +1240,21 @@ async function withOpeningDifferenceReport<T extends GlVsSubledgerResult>(
   };
 }
 
+const openingFamilyReconciliationValidator = v.object({
+  attributionStatus: v.optional(v.union(v.literal("ATTRIBUTED"), v.literal("UNALLOCATED"), v.literal("UNAVAILABLE"))),
+  heldOpeningMinor: v.optional(v.record(v.string(), v.number())),
+  currencies: v.array(v.string()),
+  byCurrency: v.record(v.string(), v.object({
+    glBalanceMinor: v.number(), subledgerBalanceMinor: v.number(), discrepancyMinor: v.number(), isReconciled: v.boolean(),
+  })),
+  isReconciled: v.boolean(),
+  status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+  unavailableReason: v.optional(v.union(v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"), v.literal("AS_OF_DATE_UNSUPPORTED"))),
+  unexplainedOpeningDifference: v.union(v.null(), v.object({ label: v.object({ en: v.string(), ar: v.string() }), currencies: v.array(v.string()) })),
+});
+
 function unavailableFamilyResult(
-  unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"
+  unavailableReason: NonNullable<OpeningFamilyReconciliationResult["unavailableReason"]>
 ): OpeningFamilyReconciliationResult {
   return {
     currencies: [],
@@ -1275,14 +1289,13 @@ async function openingAllocationAccounts(
   orgId: Id<"organizations">,
   kinds: ReadonlySet<string>
 ): Promise<Set<Id<"chartOfAccounts">> | null> {
-  const drafts = await ctx.db
-    .query("openingBalanceDrafts")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "POSTED"))
-    .take(101);
-  if (drafts.length > 100) return null;
+  // GL-side source authority survives deletion of both the subledger row and draft header.
+  // A retained header without its live opening journal is equally unverifiable.
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (source.status === "UNAVAILABLE" || (source.status === "ABSENT" && source.headers.length > 0)) return null;
   const accounts = new Set<Id<"chartOfAccounts">>();
-  for (const draft of drafts) {
-    for (const allocation of draft.allocations ?? []) {
+  if (source.status === "AVAILABLE") {
+    for (const allocation of source.parent.allocations ?? []) {
       if (kinds.has(allocation.kind) && "accountId" in allocation) accounts.add(allocation.accountId);
     }
   }
@@ -1324,6 +1337,9 @@ export async function computeEmployeeAdvancesReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const rows = await ctx.db
     .query("employeeAdvances")
@@ -1341,7 +1357,7 @@ export async function computeEmployeeAdvancesReconciliation(
   // custom asset account is classified as a supplier recoverable), so that account is the whole control set.
   const controls = new Set<Id<"chartOfAccounts">>();
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "DEBIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1350,10 +1366,17 @@ export async function computeEmployeeAdvancesReconciliation(
 
 export const employeeAdvancesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-    return computeEmployeeAdvancesReconciliation(ctx, args.orgId, args.toDate);
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeEmployeeAdvancesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Employee advances reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
   },
 });
 
@@ -1363,6 +1386,9 @@ export async function computeSupplierRecoverablesReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const rows: Array<Doc<"supplierCostRecoveries">> = [];
   // REVERSED is the one status whose source posting was reversed out of the GL, so it is excluded.
@@ -1382,7 +1408,7 @@ export async function computeSupplierRecoverablesReconciliation(
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_RECOVERABLE"]));
   if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "DEBIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1391,10 +1417,17 @@ export async function computeSupplierRecoverablesReconciliation(
 
 export const supplierRecoverablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-    return computeSupplierRecoverablesReconciliation(ctx, args.orgId, args.toDate);
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeSupplierRecoverablesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Supplier recoverables reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
   },
 });
 
@@ -1409,6 +1442,9 @@ export async function computePartnerCapitalReconciliation(
   orgId: Id<"organizations">,
   toDate: number | undefined
 ): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (!Number.isFinite(cutoff) || cutoff < now) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const partners = await ctx.db
@@ -1433,7 +1469,7 @@ export async function computePartnerCapitalReconciliation(
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_CAPITAL);
   // Draws debit Partner Drawings, a separate account that lowers each partner's balance.
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_DRAWINGS);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, toDate ?? Date.now(), controls, "CREDIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "CREDIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1442,10 +1478,17 @@ export async function computePartnerCapitalReconciliation(
 
 export const partnerCapitalReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
-    return computePartnerCapitalReconciliation(ctx, args.orgId, args.toDate);
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computePartnerCapitalReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Partner capital reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
   },
 });
 

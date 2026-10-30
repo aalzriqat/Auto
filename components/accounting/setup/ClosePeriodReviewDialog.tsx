@@ -22,6 +22,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "@/convex/utils/closeWarnings";
 import type { PeriodSummary, Translate } from "./types";
@@ -36,6 +37,7 @@ import { periodLabel } from "./types";
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
   // SCRUM-858: opening-balance reconciliation. A difference is reported, never posted away.
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES]: "ClosePeriodWarnOpeningDiffSupplierPayables",
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningDiffEmployeeAdvances",

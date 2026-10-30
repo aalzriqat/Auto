@@ -13,6 +13,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "./utils/closeWarnings";
 import {
@@ -540,7 +541,9 @@ async function computeCloseChecklist(
     warnings.push(
       supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
         ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
-        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
+        : supplierPayablesRecon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE"
+          ? SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING
+          : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
     );
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
