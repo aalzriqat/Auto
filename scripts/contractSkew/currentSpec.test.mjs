@@ -113,12 +113,42 @@ test("an unreviewed Convex SDK version refuses before module evaluation", async 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+/** @type {Array<[string, string, {fixed: number, stillFails: number, unproven: number}]>} */
+const environmentCases = [
+  ["environment-blind normal metadata is FIXED", '{ label: v.string() }', { fixed: 1, stillFails: 0, unproven: 0 }],
+  ["NODE_ENV-conditioned metadata is UNPROVEN", 'process.env.NODE_ENV === "production" ? {} : { label: v.string() }', { fixed: 0, stillFails: 0, unproven: 1 }],
+];
+for (const [scenario, args, expected] of environmentCases) {
+  test(scenario, async () => {
+    const root = fixture();
+    try {
+      fs.writeFileSync(path.join(root, "convex/unstable.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = queryGeneric({ args: ${args}, handler: () => process.env.HANDLER_ONLY });`);
+      fs.mkdirSync(path.join(root, "app"));
+      fs.writeFileSync(path.join(root, "app/client.ts"), `import { useQuery } from "convex/react";
+declare const api: { unstable: { read: unknown } };
+export function useRead() { return useQuery(api.unstable.read, { label: "new" }); }`);
+      fs.writeFileSync(path.join(root, "deployed.json"), JSON.stringify({ functions: [{ identifier: "unstable.js:read",
+        functionType: "Query", visibility: { kind: "public" }, args: { type: "object", value: {} } }] }));
+      fs.writeFileSync(path.join(root, "current.json"), JSON.stringify(await renderCurrentSpec(root)));
+      fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
+      const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json",
+        "--current", "current.json", "--baseline", "baseline.json", "--json", "report.json"],
+      { cwd: root, encoding: "utf8", timeout: 30_000 });
+      assert.ifError(run.error);
+      assert.equal(run.status, 7, run.stderr);
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes, expected);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 test("an import failure publishes no partial spec and removes stale output", () => {
   const root = fixture();
   try {
     fs.writeFileSync(path.join(root, "convex/broken.ts"), 'throw Error("IMPORT FAILED");\nexport {};');
     fs.writeFileSync(path.join(root, "current.json"), '{"functions":[]}');
-    const run = spawnSync(process.execPath, [renderer, "current.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+    const run = spawnSync(process.execPath, ["--experimental-vm-modules", renderer, "current.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     assert.ifError(run.error);
     assert.equal(run.status, 1);
     assert.match(run.stderr, /Current spec unavailable/);

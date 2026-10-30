@@ -38,6 +38,141 @@ afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
+test.each([
+  'process.env.NODE_ENV === "production" ? {} : { label: v.string() }',
+  'Object.keys(process.env).length ? {} : { label: v.string() }',
+  'Date.now() > 0 ? { label: v.string() } : {}',
+  'Math.random() > 0 ? { label: v.string() } : {}',
+  '"NODE_ENV" in process.env ? {} : { label: v.string() }',
+  'Object.getOwnPropertyDescriptor(process.env, "NODE_ENV") ? {} : { label: v.string() }',
+  '(process.env.NODE_ENV = "production") ? {} : { label: v.string() }',
+  'process.platform === "linux" ? {} : { label: v.string() }',
+  'new Date().getTime() > 0 ? {} : { label: v.string() }',
+  'crypto.randomUUID() ? {} : { label: v.string() }',
+  'performance.now() > 0 ? {} : { label: v.string() }',
+  'typeof File === "undefined" ? { label: v.string() } : {}',
+  'typeof Buffer === "undefined" ? { label: v.string() } : {}',
+  'Date.parse("2020-01-01T00:00:00") > 0 ? { label: v.string() } : {}',
+  'typeof module !== "undefined" ? { label: v.string() } : {}',
+  'typeof exports !== "undefined" ? { label: v.string() } : {}',
+  '"env" in process ? {} : { label: v.string() }',
+  'Object.keys(process).length ? {} : { label: v.string() }',
+  'Object.getOwnPropertyDescriptor(process, "env") ? {} : { label: v.string() }',
+  '"File" in globalThis ? {} : { label: v.string() }',
+  'Object.keys(globalThis).length ? {} : { label: v.string() }',
+  'Object.getOwnPropertyDescriptor(globalThis, "File") ? {} : { label: v.string() }',
+])("load-time deployment input refuses evidence: %s", async (args) => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/unstable.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = queryGeneric({ args: ${args}, handler: () => null });`);
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "unstable:read" }])).toEqual(["unstable:read"]);
+  expect(spec.functions.some((fn) => fn.identifier === "nested/functions.js:read")).toBe(true);
+  expect(warning.mock.calls.flat().join(" ")).toMatch(/1 module\(s\).*UNPROVEN/);
+});
+
+test("a native require shim tainting shared chunks refuses the entire render", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/requireBranch.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = queryGeneric({ args: typeof require !== "undefined" ? { label: v.string() } : {}, handler: () => null });`);
+  await expect(renderCurrentSpec(root)).rejects.toThrow("Incomplete or invalid native argument spec");
+});
+
+test("load-time import.meta supplies no deployment evidence", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/meta.ts"), `"use node";
+import { actionGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = actionGeneric({ args: import.meta.url ? {} : { label: v.string() }, handler: () => null });`);
+  expect(missingCurrentFunctions(await renderCurrentSpec(root), [{ identifier: "meta:read" }])).toEqual(["meta:read"]);
+});
+
+test("language intrinsics retain same-realm semantics under the global guard", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/realm.ts"), `import { queryGeneric } from "convex/server";
+import { v } from "convex/values";
+export const read = queryGeneric({ args: ({} instanceof Object) && ([] instanceof Array) ? { label: v.string() } : {}, handler: () => null });`);
+  expect((await renderCurrentSpec(root)).functions.find((fn) => fn.identifier === "realm.js:read")?.args).toEqual({
+    type: "object", value: { label: { fieldType: { type: "string" }, optional: false } },
+  });
+});
+
+test("caught environment reads still taint metadata; handler reads do not run", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/caught.ts"), `import { queryGeneric } from "convex/server";
+try { process.env.SECRET; } catch {}
+export const read = queryGeneric({ args: {}, handler: () => null });`);
+  fs.writeFileSync(path.join(root, "convex/handlerOnly.ts"), `import { queryGeneric } from "convex/server";
+console.warn("MODULE DIAGNOSTIC MUST NOT LEAK");
+export const read = queryGeneric({ args: {}, handler: () => process.env.SECRET });`);
+  const spec = await renderCurrentSpec(root);
+  expect(missingCurrentFunctions(spec, [{ identifier: "caught:read" }])).toEqual(["caught:read"]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "handlerOnly:read" }])).toEqual([]);
+});
+
+test("Node builtin dependencies are unavailable instead of evaluated by host resolution", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex/builtin.ts"), `"use node";
+import { actionGeneric } from "convex/server";
+import { randomUUID } from "node:crypto";
+export const read = actionGeneric({ args: {}, handler: () => randomUUID() });`);
+  const spec = await renderCurrentSpec(root);
+  expect(spec.unavailableModules).toEqual([{ file: "builtin.ts", reason: "external module" }]);
+});
+
+test("unsupported deployment bundler configuration publishes no evidence", async () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, "convex.json"), JSON.stringify({ node: { externalPackages: ["example"] } }));
+  await expect(renderCurrentSpec(root)).rejects.toThrow(/unsupported Convex bundler configuration/);
+});
+
+test.each([["http.ts", '"use node";'], ["actions/read.ts", ""]])("Convex refuses invalid runtime selection for %s", async (file, directive) => {
+  const { root } = fixture();
+  const target = path.join(root, "convex", file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${directive}\nimport { actionGeneric } from "convex/server";
+export const read = actionGeneric({ args: {}, handler: () => null });`);
+  await expect(renderCurrentSpec(root)).rejects.toThrow(/Convex .* (runtime|use node)/);
+});
+
+test("conditional package exports use Convex resolution, including Node actions", async () => {
+  const { root } = fixture();
+  const pkg = path.join(root, "node_modules/conditional-args");
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "conditional-args", exports: {
+    convex: "./convex.js", node: "./node.js", default: "./default.js",
+  } }));
+  for (const condition of ["convex", "node", "default"]) {
+    fs.writeFileSync(path.join(pkg, `${condition}.js`), `import { v } from "convex/values";
+export const args = { ${condition}: v.string() };`);
+  }
+  for (const [name, directive, kind] of [["condition", "", "query"], ["nodeCondition", '"use node";', "action"]]) {
+    fs.writeFileSync(path.join(root, `convex/${name}.ts`), `${directive}
+import { ${kind}Generic } from "convex/server";
+import { args } from "conditional-args";
+export const read = ${kind}Generic({ args, handler: () => process.env.HANDLER_ONLY });`);
+  }
+  const spec = await renderCurrentSpec(root);
+  for (const id of ["condition.js:read", "nodeCondition.js:read"]) {
+    expect(spec.functions.find((fn) => fn.identifier === id)?.args).toEqual({
+      type: "object", value: { convex: { fieldType: { type: "string" }, optional: false } },
+    });
+  }
+});
+
+test.each(["package", "workspace"])("patched Convex in %s refuses even at the pinned version", async (location) => {
+  const { root } = fixture();
+  if (location === "package") {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ pnpm: { patchedDependencies: { "convex@1.42.1": "patches/convex.patch" } } }));
+  } else {
+    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), 'patchedDependencies:\n  "convex@1.42.1": patches/convex.patch\n');
+  }
+  await expect(renderCurrentSpec(root)).rejects.toThrow(/patched Convex/);
+});
+
 test("native render retains aliases and callable metadata without running handlers", async () => {
   const { root } = fixture();
   const spec = await renderCurrentSpec(root);

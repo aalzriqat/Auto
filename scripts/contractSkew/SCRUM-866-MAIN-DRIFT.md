@@ -1,6 +1,11 @@
 # SCRUM-866: main evidence drift at 56e4f858
 
-This PR clears the original 12 baseline differences and incorporates #726.
+**Current result, 2026-10-30 Seat 2 remediation:** the environment-blind native
+ESM renderer leaves all six calls **UNPROVEN**. The historical FIXED results
+below are superseded as current-spec evidence. See the final section for the
+179 refused modules, native bundler mechanism and verification boundary.
+
+The original baseline PR cleared 12 differences and incorporated #726.
 The final baseline contains **928 entries**. A native comparison proves the six
 reported calls fixed against three current modules; it is not a full current
 spec or release authorization. CI supplies no `--current` spec and may still
@@ -461,3 +466,125 @@ was reachable, but its full description was unavailable. Its requested
 resolve/relative pattern is the existing confinement helper's documented
 contract. Node documents [path.resolve and path.relative](https://nodejs.org/api/path.html#pathrelativefrom-to)
 and [exclusive file flags](https://nodejs.org/api/fs.html#file-system-flags).
+
+## Seat 2 deployment-equivalence remediation, 2026-10-30
+
+Finding ACCEPTED; proposed fix ADOPTED and extended to runtime-dependent globals.
+The original renderer could falsely report FIXED for the NODE_ENV example. The
+new regressions initially produced 7 failures and 20 passes, including that
+example, package-export resolution and both patched-SDK configuration sources.
+
+The renderer now calls the installed Convex 1.42.1
+`dist/cjs/bundler/debugBundle.js` `innerEsbuild` entry point, rather than copying
+its esbuild options. Source authority inspected in the installed package:
+
+- `src/bundler/debugBundle.ts:16-97`: ESM, target esnext, browser/node platform,
+  convex/module conditions, splitting, production NODE_ENV define, tree shaking,
+  minification, automatic JSX and the isolate async-hooks shim.
+- `src/bundler/index.ts:95-107` and `src/cli/lib/components/definition/bundle.ts:674-723`:
+  isolate/node groups, native server-only/WASM plugins, node chunk directory and
+  default empty extra conditions. The external-package plugin is a resolution
+  no-op with an empty allowlist; a configured nonempty allowlist or custom
+  functions directory refuses the render instead of approximating that path.
+- `src/server/impl/registration_impl.ts:172-181` and the registration builders:
+  exportArgs reads the args definition and serializes the SDK validator. It does
+  not invoke the handler; handlers are separately captured on registration.
+
+Every entry is evaluated from the emitted ESM bytes using `vm.SourceTextModule`
+and a linker that can only load emitted chunks. Each entry/pass has fresh module
+state and a fresh context. No host package or Node builtin is loaded by the
+evaluator. Node's `--experimental-vm-modules` flag is required; without it the
+renderer refuses. The workflow's only execution change is adding that flag to
+the existing credential-free, timeout-bounded main render step. The credential
+test first failed its fingerprint, then the pin was updated with that exact
+justification. Vitest's documented `execArgv` enables the same flag in test
+workers. No Sonar threshold, coverage exclusion or credential grant changed.
+
+Evaluation receives a process.env Proxy that refuses reads, enumeration,
+membership, descriptors and writes. A second native bundle probes accesses
+before Convex's production NODE_ENV constant folding: source property accesses
+through process become globalThis.process accesses, which the production define
+does not erase. Only the unchanged production bundle supplies metadata, and both
+passes must succeed. Denials are latched, so a caught read still invalidates the
+entry. Handler-only environment reads remain eligible because handlers never run.
+
+Date construction/reads, including timezone-dependent Date.parse, randomness,
+crypto, performance, locale inputs, import.meta and dynamic imports refuse
+evaluation. Unknown globals, including `typeof File`/`Buffer`, also latch a
+refusal instead of silently changing a branch. Language intrinsics stay in the
+same realm; instanceof has a regression control. The advisory review exposed
+these additional refusal cases. Its four missing-global/clock/ESM finding classes
+were rechecked against the final mechanism and closed, without claiming a seat.
+This is conservative evaluation of trusted main, not a security sandbox or a
+Convex-runtime certification. Unsupported runtime features supply no evidence.
+
+The official sources checked were [Convex bundling](https://docs.convex.dev/functions/bundling),
+[validation](https://docs.convex.dev/functions/validation),
+[runtimes](https://docs.convex.dev/functions/runtimes),
+[Node VM](https://nodejs.org/api/vm.html) and
+[Vitest execArgv](https://vitest.dev/config/execargv). Bundling and evaluation are
+different evidence boundaries; no deployment runtime was executed here.
+
+### Final repository proof
+
+Client/backend sources still equal `43feaa4f`: `git diff --name-only 43feaa4f --
+convex app components packages lib apps/mobile` is empty. The final native ESM
+render retains **39 registered exports** and refuses **179 modules**. Compared
+with the previous 1,032-export render, **993 exports have no current evidence**.
+The first refusal is Zod's unknown global for 174 modules, unknown require for
+4 modules, and an external import for 1 module. The complete module/reason list
+is retained as `unavailableModules` in the rendered JSON.
+
+All three target modules, `vehicles.ts`, `vehicleEdits.ts` and
+`financingEconomics.ts`, refuse through the dependency's load-time read of
+`globalThis.__zod_globalConfig` in installed `zod/v4/core/core.js:135-136`.
+`convex/utils/env.ts:2` imports Zod. The recorded first refusal is a global-state
+read, not a process.env read at a target module line. No exception was added for
+Zod and no backend/dependency source was changed to obtain a green proof.
+
+The existing completeness guard is unchanged. It finds 643 called functions
+missing and discards all current evidence. Both the saved-spec replay and a
+fresh identity-checked production metadata read through `--allow-workstation`
+exit **7**, with **11 unclassified findings**, **0 proven current fixes**, and:
+
+```text
+callOutcomes: { fixed: 0, stillFails: 0, unproven: 6 }
+```
+
+All eleven finding identities equal the saved original report. All 928 baseline
+entries match, with zero drift and no additional cause. The existing wording
+says deploying is a likely remedy but explicitly says the six calls are not
+proven fixed. This change does not authorize deployment. A first live attempt
+without the explicit workstation option exited 3, UNAVAILABLE; adding the
+documented workstation option allowed the read. No handler or mutation ran.
+
+### Validation outputs
+
+- 27 contract-skew Vitest files ran individually with `--maxWorkers=1`:
+  1,324 passed, 1 existing skip, zero failures. This sweep had 45 renderer tests.
+  The final renderer suite adds six descriptor/enumeration controls and two
+  native runtime-selection refusals: 53/53 pass.
+- Final renderer plus credential-boundary coverage run: **68/68 pass**;
+  source lines **190/193 = 98.44%**, branches 94.26%, functions 93.87%.
+  Added executable renderer lines versus a4952c4e: **126/127 = 99.21%** from
+  zero-context diff hunks intersected with LCOV DA records. This is local added-line
+  evidence, not a cloud Sonar verdict.
+- `node --experimental-vm-modules --test --test-concurrency=1
+  scripts/contractSkew/*.test.mjs`: **20 passed, zero failed/skipped**.
+- Credential boundary: **15/15 pass**; only the justified render-flag pin changed.
+- `pnpm typecheck:contract-skew`: exit 0, detector checkJs project.
+  `pnpm typecheck`: exit 0, root project excluding convex/.
+- Changed-file ESLint: exit 0. Repository `pnpm lint`: exit 0, zero errors and
+  4,350 existing warnings. No lint configuration changed.
+
+The initial author-tools run reproduced the known Windows CRLF-shebang import
+failure with zero tests. The 27-file sweep used temporary LF normalization of
+the two unchanged shebang files; their original bytes were restored afterward.
+The final Node suite needs the VM flag; child renderer invocations explicitly
+carry it. All commands were bounded; test workers were limited to one.
+
+Local runtime is Node 26.4.0. The workflow's Node 22.21.1 execution, new-head cloud
+Sonar/CI, formal /simplify and independent certification seats remain unverified
+in this implementer session. No screen audit, explorer swarm, merge, backend
+deployment or production data mutation is claimed. The original six-FIXED proof
+must not be carried forward as certification of this renderer.

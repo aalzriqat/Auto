@@ -1,8 +1,9 @@
-/** Native argument metadata only: imports trusted source, never calls handlers. */
+/** Native argument metadata only: evaluates trusted bundles, never calls handlers. */
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { indexAllNamed, normalizeIdentifier, specProblems } from "./specIndex.mjs";
+import { bundleForMetadata, evaluateBundle, refusePatchedConvex } from "./metadataBundle.mjs";
 
 /**
  * Native registration metadata uses exportArgs, a private SDK hook. An
@@ -11,49 +12,27 @@ import { indexAllNamed, normalizeIdentifier, specProblems } from "./specIndex.mj
  */
 export async function renderCurrentSpec(root) {
   const require = createRequire(path.join(root, "package.json"));
+  refusePatchedConvex(root, require);
   const convexPackage = require.resolve("convex/package.json");
   if (JSON.parse(fs.readFileSync(convexPackage, "utf8")).version !== "1.42.1") {
     throw new Error("Native spec discovery and registration hooks require review for this Convex version");
   }
-  const convexRequire = createRequire(convexPackage);
-  const { build } = convexRequire("esbuild");
   const dir = path.join(root, "convex");
   const files = discoverModules(dir);
   if (!files.length) throw new Error("No Convex modules discovered");
-  const cache = path.join(root, "node_modules/.cache");
-  fs.mkdirSync(cache, { recursive: true });
-  const temp = fs.mkdtempSync(path.join(cache, "current-spec-"));
-  try {
-    const outfile = path.join(temp, "modules.cjs");
-    // Keep every namespace: tree shaking must not remove uncalled exports.
-    const source = moduleSource(dir, files);
-    await build({ stdin: { contents: source, resolveDir: root, loader: "ts" },
-      outfile, bundle: true, platform: "node", format: "cjs", packages: "external",
-      treeShaking: false, ignoreAnnotations: true, logLevel: "silent",
-      // Workspace packages expose TypeScript source and must be bundled too.
-      plugins: [{ name: "workspace-source", setup(builder) {
-        builder.onResolve({ filter: /^@autoflow\// }, (args) => ({ path: require.resolve(args.path) }));
-      } }] });
-    const modules = require(outfile).default;
-    if (!Array.isArray(modules) || modules.length !== files.length) throw new Error("Incomplete module render");
-    const functions = modules.flatMap(functionMetadata);
-    const spec = { functions };
-    const problems = specProblems(spec);
-    if (!functions.length || problems.length) throw new Error("Incomplete or invalid native argument spec");
-    return spec;
-  } finally {
-    fs.rmSync(temp, { recursive: true, force: true });
-  }
-}
-
-/** @param {string} dir @param {string[]} files */
-function moduleSource(dir, files) {
-  const imports = files.map((file, i) => `import * as m${i} from ${JSON.stringify(file)};`).join("\n");
-  const namespaces = files.map((file, i) => {
+  const bundles = await bundleForMetadata({ root, dir, files, convexPackage, require });
+  const functions = [];
+  const unavailableModules = [];
+  for (const file of files) {
     const relative = path.relative(dir, file).replaceAll("\\", "/");
-    return `{ file: ${JSON.stringify(relative)}, exports: m${i} }`;
-  }).join(",");
-  return `${imports}\nexport default [${namespaces}];`;
+    const result = await evaluateBundle(bundles, relative, functionMetadata);
+    if (result.reason) unavailableModules.push({ file: relative, reason: result.reason });
+    else functions.push(...result.functions);
+  }
+  console.warn(`Current spec: ${unavailableModules.length} module(s) UNPROVEN under environment-blind evaluation (no evidence from those modules).`);
+  const spec = { functions, unavailableModules };
+  if (!functions.length || specProblems(spec).length) throw new Error("Incomplete or invalid native argument spec");
+  return spec;
 }
 
 /**

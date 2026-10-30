@@ -243,7 +243,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // Both comparison branches pass --current only when the complete render
     // exists; failed/timed-out output is deleted. Artifact also retains it.
     // Advisory Standards review inspected this boundary; no seat is claimed.
-    "e0f0828c7b9dfcc25391f2178cb166898cfa29b85b9bf1f84c4c01611280e0ce",
+    // SCRUM-866 Seat 2 remediation: only add --experimental-vm-modules to
+    // that credential-free render invocation. Native ESM avoids introducing
+    // CJS module/exports/require bindings into argument evaluation. No trigger,
+    // grant, checkout, environment, credential step or output path changed.
+    "9e8ce003287905e3623650fc4a2502871451686b317874f291eb4a390403c52d",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales
