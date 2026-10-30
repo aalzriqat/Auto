@@ -32,6 +32,7 @@ import { toMinorUnits } from "./money";
 import { allLinesForSale } from "./dealCommissionLineReads";
 import { settlementView } from "./supplierSettlement";
 import { cancelPendingInvoiceReceiptsForSale } from "../accounting/invoiceReceiptReservation";
+import { isOpeningDeposit, refuseOpeningDepositReversal } from "./openingDepositContainment";
 
 async function getActiveReceivableAllocations(
   ctx: QueryCtx | MutationCtx,
@@ -79,6 +80,19 @@ async function getSafelyReversiblePaymentKeys(
   return keys;
 }
 
+/** True when the payment key names the receipt created from a named opening deposit. */
+async function isOpeningDepositPaymentKey(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  idempotencyKey: string
+): Promise<boolean> {
+  const prefix = "deposit_received_";
+  if (!idempotencyKey.startsWith(prefix)) return false;
+  const depositId = ctx.db.normalizeId("deposits", idempotencyKey.slice(prefix.length));
+  const deposit = depositId ? await ctx.db.get(depositId) : null;
+  return deposit?.orgId === orgId && isOpeningDeposit(deposit);
+}
+
 /** The read-only refusal half of `cancelSaleReceivableIfSafe`; returns the receivable's active allocations. */
 async function assertOnlySafelyReversiblePaymentsApplied(
   ctx: QueryCtx | MutationCtx,
@@ -96,6 +110,11 @@ async function assertOnlySafelyReversiblePaymentsApplied(
     if (plannedIds.has(allocation._id)) continue;
     const payment = await ctx.db.get(allocation.paymentId);
     if (!payment || payment.orgId !== orgId || !safeKeys.has(payment.idempotencyKey)) {
+      // SCRUM-858 S1: a payment created from a named opening deposit is not quote-keyed, so it is never in the safe
+      // set. Say why, in the coded bilingual refusal, instead of the generic one.
+      if (payment?.orgId === orgId && (await isOpeningDepositPaymentKey(ctx, orgId, payment.idempotencyKey))) {
+        refuseOpeningDepositReversal();
+      }
       throw new ConvexError(
         "Cannot automatically cancel a sale with customer payments already applied. Refund or reverse those payments first."
       );

@@ -71,6 +71,7 @@ import {
   assertQuoteDepositConservation,
 } from "./depositAllocation";
 import { type DepositApplicationTreatment, recordDepositApplication } from "./depositApplications";
+import { applyOpeningDepositsToSale } from "./openingDepositApplication";
 import { planDepositSettlementApplication } from "./depositSettlementPlan";
 import {
   consignedSettlementRoute,
@@ -1072,6 +1073,42 @@ type ResolvedReservationDeposits = {
  * on.
  */
 async function resolveReservationDeposits(
+  ctx: MutationCtx,
+  opts: Parameters<typeof resolveQuoteReservationDeposits>[1]
+): Promise<ResolvedReservationDeposits> {
+  const quoteKeyed = await resolveQuoteReservationDeposits(ctx, opts);
+  // SCRUM-858 S1. A financed sale recognised from a settlement plan takes its deposit as
+  // consideration the plan has already counted, and the plan reads quote-keyed rows only; an
+  // opening deposit stays HELD there rather than being consumed behind the plan's back.
+  if (opts.args.financedSalePlan) return quoteKeyed;
+  const { args, prepared, saleId } = opts;
+  const currency = prepared.currency;
+  const capMinor =
+    opts.customerBillableMinor -
+    toMinorUnits(quoteKeyed.previouslyCollected, currency) -
+    toMinorUnits(quoteKeyed.appliedToSupplierSettlement, currency);
+  const opening = await applyOpeningDepositsToSale(ctx, {
+    orgId: args.orgId,
+    customerId: args.customerId,
+    vehicleId: args.vehicleId,
+    saleId,
+    quoteId: args.quoteId,
+    quoteLineIndex: await quoteLineIndexFor(ctx, args.quoteId, args.vehicleId),
+    currency,
+    capMinor,
+    actorId: args.actorId,
+    occurredAt: args.saleDate,
+  });
+  if (opening.length === 0) return quoteKeyed;
+  const openingMinor = opening.reduce((sum, row) => sum + toMinorUnits(row.amount, currency), 0);
+  return {
+    ...quoteKeyed,
+    previouslyCollected: fromMinorUnits(toMinorUnits(quoteKeyed.previouslyCollected, currency) + openingMinor, currency),
+    appliedDeposits: [...quoteKeyed.appliedDeposits, ...opening],
+  };
+}
+
+async function resolveQuoteReservationDeposits(
   ctx: MutationCtx,
   opts: {
     args: SaleCompletionArgs;
@@ -2355,7 +2392,7 @@ async function assertCashPayFirstBeforeWrites(
   ctx: MutationCtx,
   args: Pick<
     SaleCompletionArgs,
-    | "orgId" | "vehicleId" | "salePrice" | "taxAmount" | "dealerFees" | "warrantySold" | "gapSold"
+    | "orgId" | "customerId" | "vehicleId" | "salePrice" | "taxAmount" | "dealerFees" | "warrantySold" | "gapSold"
     | "quoteId" | "financingType" | "financedSalePlan" | "supplierSettlementRoute" | "depositResolution"
   >
 ): Promise<void> {
@@ -2386,6 +2423,7 @@ async function assertCashPayFirstBeforeWrites(
     treatment: args.depositResolution?.treatment,
     settlesDirectToSupplierOnSourcedStock:
       vehicle.sourceType === "SOURCED" && !dealershipCollectsGross(consignedSettlementRoute(args)),
+    opening: { orgId: args.orgId, customerId: args.customerId },
   });
 }
 

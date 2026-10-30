@@ -1,0 +1,121 @@
+{
+  "id": "opening-reservation-deposit-pays-the-named-cars-cash-sale-exactly-once",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named",
+        "idempotencyKey": "od-sale-1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named",
+        "idempotencyKey": "od-sale-1"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deposit.status",
+      "value": "APPLIED"
+    },
+    {
+      "observable": "deposit.holdActive",
+      "value": false
+    },
+    {
+      "observable": "deposit.resolutionSale",
+      "value": "thisSale"
+    },
+    {
+      "observable": "applications.count",
+      "value": 1
+    },
+    {
+      "observable": "application.treatment",
+      "value": "CUSTOMER_RECEIVABLE"
+    },
+    {
+      "observable": "application.amountMinor",
+      "value": 100000
+    },
+    {
+      "observable": "replay.sameSaleId",
+      "value": true
+    },
+    {
+      "observable": "secondPass.applied",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a reservation deposit pays the named car's cash sale once: APPLIED, one application, liability released, replay and second pass add nothing"
+  },
+  "matrixRow": "OB-B6",
+  "fingerprint": "72998d5a2478190fe5606740362927b382af78ccce28236d2c92add2dd1c92b0"
+}
