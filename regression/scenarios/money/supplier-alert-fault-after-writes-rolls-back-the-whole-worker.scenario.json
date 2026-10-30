@@ -1,0 +1,73 @@
+{
+  "id": "supplier-alert-fault-after-writes-rolls-back-the-whole-worker",
+  "fingerprint": "e4e0acf6f82e4891d13f4a1671ab7396a7bac1350bd7a792af1660159208e9a1",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "obligations": 2,
+        "fault": "second-notification-insert"
+      }
+    },
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "obligations": 2,
+        "fault": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "faultedCall.rejected",
+      "value": true
+    },
+    {
+      "observable": "notificationsAfterFault",
+      "value": 0
+    },
+    {
+      "observable": "idempotencyRecordsAfterFault",
+      "value": 0
+    },
+    {
+      "observable": "retry.alerted",
+      "value": 6
+    },
+    {
+      "observable": "alerts",
+      "value": 6
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a fault after earlier writes rolls the whole worker back, and the retry sends everything once"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "supplier-alert-first-seen-late-gets-latest-step-only",
+  "fingerprint": "5254313691459f5e19067e142a307366ecb7f4a58d298504f2c3d84504de59f9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "sweepDays": "10"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 3
+    },
+    {
+      "observable": "type",
+      "value": "SUPPLIER_OBLIGATION_OVERDUE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "an obligation first seen late gets the single latest step, not the skipped ones"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}
