@@ -54,6 +54,7 @@ import { isChosenMethod } from "@/components/payments/paymentMethod";
 import { HeldDepositActions } from "@/components/vehicles/HeldDepositActions";
 import { CorrectAcquisitionCostDialog } from "@/components/vehicles/CorrectAcquisitionCostDialog";
 import { UnconfirmedPayoutNotice } from "@/components/deposits/UnconfirmedPayoutNotice";
+import { OpeningDepositActionsDisabled, OpeningDepositBadge, isOpeningOriginDeposit } from "@/components/deposits/OpeningDepositMarkers";
 import { usePendingDepositPayouts } from "@/hooks/usePendingDepositPayouts";
 import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
@@ -618,6 +619,7 @@ export function VehicleDetailsDialog({
                               >
                                 {deposit.status}
                               </span>
+                              {isOpeningOriginDeposit(deposit) && <OpeningDepositBadge />}
                             </p>
                             {/* What has already been handed back. A row can be
                                 released in part and stay HELD, so its face
@@ -630,7 +632,8 @@ export function VehicleDetailsDialog({
                             )}
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">&ldquo;{deposit.notes}&rdquo;</p>}
                           </div>
-                          {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
+                          {deposit.status === "HELD" && isOpeningOriginDeposit(deposit) && <OpeningDepositActionsDisabled />}
+                          {deposit.status === "HELD" && !isOpeningOriginDeposit(deposit) && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
                             <HeldDepositActions
                               t={t as any}
                               orgId={activeOrgId ?? undefined}

@@ -1,0 +1,89 @@
+{
+  "id": "opening-reservation-without-vin-is-customer-credit-for-that-customer-only",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "none"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "customer": "other",
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "customer": "owner",
+        "vehicle": "other"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "deposit.vehicleId",
+      "value": null
+    },
+    {
+      "observable": "otherCustomerSale.refused",
+      "value": "UNPAID"
+    },
+    {
+      "observable": "ownCustomerSale.depositStatus",
+      "value": "APPLIED"
+    },
+    {
+      "observable": "ownCustomerSale.resolutionSale",
+      "value": "thisSale"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "a reservation with no VIN is customer credit: applied to that customer's sale, never to another customer's"
+  },
+  "matrixRow": "OB-B6",
+  "fingerprint": "70274f470dbce897bc015af0f5d9c36eac0db7d2e2069e33613af4b586d502f6"
+}

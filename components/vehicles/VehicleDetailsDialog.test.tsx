@@ -515,3 +515,22 @@ describe("vehicle dialog: an unconfirmed payout keeps its identity (SCRUM-469 ro
     expect(state.releaseCalls[1]!.idempotencyKey).toBe(firstKey);
   });
 });
+describe("vehicle dialog: an opening-origin deposit (SCRUM-858 S1, ruling SCRUM-858#c23884)", () => {
+  test("is badged, offers no refund method and shows the disabled controls with the pilot reason", () => {
+    state.deposits = [{ _id: "dep_open", amount: 500, status: "HELD", releaseCount: 0, origin: "OPENING" }];
+    render(ui());
+    expect(screen.getByTestId("opening-deposit-badge")).toBeTruthy();
+    expect(screen.queryByTestId("method-RefundChooseMethod")).toBeNull();
+    expect(refundButton().disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Forfeit", hidden: true }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("OpeningDepositActionsUnavailable")).toBeTruthy();
+  });
+
+  test("control: an ordinary held deposit has no badge and keeps its refund method choice", () => {
+    state.deposits = [deposit(0)];
+    render(ui());
+    expect(screen.queryByTestId("opening-deposit-badge")).toBeNull();
+    expect(screen.queryByText("OpeningDepositActionsUnavailable")).toBeNull();
+    expect(refundSelect()).toBeTruthy();
+  });
+});

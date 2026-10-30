@@ -196,3 +196,99 @@ test("declared liability kind selector preserves the server's allowed set and cl
   expect(onChange).toHaveBeenCalledWith([{ ...row, kind: "UNALLOCATED_LIABILITY", partyId: "",
     partyLabel: "", counterpartyName: "", title: "", purpose: undefined }]);
 });
+// SCRUM-858 S1 (ruling SCRUM-858#c23884): named opening deposits in the opening editor.
+const depositGroup: OpeningAllocationGroup = { accountId: "deposits" as Id<"chartOfAccounts">, kind: "UNALLOCATED_LIABILITY",
+  allowedKinds: ["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"], allowedPurposes: ["CUSTOMER_DEPOSIT"],
+  journalMinor: 800_000, label: "2100 · Customer deposits" };
+const depositRow: OpeningAllocationDraft = { rowKey: "dep-1", accountId: depositGroup.accountId, kind: "CUSTOMER_DEPOSIT",
+  partyId: "customer-a" as Id<"customers">, partyLabel: "Synthetic Customer", amount: "500.000",
+  title: "Reservation taken before launch", dueDate: "", note: "", depositKind: "RESERVATION", depositVehicleId: "" };
+
+test.each(["en", "ar"] as const)("choosing the named deposit family reveals the customer, type and title fields and clears stale fields (%s)", (locale) => {
+  language.locale = locale;
+  const unnamed: OpeningAllocationDraft = { rowKey: "dep-1", accountId: depositGroup.accountId, kind: "UNALLOCATED_LIABILITY",
+    partyId: "", partyLabel: "", amount: "500.000", title: "Old pool", dueDate: "", note: "", purpose: "CUSTOMER_DEPOSIT" };
+  const onChange = vi.fn();
+  render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[unnamed]} onChange={onChange}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} />);
+  const kind = screen.getByRole("combobox", { name: "OpeningAllocationKind" });
+  expect(Array.from(kind.querySelectorAll("option")).map((option) => option.getAttribute("value")))
+    .toEqual(["UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"]);
+  fireEvent.change(kind, { target: { value: "CUSTOMER_DEPOSIT" } });
+  expect(onChange).toHaveBeenCalledWith([{ ...unnamed, kind: "CUSTOMER_DEPOSIT", partyId: "", partyLabel: "",
+    counterpartyName: "", title: "", purpose: undefined }]);
+});
+
+test.each(["en", "ar"] as const)("a named deposit row picks a customer, offers both deposit types and a left-to-right vehicle search (%s)", (locale) => {
+  language.locale = locale;
+  queryRows = [{ _id: "customer-next", firstName: "Next", lastName: "Customer" }];
+  const onChange = vi.fn();
+  const { container } = render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[{ ...depositRow, partyId: "", partyLabel: "" }]} onChange={onChange}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} canSelectVehicles />);
+  fireEvent.change(screen.getByRole("combobox", { name: "OpeningAllocationCustomer" }), { target: { value: "customer-next" } });
+  expect(onChange).toHaveBeenCalledWith([{ ...depositRow, partyId: "customer-next", partyLabel: "Next Customer" }]);
+  expect(screen.getByRole("textbox", { name: "OpeningAllocationSourceTitle" })).toBeTruthy();
+  const type = screen.getByRole("combobox", { name: "OpeningDepositType" });
+  expect(Array.from(type.querySelectorAll("option")).map((option) => option.getAttribute("value")))
+    .toEqual(["", "SECURITY", "RESERVATION"]);
+  // The reservation vehicle search is a left-to-right field (VIN text) inside a right-to-left page.
+  expect(screen.getByRole("textbox", { name: "OpeningDepositSearchVehicle" }).getAttribute("dir")).toBe("ltr");
+  expect(container.querySelector("input[inputmode='decimal']")).toBeTruthy();
+});
+
+test("a security deposit cannot name a vehicle and shows its own notice; a reservation shows the vehicle picker and its notice", () => {
+  language.locale = "en";
+  const onChange = vi.fn();
+  const named = { ...depositRow, depositVehicleId: "vehicle-a" as Id<"vehicles">, depositVehicleLabel: "VIN123 · 2024 Example Car" };
+  const { rerender } = render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[named]} onChange={onChange}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} canSelectVehicles />);
+  expect(screen.getByRole("note").textContent).toBe("OpeningDepositReservationNotice");
+  expect(screen.getByRole("combobox", { name: "OpeningDepositVehicle" })).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: "OpeningDepositType" }), { target: { value: "SECURITY" } });
+  expect(onChange).toHaveBeenCalledWith([{ ...named, depositKind: "SECURITY", depositVehicleId: "", depositVehicleLabel: "" }]);
+  rerender(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[{ ...named, depositKind: "SECURITY", depositVehicleId: "", depositVehicleLabel: "" }]} onChange={onChange}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} canSelectVehicles />);
+  expect(screen.getByRole("note").textContent).toBe("OpeningDepositSecurityNotice");
+  expect(screen.queryByRole("combobox", { name: "OpeningDepositVehicle" })).toBeNull();
+});
+
+test("without the vehicle-view grant a reservation deposit offers no vehicle picker", () => {
+  language.locale = "en";
+  render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[depositRow]} onChange={vi.fn()}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} />);
+  expect(screen.queryByRole("combobox", { name: "OpeningDepositVehicle" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "OpeningDepositType" })).toBeTruthy();
+});
+
+test("an unavailable reservation vehicle reports an error and does not change the row", () => {
+  language.locale = "en";
+  queryRows = [{ _id: "vehicle-a", year: 2024, make: "Example", model: "Car", vin: "VIN123", status: "AVAILABLE" }];
+  const onChange = vi.fn();
+  render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[depositRow]} onChange={onChange}
+    canSelectCustomers canSelectEmployees={false} canSelectPartners={false} canSelectVehicles />);
+  const select = screen.getByRole("combobox", { name: "OpeningDepositVehicle" });
+  const unavailable = document.createElement("option");
+  unavailable.value = "vehicle-gone"; unavailable.text = "Gone";
+  select.append(unavailable);
+  fireEvent.change(select, { target: { value: "vehicle-gone" } });
+  expect(onChange).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert").textContent).toBe("OpeningAllocationPartyUnavailable");
+  // An offered vehicle is stored with its VIN-first display snapshot.
+  fireEvent.focus(screen.getByRole("textbox", { name: "OpeningDepositSearchVehicle" }));
+  fireEvent.change(select, { target: { value: "vehicle-a" } });
+  expect(onChange).toHaveBeenCalledWith([{ ...depositRow, depositVehicleId: "vehicle-a", depositVehicleLabel: "VIN123 · 2024 Example Car" }]);
+});
+test("without the customer-view grant a named deposit row cannot pick a customer and says why", () => {
+  language.locale = "en";
+  render(<OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD"
+    groups={[depositGroup]} rows={[depositRow]} onChange={vi.fn()}
+    canSelectCustomers={false} canSelectEmployees={false} canSelectPartners={false} />);
+  expect((screen.getByRole("combobox", { name: "OpeningAllocationCustomer" }) as HTMLSelectElement).disabled).toBe(true);
+  expect(screen.getByRole("alert").textContent).toBe("OpeningAllocationPermissionNeeded");
+});

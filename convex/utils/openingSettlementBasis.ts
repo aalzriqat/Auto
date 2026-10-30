@@ -145,7 +145,8 @@ export async function resolveOpeningSettlementBasis(
     allocation.kind !== "SUPPLIER_PAYABLE" &&
     allocation.kind !== "OTHER_PAYABLE" &&
     allocation.kind !== "EMPLOYEE_COMMISSION" &&
-    allocation.kind !== "UNALLOCATED_LIABILITY"
+    allocation.kind !== "UNALLOCATED_LIABILITY" &&
+    allocation.kind !== "CUSTOMER_DEPOSIT"
   )
     return unavailable();
   if (
