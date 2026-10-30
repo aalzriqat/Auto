@@ -30,6 +30,13 @@ overrides:
   # 2026-10-15, clearing the minimumReleaseAge (<24h) gate. Preserve other majors.
   undici@7: 7.30.1
   # Security overrides — force patched transitive deps flagged by `pnpm audit`.
+  # GHSA-qr28-fpjm-wq7f (HIGH): quadratic replacement of percent-encoded
+  # runs can cause denial of service. Vulnerable <=0.5.0, patched in 0.5.1.
+  # Reached through apps/mobile > expo-router > query-string. The query-string
+  # patch below adapts its CommonJS import to this release's ESM default export.
+  # Pinned exact to the patched release.
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  decode-uri-component: 0.5.1
   # GHSA-rgj7-g3m4-5g8c: libheif vulnerabilities (GHSA-g89c-p67h-r497,
   # GHSA-2jg2-4ch7-h545) reachable through sharp's bundled libvips. Patched
   # >=0.35.4. Reached only through next’s OPTIONAL dependency — next 16.3.4
@@ -293,6 +300,7 @@ allowBuilds:
   unrs-resolver: true
 patchedDependencies:
   expo-sharing: patches/expo-sharing.patch
+  query-string@7.1.3: patches/query-string@7.1.3.patch
 auditConfig:
   ignoreGhsas:
     # SCRUM-556: node-forge RSA PKCS#1 v1.5 signature verification accepts extra

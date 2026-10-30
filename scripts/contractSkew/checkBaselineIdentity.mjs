@@ -10,13 +10,15 @@ import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBa
 import { resolveInside } from "./baselineFile.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 
+const DEFAULT_IO = Object.freeze({ log: console.log, error: console.error });
+
 /**
  * @typedef {{ log: (line: string) => void, error: (line: string) => void }} CliIo
  * @param {string[]} argv
  * @param {CliIo} [io]  output sinks; the repository root is the working directory (the TypeScript programs resolve against it)
  * @returns {number} the process exit code
  */
-export function main(argv, io = { log: console.log, error: console.error }) {
+export function main(argv, io = DEFAULT_IO) {
   try {
     const { values } = parseArgs({ args: argv, options: { baseline: { type: "string", default: DEFAULT_BASELINE }, "allow-empty": { type: "boolean" } } });
     const baseline = resolveInside(process.cwd(), values.baseline, "baseline");
