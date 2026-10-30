@@ -1,0 +1,49 @@
+{
+  "id": "supplier-due-recovery-without-agreed-date-has-no-due-date",
+  "fingerprint": "d9ca557af8d7ea66a7c7ff727dd556052691f513ffecddead67adbe2854974d9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECOVERY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "COLLECTIBILITY_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.outstandingMinor",
+      "value": 200000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "no agreed date: no due date, collectibility not recorded"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

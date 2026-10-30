@@ -1,0 +1,58 @@
+{
+  "id": "supplier-alert-unreadable-row-does-not-starve-later-pages-or-kinds",
+  "fingerprint": "b83d26660ac9002703507fa8aa4a18c38a479c6a5a8818c7f2f5ded2a52708fb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kinds": "all",
+        "unreadablePayable": 1,
+        "unreadableRecovery": 1,
+        "goodPayables": 52,
+        "goodReceivable": 1,
+        "goodRecovery": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerts",
+      "value": 162
+    },
+    {
+      "observable": "unreadableRowAlerts",
+      "value": 0
+    },
+    {
+      "observable": "unreadableRowLogs",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "one unreadable row does not starve the rest of its page, its later pages or its later kinds"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

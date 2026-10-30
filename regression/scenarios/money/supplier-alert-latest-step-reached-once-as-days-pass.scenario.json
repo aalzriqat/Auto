@@ -1,0 +1,62 @@
+{
+  "id": "supplier-alert-latest-step-reached-once-as-days-pass",
+  "fingerprint": "754ffd1b75561d84a0f1a8bfcf394a54159cd9b79bea5b9da31f5408d8698494",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s8",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "sweepDays": "-4_-3_-2_0_1_6_7_8_14_15_21"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsOnDay-3",
+      "value": 3
+    },
+    {
+      "observable": "alertsOnDay0",
+      "value": 3
+    },
+    {
+      "observable": "alertsOnDay7",
+      "value": 3
+    },
+    {
+      "observable": "alertsOnDay14",
+      "value": 3
+    },
+    {
+      "observable": "alertsOnDay21",
+      "value": 3
+    },
+    {
+      "observable": "alertsOnOtherDays",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a run sends only the latest step reached, once, as the days pass"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS"
+}

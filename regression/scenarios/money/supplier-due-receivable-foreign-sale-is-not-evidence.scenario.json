@@ -1,0 +1,47 @@
+{
+  "id": "supplier-due-receivable-foreign-sale-is-not-evidence",
+  "fingerprint": "8e10b61dc356a90153b83ff832e17781a7c9e29d61231466e292f5fa522cb655",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "saleOrg": "B",
+        "handoverStatus": "HANDED_OVER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "DELIVERY_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a receivable whose saleId is another organisation's sale reads no delivery from it"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}
