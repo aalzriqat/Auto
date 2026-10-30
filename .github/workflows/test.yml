@@ -258,13 +258,22 @@ jobs:
     # No backend spec or production credentials: catch stranded review identities
     # in the same candidate checkout used above (the PR merge ref on pull_request).
     - name: Contract-skew baseline identity regression tests
-      run: node --test --test-concurrency=1 scripts/contractSkew/baselineIdentity.test.mjs
+      run: node --test --test-concurrency=1 scripts/contractSkew/*.test.mjs
 
     - name: Contract-skew baseline call identities
       run: node scripts/contractSkew/checkBaselineIdentity.mjs
 
     - name: Contract-skew renewal evidence coverage
-      run: node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence
+      env:
+        PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+      run: |
+        if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -z "$PR_BASE_SHA" ]; then
+          echo "PR_BASE_REFUSED: pull_request requires a non-empty PR_BASE_SHA" >&2
+          exit 1
+        fi
+        args=()
+        if [ -n "$PR_BASE_SHA" ]; then args+=(--pr-base "$PR_BASE_SHA"); fi
+        node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence "${args[@]}"
 
   # `pnpm build` ran nowhere in this workflow until now. It happens inside
   # playwright.yml (via playwright.config.ts's webServer) and twice more in

@@ -2,7 +2,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 import { createImportClosure } from "./importClosure.mjs";
@@ -15,6 +16,10 @@ import {
 } from "./renewBaselineReviewed.mjs";
 
 type Compare = (file: string) => "identical" | "changed" | "missing";
+
+// The CLI fixtures model local runs independently of the runner's GitHub event.
+beforeAll(() => vi.stubEnv("GITHUB_EVENT_NAME", undefined));
+afterAll(() => vi.unstubAllEnvs());
 
 const RENEWED_EXPIRES = "2026-12-01";
 const RENEWAL = "SCRUM-866: client and backend unchanged since reviewed revision c82890bd; fingerprint and cause matched in production run 40647249580";
@@ -187,6 +192,32 @@ describe("backendModuleOf / rationalePaths", () => {
       "scripts/a.mjs",
     ]);
   });
+
+  test.each([
+    ["", []],
+    [".ts x.TS file.tsxSuffix file.ts_ file.ts9", []],
+    ["a.ts b.tsx c.js d.jsx e.mjs f.cjs g.json h.md i.yml j.yaml", ["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.cjs", "g.json", "h.md", "i.yml", "j.yaml"]],
+    ["a.ts-more a.ts_suffix a.ts9 a.tsé", ["a.ts"]],
+    ["a.ts!b.js", ["a.ts", "b.js"]],
+    ["a.ts/b.js a.ts/b.invalid", ["a.ts/b.js", "a.ts"]],
+    ["a.ts.b.js.invalid", ["a.ts.b.js"]],
+    ["a.ts a.ts", ["a.ts"]],
+    ["((app/(dashboard)/[id]/page.tsx)", ["app/(dashboard)/[id]/page.tsx"]],
+    ["@scope/pkg/file.test.ts ../lib/a.mjs", ["@scope/pkg/file.test.ts", "../lib/a.mjs"]],
+  ])("preserves path-token boundaries in %j", (text, expected) => {
+    expect(rationalePaths(text)).toEqual(expected);
+  });
+
+  test("a long token without a valid extension completes within a bounded subprocess", () => {
+    const moduleUrl = pathToFileURL(path.resolve("scripts/contractSkew/renewBaselineReviewed.mjs")).href;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `import { rationalePaths } from ${JSON.stringify(moduleUrl)};
+       const input = "a".repeat(500_000) + ".tsxSuffix";
+       if (JSON.stringify(rationalePaths(input)) !== "[]") process.exit(1);`,
+    ], { timeout: 5_000, encoding: "utf8" });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  }, 10_000);
 });
 
 describe("narrow renewal evidence (SCRUM-866 round 9)", () => {
@@ -300,6 +331,68 @@ describe("PR-head review reference in renewal evidence (SCRUM-866)", () => {
     expect(gaps).toHaveLength(1);
     expect(gaps[0].missing).toEqual(["(no reviewed source SHA in renewal)"]);
     expect(gaps[0].renewalProblem).toBe("malformed");
+  });
+});
+
+describe("blob and PR-base renewal refusals (SCRUM-866)", () => {
+  const client = "app/page.tsx";
+  const backend = "convex/vehicles.ts";
+  const blob = "a".repeat(40);
+  const records = [[client, blob], [backend, blob]];
+  const renewal = (value: string) => entry({ expires: RENEWED_EXPIRES, renewal: value });
+  const options = {
+    reviewedText: serialize([entry()]), compare: allIdentical, backendDefinitionOf: directDefinition,
+    evidenceChanged: allIdentical, blobOf: () => blob,
+  };
+  const gapsFor = (text: string, over: Partial<Parameters<typeof renewalEvidenceGaps>[1]> = {}) =>
+    renewalEvidenceGaps(serialize([renewal(text)]), { ...options, ...over });
+
+  test.each([
+    ["invalid JSON", "not-json"], ["null", "null"], ["object", "{}"], ["empty array", "[]"],
+    ["non-array record", JSON.stringify([null])], ["empty record", "[[]]"],
+    ["short record", JSON.stringify([[client]])], ["extra field", JSON.stringify([[client, blob, "extra"]])],
+    ["non-string path", JSON.stringify([[42, blob]])], ["empty path", JSON.stringify([["", blob]])],
+    ["blank path", JSON.stringify([[" \t", blob]])], ["non-string blob", JSON.stringify([[client, 42]])],
+    ["short blob", JSON.stringify([[client, blob.slice(1)]])], ["uppercase blob", JSON.stringify([[client, blob.toUpperCase()]])],
+    ["duplicate path", JSON.stringify([...records, records[0]])],
+    ["trailing prose", `${JSON.stringify(records)} reviewed`],
+  ])("a final marker with %s refuses instead of using an earlier commit", (_name, value) => {
+    expect(gapsFor(`SCRUM-866 round 1 review against origin/main fa4bdab2; evidence-blobs ${value}`))
+      .toMatchObject([{ missing: ["(malformed evidence-blobs in renewal)"], renewalProblem: "malformed" }]);
+  });
+
+  test("blob evidence requires both files even when neither changed since the original review", () => {
+    expect(gapsFor(`evidence-blobs ${JSON.stringify([[client, blob]])}`)).toMatchObject([
+      { missing: [backend], changedSinceEvidence: [backend] },
+    ]);
+    expect(gapsFor(`evidence-blobs ${JSON.stringify(records)}`, { blobOf: () => undefined }))
+      .toMatchObject([{ missing: [], changedSinceEvidence: [client, backend] }]);
+  });
+
+  test("blob evidence cannot be checked without a HEAD blob reader", () => {
+    expect(() => gapsFor(`evidence-blobs ${JSON.stringify(records)}`, { blobOf: undefined }))
+      .toThrow("blobOf is required to compare evidence-blobs with HEAD");
+  });
+
+  test.each([{}, { entries: null }, { entries: {} }])
+    ("PR mode refuses a baseline without an entries array: %j", (document) => {
+      const prBaseText = JSON.stringify(document, null, 2) + "\n";
+      expect(() => gapsFor("unused", { prBaseText })).toThrow("the PR base baseline has no entries array");
+    });
+
+  test("PR mode refuses duplicate base identities", () => {
+    expect(() => gapsFor("unused", { prBaseText: serialize([entry(), entry()]) }))
+      .toThrow("the PR base baseline has duplicate identities");
+  });
+
+  test("new commit evidence in PR mode requires the base ancestry verifier", () => {
+    expect(() => gapsFor("SCRUM-866 review of PR #721 head fa4bdab2", { prBaseText: serialize([]) }))
+      .toThrow("requireCommitOnPrBase is required in PR mode");
+  });
+
+  test.each(["notevidence-blobs", "evidence-blobsx"])("%s is not a marker", (prefix) => {
+    const text = `SCRUM-866 review of PR #721 head fa4bdab2; ${prefix} ${JSON.stringify(records)}`;
+    expect(gapsFor(text)).toEqual([]);
   });
 });
 
