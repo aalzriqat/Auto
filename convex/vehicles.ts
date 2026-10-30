@@ -1409,7 +1409,7 @@ export const update = mutation({
     });
     await assertVehicleImagesAllowed(ctx, args.imageIds);
 
-    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId), vehicle);
 
     // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
     // when this patch CHANGES the type, the supplier or the cost — an existing

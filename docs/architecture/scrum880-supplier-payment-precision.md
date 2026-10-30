@@ -1,13 +1,16 @@
 # SCRUM-880 supplier payment precision
 
 Invariant: the dialog displays the server's integer settlement amount, and a
-successful confirmation posts that exact amount. New purchase costs must be
-representable at the currency's scale. Stored excess precision refuses payment.
+successful confirmation posts that exact amount. Original supplier entitlements
+must be representable at the currency's scale before conversion. Stored excess
+precision refuses completion and payment. Unchanged legacy costs do not block
+unrelated vehicle edits.
 
 ## Design and impact map
 
 The server's `supplierSettlementAmountMinor` validates both stored amounts and
-uses the existing `toMinorUnits(amountDue - amountPaid, currency)` conversion.
+subtracts the validated integers, `dueMinor - paidMinor`. Subtracting major-unit
+Numbers first can lose one minor unit near the safe-integer limit.
 `list` returns that integer, or null for an invalid row, with an explicit return
 validator derived from the existing native/opening schema union. `markPaid`
 uses the same helper. Its optional expected integer lets the web dialog refuse
@@ -26,7 +29,7 @@ so three payments of 1.480 produce 4.440 rather than 4.4399999999999995.
 | Area | Boundary |
 | --- | --- |
 | Writers | `vehicles.create`, `update`, `createSourced`, `importBulk`, `correctAcquisitionCost`; `vehicleEdits.requestCreate`, `requestUpdate`, `resolve` CREATE/UPDATE; `postVehicleAcquisitionIfOwned`; trade-in purchase-price write in `utils/saleCompletion` |
-| Payable amount writers | Acquisition helper and cost correction validate before writing. Sale completion and opening allocations already write from integer minor units. |
+| Payable amount writers | Acquisition helper and cost correction validate before writing. Sale preparation validates the original SOURCED sourceCost before concession or commission calculations convert it. Opening allocations write from integer minor units. |
 | Readers | Sourcing list and web dialog consume the new projection. Existing fields remain for mobile, settlement readers, sales and reports. Page totals belong to SCRUM-884. |
 | Historical data | No rewrite. Invalid rows remain visible with a null projection and localized refusal. The live count was not measured; production showroom rows were not read. Zero affected live rows is not claimed. Every existing payable is potentially subject to the refusal until audited. |
 | State transitions | Valid PENDING and PARTIALLY_PAID rows settle. PAID, CANCELLED and DISPUTED refusals remain. |
@@ -34,7 +37,7 @@ so three payments of 1.480 produce 4.440 rather than 4.4399999999999995.
 | Idempotency | Refusals throw inside the transaction. The payment command and state changes roll back together. Existing replay behavior remains. |
 | Authorization | Existing finance permission checks remain. Settlement still loads caller-supplied ids with `requireOwnedRow`. |
 | Tenancy | No new cross-organization query or writer. Existing joins keep their org checks. |
-| Ledger | Valid settlement conversion remains unchanged. The projected integer goes directly to the supplier payment accounting hook and opening-payment row. |
+| Ledger | The validated integer remainder goes directly to the supplier payment accounting hook and opening-payment row, including at the safe-integer boundary. |
 | Audit | Existing actor, time, payment sequence, command and accounting event references remain. |
 | UI | Latin digits, ISO suffix, LTR amount inside RTL Arabic. Null disables confirmation and shows a localized refusal. |
 | E2E | Public-function harness tests verify list, mutation and cash journal together. Backend-connected browser rendering remains a separate evidence gap. |
@@ -77,7 +80,7 @@ the task scratchpad's `scrum880-render` directory.
 
 ## SCRUM-486 matrix rows
 
-All rows below bind tests in `convex/sourcingPayables.test.ts`. They are harness
+Unless named otherwise, rows below bind tests in `convex/sourcingPayables.test.ts`. They are harness
 evidence, not cloud, concurrency or production certification.
 
 | Matrix row | Test |
@@ -89,6 +92,8 @@ evidence, not cloud, concurrency or production certification.
 | SCRUM-486-SUPPLIER-STALE-CONFIRM | stale displayed settlement is refused before money moves |
 | SCRUM-486-SUPPLIER-LEGACY-PAID | legacy excess precision in amountPaid is refused, including accumulated residue |
 | SCRUM-486-SUPPLIER-INSTALMENTS | new fractional instalments stay canonical before the final payment |
+| SCRUM-486-SUPPLIER-ORIGINAL-ENTITLEMENT | SCRUM-880: finalization preserves original supplier entitlement %s, in financedConsignedSettlement.test.ts |
+| SCRUM-486-SUPPLIER-LEGACY-COST-EDIT | unchanged legacy costs allow unrelated direct and requested vehicle edits |
 
 ## Existing settlement regression coverage
 
@@ -126,6 +131,58 @@ the specific precision error code plus an unchanged payable after refusal.
 All 242 tests in that named file pass with one worker; its ESLint check has no
 errors or warnings. No production logic changed in this follow-up.
 
+## Seat remediation on 2026-10-31
+
+Both seat findings were reproduced before source fixes. With 128.0005 JOD in a
+legacy SOURCED vehicle, finalization returned a sale id instead of refusing.
+The 128.001 control completed and paid 128001 fils. Preparation now validates
+sourceCost immediately after resolving currency, before supplier concessions
+or commission calculations convert it. STOCK capitalized costs keep their
+existing calculation. Refusal leaves vehicle, application, sale, payable,
+accounting event, journal, journal line and command state unchanged in the harness.
+
+The original settlement test and backend library scenario incorrectly required
+9007199254740988 fils for 9007199254740.990 JOD due less 0.001 paid. The truthful
+remainder is 9007199254740989. The test failed with the old helper. Returning
+the validated integer difference fixes list and cash posting together. Both
+library scenarios now agree with the exact display integer. Capping the range
+would also avoid this example, but would unnecessarily reject safe integers.
+
+The advisory legacy-edit finding was also reproduced: purchasePrice
+100.0000000001 plus an unrelated colour change refused. The precision helper
+now compares supplied costs with the stored row for vehicles.update and both
+request-update doors. Creates still validate every supplied cost. Approval
+compares against its current row, so a stale request cannot restore an invalid
+cost that has since changed. A legacy approval request with an unchanged cost
+and a colour change remains editable. Existing acquisition, source-shape and
+posted-cost restrictions still apply independently.
+
+The design attack moved validation earlier than the reported payable write and
+identified the request and approval siblings. It is advisory, not a seat.
+Five predicted failures guided the checks: rounding before admission, changing
+owned capitalized-cost handling, losing one fils on partial settlement,
+blocking unchanged legacy edits or accepting changed invalid ones, and dropping
+a payable schema variant. A schema test pins both ordered variants and their
+optional NATIVE and required OPENING origins, matching list's destructuring.
+
+Final local validation passed 543 tests across the seven PR test files plus
+moneyDisplay.test.ts and scenarioRecord.test.ts, with one worker. The backend
+and root TypeScript projects passed separately. Root excludes Convex, test-utils,
+apps, packages and dealer-worker. The backend project covers Convex and test-utils
+and excludes generated roots. Changed-file ESLint has zero errors and two
+pre-existing explicit-any warnings in vehicleEdits.ts.
+
+Eight temporary source mutations each failed their targeted assertion: restoring
+float remainder conversion, converting instead of validating the original
+entitlement, dropping the stored-row argument at each of the three edit doors,
+inverting either cost-change comparison, and adding a third payable schema
+variant. Each source file was restored from its exact pre-mutation bytes before
+the final passing run. These are implementer checks, not independent seats.
+
+Scope remains the requested fixes. Other LOW findings belong to SCRUM-879.
+No production row count, backend-connected dialog verification, OCC proof,
+migration, deployment or fresh two-seat certification is claimed here.
+
 ## Sources
 
 [Convex mutations](https://docs.convex.dev/functions/mutation-functions) support
@@ -135,5 +192,10 @@ document Float64 support for NaN and Infinity. [ECMA-402 CurrencyDigits](https:/
 defines currency precision. SIX's [ISO 4217 List One](https://www.six-group.com/dam/download/financial-information/data-center/iso-currrency/lists/list-one.xml)
 was retrieved on 2026-10-30 with PowerShell after the browser rejected its XML
 content type: JOD 3, USD 2. [Faithful representation](https://standards.aasb.gov.au/node/336)
-supports showing the amount actually recorded. Documentation supports the design;
+supports showing the amount actually recorded. The 2026-10-31 remediation also
+checked [Adyen currency and minor-unit guidance](https://docs.adyen.com/development-resources/currency-codes/)
+and [Fowler's Money pattern](https://martinfowler.com/eaaCatalog/money.html).
+Currency-aware integer arithmetic avoids losing minor units through rounding.
+These sources support refusal of unrepresentable entitlements and subtraction
+of validated integers. Documentation supports the design;
 it does not establish live implementation or data parity.

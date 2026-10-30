@@ -611,6 +611,11 @@ async function prepareSaleCompletion(
   // defect this change exists to remove.
   const currency = await getOrgCurrency(ctx, args.orgId);
 
+  // Legacy entitlements must refuse before concession or commission calculations round them.
+  if (intent === "COMPLETION" && isConsignedAgentSale(vehicle) && vehicle.sourceCost !== undefined) {
+    requireSupplierAmountMinor(vehicle.sourceCost, currency);
+  }
+
   // Refused BEFORE the commission is worked out, not after.
   //
   // Both this and the commission calculator refuse the same missing fact, and

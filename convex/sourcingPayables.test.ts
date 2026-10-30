@@ -115,6 +115,56 @@ async function seedDealerWithPayable(amountDue = 5000) {
 }
 
 describe("SCRUM-880 authoritative supplier payment", () => {
+  test("list covers exactly the ordered native and opening payable schema variants", () => {
+    const members = schema.tables.vehicleSupplierPayables.validator.members;
+    expect(members.map(member => member.fields.origin.value)).toEqual(["NATIVE", "OPENING"]);
+    expect(members.map(member => member.fields.origin.isOptional)).toEqual(["optional", "required"]);
+  });
+
+  test("unchanged legacy costs allow unrelated direct and requested vehicle edits", async () => {
+    const { t, orgId, asOwner, vehicleId } = await seedDealerWithPayable();
+    const { registerRateLimiter } = await import("../test-utils/convexTest");
+    registerRateLimiter(t);
+    await t.run(ctx => ctx.db.patch(vehicleId, {
+      status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 100.0000000001,
+    }));
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, color: "Blue", purchasePrice: 100.0000000001,
+    });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({
+      color: "Blue", purchasePrice: 100.0000000001,
+    });
+    await t.run(ctx => ctx.db.patch(vehicleId, {
+      sourceType: "SOURCED", sourcedFromName: "Legacy supplier", sourceCost: 100.0000000001,
+    }));
+    await asOwner.mutation(api.vehicles.update, { orgId, vehicleId, color: "Yellow", sourceCost: 100.0000000001 });
+    const requestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Red", purchasePrice: 100.0000000001, sourceCost: 100.0000000001 },
+    });
+    // Requests written before filtering was introduced may still echo unchanged costs.
+    await t.run(ctx => ctx.db.patch(requestId, { payload: { color: "Red", purchasePrice: 100.0000000001, sourceCost: 100.0000000001 } }));
+    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({
+      color: "Red", purchasePrice: 100.0000000001,
+    });
+    await expect(asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, color: "Green", purchasePrice: 101.0000000001,
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    await expect(asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Green", purchasePrice: 101.0000000001 },
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    const staleRequestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Green", purchasePrice: 100.0000000001 },
+    });
+    await t.run(ctx => ctx.db.patch(staleRequestId, { payload: { color: "Green", purchasePrice: 100.0000000001 } }));
+    await t.run(ctx => ctx.db.patch(vehicleId, { purchasePrice: 100 }));
+    await expect(asOwner.mutation(api.vehicleEdits.resolve, {
+      orgId, requestId: staleRequestId, status: "APPROVED",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect((await t.run(ctx => ctx.db.get(staleRequestId)))?.status).toBe("PENDING");
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ color: "Red", purchasePrice: 100 });
+  });
+
   test("SCRUM-880: purchase cost writers refuse excess precision", async () => {
     const { t, orgId, asOwner, vehicleId } = await seedDealerWithPayable();
     const { registerRateLimiter } = await import("../test-utils/convexTest");
@@ -181,7 +231,7 @@ describe("SCRUM-880 authoritative supplier payment", () => {
     { currency: "JOD", due: 128.001, paid: 0, expected: 128001 },
     { currency: "USD", due: 128.01, paid: 0, expected: 12801 },
     { currency: "JOD", due: 128.001, paid: 28.001, expected: 100000 },
-    { currency: "JOD", due: 9007199254740.99, paid: 0.001, expected: 9007199254740988 },
+    { currency: "JOD", due: 9007199254740.99, paid: 0.001, expected: 9007199254740989 },
     ]) {
     const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(due);
     await t.run(ctx => ctx.db.patch(payableId, {

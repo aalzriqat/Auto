@@ -277,7 +277,7 @@ export const requestUpdate = mutation({
       throw new ConvexError("Vehicle not found.");
     }
     const payload = normalizeVehicleEditPayload(args.payload);
-    assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId));
+    assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,
@@ -560,7 +560,7 @@ export const resolve = mutation({
         }
 
         const requestedPayload = normalizeVehicleEditPayload(request.payload);
-        assertVehicleCostPrecision(requestedPayload, await getOrgCurrency(ctx, args.orgId));
+        assertVehicleCostPrecision(requestedPayload, await getOrgCurrency(ctx, args.orgId), previousVehicle);
         // SCRUM-868 P2: the consignment link is re-resolved at approval, and re-checked against money that
         // can have appeared since the request was written (N11). A name with no id cannot be approved.
         const resolvedSourced = await resolveUpdateSourcedSupplier(ctx, args.orgId, previousVehicle, requestedPayload);

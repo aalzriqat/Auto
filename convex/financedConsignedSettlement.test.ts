@@ -93,6 +93,56 @@ const MARGIN = VEHICLE_PRICE - SUPPLIER_ENTITLEMENT;
 /** JOD is a three-decimal currency, so a major unit is 1,000 minor units. */
 const SCALE = 1_000;
 
+test("SCRUM-880: finalization preserves original supplier entitlement", async () => {
+  for (const sourceCost of [128.0005, 128.001]) {
+    const s = await seedDealership(`880-original-${sourceCost}`);
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceCost }));
+    let applicationId: Id<"financeApplications"> | undefined;
+    const stop = new Error("SCRUM-880 ready to finalize");
+    await runDeal(s, {
+      route: "THROUGH_DEALERSHIP", finalize: true,
+      beforeFinalize: async id => { applicationId = id; throw stop; },
+    }).catch(error => { if (error !== stop) throw error; });
+    if (!applicationId) throw new Error("Fixture did not reach finalization");
+    const readyApplicationId = applicationId;
+    await payForwardBeforeFinalize(s, s.asUser, readyApplicationId);
+    const snapshot = () => s.t.run(async ctx => ({
+      vehicle: await ctx.db.get(s.vehicleId), application: await ctx.db.get(readyApplicationId),
+      sales: await ctx.db.query("sales").collect(), payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(), journals: await ctx.db.query("journalEntries").collect(),
+      lines: await ctx.db.query("journalLines").collect(), commands: await ctx.db.query("commandIdempotency").collect(),
+    }));
+    const before = await snapshot();
+    const finalize = () => s.asUser.mutation(api.applications.finalizeDeal, {
+      orgId: s.orgId, applicationId: readyApplicationId, idempotencyKey: "880-original-entitlement",
+    });
+    if (sourceCost === 128.0005) {
+      await expect(finalize()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+      expect(await snapshot()).toEqual(before);
+    } else {
+      await finalize();
+      const payable = (await s.asApprover.query(api.sourcingPayables.list, { orgId: s.orgId }))
+        .find(row => "vehicleId" in row && row.vehicleId === s.vehicleId);
+      expect(payable?.amountDue).toBe(128.001);
+      expect(payable?.settlementAmountMinor).toBe(128001);
+      if (!payable) throw new Error("Completion did not create a payable");
+      await s.asApprover.mutation(api.sourcingPayables.markPaid, {
+        orgId: s.orgId, payableId: payable._id, expectedSettlementAmountMinor: 128001,
+        idempotencyKey: "880-original-payment",
+      });
+      const credit = await s.t.run(async ctx => {
+        const event = (await ctx.db.query("accountingEvents").collect())
+          .find(row => row.sourceId === payable._id && row.eventType === "SUPPLIER_PAYMENT_SETTLED");
+        const cash = (await ctx.db.query("chartOfAccounts").collect()).find(row => row.systemKey === "CASH_ON_HAND");
+        if (!event?.journalEntryId || !cash) throw new Error("Payment did not post");
+        return (await ctx.db.query("journalLines").collect())
+          .find(row => row.journalEntryId === event.journalEntryId && row.accountId === cash._id)?.creditMinor;
+      });
+      expect(credit).toBe(128001);
+    }
+  }
+});
+
 type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
 
 /**

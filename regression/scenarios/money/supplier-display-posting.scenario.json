@@ -39,7 +39,7 @@
             "currency": "JOD",
             "due": 9007199254740.99,
             "paid": 0.001,
-            "expectedMinor": 9007199254740988
+            "expectedMinor": 9007199254740989
           }
         ]
       }
@@ -69,5 +69,5 @@
     "convex/vehicleEdits.ts",
     "convex/utils/saleCompletion.ts"
   ],
-  "fingerprint": "09cce4725d9a3d0c6cb7e5a8b4290658dd26b44c73ff704d9d937c401352a3e0"
+  "fingerprint": "dc331a2e353c0747327788878c22855ea91a2d22b993b90d396f02f8399eb3fc"
 }

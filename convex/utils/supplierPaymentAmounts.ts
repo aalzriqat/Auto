@@ -24,9 +24,15 @@ export function requireSupplierAmountMinor(amount: number, currency: string): nu
 export function assertVehicleCostPrecision(
   amounts: { purchasePrice?: number; sourceCost?: number },
   currency: string,
+  previous?: { purchasePrice?: number; sourceCost?: number },
 ): void {
-  if (amounts.purchasePrice !== undefined) requireSupplierAmountMinor(amounts.purchasePrice, currency);
-  if (amounts.sourceCost !== undefined) requireSupplierAmountMinor(amounts.sourceCost, currency);
+  // Echoing a legacy cost must not prevent an unrelated vehicle edit.
+  if (amounts.purchasePrice !== undefined && amounts.purchasePrice !== previous?.purchasePrice) {
+    requireSupplierAmountMinor(amounts.purchasePrice, currency);
+  }
+  if (amounts.sourceCost !== undefined && amounts.sourceCost !== previous?.sourceCost) {
+    requireSupplierAmountMinor(amounts.sourceCost, currency);
+  }
 }
 
 /** One server projection for list and settlement. Invalid legacy rows stay visible. */
@@ -36,8 +42,7 @@ export function supplierSettlementAmountMinor(
   const due = exactMinor(payable.amountDue, payable.currency);
   const paid = exactMinor(payable.amountPaid ?? 0, payable.currency);
   if (due === null || paid === null || paid > due) return null;
-  // Keep markPaid's existing conversion for valid rows. Both consumers use this result.
-  return toMinorUnits(payable.amountDue - (payable.amountPaid ?? 0), payable.currency);
+  return due - paid;
 }
 
 export function requireSupplierSettlementAmountMinor(
