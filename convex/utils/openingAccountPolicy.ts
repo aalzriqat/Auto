@@ -98,7 +98,8 @@ export type RemainingOpeningKind =
   | "SUPPLIER_PAYABLE"
   | "OTHER_PAYABLE"
   | "EMPLOYEE_COMMISSION"
-  | "UNALLOCATED_LIABILITY";
+  | "UNALLOCATED_LIABILITY"
+  | "CUSTOMER_DEPOSIT";
 export function isRemainingOpeningKind(
   kind: string,
 ): kind is RemainingOpeningKind {
@@ -108,6 +109,7 @@ export function isRemainingOpeningKind(
     "OTHER_PAYABLE",
     "EMPLOYEE_COMMISSION",
     "UNALLOCATED_LIABILITY",
+    "CUSTOMER_DEPOSIT",
   ].includes(kind);
 }
 
@@ -120,8 +122,10 @@ export async function openingAccountAllowsFamily(
   purpose?: string,
 ): Promise<boolean> {
   if (!matchesOpeningAccountShape(account, orgId, currency, kind)) return false;
+  // A named customer deposit is the native Customer Deposits liability, never a
+  // custom account that merely looks like one (SCRUM-858 S1).
   if (!account.systemKey)
-    return !DEFAULT_CHART.some((row) => row.code === account.code);
+    return kind !== "CUSTOMER_DEPOSIT" && !DEFAULT_CHART.some((row) => row.code === account.code);
   const expected = openingFamilySystemKey(kind, purpose);
   if (expected === null || account.systemKey !== expected) return false;
   return (await resolveSystemAccount(ctx, orgId, expected)) === account._id;
@@ -151,6 +155,7 @@ function openingFamilySystemKey(kind: RemainingOpeningKind, purpose?: string): S
     case "SUPPLIER_PAYABLE": return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
     case "EMPLOYEE_COMMISSION": return SYSTEM_KEYS.COMMISSION_PAYABLE;
     case "UNALLOCATED_LIABILITY": return purpose === "CUSTOMER_DEPOSIT" ? SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY : null;
+    case "CUSTOMER_DEPOSIT": return SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY;
     default: return null;
   }
 }

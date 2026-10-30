@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Send, FileText, Phone, MessageCircle, Mail, Plus, ReceiptText, Car, CheckSquare, CircleDollarSign } from "lucide-react";
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
+import { CustomerDepositsSection } from "@/components/customers/CustomerDepositsSection";
 import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
@@ -337,6 +338,22 @@ export function CustomerDetailsDialog({
                 </div>
 
                 <Separator />
+
+                {/* SCRUM-858 (c23884): the customer's own deposits, security and VIN-less reservation
+                    rows included, which no per-car screen can show. Same gate as the server read
+                    (VIEW_SALES): a role without it is given no list, so nothing is rendered, not even
+                    an empty state. */}
+                {canViewSales && (
+                  <>
+                    <CustomerDepositsSection
+                      deposits={relations?.deposits}
+                      truncated={relations?.depositsTruncated ?? false}
+                      canView={canViewSales}
+                      organizationCurrency={orgSettings?.currency}
+                    />
+                    <Separator />
+                  </>
+                )}
 
                 <div>
                   <h3 className="font-semibold text-sm mb-3">{t("ActivePastLeads" as any)}</h3>
