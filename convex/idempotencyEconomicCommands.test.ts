@@ -665,7 +665,8 @@ describe("SCRUM-57 — classification ratchet", () => {
    *
    * So this walks source → manifest and asserts the two sets are EQUAL. It also
    * pins the non-economic side by name: a command may be `economic: false` only
-   * if it is `sales.createDraft` or `suppliers.create` (each with its recorded
+   * if it is `sales.createDraft`, `suppliers.create` or
+   * `supplierDueAlerts.processOrgSupplierDueAlerts` (each with its recorded
    * reason where the set is asserted below). Flipping any economic command to `false` to
    * silence the ratchet fails here instead of passing quietly.
    */
@@ -732,8 +733,21 @@ describe("SCRUM-57 — classification ratchet", () => {
     // `idempotencyKey` (a retry returns the first supplier), but a double submit would create a
     // duplicate master row, which the candidate check already refuses, not a double posting.
     // Any later supplier command that touches money must be economic: true and listed above.
-    expect([...nonEconomicInSource].sort()).toEqual(["sales.createDraft", "suppliers.create"]);
-    expect(economicInSource.size + nonEconomicInSource.size).toBe(59);
+    //
+    // `supplierDueAlerts.processOrgSupplierDueAlerts` (SCRUM-869 S8, supplier due-date alerts) is
+    // the third, classified on the code: an internal per-organisation worker that inserts in-app
+    // `notifications` rows (plus the idempotency record) and nothing else. It posts no accounting
+    // event, creates or changes no payable, receivable or recovery, and moves no money; it only
+    // reads the obligation rows. Its idempotency key is `kind:obligationId:step:occurrence`, so a
+    // retry or a catch-up run cannot send the same alert twice. A duplicate would be a repeated
+    // notification, not a double posting, so it is economic: false like `suppliers.create`.
+    // 59 -> 60 call sites by SCRUM-869 S8.
+    expect([...nonEconomicInSource].sort()).toEqual([
+      "sales.createDraft",
+      "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "suppliers.create",
+    ]);
+    expect(economicInSource.size + nonEconomicInSource.size).toBe(60);
   });
 
   /**

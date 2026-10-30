@@ -1,0 +1,59 @@
+{
+  "id": "supplier-due-settled-status-does-not-hide-open-money",
+  "fingerprint": "e9ae0e0f75f3ccf716021889a162e75b10a144174de9993acdc9055384a6dbde",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECEIVABLE",
+        "status": "PAID",
+        "received": 1000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "RECOVERY",
+        "status": "RECOVERED",
+        "recoveredMinor": 50000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.outstandingMinor",
+      "value": 2000000
+    },
+    {
+      "observable": "recovery.outstandingMinor",
+      "value": 150000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a status that says settled while the amounts say open does not hide the open money"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

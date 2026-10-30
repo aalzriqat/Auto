@@ -1,0 +1,57 @@
+{
+  "id": "supplier-due-tenant-isolation",
+  "fingerprint": "02c5b2a7610fbf6ec060a6c670e2246bb50636d4be374cf9c382c0b71c4c6e6e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3a",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "orgRows": "A1-B1"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "org": "B"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": 1
+    },
+    {
+      "observable": "otherOrgCall",
+      "value": "REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "another organisation's obligations are never returned"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}

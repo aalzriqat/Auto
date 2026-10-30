@@ -1,0 +1,67 @@
+{
+  "id": "supplier-alert-worker-failure-leaves-a-durable-signal",
+  "fingerprint": "a5f12038e788a73da7fe3f077b5eea89d6d271fde82cae63261261862a2c6b25",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.runOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "payables": 51,
+        "fault": "first-send-of-the-second-obligation-page"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alertsCommittedBeforeTheFailingPage",
+      "value": 150
+    },
+    {
+      "observable": "failingPageWrites",
+      "value": 0
+    },
+    {
+      "observable": "failureHeartbeats",
+      "value": 1
+    },
+    {
+      "observable": "failureHeartbeat.success",
+      "value": false
+    },
+    {
+      "observable": "failureDetail.names",
+      "value": "organisation-id-kind-cursor-and-error-message"
+    },
+    {
+      "observable": "failureDetail.length",
+      "value": "at-most-1000"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a failed worker records one failure heartbeat naming the organisation, kind and cursor, and rolls its writes back"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "bfe3f3f75022245a57a406f1870cd747580cb156"
+  }
+}

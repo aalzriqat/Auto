@@ -1,0 +1,61 @@
+{
+  "id": "supplier-due-aging-follows-the-callers-day",
+  "fingerprint": "084b808a36f8bf488e12125ddf63cef0e195143d43e0a6090fea6563738213c2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-pr716-r2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "nowMs": "plus-1d"
+      }
+    },
+    {
+      "actor": {
+        "role": "FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "nowMs": "plus-5d"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "plusOneDay.daysOverdue",
+      "value": 11
+    },
+    {
+      "observable": "farClock.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "aging follows the supplied nowMs, and a clock far from the server's is refused"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "123faba2c8338cd7cdf34b623f32aa39d2717bf7"
+  }
+}

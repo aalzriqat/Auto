@@ -1,0 +1,52 @@
+{
+  "id": "supplier-due-payable-financed-funding-pending-has-no-due-date",
+  "fingerprint": "ce65939ca4dc6e0d4b1b97cf79f1a97d441bd28fd52fba251f7d3273365067b2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s3b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE",
+        "route": "THROUGH_DEALERSHIP",
+        "financingType": "FINANCED",
+        "funding": "pending"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.rule",
+      "value": "FINANCIER_FUNDING_NOT_RECORDED"
+    },
+    {
+      "observable": "row.bucket",
+      "value": "NO_DUE_DATE"
+    },
+    {
+      "observable": "row.dueDate",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23906",
+      "digest": "d7a58b674e3a307d6f3b3d817ab864129e190de098580e1221e5ee2a8e85ade7"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "a financed deal with no funding received (requested or pending) has no due date and is never overdue"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING"
+}
