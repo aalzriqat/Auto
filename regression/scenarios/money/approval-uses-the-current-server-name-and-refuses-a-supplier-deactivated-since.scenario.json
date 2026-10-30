@@ -1,0 +1,114 @@
+{
+  "id": "approval-uses-the-current-server-name-and-refuses-a-supplier-deactivated-since",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "CLERK",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestCreate",
+      "input": {
+        "payload": {
+          "sourceType": "SOURCED",
+          "sourceCost": 9000,
+          "sourcedSupplierId": "SUPPLIER_ID"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.deactivate",
+      "input": {
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicleEdits.resolve",
+      "input": {
+        "requestId": "REQUEST_ID",
+        "status": "APPROVED"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.reactivate",
+      "input": {
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.update",
+      "input": {
+        "supplierId": "SUPPLIER_ID",
+        "displayName": "RENAMED_DISPLAY_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicleEdits.resolve",
+      "input": {
+        "requestId": "REQUEST_ID",
+        "status": "APPROVED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "step3.writes.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "SUPPLIER_ID"
+    },
+    {
+      "observable": "vehicle.sourcedFromName",
+      "value": "RENAMED_DISPLAY_NAME"
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "approval creates the vehicle with the id and the CURRENT server name, and refuses a supplier deactivated since"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "fb240eb1a1218ba0f5ed96529e737af0beb1c0a8e5e43e648aa304a02897ab4d"
+}

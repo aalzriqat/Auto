@@ -40,6 +40,16 @@
  * A missing current file refuses even if named. Renames need a fresh review;
  * a path absent only at the original base can pass when named and present at
  * the recorded ancestor SHA. Whole-file changes can over-refuse unrelated edits.
+ * The recorded SHA comes from `SCRUM-866 round N review against origin/main <sha>` or
+ * `<KEY> review of PR #N head <sha>` (REVIEW_REFERENCES); the last one wins.
+ * Alternatively the final reference can be `evidence-blobs [["path","blob"],...]`:
+ * a JSON array of unique path/40-hex git blob pairs, ending the renewal text.
+ * Both required files must have records matching HEAD. This form needs no
+ * evidence commit or ancestry, so a squash/rebase cannot invalidate it.
+ * --blob-evidence appends this form to mechanically verified renewals. PR
+ * events require --pr-base; an explicitly blank base always refuses. In PR
+ * mode, NEW/CHANGED renewal text using a commit must cite an
+ * ancestor of that base; unchanged legacy text keeps its existing checks.
  * Wrapper hooks, shared validators, handler helpers, custom registration factory
  * bodies, re-export wiring, resolution/config/dependency changes and runtime
  * loaders are outside this check. Mechanical contract comparison uses exported
@@ -61,11 +71,15 @@ import { createImportClosure } from "./importClosure.mjs";
 import { identityOf } from "./baseline.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 
+const DEFAULT_IO = Object.freeze({ log: console.log, error: console.error });
+
 const MODULE_FUNCTION_ID = /^([A-Za-z0-9_]+):([A-Za-z0-9_]+)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 // Inputs every closure includes: dependency pins, and the schema (clients reach it only via the excluded generated dataModel).
 const IMPLICIT_INPUTS = ["package.json", "pnpm-lock.yaml", "convex/schema.ts"];
-const PATH_TOKEN = /[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/g;
+// Scan each maximal token once; anchoring the extension match prevents retries at every character.
+const PATH_TOKEN = /[\w@()[\]/.-]+/g;
+const PATH_WITH_EXTENSION = /^[\w@()[\]/.-]+\.(?:tsx?|jsx?|mjs|cjs|json|md|ya?ml)\b/;
 
 /**
  * Mechanical renewal keeps its existing module-id policy. Evidence attribution
@@ -89,7 +103,9 @@ export function backendModuleOf(functionId) {
 export function rationalePaths(rationale) {
   const found = [];
   for (const token of String(rationale).match(PATH_TOKEN) ?? []) {
-    let candidate = token;
+    const match = PATH_WITH_EXTENSION.exec(token);
+    if (!match) continue;
+    let candidate = match[0];
     while (candidate.startsWith("(") && count(candidate, "(") > count(candidate, ")")) candidate = candidate.slice(1);
     if (!found.includes(candidate)) found.push(candidate);
   }
@@ -104,29 +120,32 @@ const count = (text, char) => text.split(char).length - 1;
  *   `missing` = the file is not a blob at one of the two revisions.
  */
 export function gitCompare({ git, cwd, reviewed, head }) {
-  // One `ls-tree -r` per revision, not three git processes per file: an import closure spans thousands of files.
-  const treeOf = (rev) => {
-    const out = runGitText(git, ["ls-tree", "-r", "-z", rev], { cwd, maxBuffer: 256 * 1024 * 1024 });
-    const blobs = new Map();
-    for (const record of out.split("\0")) {
-      const tab = record.indexOf("\t");
-      if (tab < 0) continue;
-      const [, type, id] = record.slice(0, tab).split(" ");
-      if (type === "blob") blobs.set(record.slice(tab + 1), id);
-    }
-    return blobs;
-  };
   /** @type {Map<string, string> | undefined} */
   let before;
   /** @type {Map<string, string> | undefined} */
   let after;
   return (file) => {
-    before ??= treeOf(reviewed);
-    after ??= treeOf(head);
+    before ??= gitBlobs(git, cwd, reviewed);
+    after ??= gitBlobs(git, cwd, head);
     const was = before.get(file);
     const now = after.get(file);
     return was === undefined || now === undefined ? "missing" : was === now ? "identical" : "changed";
   };
+}
+
+/** @param {string} git @param {string} cwd @param {string} revision @returns {Map<string, string>} */
+function gitBlobs(git, cwd, revision) {
+  // Read committed objects, not worktree hashes (which may include CRLF/filter differences).
+  // https://git-scm.com/docs/git-ls-tree documents -z and object type/name output.
+  const out = runGitText(git, ["ls-tree", "-r", "-z", revision], { cwd, maxBuffer: 256 * 1024 * 1024 });
+  const blobs = new Map();
+  for (const record of out.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [, type, id] = record.slice(0, tab).split(" ");
+    if (type === "blob") blobs.set(record.slice(tab + 1), id);
+  }
+  return blobs;
 }
 const label = (entry) => `${entry.functionId} ${entry.contractPath} @ ${entry.callSiteId}`;
 
@@ -170,10 +189,10 @@ function refusalFor(entry, compare, closureOf) {
 
 /**
  * @param {string} text  the baseline file's text
- * @param {{ compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, expires: string, renewal: string }} options
+ * @param {{ compare: (file: string) => "identical" | "changed" | "missing", closureOf: (file: string) => { files: string[], unresolved: string[] }, expires: string, renewal: string, blobEvidenceFor?: (entry: { file: string, functionId: string }) => string }} options
  * @returns {{ text: string, renewed: number, skipped: number, refused: Array<{ index: number, entry: string, reason: string }> }}
  */
-export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
+export function renewBaseline(text, { compare, closureOf, expires, renewal, blobEvidenceFor }) {
   if (typeof closureOf !== "function") throw new Error("closureOf is required: a renewal without an import closure is refused");
   if (!DATE.test(expires) || Number.isNaN(Date.parse(expires))) throw new Error(`expires must be YYYY-MM-DD, got ${expires}`);
   if (typeof renewal !== "string" || renewal.trim() === "") throw new Error("a non-empty renewal reason is required");
@@ -197,20 +216,102 @@ export function renewBaseline(text, { compare, closureOf, expires, renewal }) {
       return entry;
     }
     renewed++;
-    return { ...entry, expires, renewal };
+    return { ...entry, expires, renewal: blobEvidenceFor ? `${renewal}; ${blobEvidenceFor(entry)}` : renewal };
   });
 
   return { text: serializeBaseline(document, text), renewed, skipped, refused };
 }
 
 /**
+ * Legacy review references retain group 1. The final recognized reference wins;
+ * evidence-blobs has no commit capture and its remaining text is parsed as JSON.
+ * `SCRUM-866 round <n> review against origin/main <sha>`, or, for a change reviewed on its own
+ * branch before it reaches main, `<JIRA-KEY> review of PR #<n> head <sha>`. Both are followed
+ * by an 8-40 digit lowercase hex SHA that must be a verified ancestor of HEAD. The SHA must end the
+ * token: only the end of the text, whitespace or `.,;:)]` may follow, so a longer or run-on token
+ * is malformed rather than silently truncated to its first 40 digits.
+ */
+const REVIEW_REFERENCES = [
+  /SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g,
+  /\b[A-Z][A-Z0-9]*-\d+ review of PR #\d+ head ([0-9a-f]{8,40})(?=$|[\s.,;:)\]])/g,
+  /\bevidence-blobs(?=\s|$)/g,
+];
+
+/** @param {string} text */
+function lastReviewReference(text) {
+  return REVIEW_REFERENCES.flatMap((pattern) => [...text.matchAll(pattern)])
+    .sort((a, b) => a.index - b.index).at(-1);
+}
+
+/**
+ * A marker is recognized even when its records are malformed, so it cannot
+ * silently fall back to an older valid commit. Duplicate paths refuse too.
+ * @param {string} text @returns {Map<string, string> | undefined}
+ */
+function parseBlobEvidence(text) {
+  try {
+    const records = JSON.parse(text);
+    if (!Array.isArray(records) || !records.length) return undefined;
+    const blobs = new Map();
+    for (const record of records) {
+      if (!Array.isArray(record) || record.length !== 2 || typeof record[0] !== "string" || !record[0].trim() ||
+          typeof record[1] !== "string" || !/^[0-9a-f]{40}$/.test(record[1]) || blobs.has(record[0])) return undefined;
+      blobs.set(record[0], record[1]);
+    }
+    return blobs;
+  } catch {
+    return undefined;
+  }
+}
+
+/** @param {string | undefined} text @returns {Map<string, unknown> | undefined} */
+function prBaseRenewals(text) {
+  if (text === undefined) return undefined;
+  const entries = parseCanonicalBaseline(text)?.entries;
+  if (!Array.isArray(entries)) throw new Error("the PR base baseline has no entries array");
+  const renewals = new Map(entries.map((entry) => [identityOf(entry), entry.renewal]));
+  if (renewals.size !== entries.length) throw new Error("the PR base baseline has duplicate identities");
+  return renewals;
+}
+
+/**
+ * @param {string | undefined} reviewHead
+ * @param {Map<string, unknown> | undefined} prRenewals
+ * @param {Record<string, unknown>} entry
+ * @param {((sha: string) => void) | undefined} requireCommitOnPrBase
+ */
+function requirePrBaseReview(reviewHead, prRenewals, entry, requireCommitOnPrBase) {
+  if (!reviewHead || !prRenewals || prRenewals.get(identityOf(entry)) === entry.renewal) return;
+  if (!requireCommitOnPrBase) throw new Error("requireCommitOnPrBase is required in PR mode");
+  requireCommitOnPrBase(reviewHead);
+}
+
+/**
+ * @param {{ file: string, functionId: string, renewal: string }} entry
+ * @param {Pick<Parameters<typeof renewalEvidenceGaps>[1], "compare" | "backendDefinitionOf" | "evidenceChanged" | "blobOf"> & { reviewHead?: string, blobs?: Map<string, string> }} options
+ */
+function sourceEvidenceGaps(entry, { compare, backendDefinitionOf, evidenceChanged, blobOf, reviewHead, blobs }) {
+  const definition = backendDefinitionOf(entry.functionId);
+  const unresolved = definition.file ? definition.unresolved : [...definition.unresolved, "backend definition is unavailable"];
+  const files = [...new Set([entry.file, ...(definition.file ? [definition.file] : [])])];
+  const changed = files.filter((file) => compare(file) !== "identical");
+  if (blobs && !blobOf) throw new Error("blobOf is required to compare evidence-blobs with HEAD");
+  const changedSinceEvidence = files.filter((file) => blobs
+    ? !blobs.has(file) || blobOf?.(file) !== blobs.get(file)
+    : evidenceChanged(/** @type {string} */ (reviewHead), file) !== "identical");
+  const named = blobs ? new Set(blobs.keys()) : new Set(rationalePaths(entry.renewal));
+  const missing = (blobs ? files : changed).filter((file) => !named.has(file));
+  return { missing, changedSinceEvidence, unresolved };
+}
+
+/**
  * A human renewal must name each changed client/defining backend file.
  * This checks evidence coverage, not whether the prose's interpretation is true.
  * @param {string} text
- * @param {{ reviewedText: string, compare: (file: string) => "identical" | "changed" | "missing", backendDefinitionOf: (functionId: string) => { file?: string, unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing" }} options
+ * @param {{ reviewedText: string, compare: (file: string) => "identical" | "changed" | "missing", backendDefinitionOf: (functionId: string) => { file?: string, unresolved: string[] }, evidenceChanged: (sha: string, file: string) => "identical" | "changed" | "missing", blobOf?: (file: string) => string | undefined, prBaseText?: string, requireCommitOnPrBase?: (sha: string) => void }} options
  * @returns {Array<{ index: number, entry: string, missing: string[], changedSinceEvidence: string[], unresolved: string[], renewalProblem?: "malformed" | "missing" }>}
  */
-export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefinitionOf, evidenceChanged }) {
+export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefinitionOf, evidenceChanged, blobOf, prBaseText, requireCommitOnPrBase }) {
   if (typeof evidenceChanged !== "function") throw new Error("evidenceChanged is required: a renewal review SHA must be compared with HEAD");
   const document = parseCanonicalBaseline(text);
   if (!document || !Array.isArray(document.entries)) throw new Error("the baseline has no entries array");
@@ -218,6 +319,7 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
   if (!reviewed || !Array.isArray(reviewed.entries) || !reviewed.entries.length) throw new Error("the reviewed baseline has no entries");
   const reviewedEntries = new Map(reviewed.entries.map((entry) => [identityOf(entry), entry]));
   if (reviewedEntries.size !== reviewed.entries.length) throw new Error("the reviewed baseline has duplicate identities");
+  const prRenewals = prBaseRenewals(prBaseText);
   return document.entries.flatMap((entry, index) => {
     const previous = reviewedEntries.get(identityOf(entry));
     // A relocated/new identity cannot establish an unchanged expiry. Evidence is
@@ -232,16 +334,13 @@ export function renewalEvidenceGaps(text, { reviewedText, compare, backendDefini
     if (typeof entry.file !== "string" || !entry.file.trim()) {
       return [{ index, entry: label(entry), missing: ["(invalid client or backend root)"], changedSinceEvidence: [], unresolved: [] }];
     }
-    const reviewHeads = [...entry.renewal.matchAll(/SCRUM-866 round \d+ review against origin\/main ([0-9a-f]{8,40})/g)];
-    const reviewHead = reviewHeads.at(-1)?.[1];
-    if (!reviewHead) return [{ index, entry: label(entry), missing: ["(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
-    const definition = backendDefinitionOf(entry.functionId);
-    const unresolved = definition.file ? definition.unresolved : [...definition.unresolved, "backend definition is unavailable"];
-    const files = [...new Set([entry.file, ...(definition.file ? [definition.file] : [])])];
-    const changed = files.filter((file) => compare(file) !== "identical");
-    const changedSinceEvidence = files.filter((file) => evidenceChanged(reviewHead, file) !== "identical");
-    const named = new Set(rationalePaths(entry.renewal));
-    const missing = changed.filter((file) => !named.has(file));
+    const reference = lastReviewReference(entry.renewal);
+    const reviewHead = reference?.[1];
+    const blobs = reference && !reviewHead ? parseBlobEvidence(entry.renewal.slice(reference.index + reference[0].length)) : undefined;
+    if (!reviewHead && !blobs) return [{ index, entry: label(entry), missing: [reference ? "(malformed evidence-blobs in renewal)" : "(no reviewed source SHA in renewal)"], changedSinceEvidence: [], unresolved: [], renewalProblem: "malformed" }];
+    requirePrBaseReview(reviewHead, prRenewals, entry, requireCommitOnPrBase);
+    const { missing, changedSinceEvidence, unresolved } = sourceEvidenceGaps(entry,
+      { compare, backendDefinitionOf, evidenceChanged, blobOf, reviewHead, blobs });
     return missing.length || changedSinceEvidence.length || unresolved.length
       ? [{ index, entry: label(entry), missing, changedSinceEvidence, unresolved }] : [];
   });
@@ -256,11 +355,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
  * @param {string} [root]  the repository to check; every path option must stay inside it
  * @returns {number} the process exit code
  */
-export function main(argv, io = { log: console.log, error: console.error }, root = REPO_ROOT) {
+export function main(argv, io = DEFAULT_IO, root = REPO_ROOT) {
   try {
     return run(argv, io, root);
   } catch (error) {
-    io.error(`renewBaselineReviewed: ${error instanceof Error ? error.message : String(error)}`);
+    const code = error instanceof TypeError && "code" in error ? `${error.code}: ` : "";
+    io.error(`renewBaselineReviewed: ${code}${error instanceof Error ? error.message : String(error)}`);
     return EXIT_UNAVAILABLE;
   }
 }
@@ -276,13 +376,22 @@ function run(argv, io, root) {
       expires: { type: "string" },
       renewal: { type: "string" },
       "check-evidence": { type: "boolean" },
+      "pr-base": { type: "string" },
+      "blob-evidence": { type: "boolean" },
       write: { type: "boolean" },
     },
   });
+  if (args["pr-base"] !== undefined && !args["pr-base"].trim()) {
+    throw new Error("PR_BASE_REFUSED: --pr-base requires a non-empty revision; empty or whitespace values cannot disable PR mode");
+  }
+  if (process.env.GITHUB_EVENT_NAME === "pull_request" && args["pr-base"] === undefined) {
+    throw new Error("PR_BASE_REFUSED: pull_request requires --pr-base <revision> to enforce PR renewal evidence");
+  }
   if (!args.reviewed) throw new Error("--reviewed <rev> is required");
   if (!args["check-evidence"] && !args.expires) throw new Error("--expires <YYYY-MM-DD> is required: the new expiry is a decision, never defaulted");
   if (!args["check-evidence"] && !args.renewal) throw new Error('--renewal "<reason>" is required: a renewal records why, it is never defaulted');
-  if (args["check-evidence"] && (args.write || args.expires || args.renewal)) throw new Error("--check-evidence is read-only and takes only --reviewed and --baseline");
+  if (args["check-evidence"] && (args.write || args.expires || args.renewal || args["blob-evidence"])) throw new Error("--check-evidence is read-only and takes only --reviewed, --baseline and --pr-base");
+  if (args["pr-base"] && !args["check-evidence"]) throw new Error("--pr-base requires --check-evidence");
   const git = resolveGit();
   if (!git) throw new Error("git could not be located (set CONTRACT_SKEW_GIT to an absolute path)");
   const baseline = resolveInside(root, args.baseline ?? DEFAULT_BASELINE, "baseline");
@@ -308,12 +417,21 @@ function run(argv, io, root) {
   };
   // A reviewed revision that is not an ancestor of HEAD says nothing about HEAD's history.
   requireAncestor(reviewed, "reviewed revision");
+  const prBase = args["pr-base"] ? resolveHistoryCommit(args["pr-base"], "PR base revision") : undefined;
+  if (prBase) requireAncestor(prBase, "PR base revision");
   const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
   const baselineText = fs.readFileSync(baseline, "utf8");
   const entries = parseCanonicalBaseline(baselineText)?.entries;
   if (!Array.isArray(entries)) throw new Error("the baseline has no entries array");
   const compare = gitCompare({ git, cwd: root, reviewed, head: headSha });
+  /** @type {Map<string, string> | undefined} */
+  let headBlobs;
+  const blobOf = (file) => {
+    if (dirty.has(file)) throw new Error(`${file} has uncommitted changes; commit or discard them before checking evidence`);
+    headBlobs ??= gitBlobs(git, root, headSha);
+    return headBlobs.get(file);
+  };
   if (args["check-evidence"]) {
     if (entries.length === 0) throw new Error("baseline has no entries to check");
     const backendDefinitionOf = createBackendDefinitionResolver({ root, functionIds: entries.map((entry) => entry.functionId) });
@@ -335,7 +453,24 @@ function run(argv, io, root) {
       if (dirty.has(file)) throw new Error(`${file} has uncommitted changes; commit or discard them before checking evidence`);
       return compare(file);
     };
-    const gaps = renewalEvidenceGaps(baselineText, { reviewedText, compare: compareRequiredFile, backendDefinitionOf, evidenceChanged });
+    const prBaseText = prBase ? runGitText(git, ["show", `${prBase}:${DEFAULT_BASELINE}`], { cwd: root }) : undefined;
+    const checkedPrCommits = new Set();
+    const requireCommitOnPrBase = (sha) => {
+      if (checkedPrCommits.has(sha)) return;
+      const guidance = "use --blob-evidence to record reviewed file blobs that survive squash merges";
+      let evidenceHead;
+      try {
+        evidenceHead = resolveHistoryCommit(sha, "recorded evidence revision");
+      } catch (error) {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}; ${guidance}`);
+      }
+      if (!prBase || !isAncestor(git, evidenceHead, prBase, root)) {
+        throw new Error(`PR_EVIDENCE_REFUSED: new or changed renewal cites ${sha}, which is not on the PR base; ${guidance}`);
+      }
+      checkedPrCommits.add(sha);
+    };
+    const gaps = renewalEvidenceGaps(baselineText, { reviewedText, compare: compareRequiredFile, backendDefinitionOf, evidenceChanged,
+      blobOf, prBaseText, requireCommitOnPrBase });
     const renewedEntries = entries.filter((entry) => Object.hasOwn(entry, "renewal")).length;
     const malformed = gaps.filter((gap) => gap.renewalProblem === "malformed").length;
     const missing = gaps.filter((gap) => gap.renewalProblem === "missing").length;
@@ -359,11 +494,24 @@ function run(argv, io, root) {
     if (edited) throw new Error(`${edited} has uncommitted changes; commit or discard them before renewing`);
     return closure;
   };
+  const backendDefinitionOf = args["blob-evidence"]
+    ? createBackendDefinitionResolver({ root, functionIds: entries.map((entry) => entry.functionId) }) : undefined;
+  const blobEvidenceFor = backendDefinitionOf ? (entry) => {
+    const definition = backendDefinitionOf(entry.functionId);
+    if (!definition.file || definition.unresolved.length) throw new Error(`cannot resolve backend definition ${entry.functionId} for blob evidence`);
+    const records = [...new Set([entry.file, definition.file])].map((file) => {
+      const blob = blobOf(file);
+      if (!blob || compare(file) !== "identical") throw new Error(`cannot record unverified blob for ${file}`);
+      return [file, blob];
+    });
+    return `evidence-blobs ${JSON.stringify(records)}`;
+  } : undefined;
   const result = renewBaseline(baselineText, {
     compare,
     closureOf,
     expires: String(args.expires),
     renewal: String(args.renewal),
+    blobEvidenceFor,
   });
   io.log(`reviewed ${reviewed}\nhead     ${headSha}`);
   io.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);

@@ -1,0 +1,152 @@
+{
+  "id": "proven-import-replay-of-a-negative-row-number-is-already-recorded",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "PURCHASE",
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "importId": "IMPORT_ID",
+        "vehicles": [
+          {
+            "rowId": -1,
+            "sourceType": "STOCK",
+            "purchasePrice": 9000,
+            "purchaseSupplierId": "CREDITOR_ID"
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.deactivateSuppliers",
+      "input": {
+        "supplierIds": [
+          "CREDITOR_ID"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "PURCHASE",
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "importId": "IMPORT_ID",
+        "vehicles": [
+          {
+            "rowId": -1,
+            "sourceType": "STOCK",
+            "purchasePrice": 9000,
+            "purchaseSupplierId": "CREDITOR_ID"
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "PURCHASE",
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "importId": "IMPORT_ID",
+        "vehicles": [
+          {
+            "rowId": -1,
+            "sourceType": "STOCK",
+            "purchasePrice": 9500,
+            "purchaseSupplierId": "CREDITOR_ID"
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "acquisitionPosting": "PURCHASE",
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "importId": "OTHER_IMPORT_ID",
+        "vehicles": [
+          {
+            "rowId": -1,
+            "sourceType": "STOCK",
+            "purchasePrice": 9000,
+            "purchaseSupplierId": "CREDITOR_ID",
+            "vin": "OTHER_VIN"
+          }
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.inserted",
+      "value": 1
+    },
+    {
+      "observable": "step3.inserted",
+      "value": 0
+    },
+    {
+      "observable": "step3.alreadyRecorded",
+      "value": 1
+    },
+    {
+      "observable": "step4.refusal",
+      "value": "IDEMPOTENCY_CONFLICT"
+    },
+    {
+      "observable": "step5.refusal",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "a7113b578bd88d204255b67f14b5311959b1990b"
+  },
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "an accepted negative row number is recognised as a replay after its supplier was deactivated"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p2-supplier-identity",
+    "firstSeen": "2026-10-29"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "17dab521a229bf22ffc9d229c54508ed6f87ef852761124c559f5764021f9aab"
+}

@@ -1,4 +1,5 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -170,7 +171,6 @@ describe("vehicles.createSourced", () => {
     mileage: 0,
     fuelType: "Gasoline",
     transmission: "Automatic",
-    sourcedFromName: "Al-Safeer Motors",
     sourceCost: 18000,
     sellingPrice: 21000,
   };
@@ -202,7 +202,9 @@ describe("vehicles.createSourced", () => {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
     const asSales = t.withIdentity({ subject: "sales_sourcer" });
 
-    const vehicleId = await asSales.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs });
+    const vehicleId = await asSales.mutation(api.vehicles.createSourced, {
+      orgId, ...sourcedArgs, sourcedSupplierId: await supplierIdFor(t, orgId, "Al-Safeer Motors"),
+    });
 
     await t.run(async (ctx) => {
       const vehicle = await ctx.db.get(vehicleId);
@@ -243,7 +245,9 @@ describe("vehicles.createSourced", () => {
     const asReception = t.withIdentity({ subject: "reception_user" });
 
     await expect(
-      asReception.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs })
+      asReception.mutation(api.vehicles.createSourced, {
+        orgId, ...sourcedArgs, sourcedSupplierId: await supplierIdFor(t, orgId, "Al-Safeer Motors"),
+      })
     ).rejects.toThrow(/create:vehicles/);
   });
 
@@ -289,7 +293,9 @@ describe("vehicles.createSourced", () => {
       const { t, orgId, asUser } = await asSourcer();
 
       await expect(
-        asUser.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs, ...override })
+        asUser.mutation(api.vehicles.createSourced, {
+          orgId, ...sourcedArgs, sourcedSupplierId: await supplierIdFor(t, orgId, "Al-Safeer Motors"), ...override,
+        })
       ).rejects.toThrow(expected);
 
       const rows = await t.run((ctx) => ctx.db.query("vehicles").collect());
@@ -302,6 +308,7 @@ describe("vehicles.createSourced", () => {
       const vehicleId = await asUser.mutation(api.vehicles.createSourced, {
         orgId,
         ...sourcedArgs,
+        sourcedSupplierId: await supplierIdFor(t, orgId, "Al-Safeer Motors"),
         sellingPrice: 0,
       });
 
@@ -1383,7 +1390,7 @@ describe("vehicles.importBulk — owned stock vs sourced", () => {
           vin: "SOURCED-IMPORT-1",
           purchasePrice: 22000,
           sourceType: "SOURCED",
-          sourcedFromName: "Gulf Motors",
+          sourcedSupplierId: await supplierIdFor(t, orgId, "Gulf Motors"),
           sourceCost: 22000,
         },
       ],
@@ -1561,7 +1568,7 @@ describe("vehicles.exportData", () => {
           vin: "ROUNDTRIP-1",
           purchasePrice: 22000,
           sourceType: "SOURCED",
-          sourcedFromName: "Gulf Motors",
+          sourcedSupplierId: await supplierIdFor(t, orgA, "Gulf Motors"),
           sourceCost: 22000,
           valuations: [{ companyId: companyAId, valuationAmount: 27000 }],
         },
@@ -1593,7 +1600,7 @@ describe("vehicles.exportData", () => {
     const asUserB = t.withIdentity({ subject: "user_b_rt" });
 
     // Transform the export payload the way the spreadsheet + import parser do.
-    const reimport = exported.vehicles.map((v) => ({
+    const reimport = await Promise.all(exported.vehicles.map(async (v) => ({
       make: v.make,
       model: v.model,
       year: v.year,
@@ -1605,10 +1612,11 @@ describe("vehicles.exportData", () => {
       sellingPrice: v.sellingPrice,
       purchasePrice: v.cost ?? undefined,
       sourceType: v.sourceType,
-      sourcedFromName: v.sourcedFrom || undefined,
+      // The dealer maps the exported supplier name to a master row of the NEW account; nothing matches by name.
+      sourcedSupplierId: v.sourcedFrom ? await supplierIdFor(t, orgB, v.sourcedFrom) : undefined,
       sourceCost: v.sourceType === "SOURCED" ? v.cost ?? undefined : undefined,
       valuations: v.valuations.map((x) => ({ companyName: x.companyName, valuationAmount: x.amount })),
-    }));
+    })));
 
     const result = await asUserB.mutation(api.vehicles.importBulk, {
       orgId: orgB,

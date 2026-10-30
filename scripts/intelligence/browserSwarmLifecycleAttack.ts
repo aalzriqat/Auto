@@ -321,6 +321,14 @@ export function depositVoidTransitionSpec(options: LifecycleAttackOptions) {
       const customerId = await command(() =>
         client.mutation(api.customers.create, { orgId: org, firstName: "Swarm", lastName: `Deposits-${nonce}` }),
       );
+      // SCRUM-868 P2: the consignment supplier is a master record named by id; the server writes the name.
+      const supplier = await command(() =>
+        client.mutation(api.suppliers.create, {
+          orgId: org,
+          idempotencyKey: `${nonce}-supplier`,
+          displayName: `Swarm Supplier ${nonce}`,
+        }),
+      );
       const vehicleId = await command(() =>
         client.mutation(api.vehicles.create, {
           orgId: org,
@@ -334,7 +342,7 @@ export function depositVoidTransitionSpec(options: LifecycleAttackOptions) {
           transmission: "Automatic",
           sellingPrice: figures.priceMajor,
           sourceType: "SOURCED",
-          sourcedFromName: `Swarm Supplier ${nonce}`,
+          sourcedSupplierId: supplier.supplierId,
           sourceCost: figures.sourceCostMajor,
           status: "AVAILABLE",
           idempotencyKey: `${nonce}-vehicle`,

@@ -1111,6 +1111,7 @@ export default function VehiclesPage() {
                       </div>
                       {askOwnership && (
                         <ApprovalOwnershipChooser
+                          orgId={activeOrgId}
                           bankOptions={acquisitionBankOptions}
                           idPrefix={`own-${req._id}`}
                           draft={draft}

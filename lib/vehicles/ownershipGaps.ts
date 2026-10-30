@@ -34,6 +34,13 @@ export interface OwnershipGapDraft {
   purchasePrice?: number | string | null;
   purchasePaymentMethod?: string | null;
   purchaseSupplierName?: string | null;
+  /**
+   * SCRUM-868 P2: the supplier master ids. A supplier is chosen when an id is present. The
+   * names above are display text that the supplier picker fills together with the id (or a
+   * legacy vehicle's stored name); they are never typed, and the server resolves the id.
+   */
+  sourcedSupplierId?: string | null;
+  purchaseSupplierId?: string | null;
 }
 
 export interface OwnershipGapOptions {
@@ -59,7 +66,9 @@ const isPositive = (value: number | string | null | undefined): boolean => {
 /** The first unanswered ownership question, or null when the decision is complete. */
 export function ownershipGaps(draft: OwnershipGapDraft, options: OwnershipGapOptions): OwnershipGap | null {
   if (draft.sourceType === "SOURCED") {
-    if (!draft.sourcedFromName?.trim()) return { field: "sourcedFromName", reason: "SUPPLIER_REQUIRED" };
+    if (!draft.sourcedSupplierId && !draft.sourcedFromName?.trim()) {
+      return { field: "sourcedFromName", reason: "SUPPLIER_REQUIRED" };
+    }
     if (options.costRequired && !isPositive(draft.sourceCost)) return { field: "sourceCost", reason: "COST_REQUIRED" };
     return null;
   }
@@ -73,7 +82,11 @@ export function ownershipGaps(draft: OwnershipGapDraft, options: OwnershipGapOpt
     return { field: "purchasePrice", reason: "BUYOUT_TERMS" };
   }
   if (priced && !draft.purchasePaymentMethod) return { field: "purchasePaymentMethod", reason: "PAYMENT_METHOD" };
-  if (draft.purchasePaymentMethod === "ON_ACCOUNT" && !draft.purchaseSupplierName?.trim()) {
+  if (
+    draft.purchasePaymentMethod === "ON_ACCOUNT" &&
+    !draft.purchaseSupplierId &&
+    !draft.purchaseSupplierName?.trim()
+  ) {
     return { field: "purchaseSupplierName", reason: "CREDITOR_REQUIRED" };
   }
   return null;

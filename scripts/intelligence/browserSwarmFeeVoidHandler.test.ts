@@ -187,6 +187,15 @@ class World {
         return this.id("company");
       case "vehicles:create":
         if (a.sourceType !== "STOCK" || a.purchasePrice !== 15_000) throw new ConvexError("scenario sent a car other than the dealership's own stock");
+        // SCRUM-54 / SCRUM-878: the product's own guard (convex/vehicles.ts postVehicleAcquisitionIfOwned ->
+        // requireActiveBankInCurrency). A bank-funded purchase names a bank that already exists, so the scenario
+        // must have created its bank BEFORE the car; a missing or unknown bank id is refused with the product's words.
+        if (
+          (a.purchasePaymentMethod === "BANK_TRANSFER" || a.purchasePaymentMethod === "CARD" || a.purchasePaymentMethod === "CHEQUE") &&
+          (this.paidFromBankId === null || a.bankAccountId !== this.paidFromBankId)
+        ) {
+          throw new ConvexError("Choose the bank account used to purchase this vehicle.");
+        }
         return this.id("veh");
       case "quotes:saveQuote":
         return this.id("quote");
@@ -406,6 +415,11 @@ describe("SCRUM-350 LIFE-1 fee void handler: the discriminating scenario", () =>
     const create = h.world.argsOf.find((entry) => entry.name === "vehicles:create");
     expect(create?.args).toMatchObject({ sourceType: "STOCK", purchasePrice: 15_000, purchasePaymentMethod: "BANK_TRANSFER" });
     expect(create?.args).not.toHaveProperty("purchaseSupplierName");
+    // SCRUM-878: the car's purchase names the same bank, created before the car, that both cost payments leave.
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeGreaterThanOrEqual(0);
+    expect(h.world.calls.indexOf("owner:bankAccounts:create")).toBeLessThan(h.world.calls.indexOf("owner:vehicles:create"));
+    expect(create?.args).toMatchObject({ bankAccountId: expect.any(String) });
+    expect(create?.args.bankAccountId).toBe(pays[0].args.bankAccountId);
   });
 
   it("FAILS a void that leaves the payment on the books", async () => {
@@ -456,8 +470,10 @@ describe("SCRUM-350 LIFE-1 fee void handler: never a pass without a judged trans
     await inconclusive({ reconcileRefused: true }, /the product refused to reconcile the voided cost of 50000/);
     await inconclusive({ payRefused: true }, /the product refused the direct payment of the voided cost of 50000/);
     // SCRUM-54: no bank, no payment - and nothing downstream (payment, void) is attempted.
-    const noBank = await inconclusive({ bankCreateRefused: true }, /the product refused to create the bank the dealership-paid costs leave/);
+    const noBank = await inconclusive({ bankCreateRefused: true }, /the product refused to create the bank the vehicle purchase and the dealership-paid costs leave/);
     expect(noBank.world.calls).toContain("owner:bankAccounts:create");
+    // SCRUM-878: the bank comes first, so a refused bank means the car was never created.
+    expect(noBank.world.calls).not.toContain("owner:vehicles:create");
     expect(noBank.world.calls.filter((call) => /recordDirectFeePayment|voidDealFee/.test(call))).toEqual([]);
     await inconclusive({ voidRefused: true }, /the product refused to void the directly paid cost: Removing a cost that has been reconciled/);
   });
