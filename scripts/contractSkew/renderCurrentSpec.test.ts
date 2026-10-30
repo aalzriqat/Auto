@@ -154,7 +154,7 @@ test.each([
   ['process.env[Symbol.iterator];', "unsupported environment key"],
   ['for (let i = 0; i < 33; i++) process.env["KEY_" + i];', "environment read"],
   ['if (process.env.NODE_ENV) process.env.SECOND;', "environment read"],
-  ['Object.getOwnPropertyDescriptor(navigator ?? {}, "platform");', "unsupported navigator probe"],
+  ['Object.getOwnPropertyDescriptor(navigator ?? {}, "platform");', "synthetic host reflection"],
   ['Object.getPrototypeOf(process.env);', "environment reflection"],
   ['Object.isExtensible(process.env);', "environment reflection"],
 ])("unsupported library env operation discards module evidence: %s", async (operation, reason) => {
@@ -218,9 +218,6 @@ export const read = queryGeneric({ args: {}, handler: () => label.parse("ok") })
 
 test.each([
   ['navigator?.userAgent?.includes("Cloudflare") ? {} : { label: v.string() }', false],
-  ['("navigator" in globalThis) ? {} : { label: v.string() }', false],
-  ['Object.getOwnPropertyDescriptor(globalThis, "navigator") ? {} : { label: v.string() }', false],
-  ['Object.getOwnPropertyDescriptor(navigator ?? {}, "userAgent")?.value?.includes("Cloudflare") ? {} : { label: v.string() }', false],
   ['(typeof navigator !== "undefined", (() => { try { new Function(""); } catch {} })(), { label: v.string() })', true],
   ['(() => { try { new Function(""); return {}; } catch { return { label: v.string() }; } })()', false],
   ['(globalThis.eval, { label: v.string() })', true],
@@ -338,11 +335,15 @@ test("caught environment reads still taint metadata; handler reads do not run", 
 try { process.env.SECRET; } catch {}
 export const read = queryGeneric({ args: {}, handler: () => null });`);
   fs.writeFileSync(path.join(root, "convex/handlerOnly.ts"), `import { queryGeneric } from "convex/server";
-console.warn("MODULE DIAGNOSTIC MUST NOT LEAK");
 export const read = queryGeneric({ args: {}, handler: () => process.env.SECRET });`);
+  fs.writeFileSync(path.join(root, "convex/diagnostic.ts"), `import { queryGeneric } from "convex/server";
+console.warn("MODULE DIAGNOSTIC MUST NOT LEAK");
+export const read = queryGeneric({ args: {}, handler: () => null });`);
   const spec = await renderCurrentSpec(root);
   expect(missingCurrentFunctions(spec, [{ identifier: "caught:read" }])).toEqual(["caught:read"]);
   expect(missingCurrentFunctions(spec, [{ identifier: "handlerOnly:read" }])).toEqual([]);
+  expect(missingCurrentFunctions(spec, [{ identifier: "diagnostic:read" }])).toEqual(["diagnostic:read"]);
+  expect(spec.unavailableModules.find((entry) => entry.file === "diagnostic.ts")?.reason).toBe("console host input");
 });
 
 test("Node builtin dependencies are unavailable instead of evaluated by host resolution", async () => {
@@ -627,9 +628,12 @@ args: { label: TextEncoder.__seat2Flag ? v.string() : v.number() }, handler: () 
   const alone = await renderCurrentSpec(root);
   fs.writeFileSync(path.join(root, "convex/aaSideEffect.ts"), 'export {}; TextEncoder.__seat2Flag = true;');
   const together = await renderCurrentSpec(root);
-  const expected = { type: "object", value: { label: { fieldType: { type: "number" }, optional: false } } };
-  expect(alone.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual(expected);
-  expect(together.functions.find((fn) => fn.identifier === "good.js:read")?.args).toEqual(expected);
+  for (const spec of [alone, together]) {
+    expect(missingCurrentFunctions(spec, [{ identifier: "good:read" }])).toEqual(["good:read"]);
+    expect(spec.unavailableModules.find((entry) => entry.file === "good.ts")?.reason).toBe("synthetic binding reflection");
+    expect(spec.functions.find((fn) => fn.identifier === "nested/functions.js:read")?.args).toEqual({ type: "object",
+      value: { label: { fieldType: { type: "string" }, optional: false } } });
+  }
 });
 
 test.each([

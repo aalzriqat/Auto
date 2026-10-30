@@ -246,7 +246,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // SCRUM-866 Sonar remediation removes only --experimental-vm-modules
     // from the credential-free render step's NODE_OPTIONS. Each runtime world
     // now imports emitted ESM in a child process with an empty environment and
-    // a fixed 1024 MiB heap. The parent retains its 6144 MiB cap. No trigger,
+    // a fixed 256 MiB heap. The parent retains its 6144 MiB cap. No trigger,
     // grant, checkout, credential step, timeout or output path changed.
     "3b6e9a8bf7312b16213dd855a792b33791be877c7dc9121b95c3ff42b26f2b03",
   "deal-scenarios-e2e.yml":

@@ -1399,8 +1399,11 @@ numbers count the unmeasured child helper as zero and exclude cli.mjs; they are
 not the whole-PR Sonar result.
 
 Final full-render measurement: **10.695s before -> 92.109s after** on Windows
-Node 26.4.0, single elapsed runs subject to concurrent workstation load, below the
-20-minute timeout. Current-alias-final.json records 329 entries, 1,349 evaluations,
+Node 26.4.0, single elapsed runs subject to concurrent workstation load. The binding
+limit is the render step's `timeout 180s` at `.github/workflows/contract-skew.yml:113`,
+not the 20-minute job timeout. Seat 1 measured 57 to 119 seconds on Linux with
+two or four CPUs and varying concurrent load. No limit is lowered or raised here.
+Current-alias-final.json records 329 entries, 1,349 evaluations,
 zero env keys/enumerations, the same five unavailable Node modules and 1,017
 exports. All complete registration records equal the before-render records.
 The final saved-spec replay still exits **7**, with **6 FIXED, 0 stillFails,
@@ -1412,3 +1415,165 @@ The previous cloud's only open minor issue, S6353, requested `\d` instead of
 without changing accepted arguments or exit behavior. No NOSONAR, Sonar config,
 workflow, credential pin, classifier or global completeness change is used.
 New-head CI and Sonar are checked after the follow-up push.
+
+## 2026-10-30 curspec10: historical observation remediation
+
+This section records uncommitted work after both seats reviewed 62b0cdc7. It is
+not a completed remediation, a review certificate, or evidence for a new PR head.
+
+At 62b0cdc7, both requested Math reproductions report `{fixed:1, stillFails:0,
+unproven:0}` with zero unavailable modules. The new Error.stack and abort-event
+tests also falsely report FIXED. An original-head snapshot with an exported
+function confirms an empty-message Error is counted as zero unavailable modules.
+The same snapshot exposes the constructibility gap: `new Math.random()` throws
+before the old arrow target's Proxy construct trap, yet publishes `label`.
+
+The working fix has one callable/host observation guard, constructible denial
+bridges, stable Date.now and console identities, fresh empty Function probes,
+captured guard intrinsics, and guarded Proxy aliases. Console execution refuses
+because the real runtime inspects arguments. Host web API execution refuses
+instead of importing Node-specific event/clock behavior. Zod creates its actual
+realm-local singleton; the renderer no longer seeds synthetic Zod objects.
+
+The new runtime matrix checks 189 caught observation attempts from library
+modules, with zero static refusals. It passes alongside native identity and
+ordinary-registration controls. Named Node tests passed 33/33 before the final
+matrix expansion, and the three expanded matrix/identity/empty-Error cases pass.
+Direct Vitest globals tests pass 20/20. A concurrent 182-test Vitest run suffered
+timeouts; a renderer-only retry passed 144/148 and its four timed-out cases all
+passed in a focused five-case run. Detector checkJs and changed-file ESLint pass
+at the checked working states; final validation remains pending.
+
+The development render retained 1,017 registrations and five unavailable modules
+over 1,349 evaluations. It took 582.375 seconds on Windows Node 26.4.0 under
+substantial concurrent workstation load. This is one elapsed run, not evidence
+that the 180-second Linux workflow limit is sufficient. No limit was changed.
+Its pre-merge supplied-file replay reports six FIXED, zero stillFails/UNPROVEN,
+exit 7 and no ALSO PRESENT. Seat 1's mutate.mjs gives zero FIXED/six UNPROVEN
+without current evidence or after removing vehicles:create, and five FIXED/one
+stillFails when both specs lack purchaseSupplierId. Seat 1's probes.mjs was run;
+the requested env/constructor/host cases refuse and the shared-args ordering
+control retains string. Locale and microtask probe outputs were observed, not
+independently certified against the hosted runtime.
+
+`git merge origin/main` cleanly integrated main 09abccc14fb8243dcf7ce0c40d815260a616125c.
+The local merge commit is fe8652983dec52b6812f0af4f71020ee241f444d and ends with
+the requested Co-Authored-By trailer. Post-merge identity check matches 928 entries.
+The implementation remains uncommitted and unpushed; new-head CI is unavailable.
+
+### Historical Error decision, superseded below
+
+Literal refusal of Error.prototype prevents the installed Convex 1.42.1 SDK from
+defining ConvexError during import. A standalone strict-prototype probe reproduces
+that refusal. A mutable Error.prepareStackTrace hook is also insufficient because
+module code can remove it. The current hook is interim and must not be shipped
+as complete. The owner has been asked whether to preserve the unchanged native
+Error.prototype for inheritance while refusing other Error reflection, mutation
+and stack inputs. Dependent implementation and final publication await that ruling.
+
+Sources checked: pinned Convex [Math/environment setup](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/00_misc.ts),
+[Error stack setup](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/errors.ts),
+[event timestamp](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/02_event.ts),
+[console inspection](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/02_console.ts),
+[V8 stack hooks](https://v8.dev/docs/stack-trace-api), and
+[ECMAScript ProxyCreate](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-proxycreate).
+The installed SDK's dist/esm/values/errors.js was read directly. No fresh hosted
+runtime comparison, final seat certificate, or pilot-readiness claim is made.
+
+## 2026-10-30 curspec11: corrected Error boundary
+
+The coordinator's corrected A–E decision supersedes the pending choice above.
+No Error facade, additional source rewriting, or infrastructure change is used.
+
+The expected shape is the realm's native eight Error constructors and their
+prototypes, with one exception. Convex's pinned
+[errors.ts:20–23](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/errors.ts#L20)
+assigns `Error.prepareStackTrace`. The renderer uses the same assignment form.
+Each expected attribute, writable, enumerable and configurable, is true because
+that assignment reaches ECMAScript's
+[OrdinarySetWithOwnDescriptor](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarysetwithowndescriptor)
+and [CreateDataProperty](https://tc39.es/ecma262/multipage/abstract-operations.html#sec-createdataproperty).
+Node 26 already owns a non-enumerable formatter, so the renderer removes that
+host hook before assignment. A fresh-vm descriptor comparison checks every own
+key and descriptor of all 16 native objects, masking only the formatter value.
+`captureStackTrace` and `stackTraceLimit` remain native and unchanged.
+
+The renderer's formatter latches UNPROVEN when invoked. Convex documents its
+lazy invocation at errors.ts:21–22 and calls `performOp("error/stack", frameData)`
+at [line 48](https://github.com/get-convex/convex-backend/blob/db914cf06e2b06ee985646611b9e12ed7a770318/npm-packages/udf-runtime/src/errors.ts#L48).
+[V8's stack API](https://v8.dev/docs/stack-trace-api#customizing-stack-traces)
+also specifies the formatter hook. Tests cover ordinary Error.stack and native
+captureStackTrace formatting, including a caught refusal.
+
+After entry import and after native metadata extraction, captured native
+operations compare constructor bindings, own descriptors and key order,
+prototype identity, extensibility, and the renderer formatter identity.
+Any residue refuses the entry. Fresh children prevent it reaching the next entry.
+Writes that are restored without formatting may register, matching the approved
+fresh-context model. Native inheritance and ConvexError remain usable.
+The own-state comparison follows ECMAScript's
+[ordinary internal methods](https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinary-object-internal-methods-and-internal-slots).
+
+The static check refuses any emitted module text containing `prepareStackTrace`,
+including imported chunks. The source-mapped file and line inputs appear in
+errors.ts:29–31 and feed the formatter at line 48. The literal check is a
+conservative coordinator requirement, not a proof of general equivalence.
+**Residual risk:** a computed property name can replace the hook, format a stack,
+and restore the hook before the residue check. This remains open for the seats
+to rate; it is not closed by this change. ECMAScript's
+[computed property access](https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-property-accessors-runtime-semantics-evaluation)
+evaluates an expression to obtain the property key, so a literal-text check
+cannot establish that property is never accessed.
+
+Failing-first evidence: the corrected descriptor expectation failed on Node's
+non-enumerable host hook; lasting residue and transitive replace-format-restore
+also published incorrectly. After the first implementation, an advisory review
+found that entry-controlled array iteration could skip descriptor comparisons.
+The permanent regression failed by publishing `error52.js:read`. Bounded index
+loops now refuse that mutation. The reviewer independently re-ran the probe.
+The 53-case residue matrix includes that case. Native name assignments that
+cannot change a non-writable field were replaced by actual descriptor writes.
+
+Final named Node checks: 37 passed, zero failed or skipped, with
+`--test-concurrency=1`. These include 189 caught observation attempts, ordinary
+controls, restored mutation, inheritance, and publication/completeness controls.
+The named renderer, globals and credential-boundary Vitest files pass 183 tests
+with `--maxWorkers=1`. A later direct formatter-identity assertion passes all
+20 globals tests. Detector-specific `pnpm typecheck:contract-skew` and changed-file
+ESLint pass. This is detector checkJs, not a Convex backend typecheck. The baseline
+identity check matches 928 entries and does not certify backend finding identity.
+
+Seat 1's probes.mjs was re-run. Env, constructor, host-stack and event-clock
+probes refuse. The Date.now-before-corrupt control preserves string; an empty
+Error is unavailable; the infinite-loop probe times out at the existing 30 seconds.
+Locale and microtask outputs remain observed, without hosted-runtime certification.
+
+The final full current-tree render takes **75.038 seconds**, one Windows Node
+26.4.0 run, four child lanes, 1,017 registrations, 1,365 evaluations and nine
+unavailable modules. Four added unavailable helper entries are locale inputs
+introduced on merged main, not Rule D refusals. Rule D refuses **zero entries
+and zero of the 1,017 registrations**. This single workstation run is not a Linux
+workflow benchmark; the binding step limit remains 180 seconds.
+
+The requested supplied-spec proof is pinned to product source and baseline
+43feaa4fe97018182a033c209f16a4a67cfa664a in an archived fixture, with current detector
+code and installed dependencies. Its full render retains 1,017 registrations,
+1,349 evaluations and five unavailable modules, in **76.331 seconds**. Its saved
+spec replay is **6 FIXED, 0 stillFails, 0 UNPROVEN, exit 7, no ALSO PRESENT**.
+Fixture-only input paths are
+adapted for Seat 1's mutate.mjs. No production credential or fresh hosted spec
+is used. The fixture has its own Git root at 43feaa4f so the no-current Git
+fallback compares the intended trees, rather than an untracked nested directory.
+After correcting that fixture setup, no-current and removed-function controls
+each yield zero FIXED and six UNPROVEN; the shared missing-argument control yields
+five FIXED and one stillFails. All four runs exit 7. The baseline has no ALSO
+PRESENT; the shared-missing control correctly reports a standing defect.
+The separately observed current-main replay has eight FIXED calls and
+two evidence-drift findings for OpeningBalanceCard allocations[*].vehicleId.
+That replay has ALSO PRESENT and is not substituted for the pinned proof.
+The baseline and classifier are unchanged.
+
+Main remains 09abccc14fb8243dcf7ce0c40d815260a616125c after a fresh fetch, and bare
+`git merge origin/main` reports already up to date. Advisory Standards and Spec
+reviews are not formal seats. Final-head certification remains unavailable;
+this change does not waive Skill Evidence or authorize merge, deploy or launch.

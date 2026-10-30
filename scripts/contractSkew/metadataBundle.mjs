@@ -246,6 +246,10 @@ function writeModules(directory, pass, modules, ts) {
 
 /** Import metadata and dynamic imports are runtime inputs, never host evidence. */
 function unsupportedModuleSyntax(ts, text) {
+  // A replacement formatter could observe host frames and restore the hook
+  // before the residue check. Conservatively refuse the emitted text, including
+  // imported chunks. Computed property names remain a documented residual.
+  if (text.includes("prepareStackTrace")) return "prepareStackTrace source input";
   const source = ts.createSourceFile("bundle.js", text, ts.ScriptTarget.Latest, true);
   let reason = "";
   function visit(node) {

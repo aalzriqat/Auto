@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expect, test } from "vitest";
 import { installConstructorGuards, installGlobals } from "./metadataGlobals.mjs";
+import { installObservationGuards } from "./metadataObservation.mjs";
 
 /** The host global object is the system boundary. Copy real descriptors so
  * setup can be tested without replacing the test runner's own globals. */
@@ -60,19 +61,19 @@ test.each([
   expect(state.reason).toBe(reason);
 });
 
-test("navigator presence and userAgent descriptors represent the selected world", () => {
+test("navigator semantic reads represent the world; synthetic reflection refuses", () => {
   const absent = runtime();
   expect(absent.target.navigator).toBeUndefined();
-  expect("navigator" in absent.target.globalThis).toBe(false);
-  expect(Object.getOwnPropertyDescriptor(absent.target.globalThis, "navigator")).toBeUndefined();
+  expect(() => "navigator" in absent.target.globalThis).toThrow("global membership");
+  expect(() => Object.getOwnPropertyDescriptor(absent.target.globalThis, "navigator")).toThrow("global descriptor");
   const present = runtime({ runtime: { userAgent: "Cloudflare-Workers" }, zodConfig: true });
   expect(present.target.navigator.userAgent).toBe("Cloudflare-Workers");
-  expect("navigator" in present.target.globalThis).toBe(true);
-  expect("userAgent" in present.target.navigator).toBe(true);
-  expect(Object.getOwnPropertyDescriptor(present.target.navigator, "userAgent")?.value).toBe("Cloudflare-Workers");
-  expect(Object.getOwnPropertyDescriptor(present.target.globalThis, "navigator")?.value).toBe(present.target.navigator);
+  expect(() => "navigator" in present.target.globalThis).toThrow("global membership");
+  expect(() => "userAgent" in present.target.navigator).toThrow("synthetic host reflection");
+  expect(() => Object.getOwnPropertyDescriptor(present.target.navigator, "userAgent")).toThrow("synthetic host reflection");
+  expect(() => Object.getOwnPropertyDescriptor(present.target.globalThis, "navigator")).toThrow("global descriptor");
   expect([...present.reads.capabilityProbes]).toContain("navigator.userAgent");
-  expect(() => Object.getOwnPropertyDescriptor(present.target.navigator, "platform")).toThrow("unsupported navigator probe");
+  expect(() => Object.getOwnPropertyDescriptor(present.target.navigator, "platform")).toThrow("synthetic host reflection");
 });
 
 test("code-generation probes prove empty capability checks and refuse invented results", () => {
@@ -148,4 +149,58 @@ test("constructor guards refuse native reflection and restore the host after syn
     "ordinary descriptor", "ordinary getter", "ordinary source", "ordinary proxy", "ordinary revocable", "revocable identity", "native deletion"]);
   expect([...probes]).toEqual(["Function.constructor"]);
   expect(typeof Object.getOwnPropertyDescriptor(Function.prototype, "constructor")?.value).toBe("function");
+});
+
+test("reflection wrappers cannot expose their own synthetic identities", () => {
+  const prototypes = [Function.prototype, Object.getPrototypeOf(async function(){}),
+    Object.getPrototypeOf(function*(){}), Object.getPrototypeOf(async function*(){})];
+  const owners = [Object, Reflect, Object.prototype, Error, ...prototypes];
+  const snapshots = owners.map((owner) => ({ owner, descriptors: Object.getOwnPropertyDescriptors(owner) }));
+  const restore = Object.defineProperties;
+  const define = Object.defineProperty;
+  const ownKeys = Reflect.ownKeys;
+  const remove = Reflect.deleteProperty;
+  const hasOwn = Object.hasOwn;
+  const proxyDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Proxy");
+  if (!proxyDescriptor) throw new Error("Native Proxy unavailable");
+  const NativeError = Error;
+  const outcomes: string[] = [];
+  try {
+    const deny = (reason: string): never => { throw new NativeError(reason); };
+    installConstructorGuards(deny, new Set<string>());
+    const verifyErrorShape = installObservationGuards(globalThis, deny);
+    verifyErrorShape();
+    const formatterDescriptor = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    if (!formatterDescriptor) throw new NativeError("Stack formatter unavailable");
+    Error.prepareStackTrace = () => "replacement";
+    try { verifyErrorShape(); outcomes.push("unexpected formatter identity"); }
+    catch (error) { outcomes.push(error instanceof NativeError ? error.message : "unknown failure"); }
+    define(Error, "prepareStackTrace", formatterDescriptor);
+    verifyErrorShape();
+    const operations = [
+      () => Object.getOwnPropertyDescriptor.name,
+      () => Object.getOwnPropertyDescriptor.length,
+      () => Object.getOwnPropertyDescriptor.toString(),
+      () => (function(){}).toString.call(Object.getOwnPropertyDescriptor),
+      () => Reflect.ownKeys(Object.getOwnPropertyDescriptor),
+      () => Proxy.revocable.name,
+      () => Object.getOwnPropertyDescriptor(Proxy, "revocable"),
+    ];
+    for (const operation of operations) {
+      try { operation(); outcomes.push("unexpected success"); }
+      catch (error) { outcomes.push(error instanceof NativeError ? error.message : "unknown failure"); }
+    }
+    outcomes.push(Object.getOwnPropertyDescriptor({ value: 42 }, "value")?.value === 42 ? "ordinary descriptor" : "wrong descriptor");
+    outcomes.push(new Proxy({ value: 42 }, {}).value === 42 ? "ordinary proxy" : "wrong proxy");
+    outcomes.push(Proxy.revocable === Proxy.revocable ? "stable factory identity" : "wrong identity");
+  } finally {
+    for (const { owner, descriptors } of snapshots) {
+      for (const key of ownKeys(owner)) if (!hasOwn(descriptors, key)) remove(owner, key);
+      restore(owner, descriptors);
+    }
+    define(globalThis, "Proxy", proxyDescriptor);
+  }
+  expect(outcomes).toEqual(["Error family residue", "synthetic binding reflection", "synthetic binding reflection", "synthetic binding reflection",
+    "dynamic function constructor", "synthetic binding reflection", "synthetic binding reflection", "synthetic binding reflection",
+    "ordinary descriptor", "ordinary proxy", "stable factory identity"]);
 });
