@@ -59,3 +59,9 @@ Seat 1's fee-backed advances concern and other findings outside the assigned rem
 - [Convex return validation](https://docs.convex.dev/functions/validation): returns validators enforce the expected result shape.
 
 Documentation supports the choices; executed regressions and mutation controls measure implementation behavior in the local harness.
+
+## CI integration correction
+
+The first pushed candidate, `7faaf1f1190e43017478ccce01730af5f8f86769`, failed Tests slice 1/4 in `openingCommissionPayroll.test.ts`. Its queued-payroll scenario closed January on February 1 without warning acknowledgement. The new historical refusals truthfully introduce three warnings, so that close now refuses. The same failure was reproduced locally before editing the test. The adjusted test asserts exactly those three warnings and each AS_OF_DATE_UNSUPPORTED result, proves unacknowledged close still refuses, then explicitly acknowledges the warnings before continuing the original payroll debt, damaged-source refusal, retry and journal assertions. No production gate or financial assertion was weakened.
+
+The full affected payroll suite passed 24 tests. Two restored source mutations each caused one failure: removing the historical guards erased the expected warnings, and disabling acknowledgement enforcement incorrectly allowed the unacknowledged close. The additional suite is named explicitly and still uses one worker.
