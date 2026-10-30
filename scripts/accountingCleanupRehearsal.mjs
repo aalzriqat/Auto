@@ -168,9 +168,16 @@ export async function runCleanupRehearsalCases(ctx) {
     knownOrgIds.delete(deletionFixture.orgId);
     return { reset, deletion, elapsedMs: Date.now() - started, scope: "actual native functions; synthetic historical admission; no OCC claim" };
   });
-  await ctx.recordCase(ctx.results, "S858-CLEANUP-SPLIT", "Actual discovery and reference cap guard receipts preserve cleanup state", async () => {
+  const prRehearsal = ctx.rehearsalEvent === "workflow_run";
+  await ctx.recordCase(ctx.results, "S858-CLEANUP-SPLIT", prRehearsal
+    ? "Reference cap guard preserves cleanup state; large discovery fixture NOT_RUN (release-only)"
+    : "Actual discovery and reference cap guard receipts preserve cleanup state", async () => {
     const started = Date.now();
-    const discovery = await splitRefusal(ctx, await prepareNativeOpening(ctx, knownOrgIds, "SPLIT-DISCOVERY", true), "DISCOVERY");
+    // SCRUM-883: only the large DISCOVERY fixture is release-only. Keep the
+    // smaller REFERENCE cap check on PRs and record what was not measured.
+    const discovery = prRehearsal
+      ? { status: "NOT_RUN", reason: "Large retained-history fixture runs only at release; PR rehearsal excludes it (SCRUM-883)." }
+      : await splitRefusal(ctx, await prepareNativeOpening(ctx, knownOrgIds, "SPLIT-DISCOVERY", true), "DISCOVERY");
     const reference = await splitRefusal(ctx, await prepareNativeOpening(ctx, knownOrgIds, "SPLIT-REFERENCE"), "REFERENCE");
     return { discovery, reference, elapsedMs: Date.now() - started, rawPageStatusObserved: false };
   });

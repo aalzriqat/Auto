@@ -258,8 +258,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
     "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
+  // SCRUM-883: PR-only trusted Git path gate before provisioning, neutral
+  // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
+  // staged deployment and exact-SHA release verdict remain unchanged.
   "trusted-accounting-rehearsal.yml":
-    "da8ee3225cb7a94f92593a2f18d336eb5284446fe06cd1c81846bbec780d72d8",
+    "3b96db15e642f4015fc1f7f4f53ed1458c32e472ab3a97acac91b9fe23b8ad51",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.

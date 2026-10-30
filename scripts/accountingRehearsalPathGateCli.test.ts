@@ -1,0 +1,82 @@
+// @vitest-environment node
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, expect, test } from "vitest";
+import { parse } from "yaml";
+import { readBackendChangeDecision } from "./accountingRehearsalPathGateCli.mjs";
+
+const directory = mkdtempSync(path.join(tmpdir(), "scrum883-path-gate-"));
+afterAll(() => {
+  if (!path.resolve(directory).startsWith(path.join(path.resolve(tmpdir()), "scrum883-path-gate-"))) {
+    throw new Error("Refusing cleanup outside the test directory");
+  }
+  rmSync(directory, { recursive: true, force: true });
+});
+const git = (...args: string[]) => execFileSync("git", [
+  "-c", "user.name=Rehearsal Test", "-c", "user.email=rehearsal@example.test", ...args,
+], { cwd: directory, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+test("fetched Git objects give a complete PR diff, detect renamed backend files and fail closed on missing objects", () => {
+  git("init", "--initial-branch=main");
+  mkdirSync(path.join(directory, "convex"));
+  mkdirSync(path.join(directory, "docs"));
+  writeFileSync(path.join(directory, "convex", "backend.ts"), "export const value = 1;\n");
+  git("add", "--", "convex/backend.ts");
+  git("commit", "-m", "base");
+  const baseSha = git("rev-parse", "HEAD");
+  writeFileSync(path.join(directory, "docs", "notes.md"), "frontend-only evidence\n");
+  git("add", "--", "docs/notes.md");
+  git("commit", "-m", "docs only");
+  const docsHead = git("rev-parse", "HEAD");
+  expect(readBackendChangeDecision({ baseSha, headSha: docsHead, cwd: directory })).toMatchObject({ run: false, baseSha, headSha: docsHead });
+  renameSync(path.join(directory, "convex", "backend.ts"), path.join(directory, "docs", "backend.ts"));
+  git("add", "--", "convex/backend.ts", "docs/backend.ts");
+  git("commit", "-m", "move backend out of deploy tree");
+  expect(readBackendChangeDecision({ baseSha, headSha: git("rev-parse", "HEAD"), cwd: directory }).run).toBe(true);
+  expect(readBackendChangeDecision({ baseSha, headSha: "f".repeat(40), cwd: directory }).run).toBe(true);
+  expect(readBackendChangeDecision({ baseSha, headSha: baseSha, cwd: directory }).run).toBe(true);
+});
+
+type Step = { id?: string; name?: string; if?: string; run?: string; env?: Record<string, string> };
+type Workflow = { on: Record<string, unknown>; jobs: Record<string, {
+  name?: string; if?: string; permissions?: Record<string, string>; steps: Step[];
+}> };
+const source = readFileSync(".github/workflows/trusted-accounting-rehearsal.yml", "utf8");
+const workflow: Workflow = parse(source);
+
+test("PR path decision precedes preview creation; release bypasses it and retains its distinct verdict", () => {
+  const steps = workflow.jobs.rehearsal.steps;
+  const gate = steps.findIndex(step => step.id === "backend_inputs");
+  const create = steps.findIndex(step => step.name?.startsWith("Name and recreate"));
+  expect(gate).toBeGreaterThan(steps.findIndex(step => step.id === "provenance"));
+  expect(gate).toBeLessThan(create);
+  expect(steps[gate]?.if).toContain("github.event_name == 'workflow_run'");
+  expect(steps[gate]?.run).toBe("node scripts/accountingRehearsalPathGateCli.mjs");
+  expect(steps[create]?.if).toContain("github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true'");
+  expect(workflow.on).not.toHaveProperty("schedule");
+  expect(workflow.jobs.release_verdict.if).toBe("always() && github.event_name == 'repository_dispatch'");
+  expect(workflow.jobs.release_verdict.name).toContain("trusted-accounting-release-not-dispatched");
+  expect(Object.values(workflow.jobs).flatMap(job => job.steps).every(step => !step.run?.includes("${{"))).toBe(true);
+});
+
+test("NOT_APPLICABLE publishes a neutral PR check with both SHAs and cannot publish a success status", () => {
+  const verdict = workflow.jobs.verdict;
+  expect(verdict.permissions?.checks).toBe("write");
+  const neutral = verdict.steps.find(step => step.name?.startsWith("Publish NOT_APPLICABLE"));
+  expect(neutral?.if).toContain("needs.rehearsal.outputs.run_rehearsal == 'false'");
+  // Execute the exact payload program used by the trusted workflow, with no HTTP request.
+  const program = neutral?.run?.match(/node -e '([\s\S]*?)'\)/)?.[1];
+  expect(program).toBeTruthy();
+  const payload = JSON.parse(execFileSync(process.execPath, ["-e", program ?? ""], { encoding: "utf8", env: {
+    NODE_ENV: "test", TESTED_SHA: "a".repeat(40), BASE_SHA: "b".repeat(40), HEAD_SHA: "c".repeat(40),
+  } }));
+  expect(payload).toMatchObject({ name: "autoflow/trusted-accounting-rehearsal", head_sha: "a".repeat(40), conclusion: "neutral",
+    output: { title: "NOT_APPLICABLE: no backend input changed" } });
+  expect(payload.output.summary).toContain("b".repeat(40));
+  expect(payload.output.summary).toContain("c".repeat(40));
+  expect(payload.output.summary).toContain("No preview was created");
+  expect(verdict.steps.find(step => step.name === "Publish trusted accounting rehearsal verdict")?.if)
+    .toBe("needs.rehearsal.outputs.run_rehearsal != 'false' || needs.rehearsal.result != 'success'");
+});
