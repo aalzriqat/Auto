@@ -21,6 +21,22 @@ const workspaceMessages = defineBilingualMessages({
   CustomerActivityTaskTitle: ["Task · {task}", "مهمة · {task}"],
   CustomerActivityTaskDetail: ["{assignee} · due {date}", "{assignee} · تستحق في {date}"],
   CustomerWhatsAppGreeting: ["Hello {name}", "مرحباً {name}"],
+  // SCRUM-858 (c23884): the customer's own deposits on their record.
+  CustomerDeposits: ["Deposits", "العربونات"],
+  CustomerDepositsDesc: ["Deposits held in this customer's name, newest first.", "العربونات المحتجزة باسم هذا العميل، الأحدث أولًا."],
+  CustomerDepositsLoading: ["Loading deposits…", "جارٍ تحميل العربونات…"],
+  CustomerDepositsEmpty: ["This customer has no deposits.", "لا توجد عربونات لهذا العميل."],
+  CustomerDepositsTruncated: [
+    "Showing only the newest {count} deposits. Older deposits are not listed here.",
+    "تُعرض أحدث {count} عربونًا فقط. العربونات الأقدم غير مدرجة هنا.",
+  ],
+  CustomerDepositKindOrdinary: ["Deposit", "عربون"],
+  CustomerDepositStatusVoided: ["Voided", "ملغى"],
+  CustomerDepositColType: ["Type", "النوع"],
+  CustomerDepositColAmount: ["Amount", "المبلغ"],
+  CustomerDepositColStatus: ["Status", "الحالة"],
+  CustomerDepositColVehicle: ["Vehicle", "المركبة"],
+  CustomerDepositColDate: ["Received", "تاريخ الاستلام"],
 });
 
 export const customersEn = {

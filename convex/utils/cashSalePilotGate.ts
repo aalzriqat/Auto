@@ -2,6 +2,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { outstandingFromReceivableDoc } from "../subledger";
 import { allocatedDepositForVehicle } from "./depositAllocation";
+import { selectOpeningDepositsForSale } from "./openingDepositSelection";
 import { CASH_SALE_EXTRAS_PILOT_REFUSED, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED, refuseSaleDebt } from "./saleDebtContainment";
 
 /**
@@ -116,10 +117,26 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
     treatment?: PayFirstDepositTreatment;
     /** Consigned/agent stock settled DIRECT_TO_SUPPLIER: the deposit goes to the supplier settlement, not the invoice. */
     settlesDirectToSupplierOnSourcedStock: boolean;
+    /**
+     * SCRUM-858 S1: the buyer, so a named opening reservation deposit (customer-keyed, no quote) counts toward the
+     * invoice exactly as `resolveReservationDeposits` will apply it. Read through the same selection the writer uses.
+     */
+    opening: { orgId: Id<"organizations">; customerId: Id<"customers"> };
   }
 ): Promise<void> {
   if (!CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED || !isCashCompletion(args) || args.invoiceMinor <= 0) return;
-  if (!args.quoteId) return refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
+  const openingCoversMinor = async (capMinor: number): Promise<number> =>
+    (await selectOpeningDepositsForSale(ctx, {
+      orgId: args.opening.orgId,
+      customerId: args.opening.customerId,
+      vehicleId: args.vehicleId,
+      currency: args.currency,
+      capMinor,
+    })).reduce((sum, pick) => sum + pick.rowMinor, 0);
+  if (!args.quoteId) {
+    if ((await openingCoversMinor(args.invoiceMinor)) < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
+    return;
+  }
   const allocation = await allocatedDepositForVehicle(ctx, {
     quoteId: args.quoteId,
     vehicleId: args.vehicleId,
@@ -155,7 +172,10 @@ export async function assertCashSaleDepositsPayInvoiceBeforeWrites(
     }
   }
   if (appliedMinor === "LEFT_TO_COMPLETION") return;
-  if (appliedMinor < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
+  // A named opening reservation deposit pays what the quote-keyed deposit did not (the writer caps it the same way).
+  const stillDueMinor = args.invoiceMinor - appliedMinor;
+  const openingMinor = stillDueMinor > 0 ? await openingCoversMinor(stillDueMinor) : 0;
+  if (appliedMinor + openingMinor < args.invoiceMinor) refuseSaleDebt("CASH_SALE_BALANCE_UNPAID_REFUSED");
 }
 
 const positive = (n: number | null | undefined): boolean => typeof n === "number" && n > 0;

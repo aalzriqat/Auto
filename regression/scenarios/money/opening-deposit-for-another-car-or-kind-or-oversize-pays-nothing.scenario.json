@@ -1,0 +1,142 @@
+{
+  "id": "opening-deposit-for-another-car-or-kind-or-oversize-pays-nothing",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s1-named-deposits",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "other"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "customer": "other"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 150000,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "SECURITY",
+        "amountMinor": 100000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "salePrice": 100,
+        "vehicle": "named"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "otherCar.refused",
+      "value": "UNPAID"
+    },
+    {
+      "observable": "otherCustomer.refused",
+      "value": "UNPAID"
+    },
+    {
+      "observable": "oversizeRow.refused",
+      "value": "UNPAID"
+    },
+    {
+      "observable": "securityKind.refused",
+      "value": "UNPAID"
+    },
+    {
+      "observable": "afterRefusals.writes",
+      "value": 0
+    },
+    {
+      "observable": "afterRefusals.depositStatus",
+      "value": "HELD"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "an opening deposit that does not belong to this sale pays nothing: other car, security kind, or a row larger than the bill"
+  },
+  "matrixRow": "OB-B6",
+  "fingerprint": "0ed9ac8c67a82f9aea7cbbae9dda011d320b98f7007ebaf23fb67b3f11223bb5"
+}

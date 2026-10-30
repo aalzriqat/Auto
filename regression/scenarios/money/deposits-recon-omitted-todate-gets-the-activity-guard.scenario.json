@@ -1,0 +1,90 @@
+{
+  "id": "deposits-recon-omitted-todate-gets-the-activity-guard",
+  "fingerprint": "32d58065917d5f99069d6904316609e2d819096134f4866f70e122be6006af5c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-s2-r3-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "depositKind": "RESERVATION",
+        "amountMinor": 100000,
+        "openedAt": "yesterday"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "dated": "tomorrow",
+        "appliesDeposit": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.customerDepositsReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": "EMPTY"
+    },
+    {
+      "observable": "journalWrites",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingNamedDeposits.scrum858.test.ts",
+    "testName": "with toDate OMITTED the default 'now' cutoff gets the same activity guard: a sale dated tomorrow is UNAVAILABLE, never +100 (round-2 repro b)"
+  },
+  "matrixRow": "OB-B14",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "d14de86285de8dc2a40a4181705377b0f3245901"
+  }
+}
