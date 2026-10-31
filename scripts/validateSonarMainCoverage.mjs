@@ -572,10 +572,23 @@ function writeProducerContext(contextFile, verified) {
   fs.writeFileSync(contextFile, JSON.stringify(verified, null, 2), "utf8");
 }
 
+/**
+ * Replaces every CR and LF with "_" so a value taken from the GitHub API cannot
+ * start a new log line or a new GITHUB_OUTPUT key (OWASP log injection; Sonar
+ * S5145 compliant form). Text without a line break comes back unchanged.
+ */
+function safeLogValue(value) {
+  return String(value).replace(/[\r\n]/g, "_");
+}
+
 function appendGithubOutput(outputFile, verified) {
+  const runId = safeLogValue(verified.runId);
+  const runAttempt = safeLogValue(verified.runAttempt);
+  const artifactId = safeLogValue(verified.artifactId);
+  const headSha = safeLogValue(verified.headSha);
   fs.appendFileSync(
     outputFile,
-    `run_id=${verified.runId}\nrun_attempt=${verified.runAttempt}\nartifact_id=${verified.artifactId}\ntarget_sha=${verified.headSha}\n`
+    `run_id=${runId}\nrun_attempt=${runAttempt}\nartifact_id=${artifactId}\ntarget_sha=${headSha}\n`
   );
 }
 
@@ -584,7 +597,7 @@ async function runVerifyProducer(args, fetchImpl) {
   try {
     const verified = await verifyProducerRun({ token, repo, runId, expectedSha, fetchImpl });
     console.log(
-      `Producer run ${verified.runId} (attempt ${verified.runAttempt}) verified successfully for SHA ${verified.headSha}. Unique artifact ID: ${verified.artifactId}.`
+      `Producer run ${safeLogValue(verified.runId)} (attempt ${safeLogValue(verified.runAttempt)}) verified successfully for SHA ${safeLogValue(verified.headSha)}. Unique artifact ID: ${safeLogValue(verified.artifactId)}.`
     );
     if (contextFile) {
       writeProducerContext(contextFile, verified);

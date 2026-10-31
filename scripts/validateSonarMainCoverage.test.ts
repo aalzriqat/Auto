@@ -1262,6 +1262,39 @@ describe("validateSonarMainCoverage command line", () => {
     }
   });
 
+  it("verify-producer cannot let a line break in the SHA forge a log line or a GITHUB_OUTPUT key (SCRUM-764, Sonar S5145)", async () => {
+    // The producer run is only compared with the caller's SHA, so a SHA that carries an
+    // internal CR/LF is equal on both sides and reaches the two sinks.
+    const forgedSha = `${VALID_SHA}\r\nrun_id=999\ntarget_sha=${OTHER_SHA}`;
+    const { log, error } = silence();
+    const { root, cleanup } = createFixtureDir();
+    const outputFile = path.join(root, "github-output.txt");
+    vi.stubEnv("GITHUB_OUTPUT", outputFile);
+    try {
+      const args = verifyArgs();
+      args[args.indexOf("--expected-sha") + 1] = forgedSha;
+      const code = await main(args, createMockFetch({ run: { head_sha: forgedSha } }));
+
+      expect(code).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+      const logged = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).not.toMatch(/[\r\n]/);
+      const outputLines = fs.readFileSync(outputFile, "utf8").split("\n");
+      expect(outputLines.pop()).toBe("");
+      expect(outputLines.map((line) => line.split("=")[0])).toEqual([
+        "run_id",
+        "run_attempt",
+        "artifact_id",
+        "target_sha",
+      ]);
+      expect(outputLines.filter((line) => line.startsWith("run_id="))).toEqual(["run_id=12345"]);
+      expect(fs.readFileSync(outputFile, "utf8")).not.toContain("\r");
+    } finally {
+      vi.unstubAllEnvs();
+      cleanup();
+    }
+  });
+
   it("verify-producer writes neither file when no context file or GITHUB_OUTPUT is given", async () => {
     silence();
     vi.stubEnv("GITHUB_OUTPUT", "");
