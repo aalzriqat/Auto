@@ -1397,3 +1397,49 @@ describe("SCRUM-868 P3 review: unresolved legacy rows are never merged by name i
     ]);
   });
 });
+// ─── Review round 2 at 9bd4ca75d (Seat 1 B1, MEDIUM, money-record integrity) ─────────────────────
+//
+// Invariant (SupplierSnapshot N3): the name and the version a money record stores come from ONE read of
+// the supplier master, taken when the record is created. A supplier renamed between intake and sale
+// completion must not leave a payable or claim whose name is the old label and whose version is the new
+// master's: that pair never existed together and is never rewritten.
+async function expectNameAndVersionFromOneSnapshot(route: SaleRoute) {
+  const s = await setupTest(`complete_rename_${route}`);
+  const supplierId = await seedSupplier(s.t, {
+    orgId: s.orgId,
+    userId: s.userId,
+    displayName: "Intake Name Co",
+    version: 1,
+  });
+  const vehicleId = await insertSourcedVehicle(s, `VINRENAME${route === "THROUGH_DEALERSHIP" ? "T" : "D"}1`, {
+    sourcedSupplierId: supplierId,
+    sourcedFromName: "Intake Name Co",
+  });
+  const attempt = await prepareSaleAttempt(s, vehicleId, route);
+  await renameSupplier(s.t, supplierId, "Renamed Co");
+  const master = await s.t.run((ctx) => ctx.db.get(supplierId));
+  expect(master?.displayName).toBe("Renamed Co");
+  expect(master?.version).toBe(2);
+
+  expect(await attempt(crypto.randomUUID())).toBeUndefined();
+
+  const table = route === "THROUGH_DEALERSHIP" ? "vehicleSupplierPayables" : "vehicleSupplierReceivables";
+  const rows = await s.t.run((ctx) => ctx.db.query(table).collect());
+  expect(rows).toHaveLength(1);
+  expect(rows[0].supplierId).toBe(supplierId);
+  // The pair is the master's at completion, taken together; the vehicle's intake label is not part of it.
+  expect({ name: rows[0].sourcedFromName, version: rows[0].supplierSnapshotVersion }).toEqual({
+    name: "Renamed Co",
+    version: 2,
+  });
+}
+
+describe("SCRUM-868 P3 review: a money record stores the supplier name and version from one snapshot", () => {
+  test("THROUGH_DEALERSHIP: a supplier renamed after intake gives a payable whose name and version are both the master's at completion", async () => {
+    await expectNameAndVersionFromOneSnapshot("THROUGH_DEALERSHIP");
+  });
+
+  test("DIRECT_TO_SUPPLIER: a supplier renamed after intake gives a claim whose name and version are both the master's at completion", async () => {
+    await expectNameAndVersionFromOneSnapshot("DIRECT_TO_SUPPLIER");
+  });
+});

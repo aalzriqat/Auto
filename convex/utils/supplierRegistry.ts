@@ -359,17 +359,25 @@ export async function requireResolvedSupplierId(
  * the refusal is not an existence oracle (TEN-1). A completed sale must never write a payable or a
  * receivable that the settlement doors would then refuse for the rest of its life.
  * Does not refuse an inactive supplier: deactivation never strands an obligation (N10).
+ *
+ * Returns the id, the display name and the version from ONE read of the master, so a record that stores
+ * all three stores a pair that existed together (N3): the name and the version are never taken from
+ * different sources (the vehicle's intake label, say, beside the master's current version).
  */
 export async function requireSupplierSnapshotForCompletion(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   supplierId: Id<"suppliers"> | undefined,
-): Promise<{ supplierId: Id<"suppliers">; supplierSnapshotVersion: number }> {
+): Promise<{ supplierId: Id<"suppliers">; supplierSnapshotName: string; supplierSnapshotVersion: number }> {
   const supplier = supplierId ? await ctx.db.get("suppliers", supplierId) : null;
   if (!supplier || supplier.orgId !== orgId) {
     return throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
   }
-  return { supplierId: supplier._id, supplierSnapshotVersion: supplier.version };
+  return {
+    supplierId: supplier._id,
+    supplierSnapshotName: supplier.displayName,
+    supplierSnapshotVersion: supplier.version,
+  };
 }
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
