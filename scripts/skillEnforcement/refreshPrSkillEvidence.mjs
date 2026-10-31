@@ -1,7 +1,7 @@
-/** Re-evaluate referenced local reports after edits/deletion, using main's code. */
+/** Re-evaluate referenced local reports and waivers after edits/deletion, using main's code. */
 import { fileURLToPath } from "node:url";
 import { check, getJson } from "./checkPrSkillEvidence.mjs";
-import { localReviewUrl } from "./prSkillEvidence.mjs";
+import { localReviewUrl, referencedCommentUrls } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
   const repositoryPath = repo.split("/").map(encodeURIComponent).join("/");
@@ -22,19 +22,20 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
   const prPath = `/repos/${repositoryPath}/pulls/${encodeURIComponent(PR_NUMBER)}`;
   const pr = await getJson(fetchImpl, GH_TOKEN, prPath);
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
-  if (pr.state !== "open" || localReviewUrl(pr.body) !== expected) return { refreshed: false };
+  const isReferenced = (localReviewUrl(pr.body) === expected) || referencedCommentUrls(pr.body).includes(expected);
+  if (pr.state !== "open" || !isReferenced) return { refreshed: false };
   const head = pr.head.sha;
   if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid PR head");
   const started = await writeCheck(fetchImpl, GH_TOKEN, REPO, "POST", "", {
     name: "skill-evidence", head_sha: head, status: "in_progress",
-    output: { title: "Rechecking local review evidence", summary: "The referenced report changed. Reading current evidence." },
+    output: { title: "Rechecking review evidence", summary: "The referenced report or waiver changed. Reading current evidence." },
   });
   if (!Number.isSafeInteger(started.id) || started.id < 1) throw new Error("Invalid check id");
   let result;
   try {
     result = await check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl);
   } catch {
-    result = { exitCode: 1, lines: ["Local review evidence is unavailable; refusing approval."] };
+    result = { exitCode: 1, lines: ["Review evidence is unavailable; refusing approval."] };
   }
   if (result.headSha !== head) {
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };

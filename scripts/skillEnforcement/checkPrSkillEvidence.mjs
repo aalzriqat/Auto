@@ -4,6 +4,7 @@
  * payload goes stale on re-runs). Runs from the base branch only. Uses fetch,
  * not a CLI, so no executable is resolved through PATH.
  */
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { evaluate, TEMPLATE } from "./prSkillEvidence.mjs";
 
@@ -15,6 +16,26 @@ const reportLine = (body, label) => {
   const matches = [...String(body).matchAll(new RegExp(`^${label}: ?(.+)$`, "gim"))];
   return matches.length === 1 ? matches[0][1].trim() : undefined;
 };
+
+export function loadSkillWaivers(filePath = ".github/skill-waivers.json") {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const content = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (!Array.isArray(parsed.waivers)) {
+      throw new Error("Invalid skill-waivers schema: 'waivers' array required");
+    }
+    for (const w of parsed.waivers) {
+      if (typeof w.pr !== "number" || typeof w.head !== "string" || !w.expires || !w.ruling) {
+        throw new Error("Invalid skill-waivers entry: pr, head, ruling, and expires are required");
+      }
+    }
+    return parsed.waivers;
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw new Error(`Failed to load skill-waivers: ${err.message}`);
+  }
+}
 
 async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchImpl, token }) {
   // Never fetch a caller-supplied URL: validate the same-PR reference, then use
@@ -41,6 +62,82 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
     reportLine(body, "Local Claude verdict") === "CERTIFY" &&
     reportLine(body, "Signed")?.length >= 5;
   return valid ? [] : ["Local Claude signed report must match the session, Opus 5.5 high, current head SHA and CERTIFY verdict."];
+}
+
+export async function verifyOwnerWaiver({ url, ruling, sha, seat }, { repo, pr, head, fetchImpl, token }) {
+  const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
+  const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
+  if (!/^[1-9]\d*$/.test(id)) return [`${seat} waiver must link to an issue comment on this PR.`];
+  if (sha && head && sha.toLowerCase() !== head.toLowerCase()) {
+    return [`${seat} waiver must address the full current PR head SHA.`];
+  }
+  const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
+  if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+    return [`${seat} waiver comment does not belong to this PR.`];
+  }
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
+    return [`${seat} waiver must be published by a repository owner, member or collaborator.`];
+  }
+  const body = comment.body;
+  if (typeof body !== "string" || body.includes("<!--")) {
+    return [`${seat} waiver fields must be visible, not inside HTML comments.`];
+  }
+  const waiverSeat = reportLine(body, "Owner waiver") ?? reportLine(body, "Waived seat") ?? reportLine(body, "Seat");
+  const commentRuling = reportLine(body, "Ruling") ?? reportLine(body, "Waiver ruling");
+  const commentSha = reportLine(body, "Head SHA") ?? reportLine(body, "SHA");
+  const expires = reportLine(body, "Expires");
+  const verdict = reportLine(body, "Verdict");
+
+  if (!waiverSeat || !waiverSeat.toLowerCase().includes(seat.toLowerCase())) {
+    return [`${seat} waiver comment must state "${seat}" as the waived seat.`];
+  }
+  if (ruling && commentRuling && !commentRuling.toLowerCase().includes(ruling.toLowerCase()) && !ruling.toLowerCase().includes(commentRuling.toLowerCase())) {
+    return [`${seat} waiver ruling "${commentRuling}" does not match declared ruling "${ruling}".`];
+  }
+  if (commentSha && head && commentSha.toLowerCase() !== head.toLowerCase()) {
+    return [`${seat} waiver comment certifies ${commentSha}, which does not match PR head ${head}.`];
+  }
+  if (!verdict || verdict.toUpperCase() !== "WAIVED") {
+    return [`${seat} waiver verdict must be WAIVED.`];
+  }
+  if (!expires || isNaN(Date.parse(expires))) {
+    return [`${seat} waiver must have an explicit ISO expiration date.`];
+  }
+  if (new Date(expires).getTime() <= Date.now()) {
+    return [`${seat} waiver expired on ${expires}.`];
+  }
+  return [];
+}
+
+export async function verifyCodexReview({ url, sha }, { repo, pr, head, fetchImpl, token }) {
+  const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
+  const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
+  if (!/^[1-9]\d*$/.test(id)) return ["Seat 2 review must link to an issue comment on this PR."];
+  if (sha && head && sha.toLowerCase() !== head.toLowerCase()) {
+    return ["Seat 2 review must certify the full current PR head SHA."];
+  }
+  const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
+  if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+    return ["Seat 2 review comment does not belong to this PR."];
+  }
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
+    return ["Seat 2 review must be published by a repository owner, member or collaborator."];
+  }
+  const body = comment.body;
+  if (typeof body !== "string" || body.includes("<!--")) {
+    return ["Seat 2 review fields must be visible, not inside HTML comments."];
+  }
+  if (/Review-evidence correction|REVIEW-INTEGRITY HOLD|NOT certified|NOT a certification/i.test(body)) {
+    return ["Seat 2 review comment is a review correction/rejection, not a certification."];
+  }
+  const hasCertify = /\[Codex Review\]/i.test(body) && /\b(?:VERDICT:\s*)?CERTIFY\b/i.test(body);
+  if (!hasCertify) {
+    return ["Seat 2 signed review must contain [Codex Review] and CERTIFY verdict."];
+  }
+  if (head && !body.toLowerCase().includes(head.toLowerCase()) && !body.toLowerCase().includes(head.slice(0, 7).toLowerCase())) {
+    return [`Seat 2 review comment does not certify current PR head ${head}.`];
+  }
+  return [];
 }
 
 export async function getJson(fetchImpl, token, path) {
@@ -80,15 +177,35 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
   const commitText = commits.map((c) => c.commit?.message ?? "").join("\n");
   own.push(pr.head.sha);
   const isPrCommit = async (sha) => own.some((c) => c.startsWith(sha.toLowerCase()));
-  const result = await evaluate({ body: pr.body ?? "", files, isPrCommit, commitText,
+  const waivers = loadSkillWaivers();
+  const result = await evaluate({
+    body: pr.body ?? "",
+    files,
+    isPrCommit,
+    commitText,
+    prNumber: PR_NUMBER,
+    headSha: pr.head.sha,
+    waivers,
     localReview: (evidence) => verifyLocalReview(evidence, {
+      repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
+    }),
+    ownerWaiver: (evidence) => verifyOwnerWaiver(evidence, {
+      repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
+    }),
+    codexReview: (evidence) => verifyCodexReview(evidence, {
       repo: REPO, pr: PR_NUMBER, head: pr.head.sha, fetchImpl, token: GH_TOKEN,
     }),
   });
   if (!result.required) {
     return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
   }
-  if (result.ok) return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: section present and consistent.", FORM_ONLY] };
+  if (result.ok) {
+    const isWaived = result.waivedSeats?.has("Seat 1");
+    const summary = isWaived
+      ? "skill-evidence: section present and consistent. Seat 1: WAIVED (owner-proxy ruling SCRUM-760 c24127). Seat 2: CERTIFIED."
+      : "skill-evidence: section present and consistent.";
+    return { exitCode: 0, headSha: pr.head.sha, lines: [summary, FORM_ONLY] };
+  }
   return {
     exitCode: 1,
     headSha: pr.head.sha,

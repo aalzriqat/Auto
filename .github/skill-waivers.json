@@ -1,0 +1,9 @@
+{
+  "$comment": [
+    "Auditable owner-proxy skill evidence waiver registry (SCRUM-760).",
+    "A waiver excuses Seat 1 execution per explicit owner ruling (e.g. c24127/c24128).",
+    "Independent Codex review (Seat 2) and all non-waived skills remain mandatory.",
+    "Expired waivers fail closed; missing or mismatched heads fail closed."
+  ],
+  "waivers": []
+}

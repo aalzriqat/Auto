@@ -12,9 +12,9 @@ import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
 import { parse } from "yaml";
 import { decide, gitExecutable, gitSteps, run, stepsFor } from "./skillGate.mjs";
-import { check } from "./checkPrSkillEvidence.mjs";
+import { check, loadSkillWaivers, verifyOwnerWaiver, verifyCodexReview } from "./checkPrSkillEvidence.mjs";
 import { refresh } from "./refreshPrSkillEvidence.mjs";
-import { evaluate, isPlaceholder, TEMPLATE } from "./prSkillEvidence.mjs";
+import { evaluate, isPlaceholder, isPlaceholderSession, referencedCommentUrls, TEMPLATE } from "./prSkillEvidence.mjs";
 
 let n = 0;
 const skillCall = (skill: string, isError = false) => {
@@ -985,5 +985,272 @@ describe("check (CI entry)", () => {
   test("surfaces an API error", async () => {
     const bad = (async () => ({ ok: false, status: 403 })) as unknown as typeof fetch;
     await expect(check(env, bad)).rejects.toThrow("403");
+  });
+});
+
+describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => {
+  const sha = "a".repeat(40);
+  const codexReviewUrl = "https://github.com/o/r/pull/7#issuecomment-222";
+  const waiverUrl = "https://github.com/o/r/pull/7#issuecomment-111";
+
+  const codexComment = (over: Record<string, string> = {}) =>
+    `[Codex Review] VERDICT: CERTIFY at ${over.sha ?? sha}. Independent review passed.\n` +
+    `Session: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nSigned: Codex Seat 2\n`;
+
+  const waiverComment = (over: Record<string, string> = {}) =>
+    `Owner waiver: Seat 1\n` +
+    `Ruling: ${over.ruling ?? "SCRUM-760 c24127"}\n` +
+    `Head SHA: ${over.sha ?? sha}\n` +
+    `Expires: ${over.expires ?? "2030-01-01T00:00:00Z"}\n` +
+    `Verdict: ${over.verdict ?? "WAIVED"}\n` +
+    `Proxy: owner-proxy\n` +
+    `Reason: Owner ruling 2026-10-31 temporarily waives Opus seat; independent Codex review is sufficient.\n`;
+
+  test.each([
+    ["repeating hex characters", "https://claude.ai/code/session_1111111111111111", true],
+    ["repeating local zeros", "local:00000000-0000-0000-0000-000000000000", true],
+    ["repeating local ones", "local:11111111-1111-1111-1111-111111111111", true],
+    ["mock prefix", "https://claude.ai/code/session_mock12345678", true],
+    ["dummy prefix", "local:dummy000-0000-0000-0000-000000000000", true],
+    ["valid session URL", "https://claude.ai/code/session_01928374abcdef", false],
+    ["valid local UUID", "local:df7e4a61-cb22-4774-9ed8-3c191d397ed2", false],
+  ])("isPlaceholderSession classifies %s as placeholder: %s", (_label, session, expected) => {
+    expect(isPlaceholderSession(session)).toBe(expected);
+  });
+
+  test.each(["mock", "dummy", "fake"])("isPlaceholder recognizes %s", (word) => {
+    expect(isPlaceholder(word)).toBe(true);
+  });
+
+  test("evaluate rejects placeholder session pattern session_1111111111111111", async () => {
+    const r = await evaluate({
+      body: fill({ "Seat 1 session": "https://claude.ai/code/session_1111111111111111" }),
+      files: money,
+      isPrCommit: async () => true,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain('"Seat 1 session" is an unverified placeholder session pattern.');
+  });
+
+  test("evaluate accepts waived Seat 1 with valid waiver comment and independent Codex certification", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 1 waiver: ${waiverUrl}\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const r = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      headSha: sha,
+      ownerWaiver: async () => [],
+      codexReview: async () => [],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.problems).toEqual([]);
+    expect(r.waivedSeats).toEqual(new Set(["Seat 1"]));
+  });
+
+  test("evaluate fails when Seat 1 is waived but Seat 1 waiver ruling is missing", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver: ${waiverUrl}\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const r = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      headSha: sha,
+      ownerWaiver: async () => [],
+      codexReview: async () => [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain('Waived Seat 1 requires an explicit "Seat 1 waiver ruling"');
+  });
+
+  test("evaluate fails when Seat 1 is waived but Seat 2 review is missing", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 1 waiver: ${waiverUrl}\n`;
+
+    const r = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      headSha: sha,
+      ownerWaiver: async () => [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain('When Seat 1 is waived, "Seat 2 review" must link to an independent Codex review comment on this PR.');
+  });
+
+  test("evaluate accepts waived Seat 1 from skill-waivers.json registry", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const waivers = [{
+      pr: 7,
+      head: sha,
+      seat: "Seat 1",
+      ruling: "SCRUM-760 c24127",
+      expires: "2030-01-01T00:00:00Z",
+      authority: "owner-proxy",
+      reason: "Owner ruling 2026-10-31",
+    }];
+
+    const r = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      prNumber: 7,
+      headSha: sha,
+      waivers,
+      codexReview: async () => [],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.problems).toEqual([]);
+    expect(r.waivedSeats).toEqual(new Set(["Seat 1"]));
+  });
+
+  test("evaluate fails closed when registry waiver is expired", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const waivers = [{
+      pr: 7,
+      head: sha,
+      seat: "Seat 1",
+      ruling: "SCRUM-760 c24127",
+      expires: "2020-01-01T00:00:00Z",
+      authority: "owner-proxy",
+      reason: "Old ruling",
+    }];
+
+    const r = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      prNumber: 7,
+      headSha: sha,
+      waivers,
+      codexReview: async () => [],
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain("Seat 1 waiver for PR 7 expired on 2020-01-01T00:00:00Z.");
+  });
+
+  test("loadSkillWaivers parses valid JSON and throws on malformed schema", () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), "waivers-"));
+    const filePath = path.join(tmp, "skill-waivers.json");
+    try {
+      writeFileSync(filePath, JSON.stringify({ waivers: [{ pr: 123, head: "abc", ruling: "c1", expires: "2030" }] }));
+      expect(loadSkillWaivers(filePath)).toHaveLength(1);
+
+      writeFileSync(filePath, JSON.stringify({ notWaivers: [] }));
+      expect(() => loadSkillWaivers(filePath)).toThrow("Invalid skill-waivers schema");
+
+      writeFileSync(filePath, JSON.stringify({ waivers: [{ pr: "not-a-number" }] }));
+      expect(() => loadSkillWaivers(filePath)).toThrow("Invalid skill-waivers entry");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("verifyOwnerWaiver checks author, expiration, ruling, and verdict", async () => {
+    const context = { repo: "o/r", pr: "7", head: sha, token: "test" };
+    const makeFetch = (commentData: Record<string, unknown>) => (async () => ({
+      ok: true, status: 200, json: async () => commentData,
+    })) as unknown as typeof fetch;
+
+    const baseComment = {
+      html_url: waiverUrl,
+      issue_url: "https://api.github.com/repos/o/r/issues/7",
+      author_association: "OWNER",
+      body: waiverComment(),
+    };
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch(baseComment) })).toEqual([]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, author_association: "NONE" }) }))
+      .toEqual(["Seat 1 waiver must be published by a repository owner, member or collaborator."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ verdict: "REJECT" }) }) }))
+      .toEqual(["Seat 1 waiver verdict must be WAIVED."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ expires: "2020-01-01T00:00:00Z" }) }) }))
+      .toEqual(["Seat 1 waiver expired on 2020-01-01T00:00:00Z."]);
+
+    const wrongSha = "b".repeat(40);
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ sha: wrongSha }) }) }))
+      .toEqual([`Seat 1 waiver comment certifies ${wrongSha}, which does not match PR head ${sha}.`]);
+  });
+
+  test("verifyCodexReview accepts CERTIFY and rejects review-evidence corrections", async () => {
+    const context = { repo: "o/r", pr: "7", head: sha, token: "test" };
+    const makeFetch = (commentData: Record<string, unknown>) => (async () => ({
+      ok: true, status: 200, json: async () => commentData,
+    })) as unknown as typeof fetch;
+
+    const validComment = {
+      html_url: codexReviewUrl,
+      issue_url: "https://api.github.com/repos/o/r/issues/7",
+      author_association: "OWNER",
+      body: codexComment(),
+    };
+
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(validComment) })).toEqual([]);
+
+    const correctionComment = {
+      ...validComment,
+      body: "[Codex Review] Review-evidence correction, not a certification. The prior body supplied placeholder session... NOT certified.",
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(correctionComment) }))
+      .toEqual(["Seat 2 review comment is a review correction/rejection, not a certification."]);
+
+    const missingCertify = {
+      ...validComment,
+      body: "[Codex Review] In progress, looks promising so far.",
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(missingCertify) }))
+      .toEqual(["Seat 2 signed review must contain [Codex Review] and CERTIFY verdict."]);
+
+    const wrongHeadComment = {
+      ...validComment,
+      body: `[Codex Review] VERDICT: CERTIFY at ${"b".repeat(40)}.`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(wrongHeadComment) }))
+      .toEqual([`Seat 2 review comment does not certify current PR head ${sha}.`]);
+  });
+
+  test("referencedCommentUrls collects review and waiver URLs", () => {
+    const s1Url = "https://github.com/o/r/pull/7#issuecomment-999";
+    const body = `## Skill evidence\n- Seat 1 review: ${s1Url}\n- Seat 1 waiver: ${waiverUrl}\n- Seat 2 review: ${codexReviewUrl}\n`;
+    expect(referencedCommentUrls(body)).toEqual([s1Url, waiverUrl, codexReviewUrl]);
+  });
+
+  test("check reports Seat 1: WAIVED and Seat 2: CERTIFIED explicitly", async () => {
+    const bodyText = fill({
+      "Seat 1 model": "WAIVED",
+      "Seat 2 SHA": sha,
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 1 waiver: ${waiverUrl}\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const comments: Record<string, Record<string, unknown>> = {
+      "111": { html_url: waiverUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: waiverComment() },
+      "222": { html_url: codexReviewUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: codexComment() },
+    };
+
+    const fetchImpl = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/issues/comments/111")) return { ok: true, status: 200, json: async () => comments["111"] } as Response;
+      if (u.includes("/issues/comments/222")) return { ok: true, status: 200, json: async () => comments["222"] } as Response;
+      if (u.includes("/files")) return { ok: true, status: 200, json: async () => money.map((filename) => ({ filename })) } as Response;
+      if (u.includes("/commits")) return { ok: true, status: 200, json: async () => [{ sha }] } as Response;
+      return { ok: true, status: 200, json: async () => ({ state: "open", body: bodyText, head: { sha } }) } as Response;
+    }) as typeof fetch;
+
+    const result = await check({ REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" }, fetchImpl);
+    expect(result.exitCode).toBe(0);
+    expect(result.lines[0]).toBe("skill-evidence: section present and consistent. Seat 1: WAIVED (owner-proxy ruling SCRUM-760 c24127). Seat 2: CERTIFIED.");
   });
 });
