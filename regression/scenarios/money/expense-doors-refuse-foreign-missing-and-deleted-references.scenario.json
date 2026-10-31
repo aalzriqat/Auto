@@ -92,6 +92,59 @@
       "input": {
         "expenseId": "DELETED_EXPENSE_ID"
       }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "payerId": "DANGLING_MEMBER_USER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "payerId": "DANGLING_MEMBER_USER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "status": "PAID",
+        "storedVehicleId": "DELETED_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "status": "PAID",
+        "storedVehicleId": "MISSING_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "status": "PAID",
+        "storedVehicleId": "OTHER_ORG_VEHICLE_ID"
+      }
     }
   ],
   "expected": [
@@ -109,6 +162,10 @@
     },
     {
       "observable": "positiveControl.sameOrgAccepted",
+      "value": true
+    },
+    {
+      "observable": "paidExpenseHistory.replayEditReversalUnblocked",
       "value": true
     }
   ],
@@ -129,5 +186,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "f63b69518563c6b3e72c3a971f974a9ef4227a3e2d9e5d0c5a8164a7fe78058d"
+  "fingerprint": "334bbf310f1801956b2030ee2de391750057edabafa311c5cb284d153b5860f1"
 }

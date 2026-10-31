@@ -6,14 +6,20 @@
  * besides `orgId`). The caller owns BOTH org A and org B, so authentication
  * cannot tell an org B customer from an org A one: only the reference check
  * refuses it. Foreign, missing (hard-deleted) and soft-deleted ids must be
- * refused with every table unchanged; a live same-org id is the control.
+ * refused with every table of the app schema unchanged; a live same-org id is
+ * the control, and the bound regression test below runs it itself.
+ *
+ * "Every table" means every table of the app schema, read generically. The
+ * aggregate component tables a customer write also maintains are not readable
+ * through `ctx.db` and are outside that claim; Convex rolls back a throwing
+ * mutation as a whole.
  */
-import { describe, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { api } from "./_generated/api";
 import schema from "./schema";
-import type { Id } from "./_generated/dataModel";
+import type { Id, TableNames } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -23,6 +29,7 @@ vi.mock("./rateLimit", () => ({
 type Kind = "foreign" | "missing" | "deleted";
 const KINDS: Kind[] = ["foreign", "missing", "deleted"];
 const REFUSAL = "Customer not found in this organization.";
+const TABLES = Object.keys(schema.tables) as TableNames[];
 
 async function fixture() {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
@@ -41,13 +48,13 @@ async function fixture() {
     if (kind === "missing") await t.run((ctx) => ctx.db.delete(id));
     return id;
   };
-  const snapshot = () => t.run(async (ctx) => ({
-    customers: await ctx.db.query("customers").collect(),
-    notifications: await ctx.db.query("notifications").collect(),
-    leads: await ctx.db.query("leads").collect(),
-    sales: await ctx.db.query("sales").collect(),
-    idempotency: await ctx.db.query("commandIdempotency").collect(),
-  }));
+  // Every table of the app schema, read generically so a table a door writes
+  // transitively cannot be left out of the comparison by omission.
+  const snapshot = () => t.run(async (ctx) => {
+    const out: Record<string, Array<Record<string, unknown>>> = {};
+    for (const table of TABLES) out[table] = (await ctx.db.query(table).collect()) as Array<Record<string, unknown>>;
+    return out;
+  });
   return { t, owner, orgId, customer, snapshot };
 }
 
@@ -58,35 +65,42 @@ const DOORS = [
     f.owner.mutation(api.customers.softDelete, { orgId: f.orgId, customerId }) },
 ];
 
-describe("SCRUM-811 customer doors own the customer reference before writing", () => {
-  test("every customer door refuses a foreign, missing and soft-deleted customer and writes nothing", async () => {
-    const failures: string[] = [];
-    for (const door of DOORS) {
-      for (const kind of KINDS) {
-        const f = await fixture();
-        const id = await f.customer(kind);
-        const before = await f.snapshot();
-        let refusal: unknown;
-        try {
-          await door.call(f, id);
-        } catch (error) {
-          refusal = error;
-        }
-        const label = `${door.name} / ${kind}`;
-        if (refusal === undefined) failures.push(`${label}: accepted the reference`);
-        else if (!(refusal instanceof ConvexError) || refusal.data !== REFUSAL) failures.push(`${label}: wrong refusal`);
-        if (JSON.stringify(await f.snapshot()) !== JSON.stringify(before)) failures.push(`${label}: changed stored state`);
+// Bound by SCRUM-761 scenario `customer-doors-refuse-foreign-missing-and-deleted-customers`. It is a TOP-LEVEL
+// test with its positive control inside it: the local runner anchors `^title$` against the full name
+// (describe + title), so a title nested in a describe selects nothing and "executes" zero tests.
+test("every customer door refuses a foreign, missing and soft-deleted customer and writes nothing", async () => {
+  const failures: string[] = [];
+  for (const door of DOORS) {
+    for (const kind of KINDS) {
+      const f = await fixture();
+      const id = await f.customer(kind);
+      const before = await f.snapshot();
+      let refusal: unknown;
+      try {
+        await door.call(f, id);
+      } catch (error) {
+        refusal = error;
       }
+      const label = `${door.name} / ${kind}`;
+      if (refusal === undefined) failures.push(`${label}: accepted the reference`);
+      else if (!(refusal instanceof ConvexError) || refusal.data !== REFUSAL) failures.push(`${label}: wrong refusal`);
+      if (JSON.stringify(await f.snapshot()) !== JSON.stringify(before)) failures.push(`${label}: changed stored state`);
     }
-    expect(failures).toEqual([]);
-  });
+  }
 
-  test("a live same-org customer is updated and then soft-deleted (positive control)", async () => {
-    const f = await fixture();
-    const id = await f.customer("live");
+  // Positive control: a live same-org customer is updated and then soft-deleted by the same doors.
+  const f = await fixture();
+  const id = await f.customer("live");
+  try {
     await f.owner.mutation(api.customers.update, { orgId: f.orgId, customerId: id, firstName: "Renamed" });
-    expect((await f.snapshot()).customers.find((row) => row._id === id)?.firstName).toBe("Renamed");
+    if ((await f.snapshot()).customers.find((row) => row._id === id)?.firstName !== "Renamed")
+      failures.push("customers.update / live: did not rename the customer (positive control)");
     await f.owner.mutation(api.customers.softDelete, { orgId: f.orgId, customerId: id });
-    expect((await f.snapshot()).customers.find((row) => row._id === id)?.isDeleted).toBe(true);
-  });
-});
+    if ((await f.snapshot()).customers.find((row) => row._id === id)?.isDeleted !== true)
+      failures.push("customers.softDelete / live: did not delete the customer (positive control)");
+  } catch (error) {
+    failures.push(`live same-org customer was refused (positive control): ${String(error)}`);
+  }
+
+  expect(failures).toEqual([]);
+}, 120_000);
