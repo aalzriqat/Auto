@@ -69,6 +69,7 @@ export interface SupplierConcessionBasis {
   contractEntitlementMinor: number;
   currency: string;
   supplierName: string;
+  supplierId?: Id<"suppliers">;
 }
 
 const isSafeMinor = (value: number): boolean => Number.isSafeInteger(value);
@@ -162,7 +163,7 @@ const sameName = (a: string | undefined, b: string): boolean => (a ?? "").trim()
  * basis, and a basis that has moved since the dialog rendered.
  */
 export function assertObservedBasisMatchesVehicle(args: {
-  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName">;
+  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName" | "sourcedSupplierId">;
   currency: string;
   concessionMinor: number;
   observedEntitlementMinor: number | undefined;
@@ -191,7 +192,7 @@ export function assertObservedBasisMatchesVehicle(args: {
   }
   // Bounds last, so a wrong basis is reported as such before an amount problem.
   effectiveSupplierEntitlementMinor({ entitlementMinor, concessionMinor });
-  return { contractEntitlementMinor: entitlementMinor, currency, supplierName };
+  return { contractEntitlementMinor: entitlementMinor, currency, supplierName, ...(vehicle.sourcedSupplierId ? { supplierId: vehicle.sourcedSupplierId } : {}) };
 }
 
 /**
@@ -204,7 +205,7 @@ export function resolveEffectiveEntitlementForCompletion(args: {
     Doc<"financeApplications">,
     "vehicleId" | "vehicleItems" | "supplierGapShareMinor" | "supplierGapBasis"
   >;
-  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName">;
+  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName" | "sourcedSupplierId">;
   currency: string;
 }): { concessionMinor: number; contractEntitlementMinor: number | undefined } {
   const concessionMinor = storedConcessionMinor(args.app);
@@ -224,7 +225,9 @@ export function resolveEffectiveEntitlementForCompletion(args: {
     contractEntitlementMinor === undefined ||
     basis.contractEntitlementMinor !== contractEntitlementMinor ||
     basis.currency !== args.currency ||
-    !sameName(args.vehicle.sourcedFromName, basis.supplierName)
+    !sameName(args.vehicle.sourcedFromName, basis.supplierName) ||
+    !basis.supplierId ||
+    basis.supplierId !== args.vehicle.sourcedSupplierId
   ) {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }

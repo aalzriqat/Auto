@@ -579,6 +579,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "اسم المورّد مطلوب للمركبة المشتراة على الحساب.",
   ],
   // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
+  ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
+    "Supplier identity is unresolved.",
+    "هوية المورّد غير محددة.",
+  ],
   ServerError_SUPPLIER_IDENTITY_REQUIRED: [
     "A supplier is required.",
     "المورّد مطلوب.",

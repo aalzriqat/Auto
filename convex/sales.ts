@@ -2890,6 +2890,8 @@ export const dealCockpit = query({
     let supplierReference: string | undefined;
     let supplierReceivableId: Id<"vehicleSupplierReceivables"> | undefined;
     let supplierClaimStatus: SupplierClaimStatus | undefined;
+    let payable: Doc<"vehicleSupplierPayables"> | undefined;
+    let claim: Doc<"vehicleSupplierReceivables"> | undefined;
 
     if (consigned && collectsGross) {
       // THROUGH_DEALERSHIP: the gross landed here, so his share is a payable.
@@ -2897,7 +2899,7 @@ export const dealCockpit = query({
         .query("vehicleSupplierPayables")
         .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
         .collect();
-      const payable = payables.find(
+      payable = payables.find(
         (row) => row.orgId === args.orgId && row.status !== "CANCELLED"
       );
       supplierObligation = payable
@@ -2927,7 +2929,7 @@ export const dealCockpit = query({
         .query("vehicleSupplierReceivables")
         .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
         .collect();
-      const claim = receivables.find(
+      claim = receivables.find(
         (row) => row.orgId === args.orgId && row.status !== "CANCELLED"
       );
       supplierObligation = claim
@@ -3143,7 +3145,7 @@ export const dealCockpit = query({
         label: `${vehicle.make} ${vehicle.model} ${vehicle.year}`.trim(),
         vin: vehicle.vin,
         consigned,
-        supplierName: vehicle.sourcedFromName,
+        supplierName: (collectsGross ? payable?.sourcedFromName : claim?.sourcedFromName) ?? vehicle.sourcedFromName,
         /** SCRUM-372 vehicle card. Allowlisted — see `projectDealVehicleProfile`. */
         profile: vehicleProfile,
       },
@@ -3225,7 +3227,7 @@ export const dealCockpit = query({
       ? [
           {
             party: "SUPPLIER" as const,
-            name: vehicle?.sourcedFromName ?? "",
+            name: (collectsGross ? payable?.sourcedFromName : claim?.sourcedFromName) ?? vehicle?.sourcedFromName ?? "",
             position: positionForObligation(
               supplierObligation,
               // Same row, opposite direction, decided by the route: the

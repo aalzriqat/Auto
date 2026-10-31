@@ -66,6 +66,7 @@ export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ER
 /** Same message for a missing and a foreign id: no existence oracle (TEN-1, invariant I2). */
 export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
+export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE = "Supplier identity is unresolved.";
 const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 export function throwSupplierError(
@@ -328,6 +329,26 @@ async function readSupplierSnapshot(
  * copied into a new record; the name snapshot already on the source record still carries the history.
  * Read-only. It lives here because only the supplier modules read the supplier tables.
  */
+
+/**
+ * Asserts that a row has a resolved supplierId in the given orgId (N5, N6, N10).
+ * Throws SUPPLIER_ERROR.IDENTITY_UNRESOLVED with SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE if absent or foreign.
+ * Note: Does NOT refuse if supplier is inactive (author self-attack #4: deactivation allows settlement).
+ */
+export async function requireResolvedSupplierId(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  row: { supplierId?: Id<"suppliers"> },
+): Promise<Id<"suppliers">> {
+  if (!row.supplierId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  const supplier = await ctx.db.get("suppliers", row.supplierId);
+  if (!supplier || supplier.orgId !== orgId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  return row.supplierId;
+}
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,

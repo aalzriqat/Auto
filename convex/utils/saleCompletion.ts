@@ -1,3 +1,8 @@
+import {
+  SUPPLIER_ERROR,
+  SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+  throwSupplierError,
+} from "./supplierRegistry";
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
@@ -355,6 +360,7 @@ type PreparedSaleCompletion = {
   // left unposted. Both branches below now set this from `commissionAmount`
   // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
+  supplierSnapshotVersion?: number;
 };
 
 /**
@@ -514,6 +520,23 @@ async function prepareSaleCompletion(
   assertVehicleReadyForSale(vehicle);
   if (intent === "COMPLETION" && vehicle.sourceType !== "SOURCED") {
     await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId, args.saleDate);
+  }
+  let supplierSnapshotVersion: number | undefined;
+  if (intent === "COMPLETION" && vehicle.sourceType === "SOURCED") {
+    if (!vehicle.sourcedSupplierId) {
+      throwSupplierError(
+        SUPPLIER_ERROR.IDENTITY_UNRESOLVED,
+        SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+      );
+    }
+    const supplier = await ctx.db.get("suppliers", vehicle.sourcedSupplierId);
+    if (!supplier || supplier.orgId !== args.orgId) {
+      throwSupplierError(
+        SUPPLIER_ERROR.IDENTITY_UNRESOLVED,
+        SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+      );
+    }
+    supplierSnapshotVersion = supplier.version;
   }
 
   const customer = await ctx.db.get(args.customerId);
@@ -789,6 +812,7 @@ async function prepareSaleCompletion(
     accrueAtCompletion,
     supplierConcessionMinor,
     consignedFinancedNetMinor: consignedFinancedNet?.netMinor,
+    supplierSnapshotVersion,
   };
 }
 
@@ -2266,7 +2290,9 @@ async function applySaleCompletionSideEffects(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       saleId,
-      sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
+      supplierId: prepared.vehicle.sourcedSupplierId,
+      supplierSnapshotVersion: prepared.supplierSnapshotVersion,
+      sourcedFromName: prepared.vehicle.sourcedFromName ?? "",
       amountDue: marginAmount,
       currency: prepared.currency,
       alreadyReceivedAmount: appliedToSupplierSettlement,
@@ -2280,7 +2306,9 @@ async function applySaleCompletionSideEffects(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       saleId,
-      sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
+      supplierId: prepared.vehicle.sourcedSupplierId,
+      supplierSnapshotVersion: prepared.supplierSnapshotVersion,
+      sourcedFromName: prepared.vehicle.sourcedFromName ?? "",
       // At the currency's scale, mirroring the receivable side. `sourceCost` is
       // a decimal a person typed and the capitalized cost is a sum of them, so
       // stored raw this becomes a payable no payment can close: `recordPayment`

@@ -1,3 +1,4 @@
+import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
@@ -82,6 +83,7 @@ export async function openSupplierCostRecovery(
     orgId: args.expense.orgId,
     vehicleId: args.vehicle._id,
     expenseId: args.expense._id,
+    supplierId: args.vehicle.sourcedSupplierId,
     sourcedFromName: (args.vehicle.sourcedFromName ?? "").trim(),
     amountDueMinor: toMinorUnits(args.expense.amount, args.currency),
     amountRecoveredMinor: 0,
@@ -339,6 +341,11 @@ export const recordReceipt = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",args.recoveryId,"Supplier cost recovery not found."));
+    await requireResolvedSupplierId(
+      ctx,
+      args.orgId,
+      await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.")
+    );
     return await runWithIdempotency(
       ctx,
       {
@@ -366,6 +373,7 @@ export const recordReceipt = mutation({
           args.recoveryId,
           "Supplier cost recovery not found."
         );
+        await requireResolvedSupplierId(ctx, args.orgId, recovery);
         if (args.method === "BANK_TRANSFER") {
           await requireActiveBankInCurrency(ctx, {
             orgId: args.orgId, bankAccountId: args.bankAccountId, currency: recovery.currency,
