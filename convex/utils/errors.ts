@@ -376,6 +376,9 @@ export const AppErrorCode = {
   // nonzero VAT on a consigned supplier payable. Message in convex/sourcingPayables.ts; translated
   // under ServerError_<code>.
   CONSIGNED_PAYABLE_VAT_REFUSED: "CONSIGNED_PAYABLE_VAT_REFUSED",
+  SUPPLIER_AMOUNT_PRECISION: "SUPPLIER_AMOUNT_PRECISION",
+  TRADE_IN_VALUE_PRECISION: "TRADE_IN_VALUE_PRECISION",
+  SUPPLIER_PAYMENT_CHANGED: "SUPPLIER_PAYMENT_CHANGED",
   // SCRUM-858 S2 (owner, SCRUM-858 c23884): see convex/utils/openingInventoryContainment.ts.
   // Translated under ServerError_<code>.
   OPENING_INVENTORY_SOURCED_REFUSED: "OPENING_INVENTORY_SOURCED_REFUSED",
