@@ -71,8 +71,8 @@ export function encodeFilePath(file) {
   for (const char of file) {
     if (/^[a-z0-9._-]$/.test(char)) out += char;
     else if (char === "/") out += "+";
-    // A-Z (0x41-0x5A) plus 0x20 is a-z. Not `toLowerCase()`: fetchSpec.test.ts allows exactly one case-folding site in
-    // this folder (the path normalizer), and this is an encoding, not path normalization.
+    // A-Z (0x41-0x5A) plus 0x20 is a-z. This is spelled out because fetchSpec.test.ts allows exactly one
+    // case-folding call in this folder (the path normalizer), and this is an encoding, not path normalization.
     else if (/^[A-Z]$/.test(char)) out += `=${String.fromCharCode(char.charCodeAt(0) + 0x20)}`;
     else for (const byte of new TextEncoder().encode(char)) out += `~${byte.toString(16).padStart(2, "0")}`;
   }
