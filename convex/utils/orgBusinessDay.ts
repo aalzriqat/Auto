@@ -174,6 +174,44 @@ export function orgDayCalendarKeyRange(timeZone: string, at: number): InstantRan
   return { start, end: start + DAY_MS - 1 };
 }
 
+/**
+ * True when a stored date has the shape of a calendar key (an exact UTC midnight).
+ *
+ * `collectionPayments.paymentDate` is written in both forms: the Record Payment form stores the picked
+ * date as a calendar key, while refunds, cheque clearing and payment links store the instant they
+ * happened. The two cannot be told apart by a marker (the row has none), so the shape decides: a value
+ * that is an exact UTC midnight is read as the calendar date it names. An instant that lands on
+ * 00:00:00.000Z to the millisecond (about 1 in 86 million) is therefore filed under that UTC date.
+ */
+export function isCalendarKey(value: number): boolean {
+  return Number.isInteger(value) && value % DAY_MS === 0;
+}
+
+/**
+ * The inclusive `paymentDate` index ranges whose union is exactly the rows of one organization day:
+ *  - every INSTANT inside the zone's real span of the date, except those shaped like another date's
+ *    calendar key, and
+ *  - the date's own CALENDAR KEY, wherever it falls relative to that span.
+ * East of UTC the key sits inside the span; west of UTC it sits before it, and the span contains the
+ * NEXT date's key instead, which is why the span is split around foreign keys. The ranges are sorted
+ * and disjoint, and across consecutive dates every `paymentDate` falls in exactly one day.
+ * https://tc39.es/proposal-temporal/docs/plaindate.html (a calendar date is independent of any zone)
+ */
+export function orgDayPaymentDateRanges(timeZone: string, date: CalendarDate): InstantRange[] {
+  const ownKey = Date.UTC(date.year, date.month - 1, date.day);
+  const span = instantRangeOfCalendarDate(timeZone, date);
+  const ranges: InstantRange[] = [];
+  let cursor = span.start;
+  for (let midnight = Math.ceil(span.start / DAY_MS) * DAY_MS; midnight <= span.end; midnight += DAY_MS) {
+    if (midnight === ownKey) continue;
+    if (cursor <= midnight - 1) ranges.push({ start: cursor, end: midnight - 1 });
+    cursor = midnight + 1;
+  }
+  if (cursor <= span.end) ranges.push({ start: cursor, end: span.end });
+  if (ownKey < span.start || ownKey > span.end) ranges.push({ start: ownKey, end: ownKey });
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
 /** The calendar date a client-sent business-date key (a UTC midnight) names. */
 export function calendarDateOfKey(key: number): CalendarDate {
   const d = new Date(key);

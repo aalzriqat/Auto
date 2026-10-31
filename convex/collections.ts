@@ -54,12 +54,13 @@ import { assertNoActiveDealUnwind } from "./utils/dealUnwindGuard";
 import { assertNoOpenSaleInvoiceForUnlinkedReceipt } from "./utils/cashSalePilotGate";
 import { openingReceivableBasis } from "./utils/openingReceivableBasis";
 import {
+  calendarDateInTimeZone,
   calendarDateOfKey,
   calendarKeyOf,
   getOrgTimeZone,
-  instantRangeOfCalendarDate,
   orgDayCalendarKeyRange,
-  orgDayInstantRange,
+  orgDayPaymentDateRanges,
+  type InstantRange,
 } from "./utils/orgBusinessDay";
 import {
   assertNoSaleIdOnNewReceivable,
@@ -211,7 +212,12 @@ function roundMoney(amount: number, currency: string) {
 /**
  * SCRUM-265: a report that reads a bounded prefix must say so. Each read asks for one row more than
  * the cap; seeing that extra row proves the prefix hid qualifying rows, so the totals built from it
- * are lower bounds and the response carries `incomplete`.
+ * are partial and the response carries `incomplete`.
+ *
+ * "Partial" is not "lower bound". The prefix is the EARLIEST rows, and a total that nets refunds
+ * (`collectedToday`, the daily collections report: direction OUT / REFUND subtract) can hide a refund
+ * and so overstate as easily as understate. Only a figure that cannot be negative (receivables,
+ * aging, cheques) is a true lower bound. The screen words the two cases differently.
  */
 export const COLLECTIONS_REPORT_ROW_CAP = 500;
 export const COLLECTIONS_UPCOMING_CHEQUE_CAP = 200;
@@ -221,16 +227,54 @@ function capRows<T>(rows: T[], cap: number): { rows: T[]; incomplete: boolean } 
 }
 
 /**
+ * Reads `budget` rows at most across the ranges, in order. `read` receives only what is left of the
+ * budget, so a later range is never read when an earlier one already filled it.
+ */
+async function takeAcrossRanges<T>(
+  ranges: InstantRange[],
+  budget: number,
+  read: (range: InstantRange, take: number) => Promise<T[]>
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (const range of ranges) {
+    const left = budget - rows.length;
+    if (left <= 0) break;
+    rows.push(...(await read(range, left)));
+  }
+  return rows;
+}
+
+/**
+ * The `collectionPayments` of one organization day (SCRUM-264): instants inside the zone's span of
+ * the date plus the date's own calendar key. Read with one extra row so `capRows` can flag a cap.
+ */
+async function readOrgDayPayments(
+  ctx: Pick<QueryCtx, "db">,
+  orgId: Id<"organizations">,
+  ranges: InstantRange[]
+): Promise<Doc<"collectionPayments">[]> {
+  return takeAcrossRanges(ranges, COLLECTIONS_REPORT_ROW_CAP + 1, (range, take) =>
+    ctx.db
+      .query("collectionPayments")
+      .withIndex("by_org_paymentDate", (q) =>
+        q.eq("orgId", orgId).gte("paymentDate", range.start).lte("paymentDate", range.end)
+      )
+      .take(take)
+  );
+}
+
+/**
  * SCRUM-264: the business date the caller named, as the organization's own day. `businessDate` is a
  * calendar date sent as its UTC midnight (lib/dateInput.ts `dateInputToUtcMs`). `key` is that same
- * calendar key (what `cashierReconciliations.businessDate` stores); `start`/`end` bound the real
- * span of that date in the organization's time zone, for event timestamps such as `paymentDate`.
+ * calendar key (what `cashierReconciliations.businessDate` stores); `paymentRanges` are the
+ * `paymentDate` index ranges of that date: the real span of the date in the organization's time zone
+ * for event instants, plus the date's own calendar key for payments entered through the form.
  */
 async function orgBusinessDay(ctx: Pick<QueryCtx, "db">, orgId: Id<"organizations">, businessDate: number) {
   if (!Number.isFinite(businessDate)) throw new ConvexError("Business date is invalid.");
   const timeZone = await getOrgTimeZone(ctx, orgId);
   const date = calendarDateOfKey(businessDate);
-  return { key: calendarKeyOf(businessDate), ...instantRangeOfCalendarDate(timeZone, date) };
+  return { key: calendarKeyOf(businessDate), paymentRanges: orgDayPaymentDateRanges(timeZone, date) };
 }
 
 function addMonths(timestamp: number, months: number) {
@@ -754,7 +798,8 @@ export const summary = query({
     // SCRUM-264: "today" is the organization's business day. A payment is an instant, so it is
     // bounded by the real span of that day; a due date is a calendar key (UTC midnight).
     const timeZone = await getOrgTimeZone(ctx, args.orgId);
-    const paymentDay = orgDayInstantRange(timeZone, now);
+    const today = calendarDateInTimeZone(timeZone, now);
+    const paymentRanges = orgDayPaymentDateRanges(timeZone, today);
     const dueDay = orgDayCalendarKeyRange(timeZone, now);
     const openStatuses: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
     let totalOutstanding = 0;
@@ -776,22 +821,21 @@ export const summary = query({
       }
     }
 
-    const todaysPaymentsRead = await ctx.db
-      .query("collectionPayments")
-      .withIndex("by_org_paymentDate", (q) =>
-        q.eq("orgId", args.orgId).gte("paymentDate", paymentDay.start).lte("paymentDate", paymentDay.end)
-      )
-      .take(COLLECTIONS_REPORT_ROW_CAP + 1);
+    const todaysPaymentsRead = await readOrgDayPayments(ctx, args.orgId, paymentRanges);
     const todaysPayments = capRows(todaysPaymentsRead, COLLECTIONS_REPORT_ROW_CAP);
     const collectedToday = todaysPayments.rows
       .filter((payment) => payment.status === "POSTED")
       .reduce((sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount), 0);
 
     // Bounded by the week in the index range itself: a prefix of ALL future cheques, filtered
-    // afterwards, could fill with later cheques and hide this week's.
+    // afterwards, could fill with later cheques and hide this week's. A cheque date is a calendar key
+    // (00:00Z of its date), so the week runs from the organization's own date to seven days on, in
+    // keys. Bounding it by the instant `now` dropped today's cheque from 00:00Z onward.
     const upcomingChequesRead = await ctx.db
       .query("postDatedCheques")
-      .withIndex("by_org_chequeDate", (q) => q.eq("orgId", args.orgId).gte("chequeDate", now).lte("chequeDate", now + 7 * DAY_MS))
+      .withIndex("by_org_chequeDate", (q) =>
+        q.eq("orgId", args.orgId).gte("chequeDate", dueDay.start).lte("chequeDate", dueDay.start + 7 * DAY_MS)
+      )
       .take(COLLECTIONS_UPCOMING_CHEQUE_CAP + 1);
     const upcomingCheques = capRows(upcomingChequesRead, COLLECTIONS_UPCOMING_CHEQUE_CAP);
     const upcomingChequesThisWeek = upcomingCheques.rows
@@ -805,7 +849,8 @@ export const summary = query({
       collectedToday: roundMoney(collectedToday, currency),
       upcomingChequeTotal: roundMoney(upcomingChequeTotal, currency),
       upcomingChequeCount: upcomingChequesThisWeek.length,
-      // Additive (SCRUM-265): true means the matching figures are lower bounds from a capped read.
+      // Additive (SCRUM-265): true means the matching figures come from a capped read. For receivables
+      // and cheques they are lower bounds; `collectedToday` nets refunds, so it may be higher or lower.
       // Older clients ignore it, so they keep showing the bounded number they showed before.
       incomplete: {
         receivables: receivablesIncomplete,
@@ -3679,26 +3724,27 @@ async function readCashierDayCashPayments(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   cashierId: Id<"users">,
-  start: number,
-  end: number
+  paymentRanges: InstantRange[]
 ): Promise<
   | { complete: false }
   | { complete: true; payments: Doc<"collectionPayments">[]; expectedCash: number }
 > {
   const readMethod = (method: "CASH" | "REFUND", budget: number) =>
-    ctx.db
-      .query("collectionPayments")
-      .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
-        q
-          .eq("orgId", orgId)
-          .eq("cashierId", cashierId)
-          .eq("reconciliationId", undefined)
-          .eq("status", "POSTED")
-          .eq("method", method)
-          .gte("paymentDate", start)
-          .lte("paymentDate", end)
-      )
-      .take(budget);
+    takeAcrossRanges(paymentRanges, budget, (range, take) =>
+      ctx.db
+        .query("collectionPayments")
+        .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
+          q
+            .eq("orgId", orgId)
+            .eq("cashierId", cashierId)
+            .eq("reconciliationId", undefined)
+            .eq("status", "POSTED")
+            .eq("method", method)
+            .gte("paymentDate", range.start)
+            .lte("paymentDate", range.end)
+        )
+        .take(take)
+    );
   // Sequential on purpose: the second read gets only what the first left over.
   const cash = await readMethod("CASH", RECONCILIATION_DAY_LIMIT + 1);
   // Never issue a zero-budget read: CASH alone already proves the day incomplete.
@@ -3720,8 +3766,8 @@ export const getReconciliationDraft = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const { key: businessDate, start, end } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-    const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, start, end);
+    const { key: businessDate, paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+    const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, paymentRanges);
     if (!day.complete) {
       return { businessDate, complete: false as const, expectedCash: null, paymentCount: null };
     }
@@ -3764,8 +3810,8 @@ export const submitCashierReconciliation = mutation({
           throw new ConvexError("Counted cash must be zero or greater.");
         }
         const currency = await getOrgCurrency(ctx, args.orgId);
-        const { key: businessDate, start, end } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-        const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, start, end);
+        const { key: businessDate, paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+        const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, paymentRanges);
         if (!day.complete) {
           // Certifying the part we could read would be the defect this replaced.
           // The throw also rolls back the idempotency record, so a retry is fresh.
@@ -3859,11 +3905,8 @@ export const dailyCollectionList = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const { start, end } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-    const read = await ctx.db
-      .query("collectionPayments")
-      .withIndex("by_org_paymentDate", (q) => q.eq("orgId", args.orgId).gte("paymentDate", start).lte("paymentDate", end))
-      .take(COLLECTIONS_REPORT_ROW_CAP + 1);
+    const { paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+    const read = await readOrgDayPayments(ctx, args.orgId, paymentRanges);
     const { rows: payments, incomplete } = capRows(read, COLLECTIONS_REPORT_ROW_CAP);
     const rows = payments.filter((payment) => payment.status === "POSTED");
     const totalsByMethod: Record<string, number> = {};
@@ -3878,7 +3921,8 @@ export const dailyCollectionList = query({
       total: roundMoney(Object.values(totalsByMethod).reduce((sum, amount) => sum + amount, 0), currency),
       rows: await Promise.all(rows.map((payment) => hydratePayment(ctx, payment))),
       // Additive (SCRUM-265): true means the day held more payments than this report reads, so the
-      // totals and rows are a lower bound.
+      // rows and totals are partial. The total nets refunds, so it may be higher or lower than the
+      // true figure.
       incomplete,
     };
   },

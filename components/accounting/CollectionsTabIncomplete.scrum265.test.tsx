@@ -63,6 +63,17 @@ describe("Collections incomplete totals", () => {
     render(<CollectionsTab />);
     // Outstanding, overdue and due today all come from the receivables read.
     expect(screen.getAllByText("CollectionMetricIncomplete")).toHaveLength(3);
+    expect(screen.queryByText("CollectionMetricIncompleteNet")).toBeNull();
+  });
+
+  test("the collected-today figure nets refunds, so its capped tile is partial and never an at-least claim", () => {
+    stubs.queryResults.set(
+      "collections:summary",
+      summary({ receivables: false, collectedToday: true, upcomingCheques: false }),
+    );
+    render(<CollectionsTab />);
+    expect(screen.getAllByText("CollectionMetricIncompleteNet")).toHaveLength(1);
+    expect(screen.queryByText("CollectionMetricIncomplete")).toBeNull();
   });
 
   test("says nothing when every read was complete, and for a backend that does not report it", () => {
@@ -93,8 +104,12 @@ describe("Collections incomplete totals", () => {
     const tab = screen.getByRole("tab", { name: "Reports" });
     fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
     fireEvent.focus(tab);
-    const notices = await screen.findAllByText("CollectionReportIncomplete", undefined, { timeout: 3000 });
-    expect(notices).toHaveLength(3);
-    for (const notice of notices) expect(notice.getAttribute("role")).toBe("alert");
+    // Cheques and aging cannot be negative, so they keep the lower-bound wording; the daily
+    // collections report subtracts refunds, so it gets the neutral partial wording.
+    const lowerBound = await screen.findAllByText("CollectionReportIncomplete", undefined, { timeout: 3000 });
+    expect(lowerBound).toHaveLength(2);
+    const net = await screen.findAllByText("CollectionReportIncompleteNet", undefined, { timeout: 3000 });
+    expect(net).toHaveLength(1);
+    for (const notice of [...lowerBound, ...net]) expect(notice.getAttribute("role")).toBe("alert");
   });
 });

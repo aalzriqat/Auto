@@ -646,8 +646,16 @@ independent obligations; these rows do not stand for them.
 Matrix rows `SCRUM264-org-day` (money) and `SCRUM265-capped-reports` (money) bind literal tests in
 `convex/collectionsOrgDay.scrum264.test.ts`. Collections "today" and a business date are the
 organization's day (`orgSettings.timezone`, default Asia/Amman), computed with `Intl.DateTimeFormat`
-and exact at 23-hour and 25-hour daylight-saving days. A capped Collections read (`summary`,
-`dailyCollectionList`, `upcomingChequeReport`, `agingReport`) reports `incomplete` instead of a
-silent lower bound. They do not certify `overdueOutstanding` or the aging buckets against the
+and exact at 23-hour and 25-hour daylight-saving days. `collectionPayments.paymentDate` is stored as
+either a calendar key (the Record Payment form: UTC midnight of the picked date) or an instant (refunds,
+cheque clearing, payment links). A value that is an exact UTC midnight is filed under the date it names in
+every zone; any other value is filed under the zone's wall-clock date. An instant landing on 00:00:00.000Z
+to the millisecond is therefore read as that UTC date. The week of upcoming cheques in `summary` is bounded
+in organization calendar keys (today through today + 7), because a cheque date is a calendar key. A capped
+Collections read (`summary`, `dailyCollectionList`, `upcomingChequeReport`, `agingReport`) reports
+`incomplete` instead of a silent bound. Receivables, aging and cheque totals cannot be negative, so for them
+it is a lower bound; `collectedToday` and the daily list net refunds, the earliest rows are read, and a hidden
+refund makes the shown figure too high, so for them it is only partial (the screen says "higher or lower").
+They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.

@@ -242,7 +242,7 @@ export function CollectionsTab() {
         <Metric icon={Landmark} label={t("CollectionOutstanding" as any)} value={formatCurrency(summary?.totalOutstanding ?? 0)} incomplete={summary?.incomplete?.receivables} />
         <Metric icon={AlertTriangle} label={t("CollectionOverdue" as any)} value={formatCurrency(summary?.overdueOutstanding ?? 0)} tone="danger" incomplete={summary?.incomplete?.receivables} />
         <Metric icon={CalendarClock} label={t("CollectionDueToday" as any)} value={formatCurrency(summary?.dueToday ?? 0)} incomplete={summary?.incomplete?.receivables} />
-        <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" incomplete={summary?.incomplete?.collectedToday} />
+        <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" incomplete={summary?.incomplete?.collectedToday} net />
         <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} incomplete={summary?.incomplete?.upcomingCheques} />
       </div>
 
@@ -560,7 +560,7 @@ export function CollectionsTab() {
                 <div className="text-sm font-semibold text-foreground">{formatCurrency(dailyReport?.total ?? 0)}</div>
               </div>
               <MethodTotals totals={dailyReport?.totalsByMethod ?? {}} />
-              <IncompleteReportNotice incomplete={dailyReport?.incomplete} />
+              <IncompleteReportNotice incomplete={dailyReport?.incomplete} net />
             </ReportPanel>
 
             <ReportPanel title={t("UpcomingChequeReport" as any)}>
@@ -739,7 +739,7 @@ function DrawerLine({ template, name }: { template: string; name: string }) {
   );
 }
 
-function Metric({ icon: Icon, label, value, tone, incomplete }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; tone?: "success" | "danger"; incomplete?: boolean }) {
+function Metric({ icon: Icon, label, value, tone, incomplete, net }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; tone?: "success" | "danger"; incomplete?: boolean; net?: boolean }) {
   const { t } = useLanguage();
   const color = tone === "success" ? "text-emerald-600 dark:text-emerald-400" : tone === "danger" ? "text-rose-600 dark:text-rose-400" : "text-foreground";
   return (
@@ -749,17 +749,22 @@ function Metric({ icon: Icon, label, value, tone, incomplete }: { icon: React.Co
         {label}
       </div>
       <p className={`mt-2 text-lg font-semibold ${color}`}>{value}</p>
-      {/* SCRUM-265: a figure built from a capped read is never shown as exact. */}
-      {incomplete && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{t("CollectionMetricIncomplete" as any)}</p>}
+      {/* SCRUM-265: a figure built from a capped read is never shown as exact. A figure that nets refunds
+          (`net`) can be hidden-refund overstated, so it is "partial", never "at least". */}
+      {incomplete && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{t((net ? "CollectionMetricIncompleteNet" : "CollectionMetricIncomplete") as any)}</p>}
     </div>
   );
 }
 
-/** SCRUM-265: shown under a report whose backend read stopped at its row cap. */
-function IncompleteReportNotice({ incomplete }: { incomplete?: boolean }) {
+/**
+ * SCRUM-265: shown under a report whose backend read stopped at its row cap. `net` is for a report
+ * whose total subtracts refunds: the earliest rows were read, so a hidden refund makes the shown total
+ * too high as easily as a hidden receipt makes it too low.
+ */
+function IncompleteReportNotice({ incomplete, net }: { incomplete?: boolean; net?: boolean }) {
   const { t } = useLanguage();
   if (!incomplete) return null;
-  return <p role="alert" className="text-xs font-medium text-amber-700 dark:text-amber-300">{t("CollectionReportIncomplete" as any)}</p>;
+  return <p role="alert" className="text-xs font-medium text-amber-700 dark:text-amber-300">{t((net ? "CollectionReportIncompleteNet" : "CollectionReportIncomplete") as any)}</p>;
 }
 
 function StatusBadge({ status }: { status: string }) {
