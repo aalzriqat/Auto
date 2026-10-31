@@ -642,3 +642,12 @@ supplier, refunds a deposit, corrects a cost, or enables an excluded door.
 The direct-route browser witness records the supplier advice and asserts no
 bank movement. G9/G10 supplier identity and settlement certification remain
 independent obligations; these rows do not stand for them.
+
+Matrix rows `SCRUM264-org-day` (money) and `SCRUM265-capped-reports` (money) bind literal tests in
+`convex/collectionsOrgDay.scrum264.test.ts`. Collections "today" and a business date are the
+organization's day (`orgSettings.timezone`, default Asia/Amman), computed with `Intl.DateTimeFormat`
+and exact at 23-hour and 25-hour daylight-saving days. A capped Collections read (`summary`,
+`dailyCollectionList`, `upcomingChequeReport`, `agingReport`) reports `incomplete` instead of a
+silent lower bound. They do not certify `overdueOutstanding` or the aging buckets against the
+organization day (those still compare a due date with the current instant), the reconciliation
+history list (50 rows), or measured I/O.
