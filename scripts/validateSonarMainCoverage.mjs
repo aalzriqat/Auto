@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * SCRUM-764: Fail-closed validator for Sonar Main coverage artifact reuse.
  *
