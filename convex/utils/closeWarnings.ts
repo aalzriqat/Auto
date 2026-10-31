@@ -14,6 +14,15 @@ export const SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING =
   "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.";
 
 /**
+ * SCRUM-876: emitted when the supplier-payables comparison cannot be made as of the period end because a
+ * supplier payable moved, or an AP posting is dated, after it (or the date is unusable). The subledger
+ * is the payables' current state and cannot be restated to the period end. Server text is the
+ * acknowledgement key; the close dialog translates it at display time only.
+ */
+export const SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING =
+  "Supplier payables reconciliation could not be completed as of the period end: supplier payable or accounts payable activity is dated after that date (or the date is not usable), and the payables cannot be restated to it. Review supplier payables manually.";
+
+/**
  * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
  * the period end because deposit activity is dated after it. Server text is the acknowledgement key,
  * like the two above; the close dialog translates it at display time only.

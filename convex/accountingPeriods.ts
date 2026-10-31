@@ -13,6 +13,7 @@ import {
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
 } from "./utils/closeWarnings";
 import {
   computeSubledgerReconciliation,
@@ -525,10 +526,13 @@ async function computeCloseChecklist(
     // Could not see everything (too many rows to read, or AP-affecting postings
     // still in flight): never report that as reconciled, and never as a
     // difference in an empty list of currencies either.
+    const reason = supplierPayablesRecon.unavailableReason;
     warnings.push(
-      supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
+      reason === "PENDING_POSTINGS"
         ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
-        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
+        : reason === "POST_CUTOFF_ACTIVITY" || reason === "INVALID_DATE"
+          ? SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING
+          : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
     );
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
