@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { getValidatedEnv } from "./utils/env";
 
 // SCRUM-842: Meta's deauthorize and data-deletion callbacks must not copy the
 // Meta user id into anything that outlives the request (webhookLogs, the
@@ -259,6 +260,54 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
       expect(await allDeletionRequests(t)).toHaveLength(0);
       expect(await settingsOf(t, orgId)).toEqual(before);
       expect(consoleOutput.join("\n")).not.toContain(META_USER_ID);
+    });
+
+    test.each([
+      ["deauthorize", p.deauthorize],
+      ["data-deletion", p.deletion],
+    ])("%s: an unconfigured app secret answers 500 and nothing is written", async (_name, path) => {
+      const t = newTest();
+      const orgId = await seedConnectedOrg(t, p.platform);
+      const before = await settingsOf(t, orgId);
+      vi.mocked(getValidatedEnv).mockReturnValueOnce({
+        NEXT_PUBLIC_APP_URL: "https://app.test",
+      } as unknown as ReturnType<typeof getValidatedEnv>);
+
+      const res = await post(t, path, await signedRequest({ user_id: META_USER_ID }, p.secret));
+
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("Not configured");
+      expect(await allWebhookLogs(t)).toHaveLength(0);
+      expect(await allDeletionRequests(t)).toHaveLength(0);
+      expect(await settingsOf(t, orgId)).toEqual(before);
+    });
+
+    test.each([
+      ["deauthorize", p.deauthorize],
+      ["data-deletion", p.deletion],
+    ])("%s: a request with no signed_request is refused with 400 and nothing is written", async (_name, path) => {
+      const t = newTest();
+      const orgId = await seedConnectedOrg(t, p.platform);
+      const before = await settingsOf(t, orgId);
+
+      const emptyForm = await t.fetch(path, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "",
+      });
+      const notAForm = await t.fetch(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ signed_request: await signedRequest({ user_id: META_USER_ID }, p.secret) }),
+      });
+
+      for (const res of [emptyForm, notAForm]) {
+        expect(res.status).toBe(400);
+        expect(await res.text()).toBe("Bad request");
+      }
+      expect(await allWebhookLogs(t)).toHaveLength(0);
+      expect(await allDeletionRequests(t)).toHaveLength(0);
+      expect(await settingsOf(t, orgId)).toEqual(before);
     });
   });
 
