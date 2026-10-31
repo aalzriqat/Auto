@@ -323,6 +323,103 @@ async function verifyMetaSignedRequest(
   return JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
 }
 
+// SCRUM-842: the confirmation code Meta's data-deletion callback returns. It is
+// 16 random bytes in hex, so it is opaque and unguessable and carries nothing
+// from the signed request (no user id, no timestamp).
+function newMetaDeletionConfirmationCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function metaDeletionReply(appUrlSetting: string | undefined, confirmationCode: string): Response {
+  const appUrl = (appUrlSetting ?? "").replace(/\/$/, "");
+  return new Response(
+    JSON.stringify({
+      url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
+      confirmation_code: confirmationCode,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+type MetaCallbackKind = "deauthorize" | "data-deletion";
+
+interface MetaCallbackPlatform {
+  /** Lower-case platform id: the `<platform>-oauth` webhook-log source and the stored deletion-request platform. */
+  platform: "instagram" | "facebook";
+  /** Display name used in the fixed webhook-log summaries. */
+  label: "Instagram" | "Facebook";
+  deauthorizePath: string;
+  dataDeletionPath: string;
+  appSecret: (env: ReturnType<typeof getValidatedEnv>) => string | undefined;
+  /** Disconnects the dealer's connection for the signed-in Meta user id. */
+  disconnect: (ctx: ActionCtx, metaUserId: string) => Promise<unknown>;
+}
+
+// Shared handler for Meta's deauthorize and data-deletion callbacks on every
+// platform. Meta POSTs a form-encoded `signed_request`
+// (https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback);
+// it is verified against the app secret before anything is read from it, and
+// the Meta user id is never logged (SCRUM-842).
+async function handleMetaCallback(
+  ctx: ActionCtx,
+  request: Request,
+  config: MetaCallbackPlatform,
+  kind: MetaCallbackKind,
+): Promise<Response> {
+  const env = getValidatedEnv();
+  const appSecret = config.appSecret(env);
+  if (!appSecret) return new Response("Not configured", { status: 500 });
+
+  const form = await request.formData().catch(() => null);
+  const signedRequest = form?.get("signed_request")?.toString();
+  if (!signedRequest) return new Response("Bad request", { status: 400 });
+
+  const payload = await verifyMetaSignedRequest(signedRequest, appSecret);
+  if (!payload?.user_id)
+    return new Response("Invalid signature", { status: 400 });
+
+  await config.disconnect(ctx, String(payload.user_id));
+
+  if (kind === "deauthorize") {
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: `${config.platform}-oauth`,
+      status: "success",
+      summary: `${config.label} deauthorization callback processed`,
+    });
+    return new Response(null, { status: 200 });
+  }
+
+  const confirmationCode = newMetaDeletionConfirmationCode();
+  await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
+    code: confirmationCode,
+    platform: config.platform,
+  });
+  await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+    source: `${config.platform}-oauth`,
+    status: "success",
+    summary: `${config.label} data deletion callback processed`,
+  });
+  return metaDeletionReply(env.NEXT_PUBLIC_APP_URL, confirmationCode);
+}
+
+function registerMetaCallbackRoutes(config: MetaCallbackPlatform): void {
+  http.route({
+    path: config.deauthorizePath,
+    method: "POST",
+    handler: httpAction((ctx, request) =>
+      handleMetaCallback(ctx, request, config, "deauthorize"),
+    ),
+  });
+  http.route({
+    path: config.dataDeletionPath,
+    method: "POST",
+    handler: httpAction((ctx, request) =>
+      handleMetaCallback(ctx, request, config, "data-deletion"),
+    ),
+  });
+}
+
 // Verifies Meta's `X-Hub-Signature-256` header — a hex-encoded HMAC-SHA256 of
 // the raw request body, keyed with the Meta App Secret — sent on every
 // WhatsApp Cloud API webhook POST. This is the only thing that proves a
@@ -1006,86 +1103,20 @@ http.route({
 // Meta POSTs a form-encoded `signed_request` to both when a user revokes
 // access or requests data deletion from inside Instagram's own settings.
 
-http.route({
-  path: "/instagram-deauthorize",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const env = getValidatedEnv();
-    if (!env.INSTAGRAM_APP_SECRET)
-      return new Response("Not configured", { status: 500 });
-
-    const form = await request.formData().catch(() => null);
-    const signedRequest = form?.get("signed_request")?.toString();
-    if (!signedRequest) return new Response("Bad request", { status: 400 });
-
-    const payload = await verifyMetaSignedRequest(
-      signedRequest,
-      env.INSTAGRAM_APP_SECRET,
-    );
-    if (!payload?.user_id)
-      return new Response("Invalid signature", { status: 400 });
-
-    await ctx.runMutation(
+registerMetaCallbackRoutes({
+  platform: "instagram",
+  label: "Instagram",
+  deauthorizePath: "/instagram-deauthorize",
+  dataDeletionPath: "/instagram-data-deletion",
+  appSecret: (env) => env.INSTAGRAM_APP_SECRET,
+  // Clears the dealer's IG business account ID, access token and display name
+  // from orgSettings, which removes the connection synchronously with no async
+  // job. That is what the status page claims, and no more (SCRUM-842).
+  disconnect: (ctx, metaUserId) =>
+    ctx.runMutation(
       internal.socialIntegrations.disconnectByInstagramUserId,
-      {
-        instagramBusinessAccountId: String(payload.user_id),
-      },
-    );
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "instagram-oauth",
-      status: "success",
-      summary: `Deauthorized by Instagram user ${payload.user_id}`,
-    });
-
-    return new Response(null, { status: 200 });
-  }),
-});
-
-http.route({
-  path: "/instagram-data-deletion",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const env = getValidatedEnv();
-    if (!env.INSTAGRAM_APP_SECRET)
-      return new Response("Not configured", { status: 500 });
-
-    const form = await request.formData().catch(() => null);
-    const signedRequest = form?.get("signed_request")?.toString();
-    if (!signedRequest) return new Response("Bad request", { status: 400 });
-
-    const payload = await verifyMetaSignedRequest(
-      signedRequest,
-      env.INSTAGRAM_APP_SECRET,
-    );
-    if (!payload?.user_id)
-      return new Response("Invalid signature", { status: 400 });
-
-    // We only ever stored the dealer's own IG business account ID, access
-    // token, and display name on orgSettings — clearing those is a complete
-    // erasure, no async job needed.
-    await ctx.runMutation(
-      internal.socialIntegrations.disconnectByInstagramUserId,
-      {
-        instagramBusinessAccountId: String(payload.user_id),
-      },
-    );
-
-    const confirmationCode = `${payload.user_id}-${Date.now()}`;
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "instagram-oauth",
-      status: "success",
-      summary: `Data deletion requested by Instagram user ${payload.user_id}`,
-    });
-
-    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-    return new Response(
-      JSON.stringify({
-        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
-        confirmation_code: confirmationCode,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-  }),
+      { instagramBusinessAccountId: metaUserId },
+    ),
 });
 
 // ─── Instagram comments + DMs webhook ──────────────────────────────────────────
@@ -1468,86 +1499,21 @@ http.route({
 // access or requests data deletion. Reuses the same signed_request verifier
 // Instagram's callbacks use — it's a generic Meta format, not platform-specific.
 
-http.route({
-  path: "/facebook-deauthorize",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const env = getValidatedEnv();
-    if (!env.FACEBOOK_APP_SECRET)
-      return new Response("Not configured", { status: 500 });
-
-    const form = await request.formData().catch(() => null);
-    const signedRequest = form?.get("signed_request")?.toString();
-    if (!signedRequest) return new Response("Bad request", { status: 400 });
-
-    const payload = await verifyMetaSignedRequest(
-      signedRequest,
-      env.FACEBOOK_APP_SECRET,
-    );
-    if (!payload?.user_id)
-      return new Response("Invalid signature", { status: 400 });
-
-    await ctx.runMutation(
+registerMetaCallbackRoutes({
+  platform: "facebook",
+  label: "Facebook",
+  deauthorizePath: "/facebook-deauthorize",
+  dataDeletionPath: "/facebook-data-deletion",
+  appSecret: (env) => env.FACEBOOK_APP_SECRET,
+  // Clears the dealer's Page ID, access token, display name and connecting user
+  // id from orgSettings, which removes the connection synchronously with no async
+  // job. The revocation fence (`facebookRevocations`) is separate and retained
+  // (SCRUM-807); the status page claims only the connection (SCRUM-842).
+  disconnect: (ctx, metaUserId) =>
+    ctx.runMutation(
       internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
-      {
-        facebookConnectedByUserId: String(payload.user_id),
-      },
-    );
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "facebook-oauth",
-      status: "success",
-      summary: `Deauthorized by Facebook user ${payload.user_id}`,
-    });
-
-    return new Response(null, { status: 200 });
-  }),
-});
-
-http.route({
-  path: "/facebook-data-deletion",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const env = getValidatedEnv();
-    if (!env.FACEBOOK_APP_SECRET)
-      return new Response("Not configured", { status: 500 });
-
-    const form = await request.formData().catch(() => null);
-    const signedRequest = form?.get("signed_request")?.toString();
-    if (!signedRequest) return new Response("Bad request", { status: 400 });
-
-    const payload = await verifyMetaSignedRequest(
-      signedRequest,
-      env.FACEBOOK_APP_SECRET,
-    );
-    if (!payload?.user_id)
-      return new Response("Invalid signature", { status: 400 });
-
-    // We only ever stored the dealer's own Page ID, access token, and
-    // display name on orgSettings — clearing those is a complete erasure,
-    // no async job needed.
-    await ctx.runMutation(
-      internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
-      {
-        facebookConnectedByUserId: String(payload.user_id),
-      },
-    );
-
-    const confirmationCode = `${payload.user_id}-${Date.now()}`;
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "facebook-oauth",
-      status: "success",
-      summary: `Data deletion requested by Facebook user ${payload.user_id}`,
-    });
-
-    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-    return new Response(
-      JSON.stringify({
-        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
-        confirmation_code: confirmationCode,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
-  }),
+      { facebookConnectedByUserId: metaUserId },
+    ),
 });
 
 // ─── Facebook Page comments + Messenger DMs webhook ────────────────────────

@@ -783,12 +783,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // and takes no caller-supplied row id. The worker mutation keeps a native orgId declaration (the
   // shared remainder of its args is spread) so the analyser still covers it: sharing the whole args
   // object would have moved it to skippedNoArgsBlock, a silent loss of coverage.
+  // SCRUM-842: + socialIntegrations.recordMetaDataDeletion (+1) - 566 -> 567 total, 169 -> 170 skippedNoOrgId,
+  // `analysed` unchanged at 382 (re-measured FROM THE ANALYSER). An internalMutation with no public entry point
+  // and no `orgId` arg, called only by the signed Meta data-deletion HTTP callbacks. It is keyed by neither org
+  // nor Meta user: it inserts one `metaDataDeletionRequests` receipt (opaque 32-hex code, platform, time) after a
+  // regex check on the code, takes no caller-supplied row id and reads or patches no tenant data. The unguarded-write
+  // audit stays empty.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 566,
+      totalMutations: 567,
       analysed: 382,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 169,
+      skippedNoOrgId: 170,
     });
   });
 });
