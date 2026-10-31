@@ -272,13 +272,8 @@ async function checkStandardSeat1(t, otherSessionText, seat1Model, localReview) 
   return problems;
 }
 
-async function checkSeat2(t, isWaived, codexReview) {
+function checkSeat2Effort(t) {
   const problems = [];
-  const seat2Model = line(t, "Seat 2 model") ?? "";
-  if (!SEAT2_MODEL.test(seat2Model)) {
-    problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
-  }
-
   const seat2Mode = (line(t, "Seat 2 mode") ?? line(t, "Seat 2 execution") ?? "").trim().toLowerCase();
   const isChatMode = seat2Mode === "chat" || seat2Mode === "primary-chat";
   const seat2Effort = line(t, "Seat 2 effort") ?? "";
@@ -294,15 +289,26 @@ async function checkSeat2(t, isWaived, codexReview) {
     problems.push('"Seat 2 effort" must be low, medium, or unasserted (chat review).');
   }
 
+  return { problems, seat2Mode, isChatMode, isUnassertedEffort };
+}
+
+function checkSeat2ChatUnasserted(seat2Review, codexReview) {
+  if (!seat2Review || isPlaceholder(seat2Review)) {
+    return ['Seat 2 primary-chat execution with unasserted effort requires an independent current-head review comment on this PR.'];
+  }
+  if (!codexReview) {
+    return ['Seat 2 primary-chat execution with unasserted effort requires an independent current-head review certificate.'];
+  }
+  return [];
+}
+
+async function checkSeat2Review(t, isWaived, codexReview, { seat2Mode, isChatMode, isUnassertedEffort }) {
+  const problems = [];
   const seat2Review = line(t, "Seat 2 review");
   const implementerSession = line(t, "Implementer session") ?? line(t, "Implementer");
 
   if (isChatMode && isUnassertedEffort) {
-    if (!seat2Review || isPlaceholder(seat2Review)) {
-      problems.push('Seat 2 primary-chat execution with unasserted effort requires an independent current-head review comment on this PR.');
-    } else if (!codexReview) {
-      problems.push('Seat 2 primary-chat execution with unasserted effort requires an independent current-head review certificate.');
-    }
+    problems.push(...checkSeat2ChatUnasserted(seat2Review, codexReview));
   }
 
   if (isWaived) {
@@ -319,6 +325,23 @@ async function checkSeat2(t, isWaived, codexReview) {
     const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
     problems.push(...await codexReview({ url: seat2Review, sha, implementerSession, mode: seat2Mode }));
   }
+
+  return problems;
+}
+
+async function checkSeat2(t, isWaived, codexReview) {
+  const problems = [];
+  const seat2Model = line(t, "Seat 2 model") ?? "";
+  if (!SEAT2_MODEL.test(seat2Model)) {
+    problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
+  }
+
+  const effortResult = checkSeat2Effort(t);
+  problems.push(...effortResult.problems);
+
+  const reviewProblems = await checkSeat2Review(t, isWaived, codexReview, effortResult);
+  problems.push(...reviewProblems);
+
   return problems;
 }
 
