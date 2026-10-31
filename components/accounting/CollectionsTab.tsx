@@ -239,11 +239,11 @@ export function CollectionsTab() {
   return (
     <div className="h-full p-6 space-y-6">
       <div className="grid gap-3 md:grid-cols-5">
-        <Metric icon={Landmark} label={t("CollectionOutstanding" as any)} value={formatCurrency(summary?.totalOutstanding ?? 0)} />
-        <Metric icon={AlertTriangle} label={t("CollectionOverdue" as any)} value={formatCurrency(summary?.overdueOutstanding ?? 0)} tone="danger" />
-        <Metric icon={CalendarClock} label={t("CollectionDueToday" as any)} value={formatCurrency(summary?.dueToday ?? 0)} />
-        <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" />
-        <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} />
+        <Metric icon={Landmark} label={t("CollectionOutstanding" as any)} value={formatCurrency(summary?.totalOutstanding ?? 0)} incomplete={summary?.incomplete?.receivables} />
+        <Metric icon={AlertTriangle} label={t("CollectionOverdue" as any)} value={formatCurrency(summary?.overdueOutstanding ?? 0)} tone="danger" incomplete={summary?.incomplete?.receivables} />
+        <Metric icon={CalendarClock} label={t("CollectionDueToday" as any)} value={formatCurrency(summary?.dueToday ?? 0)} incomplete={summary?.incomplete?.receivables} />
+        <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" incomplete={summary?.incomplete?.collectedToday} />
+        <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} incomplete={summary?.incomplete?.upcomingCheques} />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -560,6 +560,7 @@ export function CollectionsTab() {
                 <div className="text-sm font-semibold text-foreground">{formatCurrency(dailyReport?.total ?? 0)}</div>
               </div>
               <MethodTotals totals={dailyReport?.totalsByMethod ?? {}} />
+              <IncompleteReportNotice incomplete={dailyReport?.incomplete} />
             </ReportPanel>
 
             <ReportPanel title={t("UpcomingChequeReport" as any)}>
@@ -576,6 +577,7 @@ export function CollectionsTab() {
                   </div>
                 ))}
               </div>
+              <IncompleteReportNotice incomplete={chequeReport?.incomplete} />
             </ReportPanel>
           </div>
 
@@ -595,6 +597,7 @@ export function CollectionsTab() {
                 </div>
               ))}
             </div>
+            <IncompleteReportNotice incomplete={aging?.incomplete} />
           </ReportPanel>
 
           <ReportPanel title={t("CashierReconciliations" as any)}>
@@ -736,7 +739,8 @@ function DrawerLine({ template, name }: { template: string; name: string }) {
   );
 }
 
-function Metric({ icon: Icon, label, value, tone }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; tone?: "success" | "danger" }) {
+function Metric({ icon: Icon, label, value, tone, incomplete }: { icon: React.ComponentType<{ className?: string }>; label: string; value: string; tone?: "success" | "danger"; incomplete?: boolean }) {
+  const { t } = useLanguage();
   const color = tone === "success" ? "text-emerald-600 dark:text-emerald-400" : tone === "danger" ? "text-rose-600 dark:text-rose-400" : "text-foreground";
   return (
     <div className="rounded-md border border-border bg-card p-3">
@@ -745,8 +749,17 @@ function Metric({ icon: Icon, label, value, tone }: { icon: React.ComponentType<
         {label}
       </div>
       <p className={`mt-2 text-lg font-semibold ${color}`}>{value}</p>
+      {/* SCRUM-265: a figure built from a capped read is never shown as exact. */}
+      {incomplete && <p role="status" className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">{t("CollectionMetricIncomplete" as any)}</p>}
     </div>
   );
+}
+
+/** SCRUM-265: shown under a report whose backend read stopped at its row cap. */
+function IncompleteReportNotice({ incomplete }: { incomplete?: boolean }) {
+  const { t } = useLanguage();
+  if (!incomplete) return null;
+  return <p role="alert" className="text-xs font-medium text-amber-700 dark:text-amber-300">{t("CollectionReportIncomplete" as any)}</p>;
 }
 
 function StatusBadge({ status }: { status: string }) {
