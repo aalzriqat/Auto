@@ -94,8 +94,8 @@ afterEach(async () => {
   }
 });
 
-async function seed(tag: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+async function seed(tag: string, options: { transactionLimits?: boolean } = {}) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB, options);
   seededConvexes.push(t);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S2 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
@@ -846,9 +846,10 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
         ...(partnerId ? [{ kind: "PARTNER_CAPITAL" as const, partnerId, accountId: capitalAccountId, rowKey: "capital-1", amountMinor: OPENING_MINOR }] : []),
       ],
     });
-    const row = (await s.t.run((ctx) =>
-      ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).filter((q) => q.eq(q.field("origin"), "OPENING")).unique()
-    ))!;
+    const row = (await s.t.run(async (ctx) =>
+      (await ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).take(50))
+        .filter((recovery) => recovery.origin === "OPENING")
+    ))[0];
     if (row.origin !== "OPENING") throw new Error("Opening fixture did not create an opening recovery");
     return { accountId, row };
   }
@@ -994,9 +995,11 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     const measured = await s.t.run(ctx => computeSupplierReceivablesReconciliation(
       { ...ctx, db: observed(ctx.db) }, s.orgId, undefined));
     expect(measured).toMatchObject({ status: "AVAILABLE", isReconciled: true });
-    expect(reads.documents).toBeGreaterThan(18_000);
-    expect(reads.documents).toBeLessThan(CONVEX_DOCUMENTS_SCANNED_LIMIT);
+    // r5 M1: discovery no longer inventories the tenant's journal lines, so 6,000 receipt/reversal journals
+    // and their 12,000 lines cost nothing here. The reviewed head read 18,039 documents for this fixture.
+    expect(reads.documents).toBeLessThan(2_000);
     expect(reads.ranges).toBeLessThan(CONVEX_INDEX_RANGES_LIMIT);
+    expect(reads.documents).toBeLessThan(CONVEX_DOCUMENTS_SCANNED_LIMIT);
     console.info("SCRUM-869 pilot history harness database reads", reads);
   }, 60_000);
 
@@ -1065,6 +1068,176 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
       status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", complete: false, isReconciled: false, currencies: [],
     });
   });
+
+  // SCRUM-869 r5 H2. Seat 2 reproduced both at 20d938c5: a retained header that agrees with the live
+  // legs proves nothing about independent coverage, because the omitted account's snapshot survives.
+  test("r5 H2(i): deleting the supplier leg AND its retained-header line cannot hide the surviving snapshot", async () => {
+    const s = await seed("r5hdrleg");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId))!;
+      const line = (await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).unique())!;
+      await ctx.db.delete(line._id);
+      await ctx.db.patch(header._id, { lines: header.lines.filter(l => l.accountId !== accountId), allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    const gl = await s.t.run(ctx => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("r5 H2(ii): swapping the supplier account to cash in BOTH the live leg and the retained header cannot hide its snapshot", async () => {
+    const s = await seed("r5hdrswap");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const cash = (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", s.orgId).eq("systemKey", "CASH_ON_HAND")).unique())!;
+      const header = (await ctx.db.get(row.openingBalanceDraftId))!;
+      const line = (await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).unique())!;
+      await ctx.db.patch(line._id, { accountId: cash._id });
+      await ctx.db.patch(header._id, {
+        lines: header.lines.map(l => l.accountId === accountId ? { ...l, accountId: cash._id } : l),
+        allocations: [], allocationResults: [],
+      });
+      await ctx.db.delete(row._id);
+    });
+    const gl = await s.t.run(ctx => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("r5 H2(iii): an opening journal that lost its supplier leg is refused even when no snapshot survives", async () => {
+    const s = await seed("r5noevidence");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId))!;
+      const lines = await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).take(10);
+      const snapshots = await ctx.db.query("accountBalanceSnapshots").withIndex("by_org_account_currency_period_shard", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).take(10);
+      for (const doc of [...lines, ...snapshots]) await ctx.db.delete(doc._id);
+      await ctx.db.patch(header._id, { lines: header.lines.filter(l => l.accountId !== accountId), allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("r5 H2 CONTROL: a custom asset account with no GL activity does not block the comparison", async () => {
+    const s = await seed("r5idleasset");
+    await s.asUser.mutation(api.chartOfAccounts.create, {
+      orgId: s.orgId, code: "1998", name: "Idle custom asset", type: "ASSET", normalBalance: "DEBIT",
+      currencyRestriction: "JOD", isControlAccount: false, allowManualPosting: true,
+    });
+    await directSale(s, "r5idleasset");
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+  });
+
+  test("r5 H2: exactly 30 idle custom asset accounts reconcile; a 31st is OVER_LIMIT, never a partial look", async () => {
+    const s = await seed("r5assetcap");
+    await directSale(s, "r5assetcap");
+    const addIdleAssets = (from: number, to: number) => s.t.run(async (ctx) => {
+      for (let i = from; i < to; i += 1) {
+        await ctx.db.insert("chartOfAccounts", {
+          orgId: s.orgId, code: `19${String(i).padStart(2, "0")}`, name: `Idle custom asset ${i}`, type: "ASSET", normalBalance: "DEBIT",
+          isControlAccount: false, allowManualPosting: true, active: true, createdAt: Date.now(), updatedAt: Date.now(),
+        });
+      }
+    });
+    await addIdleAssets(0, 30);
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    await addIdleAssets(30, 31);
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", complete: false });
+  });
+
+  /** Unrelated org history: balanced pairs on expense/cash, under one header, in batches that fit one harness transaction. */
+  async function addUnrelatedHistory(s: Seed, pairs: number, batch: number, description?: string) {
+    const target = await s.t.run(async (ctx) => {
+      const expense = (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", s.orgId).eq("systemKey", "GENERAL_EXPENSE")).unique())!;
+      const cash = (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", s.orgId).eq("systemKey", "CASH_ON_HAND")).unique())!;
+      const template = (await ctx.db.query("journalEntries").withIndex("by_org", q => q.eq("orgId", s.orgId)).first())!;
+      const { _id: _i, _creationTime: _c, ...header } = template;
+      const id = await ctx.db.insert("journalEntries", { ...header, sourceType: "unrelated-history", sourceId: "bulk", journalNumber: "BULK",
+        category: "SYSTEM", status: "POSTED" });
+      return { id, expense: expense._id, cash: cash._id };
+    });
+    for (let done = 0; done < pairs; done += batch) {
+      // Raw insert: the rows are unrelated expense/cash lines, so the bank aggregate triggers would be no-ops, and 27,000 wrapped writes take minutes.
+      await s.t.runUnwrapped(async (ctx) => {
+        const base = { orgId: s.orgId, journalEntryId: target.id, currency: "JOD", scale: 3, accountingDate: Date.now() - 1_000,
+          ...(description === undefined ? {} : { description }) };
+        for (let i = done; i < Math.min(done + batch, pairs); i += 1) {
+          await ctx.db.insert("journalLines", { ...base, lineNumber: 2 * i, accountId: target.expense, debitMinor: 1, creditMinor: 0 });
+          await ctx.db.insert("journalLines", { ...base, lineNumber: 2 * i + 1, accountId: target.cash, debitMinor: 0, creditMinor: 1 });
+        }
+      });
+    }
+  }
+
+  /** Documents, ranges and payload bytes the computation reads, observed by forwarding the harness db unchanged. */
+  async function measureReportReads(s: Seed) {
+    const reads = { documents: 0, ranges: 0, bytes: 0 };
+    const observed = <T extends object>(target: T): T => new Proxy(target, {
+      get(object, key, receiver) {
+        const member: unknown = Reflect.get(object, key, receiver);
+        if (typeof member !== "function") return member;
+        return (...args: unknown[]) => {
+          const value: unknown = Reflect.apply(member, object, args);
+          if (["take", "first", "unique", "get", "collect"].includes(String(key))) {
+            reads.ranges += 1;
+            return Promise.resolve(value).then(rows => {
+              reads.documents += Array.isArray(rows) ? rows.length : 1;
+              reads.bytes += JSON.stringify(rows ?? null).length;
+              return rows;
+            });
+          }
+          return value !== null && typeof value === "object" ? observed(value) : value;
+        };
+      },
+    });
+    await s.t.run(ctx => computeSupplierReceivablesReconciliation({ ...ctx, db: observed(ctx.db) }, s.orgId, undefined));
+    return reads;
+  }
+
+  async function withRealRecoveryReceipt(s: Seed, tag: string) {
+    const { recovery } = await supplierBornePayment(s, tag);
+    await s.asUser.mutation(api.supplierCostRecoveries.recordReceipt, {
+      orgId: s.orgId, recoveryId: recovery._id, amountMinor: 80_000, method: "CASH",
+      receivedDate: Date.now() - 1_000, idempotencyKey: crypto.randomUUID(),
+    });
+  }
+
+  test("r5 M1(a): more than 26,700 unrelated journal lines still reconcile once a recovery-family journal exists", async () => {
+    const s = await seed("r5unrelated");
+    await withRealRecoveryReceipt(s, "r5unrelated");
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+    await addUnrelatedHistory(s, 13_500, 1_500); // 27,000 lines; the reviewed head went OVER_LIMIT at ~26,658
+    const total = await s.t.run(async (ctx) => (await ctx.db.query("journalLines").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(40_000)).length);
+    expect(total).toBeGreaterThan(26_700);
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    // The read follows the chart and the recovery inventories, not the size of the org's journal.
+    const reads = await measureReportReads(s);
+    console.info("SCRUM-869 r5 unrelated-history harness reads at 27,000 lines", reads);
+    expect(reads.documents).toBeLessThan(2_000);
+  }, 180_000);
+
+  test("r5 M1(b): unrelated lines with large descriptions stay under the 16 MiB read limit (convex-test transactionLimits enforced)", async () => {
+    const s = await seed("r5bytes", { transactionLimits: true });
+    await withRealRecoveryReceipt(s, "r5bytes");
+    // 1,000 pairs x 9,000 characters = ~18 MB of line payload in 2,000 documents: far below the document cap.
+    await addUnrelatedHistory(s, 1_000, 100, "x".repeat(9_000));
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    const reads = await measureReportReads(s);
+    console.info("SCRUM-869 r5 large-description harness reads", reads);
+    // The reviewed head read 18,769,196 bytes here; bytes are the size of every document the report reads.
+    expect(reads.bytes).toBeLessThan(1_000_000);
+  }, 180_000);
 
   async function resetOpening(s: Seed) {
     const { row } = await openingRecovery(s, Date.now() - 1_000);

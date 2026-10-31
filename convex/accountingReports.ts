@@ -1275,9 +1275,10 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
  *                     the lines and one `db.get` per parent entry.
  *   openingRecoveries OPENING cost recoveries, each of which re-verifies its opening draft (a scan of up
  *                     to 100 drafts, a journal probe, up to 200 lines and a few `db.get`s).
- * Discovery borrows the unused document allowance after reserving actual subledger counts,
- * actual opening proofs, and the full in-flight/GL caps. One complete tenant-line inventory
- * joins both recovery-family journal inventories without a range per historical journal.
+ * Discovery has a constant allowance (SUPPLIER_GL_DISCOVERY_LIMITS) that must still fit after reserving
+ * actual subledger counts, actual opening proofs, and the full in-flight/GL caps. It reads identities,
+ * not history: cutover journals, retained opening headers, the opening journal's lines and the chart's
+ * ASSET accounts. It never scans the organization's journal lines, so its cost does not grow with age.
  * `supplierReceivablesReconWorstCase` includes the refusal sentinel. Opening proof allowances
  * come from openingRecoveryBasis / requireOpeningSettlementBasis, with headroom.
  */
@@ -1289,7 +1290,10 @@ export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl
 const OPENING_ROW_DOCUMENT_ALLOWANCE = 320;
 const OPENING_SHARED_DOCUMENT_ALLOWANCE = 202;
 const OPENING_ROW_RANGE_ALLOWANCE = 24;
-const SUPPLIER_GL_DISCOVERY_LIMITS = { documents: 1000, ranges: 100 } as const;
+const SUPPLIER_GL_DISCOVERY_LIMITS = { documents: 1000, ranges: 160 } as const;
+// Chart-class coverage reads the ASSET accounts once (<= 100 documents) and probes each custom one that
+// is not already compared with two one-row ranges (<= 30 accounts = 60 ranges and 60 documents).
+const SUPPLIER_CLASS_COVERAGE_LIMITS = { assetAccounts: 100, probedAccounts: 30 } as const;
 const SUPPLIER_RECON_DOCUMENT_BUDGET = 31_900;
 export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
 export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
@@ -1363,8 +1367,10 @@ class SupplierGlDiscoveryRefusal extends Error {
 }
 
 /** Discover the comparison from durable GL sources, never from surviving subledger/allocation rows.
- * Source-family history is bounded even when it has no remaining domain row. Balances still come
- * from the snapshot-aware GL reader; these lines establish account identity, not a second balance. */
+ * Coverage is independent of the opening journal and its header: the chart's custom ASSET accounts are
+ * probed for GL evidence, so an account omitted from both cannot hide a surviving balance. The read
+ * follows the chart, not the organization's journal history. Balances still come from the
+ * snapshot-aware GL reader; these reads establish account identity, not a second balance. */
 async function discoverSupplierReceivableGlAccounts(
   ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, maxAccounts: number,
   reservation: Parameters<typeof supplierReceivablesReservedReads>[0],
@@ -1378,8 +1384,12 @@ async function discoverSupplierReceivableGlAccounts(
   const reserved = supplierReceivablesReservedReads({ ...reservation, openingRecoveries: openingProofs });
   // Missing allocations can leave more discovered controls than surviving proofs.
   // Reserve the maximum compared-account allowance even on that corruption path.
-  const documentLimit = SUPPLIER_RECON_DOCUMENT_BUDGET - reserved.documents - (maxAccounts - 1 - openingProofs);
-  if (documentLimit < SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  const available = SUPPLIER_RECON_DOCUMENT_BUDGET - reserved.documents - (maxAccounts - 1 - openingProofs);
+  if (available < SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  // Discovery reads identities (cutover journals, retained headers, the opening journal's lines, the
+  // chart's asset accounts and one-row probes), never history, so its allowance is a constant and the
+  // worst-case arithmetic below is true rather than an upper bound that borrowed ~10k more documents.
+  const documentLimit = SUPPLIER_GL_DISCOVERY_LIMITS.documents;
   let documents = 0;
   let ranges = 0;
   const chargeRange = () => {
@@ -1459,7 +1469,11 @@ async function discoverSupplierReceivableGlAccounts(
     // retained header's exact account/amount multiset before discovering controls.
     // Amounts still come exclusively from the snapshot-aware balance consumer.
     const remainingLines = [...source.parent.lines];
+    let journalDebit = 0;
+    let journalCredit = 0;
     for (const line of lines) {
+      journalDebit += line.debitMinor;
+      journalCredit += line.creditMinor;
       const match = remainingLines.findIndex(expected => expected.accountId === line.accountId &&
         expected.debitMinor === line.debitMinor && expected.creditMinor === line.creditMinor);
       if (match < 0 || line.currency !== source.journal.currency ||
@@ -1476,42 +1490,42 @@ async function discoverSupplierReceivableGlAccounts(
         addControl(account._id, source.journal.accountingDate);
       }
     }
+    // A posted journal balances by construction. A retained set that does not has lost a leg,
+    // whatever the header says; no snapshot is needed to see it.
+    if (!Number.isSafeInteger(journalDebit) || !Number.isSafeInteger(journalCredit) || journalDebit !== journalCredit) refuse();
   }
 
-  // Native recognition uses expenses and canonical 1240. These two recovery source prefixes
-  // also carry receipt/reversal history; unknown custom legs cannot be silently omitted.
-  const familyJournals = new Map<Id<"journalEntries">, { debit: number; credit: number; lines: number }>();
-  for (const sourceType of ["supplierCostRecoveries", "supplierCostRecoveryReceipts"]) {
-    const journals = await readRows(ctx.db.query("journalEntries")
-      .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", sourceType)));
-    for (const journal of journals) {
-      if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
-      familyJournals.set(journal._id, { debit: 0, credit: 0, lines: 0 });
-    }
-  }
-  if (familyJournals.size > 0) {
-    // One complete tenant inventory replaces one index range per historical
-    // receipt/reversal. Unrelated lines also consume the shared document budget.
+  // Independent account-class coverage (SCRUM-869 r5 H2, M1). Everything above starts from records an
+  // actor can alter together: the posted opening journal and its retained header can be edited to agree
+  // with each other, and the recovery-family journals only name accounts through their own lines.
+  // What cannot be edited away with them is the chart itself: the product classifies every custom
+  // ASSET account as a supplier-recoverable account (`openingPolicyForAccount`, the one authority the
+  // opening writer uses) and the GL consumer still holds that account's lines and closed-period
+  // snapshots. So read the chart's ASSET accounts through `by_org_type`, and refuse when a
+  // supplier-recoverable-class account carries any GL evidence yet is not among the compared accounts.
+  // The cost follows the chart (a bounded handful of accounts, two one-row probes per custom asset
+  // account), never the organization's journal history: it replaces a scan of every journal line that
+  // went OVER_LIMIT permanently at ~26.7k lines and could pass 16 MiB of descriptions first.
+  // Stated limit: this class check does not read the recovery-family journals themselves, so a family
+  // leg moved onto a non-ASSET custom account is not caught here (it still shows as a displayed
+  // difference when the subledger disagrees). Reading the families again would need an indexed family
+  // tag on journalLines, a schema decision recorded in docs/architecture/scrum869-s2-discovery-remediation.md.
+  const assets = await readRows(ctx.db.query("chartOfAccounts")
+    .withIndex("by_org_type", q => q.eq("orgId", orgId).eq("type", "ASSET")), SUPPLIER_CLASS_COVERAGE_LIMITS.assetAccounts + 1);
+  if (assets.length > SUPPLIER_CLASS_COVERAGE_LIMITS.assetAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  let probed = 0;
+  for (const account of assets) {
+    accounts.set(account._id, account);
+    if (account.orgId !== orgId) refuse();
+    if (controlAccounts.has(account._id)) continue;
+    if (openingPolicyForAccount(account, false) !== "SUPPLIER_RECOVERABLE") continue;
+    if (++probed > SUPPLIER_CLASS_COVERAGE_LIMITS.probedAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+    // Existence of either GL storage path, not a net total: zero-net residue is evidence too.
     const lines = await readRows(ctx.db.query("journalLines")
-      .withIndex("by_org", q => q.eq("orgId", orgId)));
-    for (const line of lines) {
-      const totals = familyJournals.get(line.journalEntryId);
-      if (totals) {
-        if (!Number.isSafeInteger(line.debitMinor) || line.debitMinor < 0 ||
-          !Number.isSafeInteger(line.creditMinor) || line.creditMinor < 0) refuse();
-        totals.debit += line.debitMinor;
-        totals.credit += line.creditMinor;
-        totals.lines += 1;
-        const account = await readAccount(line.accountId);
-        if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
-        if (!controlAccounts.has(line.accountId) && account?.systemKey !== SYSTEM_KEYS.CASH_ON_HAND &&
-          account?.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) refuse();
-      }
-    }
-    for (const totals of familyJournals.values()) {
-      if (totals.lines === 0 || !Number.isSafeInteger(totals.debit) ||
-        !Number.isSafeInteger(totals.credit) || totals.debit !== totals.credit) refuse();
-    }
+      .withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", account._id)), 1);
+    const snapshots = await readRows(ctx.db.query("accountBalanceSnapshots")
+      .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", orgId).eq("accountId", account._id)), 1);
+    if (lines.length > 0 || snapshots.length > 0) refuse();
   }
   return { controlAccounts, subledgerAccounts, source };
 }
