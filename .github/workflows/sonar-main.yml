@@ -1,30 +1,169 @@
 name: Sonar Main
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
     branches: ["main"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: sonar-main-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   scan:
-    if: github.ref == 'refs/heads/main'
+    name: scan
+    # SCRUM-764: Runs on main when Tests workflow completes, or on manual workflow_dispatch.
+    # Reuses the exact same-commit coverage report produced by Tests across 4 slices + mobile + shared.
+    # Native trusted-controller pattern: admission runs from trusted code before candidate checkout.
+    # Fails closed on missing, failed, cancelled, stale, truncated, fork, or unverified producer coverage.
+    if: |
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main' &&
+       github.repository == 'aalzriqat/Auto')
     runs-on: ubuntu-latest
-    # SCRUM-384: a cancelled run leaves no SonarCloud result, which refuses the
-    # production release (no waiver). SCRUM-763: coverage + scan now take ~45 min
-    # (three runs were cancelled at the old 45-minute budget), so 75 leaves headroom
-    # until the coverage step is split or sped up.
-    timeout-minutes: 75
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout immutable trusted controller
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          fetch-depth: 0
+
+      - name: Verify producer run and admission provenance
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            TARGET_SHA="$WORKFLOW_RUN_SHA"
+            RUN_ID="$WORKFLOW_RUN_ID"
+          else
+            TARGET_SHA="$DISPATCH_SHA"
+            echo "Searching for successful Tests run for commit $TARGET_SHA on main..."
+            RUN_ID="$(gh run list --repo "$REPO" --workflow=test.yml --commit="$TARGET_SHA" --status=success --event=push --branch=main --limit=1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No successful Tests workflow run found for commit $TARGET_SHA on main."
+              exit 1
+            fi
+          fi
+
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Invalid target SHA: $TARGET_SHA"
+            exit 1
+          fi
+
+          # Staleness / Current-Tip Protection:
+          # Explicitly compare target SHA with fresh origin/main before scan.
+          # A late workflow_run from an older commit must not overwrite main analysis with stale source.
+          git -C trusted fetch --no-tags origin "+refs/heads/main:refs/autoflow/sonar-main"
+          CURRENT_MAIN="$(git -C trusted rev-parse refs/autoflow/sonar-main)"
+          if [ "$TARGET_SHA" != "$CURRENT_MAIN" ]; then
+            echo "::error::Target SHA $TARGET_SHA is not the current tip of main ($CURRENT_MAIN); refusing stale workflow_run."
+            exit 1
+          fi
+
+          # Run admission and producer verification from trusted controller code before candidate checkout
+          node trusted/scripts/validateSonarMainCoverage.mjs verify-producer \
+            --token "$GH_TOKEN" \
+            --repo "$REPO" \
+            --run-id "$RUN_ID" \
+            --expected-sha "$TARGET_SHA" \
+            --context-file "$RUNNER_TEMP/producer-context.json"
+          # verify-producer writes run_id, run_attempt, artifact_id and target_sha to
+          # GITHUB_OUTPUT itself, from the values it verified. Do not append them again
+          # here: GitHub documents no precedence for a name written twice.
+
+      # Fail closed before anything is downloaded. If the admission script did not
+      # run to completion (for example it was started through a link and exited
+      # without doing its work), `artifact_id` is empty, and `download-artifact`
+      # treats an empty `artifact-ids` as "download every artifact of the run".
+      # Nothing downstream checks the Tests conclusion, so this step must.
+      - name: Require an admitted coverage artifact before download
+        env:
+          ARTIFACT_ID: ${{ steps.admission.outputs.artifact_id }}
+          RUN_ID: ${{ steps.admission.outputs.run_id }}
+          TARGET_SHA: ${{ steps.admission.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          for value in "$ARTIFACT_ID" "$RUN_ID"; do
+            if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Admission did not produce a positive integer artifact id and run id; refusing to download."
+              exit 1
+            fi
+          done
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Admission did not produce a 40-character target SHA; refusing to download."
+            exit 1
+          fi
+          if [ ! -s "$RUNNER_TEMP/producer-context.json" ]; then
+            echo "::error::Admission did not write $RUNNER_TEMP/producer-context.json; refusing to download."
+            exit 1
+          fi
+
+          # The verified context must name the same artifact, run and commit as the step outputs.
+          CONTEXT_FILE="$RUNNER_TEMP/producer-context.json" node -e '
+            const fs = require("node:fs");
+            const context = JSON.parse(fs.readFileSync(process.env.CONTEXT_FILE, "utf8"));
+            const mismatches = [];
+            if (context.verified !== true) mismatches.push("verified");
+            if (String(context.artifactId) !== process.env.ARTIFACT_ID) mismatches.push("artifactId");
+            if (String(context.runId) !== process.env.RUN_ID) mismatches.push("runId");
+            if (String(context.headSha).toLowerCase() !== process.env.TARGET_SHA.toLowerCase()) mismatches.push("headSha");
+            if (mismatches.length > 0) {
+              console.error("::error::Admission context disagrees with the step outputs on: " + mismatches.join(", "));
+              process.exit(1);
+            }
+          '
+
+      - name: Checkout admitted target commit as data only
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ steps.admission.outputs.target_sha }}
+          path: candidate
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Download coverage report from Tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ steps.admission.outputs.artifact_id }}
+          path: ${{ runner.temp }}/sonar-coverage
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.admission.outputs.run_id }}
+
+      - name: Validate coverage artifact provenance and census
+        run: |
+          set -euo pipefail
+          node trusted/scripts/validateSonarMainCoverage.mjs \
+            "${{ runner.temp }}/sonar-coverage" \
+            candidate \
+            "${{ steps.admission.outputs.target_sha }}" \
+            "$RUNNER_TEMP/producer-context.json"
+
+          mkdir -p candidate/coverage
+          cp "${{ runner.temp }}/sonar-coverage/lcov.info" candidate/coverage/lcov.info
+          cp trusted/sonar-project.properties candidate/sonar-project.properties
 
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
@@ -35,35 +174,23 @@ jobs:
         with:
           node-version: "22.21.1"
           cache: "pnpm"
+          cache-dependency-path: candidate/pnpm-lock.yaml
 
+      # Restores full AST / TSConfig compiler resolution for Expo/Next/Clerk semantic analysis
       - name: Install dependencies without lifecycle scripts
+        working-directory: candidate
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Generate coverage for Sonar
-        run: pnpm test:coverage:sonar
-        env:
-          NODE_ENV: test
-          # Keep the same bounded ceiling proven by PR coverage. This does not
-          # relax coverage or buy success with unbounded memory; it prevents the
-          # main-only Sonar path from reintroducing the V8 OOM already reproduced
-          # in the identical coverage runner.
-          NODE_OPTIONS: --max-old-space-size=5632
-
-      # SCRUM-293: append mobile jest coverage to the report Sonar reads.
-      - name: Mobile coverage for Sonar
-        run: |
-          pnpm mobile:coverage:sonar
-          node scripts/appendMobileLcov.mjs
-        env:
-          NODE_ENV: test
-
-      # SCRUM-552: append packages/shared vitest coverage the same way.
-      - name: Shared coverage for Sonar
-        run: |
-          pnpm shared:coverage:sonar
-          node scripts/appendSharedLcov.mjs
-        env:
-          NODE_ENV: test
-
       - name: SonarCloud scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        with:
+          projectBaseDir: candidate
+          args: >-
+            -Dsonar.host.url=https://sonarcloud.io
+            -Dsonar.projectKey=aalzriqat_Auto
+            -Dsonar.organization=aalzriqat
+            -Dsonar.scm.revision=${{ steps.admission.outputs.target_sha }}
+            -Dsonar.branch.name=main
+            -Dsonar.working.directory=${{ runner.temp }}/sonar-scannerwork
