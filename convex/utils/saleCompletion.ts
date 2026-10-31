@@ -65,6 +65,7 @@ import {
 } from "./supplierConcession";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
+import { requireSupplierAmountMinor, requireTradeInValueMinor } from "./supplierPaymentAmounts";
 import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -638,6 +639,11 @@ async function prepareSaleCompletion(
   // major ones, and converting with the wrong scale is the exact class of
   // defect this change exists to remove.
   const currency = await getOrgCurrency(ctx, args.orgId);
+
+  // Legacy entitlements must refuse before concession or commission calculations round them.
+  if (intent === "COMPLETION" && isConsignedAgentSale(vehicle) && vehicle.sourceCost !== undefined) {
+    requireSupplierAmountMinor(vehicle.sourceCost, currency);
+  }
 
   // Refused BEFORE the commission is worked out, not after.
   //
@@ -2169,7 +2175,7 @@ async function applySaleCompletionSideEffects(
       );
     }
 
-    const tradeInValueMinor = toMinorUnits(args.tradeInValue, prepared.currency);
+    const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
     tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,

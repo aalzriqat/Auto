@@ -22,6 +22,7 @@ import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from
 import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure, throwVehicleCostPosted } from "./vehicles";
 import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { assertVehicleCostPrecision } from "./utils/supplierPaymentAmounts";
 import { requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { retroactiveOwnershipChangeRefusal } from "./utils/vehicleOwnership";
 import { syncVehicleHoldStatus } from "./utils/depositHelpers";
@@ -201,6 +202,7 @@ export const requestCreate = mutation({
     // `vehicles.create` requires — refused here so it never becomes a request a
     // manager is asked to approve.
     assertVehicleIntake(payload);
+    assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId));
     if (payload.sourceType === "STOCK" && (payload.purchasePrice ?? 0) > 0) {
       await validateRequestedAcquisitionBank(ctx, args.orgId, payload);
     }
@@ -275,6 +277,7 @@ export const requestUpdate = mutation({
       throw new ConvexError("Vehicle not found.");
     }
     const payload = normalizeVehicleEditPayload(args.payload);
+    assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,
@@ -492,6 +495,7 @@ export const resolve = mutation({
         // (or forged through the table) carries a name with no id: that cannot be approved.
         const resolvedSuppliers = await resolveIntakeSuppliers(ctx, args.orgId, submittedPayload);
         const payload: VehicleEditPayload = withServerSupplierNames(submittedPayload, resolvedSuppliers);
+        assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId));
         if (args.ownership) {
           // The approval record states the ownership that was applied, with the server names.
           const applied: Record<string, unknown> = {};
@@ -556,6 +560,7 @@ export const resolve = mutation({
         }
 
         const requestedPayload = normalizeVehicleEditPayload(request.payload);
+        assertVehicleCostPrecision(requestedPayload, await getOrgCurrency(ctx, args.orgId), previousVehicle);
         // SCRUM-868 P2: the consignment link is re-resolved at approval, and re-checked against money that
         // can have appeared since the request was written (N11). A name with no id cannot be approved.
         const resolvedSourced = await resolveUpdateSourcedSupplier(ctx, args.orgId, previousVehicle, requestedPayload);

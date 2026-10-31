@@ -1459,6 +1459,17 @@ describe("tax on an agency sale, with no open accounting period", () => {
  * case, because who financed the buyer has never changed whose car it was.
  */
 describe("a financed consigned sale settled directly with the supplier", () => {
+  async function supplierCompletionState(s: Awaited<ReturnType<typeof seedDealer>>, vehicleId: Id<"vehicles">) {
+    return await s.t.run(async ctx => ({
+      vehicle: await ctx.db.get(vehicleId), sales: await ctx.db.query("sales").collect(),
+      payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      receivables: await ctx.db.query("vehicleSupplierReceivables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(), pending: await ctx.db.query("pendingAccountingEvents").collect(),
+      journals: await ctx.db.query("journalEntries").collect(), lines: await ctx.db.query("journalLines").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(),
+    }));
+  }
+
   async function financedDirect(
     tag: string,
     overrides: { financingType?: "CASH" | "FINANCED" | "LEASE"; route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER" } = {}
@@ -1519,20 +1530,14 @@ describe("a financed consigned sale settled directly with the supplier", () => {
    * What the supplier owes must be the figure the journal posted, to the unit.
    *
    * The GL debit on the direct route is built from `marginMinor`
-   * (`toMinorUnits(salePrice) - costMinor`). The receivable was built from
-   * `toMinorUnits(salePrice - costAmount)` — `round(a) - round(b)` against
-   * `round(a - b)`. Where either amount carries more decimals than the currency
-   * scale those differ by a minor unit, and a claim that disagrees with its own
-   * posting by one fils can never be settled to zero. It sits on the aging
-   * report forever, which is the exact outcome the comment above it set out to
-   * prevent.
-   *
-   * The same defect was fixed for `recognizedRevenueAmount`; this is its
-   * sibling, two hundred lines further down the same function.
+   * (`toMinorUnits(salePrice) - costMinor`). SCRUM-880 now refuses an original
+   * supplier cost finer than one fils before either calculation. Keep the old
+   * invalid fixture as a refusal check and retain the journal equality control
+   * with an entitlement representable at the currency's scale.
    */
   test("the supplier receivable equals the journal's margin, to the minor unit", async () => {
     const s = await seedDealer("claimScale");
-    // Both carry sub-fils precision, so round(a-b) and round(a)-round(b) split.
+    // The sale-price conversion remains independent of supplier-cost admission.
     const SALE = 12_500.7005;
     const COST = 9_500.5002;
     const vehicleId = await s.t.run(async (ctx) =>
@@ -1543,28 +1548,41 @@ describe("a financed consigned sale settled directly with the supplier", () => {
         sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+    const complete = () => s.asUser.mutation(api.sales.create, { idempotencyKey: "claimScale-completion",
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
     });
 
+    const before = await supplierCompletionState(s, vehicleId);
+    await expect(complete()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await supplierCompletionState(s, vehicleId)).toEqual(before);
+    await s.t.run(ctx => ctx.db.patch(vehicleId, { sourceCost: 9_500.5 }));
+    const saleId = await complete();
+
     const receivable = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).find((r) => r.vehicleId === vehicleId)
     );
-    // marginMinor = round(12500.7005*1000) - round(9500.5002*1000) = 3000201.
+    // Rounded sale consideration minus the exact supplier entitlement is 3000201 fils.
     expect(receivable?.amountDue).toBe(3_000.201);
+    const debitMinor = await s.t.run(async ctx => {
+      const event = (await ctx.db.query("accountingEvents").collect())
+        .find(row => row.sourceId === saleId && row.eventType === "SALE_COMPLETED");
+      const account = (await ctx.db.query("chartOfAccounts").collect())
+        .find(row => row.systemKey === SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
+      if (!event?.journalEntryId || !account) throw new Error("Supplier receivable did not post");
+      return (await ctx.db.query("journalLines").collect())
+        .find(row => row.journalEntryId === event.journalEntryId && row.accountId === account._id)?.debitMinor;
+    });
+    expect(debitMinor).toBe(3_000_201);
   });
 
   /**
    * And what the dealership owes is stored at the currency's scale.
    *
-   * `sourceCost` is a decimal a person typed, and the capitalized cost is a sum
-   * of them. Stored raw, a payable of 9500.5002 is one no payment can ever
-   * close: `recordPayment` refuses to overpay, so the last fraction of a fils
-   * is unpayable and the row never reaches PAID. The receivable side already
-   * rounds through the currency; this side did not.
+   * SCRUM-880 refuses sub-fils entitlements instead of silently rounding them.
+   * A valid three-decimal entitlement must survive completion unchanged.
    */
   test("the supplier payable is stored at the currency's scale", async () => {
     const s = await seedDealer("payScale");
@@ -1577,17 +1595,23 @@ describe("a financed consigned sale settled directly with the supplier", () => {
         sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+    const complete = () => s.asUser.mutation(api.sales.create, { idempotencyKey: "payScale-completion",
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,
       supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
     });
 
+    const before = await supplierCompletionState(s, vehicleId);
+    await expect(complete()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await supplierCompletionState(s, vehicleId)).toEqual(before);
+    await s.t.run(ctx => ctx.db.patch(vehicleId, { sourceCost: 9_500.501 }));
+    await complete();
+
     const payable = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierPayables").collect()).find((p) => p.origin !== "OPENING" && p.vehicleId === vehicleId)
     );
-    expect(payable?.amountDue).toBe(9_500.5);
+    expect(payable?.amountDue).toBe(9_500.501);
   });
 
   test("the refusal leaves the car unsold rather than half-completing it", async () => {

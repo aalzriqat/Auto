@@ -78,6 +78,19 @@ export function formatMinorAmount(minor: number, factor: number): string {
   return formatMoneyAmount(minor / factor, "", scale);
 }
 
+/** Formats an authoritative integer without a lossy conversion through major-unit Number. */
+export function formatExactMinorAmount(minor: number, currency: string): string {
+  const scale = supportedCurrencyScale(currency);
+  if (scale === null || !Number.isSafeInteger(minor)) return "—";
+  const absolute = BigInt(minor < 0 ? -minor : minor);
+  const factor = 10n ** BigInt(scale);
+  const whole = new Intl.NumberFormat("en-US", { numberingSystem: "latn", maximumFractionDigits: 0 })
+    .format(absolute / factor);
+  const remainder = absolute % factor;
+  const fraction = remainder === 0n ? "" : `.${remainder.toString().padStart(scale, "0")}`;
+  return `${minor < 0 ? "-" : ""}${whole}${fraction}`;
+}
+
 /** "11,100 JOD" / "316.854 د.أ". `scale` overrides the currency's own when the server supplies it. */
 export function formatMoneyDisplay(amount: number, currency: string, locale: MoneyLocale, scale?: number): string {
   if (!Number.isFinite(amount)) return "—";
