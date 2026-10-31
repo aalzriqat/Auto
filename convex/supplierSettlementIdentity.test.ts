@@ -30,14 +30,13 @@ import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { seedSupplier, renameSupplier } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import {
   SUPPLIER_ERROR,
   SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
 } from "./utils/supplierRegistry";
 import {
-  assertObservedBasisMatchesVehicle,
   resolveEffectiveEntitlementForCompletion,
   SUPPLIER_CONCESSION_REFUSALS,
 } from "./utils/supplierConcession";
