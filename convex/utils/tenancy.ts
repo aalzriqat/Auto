@@ -332,6 +332,61 @@ export async function requireOrgMember(
   return membership;
 }
 
+// ─── Read-side reference ownership (SCRUM-811) ───────────────────────────────
+
+/**
+ * Returns `doc` only when it belongs to `orgId`; a missing document or one that
+ * belongs to another organization reads as `null`.
+ *
+ * The READ counterpart of the write-side ownership checks. A query that joins a
+ * STORED id (a quote's vehicle, an expense's vehicle, a company) returns whatever
+ * that id resolves to, so a stale or planted cross-org link would otherwise
+ * disclose another tenant's document under this tenant's list. OWASP API1:2023
+ * (Broken Object Level Authorization) applies to the joined object as much as
+ * to the requested one. A soft-deleted document is deliberately still returned:
+ * history keeps naming a car or company that was later removed.
+ */
+export function sameOrgOrNull<T extends { orgId: Id<"organizations"> }>(
+  doc: T | null | undefined,
+  orgId: Id<"organizations">
+): T | null {
+  return doc && doc.orgId === orgId ? doc : null;
+}
+
+/**
+ * A reader for the users a query joins by stored id. It returns the user only
+ * when a membership row of ANY status (an offboarding member included) ties the
+ * user to `orgId`; otherwise `null`.
+ *
+ * `users` rows carry no org, so the membership is the only proof a user belongs
+ * here. Memberships are hard-deleted on removal, so a removed member can no
+ * longer be proven and reads as `null`, the same as a deleted user row. Results
+ * are cached for the life of the reader, so a list that names the same member
+ * many times does one membership lookup, not one per row.
+ */
+export function createOrgUserReader(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">
+): (userId: Id<"users"> | null | undefined) => Promise<Doc<"users"> | null> {
+  const cache = new Map<Id<"users">, Promise<Doc<"users"> | null>>();
+  const read = async (userId: Id<"users">): Promise<Doc<"users"> | null> => {
+    const membership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+      .first();
+    return membership ? await ctx.db.get(userId) : null;
+  };
+  return (userId) => {
+    if (!userId) return Promise.resolve(null);
+    let pending = cache.get(userId);
+    if (!pending) {
+      pending = read(userId);
+      cache.set(userId, pending);
+    }
+    return pending;
+  };
+}
+
 /**
  * Whether a given member holds a permission, for guards that run away from the
  * mutation boundary.

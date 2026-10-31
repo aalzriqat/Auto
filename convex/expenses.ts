@@ -3,7 +3,7 @@ import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -380,16 +380,18 @@ export const list = query({
         .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
     }
 
-    // Hydrate vehicle info
+    // Hydrate vehicle info. SCRUM-811: the vehicle and payer ids are STORED on the row, so each
+    // joined document must be proven to belong to this org before any field of it is returned.
+    const readOrgUser = createOrgUserReader(ctx, args.orgId);
     const page = await Promise.all(
       pageResult.page.map(async (exp) => {
         let vehicle = null;
         if (exp.vehicleId) {
-          vehicle = await ctx.db.get(exp.vehicleId);
+          vehicle = sameOrgOrNull(await ctx.db.get(exp.vehicleId), args.orgId);
         }
         let payerName = null;
         if (exp.payerId) {
-          const payer = await ctx.db.get(exp.payerId);
+          const payer = await readOrgUser(exp.payerId);
           if (payer && "name" in payer) {
             payerName = payer.name;
           }

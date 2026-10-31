@@ -3,7 +3,7 @@ import { query, QueryCtx } from "./_generated/server";
 import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -230,9 +230,11 @@ export const list = query({
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .paginate(args.paginationOpts);
 
+    // SCRUM-811: `createdBy` is a stored id; the creator is named only when a membership ties them to this org.
+    const readOrgUser = createOrgUserReader(ctx, args.orgId);
     const page = await Promise.all(
       pageResult.page.map(async (customer) => {
-        const createdByUser = customer.createdBy ? await ctx.db.get(customer.createdBy) : null;
+        const createdByUser = await readOrgUser(customer.createdBy);
         return {
           ...customer,
           createdByName: createdByUser?.name ?? createdByUser?.email ?? null,
@@ -670,10 +672,15 @@ export const getRelations = query({
       .filter((q) => q.eq(q.field("customerId"), args.customerId))
       .collect();
 
+    // SCRUM-811: every vehicle, company and user below is joined by a STORED id. Each is returned only when it
+    // provably belongs to this org (the document's own orgId, or a membership for a user); otherwise the
+    // neutral fallback already used for a missing document applies. See sameOrgOrNull / createOrgUserReader.
+    const readOrgUser = createOrgUserReader(ctx, args.orgId);
+
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
-        const salesperson = await ctx.db.get(sale.salespersonId);
+        const vehicle = sameOrgOrNull(await ctx.db.get(sale.vehicleId), args.orgId);
+        const salesperson = await readOrgUser(sale.salespersonId);
         return {
           ...projectSaleRow(sale, role),
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -691,8 +698,8 @@ export const getRelations = query({
 
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
-        const vehicle = lead.vehicleId ? await ctx.db.get(lead.vehicleId) : null;
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
+        const vehicle = lead.vehicleId ? sameOrgOrNull(await ctx.db.get(lead.vehicleId), args.orgId) : null;
+        const assignedUser = await readOrgUser(lead.assignedUserId);
         return {
           ...lead,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Any",
@@ -710,7 +717,7 @@ export const getRelations = query({
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo);
+        const assignedUser = await readOrgUser(task.assignedTo);
         return {
           ...task,
           assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
@@ -727,14 +734,15 @@ export const getRelations = query({
 
     const enrichedQuotes = await Promise.all(
       quotes.map(async (quote) => {
-        const vehicle = await ctx.db.get(quote.vehicleId);
-        const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
-        const createdByUser = await ctx.db.get(quote.createdBy);
+        const vehicle = sameOrgOrNull(await ctx.db.get(quote.vehicleId), args.orgId);
+        const company = quote.companyId ? sameOrgOrNull(await ctx.db.get(quote.companyId), args.orgId) : null;
+        const createdByUser = await readOrgUser(quote.createdBy);
         return {
           ...quote,
-          vehicle: vehicle ?? null,
+          vehicle,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
-          companyName: company ? company.name : "Cash Deal",
+          // A quote that names a company which is not this org's is not a cash deal: it reads as unknown.
+          companyName: company ? company.name : quote.companyId ? "Unknown" : "Cash Deal",
           createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",
         };
       })
