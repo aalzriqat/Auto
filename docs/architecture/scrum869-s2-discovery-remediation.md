@@ -1,5 +1,33 @@
 # SCRUM-869 S2 discovery remediation
 
+## Round 4: current implementation and evidence
+
+Invariant: every supplier-recovery GL account, including surviving snapshots, participates in the independent comparison or the report refuses; ordinary pilot receipt/reversal history fits the bounded read strategy. No snapshot reconstruction or correction posting.
+
+Both full reports at f10c54c58 were read. Independently reproduced before coding:
+- HIGH: after allocation/recovery loss the correct 100,000 difference became an empty reconciliation when only the supplier journal leg was deleted. The independent snapshot consumer still returned 100,000.
+- MEDIUM: real opening/expense/receipt reconciled at 220,000; adding 3,000 receipt journals and 3,000 reversals (two lines each, net zero, unchanged snapshots) caused OVER_LIMIT.
+- Author attack: replace the supplier leg with an equal cash debit. Journal count and balance remain unchanged, but snapshot 100,000 disappears from old discovery. This also failed at the original head.
+- M4 initially passed: retain the journal under a non-cutover/non-recovery source while deleting its referenced chart/lines/snapshots and recovery. This isolates the journal-presence retirement guard.
+
+Opening discovery now proves the exact retained-header account/debit/credit multiset against GL lines, plus currency/date correspondence. Balance alone misses balanced loss/replacement. Missing header authority already refuses. Snapshot balances remain the balance source.
+
+History discovery obtains both complete bounded family journal inventories, then joins them to one complete bounded journalLines.by_org inventory in memory. All POSTED/REVERSED family journals require nonempty balanced safe-integer line coverage and the existing account classification. Both orphan-family refusals remain. Unrelated org lines consume the budget too. A family stamp/index plus writer/backfill would improve selectivity but expands this report remediation into a migration. Raising the per-journal range cap cannot accommodate several thousand beside the GL/outbox worst case.
+
+The historical 13-area impact map below applies except its runtime/discovery details, superseded here. No writer/schema/UI/permission/return-validator change. Existing reset retirement, all-compared-account drafts, generic logged error and coded refusals remain covered.
+
+Five predicted failures: partial opening loss; balanced account replacement; history range exhaustion; retained journal falsely retired; batching drops an orphan family. New/existing tests cover them. Advisory design/Standards/Spec checks found no scoped blocker in restored source; they are not certification seats.
+
+Read budget: caps remain rows 4,000 per subledger, in-flight/drafts 400 each, GL 2,400 documents, 25 opening proofs and 26 accounts. Discovery retains 100 ranges and borrows unused documents after reserving actual larger subledger/proof counts and full in-flight/GL caps. Missing allocations still reserve all 26 accounts. Per opening row: declaration basis <=105, recovery basis <=105, recovery reference scan <=101 =311, rounded to320 documents and24 ranges. Shared unique current parent plus <=201 cached lines reserves202 further documents. A contradictory parent refuses before another line inventory. Earlier canonical unique() bounds later system-account lookup in the same query snapshot.
+
+At all default caps non-discovery reserves **21,239 documents / 3,895 ranges**; discovery may spend10,661 documents there. With fewer rows/proofs it borrows more. Every inventory uses remaining+one sentinel and refuses truncation. Static whole-report bound including sentinel: **31,901 documents / 3,995 ranges**, below32,000/4,096. Pilot fixture forwarded real harness I/O: **18,039 documents /41 ranges**, computation only (public auth excluded; absent get/unique/first charged as one document). This is harness I/O, not Convex platform limit enforcement. Bytes against16MiB, runtime, OCC and Date.now cache remain unmeasured. Total organization lifetime history can eventually exhaust this bounded inventory; no indefinite availability or family-selective I/O claim. LOW byte/runtime/cache, orphan-GL integrity, unused export, labels and maintainability stay SCRUM-879.
+
+Failing-first reports: C:/tmp/714-r4-red.json (two intended assertion failures), C:/tmp/714-r4-red-replacement.json (one). Four source mutants each killed one new case: remove line-count proof; remove multiset identity check; restore per-journal line range; remove journal-presence retirement guard. Restored by file copy with SHA256 F08C6EF516FB8EFB6E314949EF449587EE50C1F86A9037958D00BD1D152169C5. Named restored suites **111/111** (87 A/R+24 A/P), zero skips, one worker; C:/tmp/714-r4-final.json. Four permanent scenarios/oracle rows. Definition validation461 records, zero problems (not461 executions). Convex typecheck and changed-file ESLint pass; convex/test-utils included, generated entry roots excluded, frontend/scripts projects not checked.
+
+Official ACCA example1 and Convex limits/indexes linked below were fetched again. Sources support design, not implementation proof. Both final reviewer seats and /simplify remain pending. No certification, review-evidence JSON, PR merge, deploy or production verification. Recurrence prevention (correct): allocation-only and surviving-leg-only discovery both lost coverage; exact correspondence plus permanent corruption tests enforce the lesson.
+
+## Historical round 3 packet (superseded above)
+
 Invariant: the GL side is discovered independently of surviving supplier rows,
 opening allocations and headers; lost current authority produces a difference or
 UNAVAILABLE, while a completed financial reset retires its deleted authority.

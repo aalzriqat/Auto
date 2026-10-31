@@ -919,6 +919,126 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
     expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", complete: false, isReconciled: false, currencies: [] });
   });
 
+  test("partial opening journal-line loss cannot hide a surviving snapshot balance", async () => {
+    const s = await seed("partialopeningline");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(row.openingBalanceDraftId, { allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", isReconciled: false,
+      byCurrency: { JOD: { glBalanceMinor: 100_000, discrepancyMinor: 100_000 } } });
+    await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).collect();
+      for (const line of lines) await ctx.db.delete(line._id);
+    });
+    const gl = await s.t.run(ctx => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("three thousand recovery receipts and their reversals remain reportable", async () => {
+    const s = await seed("pilothistory");
+    await openingRecovery(s, Date.now() - 60_000);
+    const { recovery } = await supplierBornePayment(s, "pilothistory");
+    await s.asUser.mutation(api.supplierCostRecoveries.recordReceipt, {
+      orgId: s.orgId, recoveryId: recovery._id, amountMinor: 80_000, method: "CASH",
+      receivedDate: Date.now() - 1_000, idempotencyKey: crypto.randomUUID(),
+    });
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", isReconciled: true,
+      byCurrency: { JOD: { glBalanceMinor: 220_000, subledgerBalanceMinor: 220_000 } } });
+    // Shape comes from a real receipt. Each added original/reversal pair is net zero;
+    // snapshots therefore remain the independent, unchanged GL consumer's authority.
+    await s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("journalEntries").withIndex("by_org_source", q =>
+        q.eq("orgId", s.orgId).eq("sourceType", "supplierCostRecoveryReceipts")).unique())!;
+      const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", original._id)).collect();
+      const { _id: _journalId, _creationTime: _journalTime, ...journal } = original;
+      for (let i = 0; i < 3000; i += 1) {
+        const sourceId = `pilot-receipt-${i}`;
+        const receiptId = await ctx.db.insert("journalEntries", { ...journal, sourceId, status: "REVERSED", journalNumber: sourceId });
+        const reversalId = await ctx.db.insert("journalEntries", { ...journal, sourceId, category: "REVERSAL",
+          reversalOfJournalEntryId: receiptId, journalNumber: `reverse-${i}` });
+        for (const line of lines) {
+          const { _id: _lineId, _creationTime: _lineTime, ...fields } = line;
+          await ctx.db.insert("journalLines", { ...fields, journalEntryId: receiptId });
+          await ctx.db.insert("journalLines", { ...fields, journalEntryId: reversalId,
+            debitMinor: line.creditMinor, creditMinor: line.debitMinor });
+        }
+      }
+    });
+    expect(await recon(s)).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true,
+      byCurrency: { JOD: { glBalanceMinor: 220_000, subledgerBalanceMinor: 220_000, discrepancyMinor: 0 } } });
+    // Forward real harness I/O unchanged; this observes terminal database reads,
+    // not a mock of the report or its balance source. Platform bytes/OCC remain unmeasured.
+    const reads = { documents: 0, ranges: 0 };
+    const observed = <T extends object>(target: T): T => new Proxy(target, {
+      get(object, key, receiver) {
+        const member: unknown = Reflect.get(object, key, receiver);
+        if (typeof member !== "function") return member;
+        return (...args: unknown[]) => {
+          const value: unknown = Reflect.apply(member, object, args);
+          if (["take", "first", "unique", "get", "collect"].includes(String(key))) {
+            reads.ranges += 1;
+            return Promise.resolve(value).then(result => {
+              reads.documents += Array.isArray(result) ? result.length : 1;
+              return result;
+            });
+          }
+          return value !== null && typeof value === "object" ? observed(value) : value;
+        };
+      },
+    });
+    const measured = await s.t.run(ctx => computeSupplierReceivablesReconciliation(
+      { ...ctx, db: observed(ctx.db) }, s.orgId, undefined));
+    expect(measured).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+    expect(reads.documents).toBeGreaterThan(18_000);
+    expect(reads.documents).toBeLessThan(CONVEX_DOCUMENTS_SCANNED_LIMIT);
+    expect(reads.ranges).toBeLessThan(CONVEX_INDEX_RANGES_LIMIT);
+    console.info("SCRUM-869 pilot history harness database reads", reads);
+  }, 60_000);
+
+  test("balanced replacement of an opening supplier leg cannot hide its snapshot", async () => {
+    const s = await seed("replacedopeningline");
+    const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const cash = (await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q =>
+        q.eq("orgId", s.orgId).eq("systemKey", "CASH_ON_HAND")).unique())!;
+      const line = (await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+        q.eq("orgId", s.orgId).eq("accountId", accountId)).unique())!;
+      await ctx.db.patch(line._id, { accountId: cash._id });
+      await ctx.db.patch(row.openingBalanceDraftId, { allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    const gl = await s.t.run(ctx => getControlAccountBalancesAsOf(ctx, s.orgId, [accountId], Date.now(), 4000));
+    expect(gl).toMatchObject({ status: "OK", balances: [{ debitMinor: 100_000, creditMinor: 0 }] });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
+  test("a retained non-cutover journal prevents retirement after its accounts and GL evidence are gone", async () => {
+    const s = await seed("retainedjournal");
+    const { row } = await openingRecovery(s, Date.now() - 1_000);
+    await s.t.run(async (ctx) => {
+      const header = (await ctx.db.get(row.openingBalanceDraftId))!;
+      await ctx.db.patch(header.journalEntryId!, { sourceType: "retained-unknown-source" });
+      for (const line of header.lines) {
+        const lines = await ctx.db.query("journalLines").withIndex("by_org_account", q =>
+          q.eq("orgId", s.orgId).eq("accountId", line.accountId)).collect();
+        const snapshots = await ctx.db.query("accountBalanceSnapshots").withIndex("by_org_account_currency_period_shard", q =>
+          q.eq("orgId", s.orgId).eq("accountId", line.accountId)).collect();
+        for (const entry of [...lines, ...snapshots]) await ctx.db.delete(entry._id);
+        await ctx.db.delete(line.accountId);
+      }
+      await ctx.db.patch(header._id, { allocations: [], allocationResults: [] });
+      await ctx.db.delete(row._id);
+    });
+    expect(await recon(s)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE",
+      complete: false, isReconciled: false, currencies: [] });
+  });
+
   async function orphanRecoveryFamily(sourceType: "supplierCostRecoveries" | "supplierCostRecoveryReceipts") {
       const s = await seed(`orphan${sourceType}`);
       const { accountId, row } = await openingRecovery(s, Date.now() - 1_000);

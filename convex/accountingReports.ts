@@ -1275,20 +1275,26 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
  *                     the lines and one `db.get` per parent entry.
  *   openingRecoveries OPENING cost recoveries, each of which re-verifies its opening draft (a scan of up
  *                     to 100 drafts, a journal probe, up to 200 lines and a few `db.get`s).
- * `supplierReceivablesReconWorstCase` adds the caps up the way the code reads, and the test pins the
- * result under both Convex limits. Its per-opening-row costs are read from the code of
- * openingRecoveryBasis / requireOpeningSettlementBasis, not measured, so they carry headroom.
+ * Discovery borrows the unused document allowance after reserving actual subledger counts,
+ * actual opening proofs, and the full in-flight/GL caps. One complete tenant-line inventory
+ * joins both recovery-family journal inventories without a range per historical journal.
+ * `supplierReceivablesReconWorstCase` includes the refusal sentinel. Opening proof allowances
+ * come from openingRecoveryBasis / requireOpeningSettlementBasis, with headroom.
  */
 export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl: 2400, openingRecoveries: 25 } as const;
 // Includes independent declared-account verification and row verification. The request-local
 // reader shares parent drafts and journal lines; the additional journal-provenance scan is bounded.
-const OPENING_ROW_DOCUMENT_ALLOWANCE = 700;
+// Per opening row: declaration basis <=105 documents, recovery basis <=105,
+// recovery parent-reference inventory <=101. Shared parent + 201 lines are reserved once.
+const OPENING_ROW_DOCUMENT_ALLOWANCE = 320;
+const OPENING_SHARED_DOCUMENT_ALLOWANCE = 202;
 const OPENING_ROW_RANGE_ALLOWANCE = 24;
 const SUPPLIER_GL_DISCOVERY_LIMITS = { documents: 1000, ranges: 100 } as const;
+const SUPPLIER_RECON_DOCUMENT_BUDGET = 31_900;
 export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
 export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
 
-export function supplierReceivablesReconWorstCase(limits: {
+function supplierReceivablesReservedReads(limits: {
   rows: number; inFlight: number; gl: number; openingRecoveries: number;
 }): { documents: number; ranges: number } {
   const outbox = 2 * (limits.inFlight + 1);
@@ -1296,19 +1302,29 @@ export function supplierReceivablesReconWorstCase(limits: {
   const drafts = 2 * (limits.inFlight + 1) + 1; // manual + opening drafts, and the control account
   const rows = 2 * (limits.rows + 1);
   const referenceDrafts = 101;
-  const opening = limits.openingRecoveries * OPENING_ROW_DOCUMENT_ALLOWANCE;
+  const opening = limits.openingRecoveries * OPENING_ROW_DOCUMENT_ALLOWANCE + OPENING_SHARED_DOCUMENT_ALLOWANCE;
   const openingAccounts = 1 + limits.openingRecoveries;
   const glDocuments = limits.gl + 1 + openingAccounts;
   // Source identity adds a 101-journal probe to the existing 101-header inventory.
   // All further discovery queries/gets share hard document and range budgets.
-  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments +
-    101 + SUPPLIER_GL_DISCOVERY_LIMITS.documents + 1;
+  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments + 101;
   const ranges =
     2 /* outbox */ + originals + 3 /* drafts */ + 4 + 3 /* statuses of both subledgers */ + 1 /* control account */ +
     1 /* opening references */ + limits.openingRecoveries * OPENING_ROW_RANGE_ALLOWANCE +
     2 /* periods, future-entry probe */ + 3 * openingAccounts /* snapshots, later-line probe, lines */ + limits.gl /* parent entries */ +
-    1 /* source identity journals */ + SUPPLIER_GL_DISCOVERY_LIMITS.ranges;
+    1 /* source identity journals */;
   return { documents, ranges };
+}
+
+export function supplierReceivablesReconWorstCase(limits: {
+  rows: number; inFlight: number; gl: number; openingRecoveries: number;
+}): { documents: number; ranges: number } {
+  const reserved = supplierReceivablesReservedReads(limits);
+  return {
+    documents: Math.max(SUPPLIER_RECON_DOCUMENT_BUDGET,
+      reserved.documents + SUPPLIER_GL_DISCOVERY_LIMITS.documents) + 1,
+    ranges: reserved.ranges + SUPPLIER_GL_DISCOVERY_LIMITS.ranges,
+  };
 }
 
 /** Exhaustive over each status union, so a new status fails typecheck until it is classified. */
@@ -1351,10 +1367,19 @@ class SupplierGlDiscoveryRefusal extends Error {
  * from the snapshot-aware GL reader; these lines establish account identity, not a second balance. */
 async function discoverSupplierReceivableGlAccounts(
   ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, maxAccounts: number,
+  reservation: Parameters<typeof supplierReceivablesReservedReads>[0],
 ) {
   const source = await loadOpeningSourceIdentity(ctx, orgId);
   const refuse = () => { throw new SupplierGlDiscoveryRefusal("OPENING_SOURCE_UNAVAILABLE"); };
   if (source.status === "UNAVAILABLE") refuse();
+  const openingProofs = Math.max(reservation.openingRecoveries,
+    source.parent?.allocations?.filter(row => row.kind === "SUPPLIER_RECOVERABLE").length ?? 0);
+  if (openingProofs >= maxAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  const reserved = supplierReceivablesReservedReads({ ...reservation, openingRecoveries: openingProofs });
+  // Missing allocations can leave more discovered controls than surviving proofs.
+  // Reserve the maximum compared-account allowance even on that corruption path.
+  const documentLimit = SUPPLIER_RECON_DOCUMENT_BUDGET - reserved.documents - (maxAccounts - 1 - openingProofs);
+  if (documentLimit < SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
   let documents = 0;
   let ranges = 0;
   const chargeRange = () => {
@@ -1362,11 +1387,11 @@ async function discoverSupplierReceivableGlAccounts(
   };
   const chargeDocuments = (count: number) => {
     documents += count;
-    if (documents > SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+    if (documents > documentLimit) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
   };
   const readRows = async <T>(query: { take: (count: number) => Promise<T[]> }, maxRows?: number): Promise<T[]> => {
     chargeRange();
-    const remaining = SUPPLIER_GL_DISCOVERY_LIMITS.documents - documents + 1;
+    const remaining = documentLimit - documents + 1;
     const rows = await query.take(maxRows === undefined ? remaining : Math.min(maxRows, remaining));
     chargeDocuments(rows.length);
     return rows;
@@ -1429,8 +1454,17 @@ async function discoverSupplierReceivableGlAccounts(
   if (source.status === "AVAILABLE") {
     const lines = await readRows(ctx.db.query("journalLines")
       .withIndex("by_journal_entry", q => q.eq("journalEntryId", source.journal._id)));
-    if (lines.length === 0) refuse();
+    if (lines.length === 0 || lines.length !== source.parent.lines.length) refuse();
+    // A surviving counterpart is not proof of a complete journal. Prove the
+    // retained header's exact account/amount multiset before discovering controls.
+    // Amounts still come exclusively from the snapshot-aware balance consumer.
+    const remainingLines = [...source.parent.lines];
     for (const line of lines) {
+      const match = remainingLines.findIndex(expected => expected.accountId === line.accountId &&
+        expected.debitMinor === line.debitMinor && expected.creditMinor === line.creditMinor);
+      if (match < 0 || line.currency !== source.journal.currency ||
+        line.accountingDate !== source.journal.accountingDate) refuse();
+      remainingLines.splice(match, 1);
       const account = await readAccount(line.accountId);
       if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
       // This classifies posted identities, not permission to post: recognize custom partner
@@ -1446,20 +1480,37 @@ async function discoverSupplierReceivableGlAccounts(
 
   // Native recognition uses expenses and canonical 1240. These two recovery source prefixes
   // also carry receipt/reversal history; unknown custom legs cannot be silently omitted.
+  const familyJournals = new Map<Id<"journalEntries">, { debit: number; credit: number; lines: number }>();
   for (const sourceType of ["supplierCostRecoveries", "supplierCostRecoveryReceipts"]) {
     const journals = await readRows(ctx.db.query("journalEntries")
       .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", sourceType)));
     for (const journal of journals) {
       if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
-      const lines = await readRows(ctx.db.query("journalLines")
-        .withIndex("by_journal_entry", q => q.eq("journalEntryId", journal._id)));
-      if (lines.length === 0) refuse();
-      for (const line of lines) {
+      familyJournals.set(journal._id, { debit: 0, credit: 0, lines: 0 });
+    }
+  }
+  if (familyJournals.size > 0) {
+    // One complete tenant inventory replaces one index range per historical
+    // receipt/reversal. Unrelated lines also consume the shared document budget.
+    const lines = await readRows(ctx.db.query("journalLines")
+      .withIndex("by_org", q => q.eq("orgId", orgId)));
+    for (const line of lines) {
+      const totals = familyJournals.get(line.journalEntryId);
+      if (totals) {
+        if (!Number.isSafeInteger(line.debitMinor) || line.debitMinor < 0 ||
+          !Number.isSafeInteger(line.creditMinor) || line.creditMinor < 0) refuse();
+        totals.debit += line.debitMinor;
+        totals.credit += line.creditMinor;
+        totals.lines += 1;
         const account = await readAccount(line.accountId);
         if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
         if (!controlAccounts.has(line.accountId) && account?.systemKey !== SYSTEM_KEYS.CASH_ON_HAND &&
           account?.systemKey !== SYSTEM_KEYS.BANK_ACCOUNT) refuse();
       }
+    }
+    for (const totals of familyJournals.values()) {
+      if (totals.lines === 0 || !Number.isSafeInteger(totals.debit) ||
+        !Number.isSafeInteger(totals.credit) || totals.debit !== totals.credit) refuse();
     }
   }
   return { controlAccounts, subledgerAccounts, source };
@@ -1551,7 +1602,10 @@ export async function computeSupplierReceivablesReconciliation(
   const cutoff = toDate ?? now;
   let discovered;
   try {
-    discovered = await discoverSupplierReceivableGlAccounts(ctx, orgId, cutoff, 1 + limits.openingRecoveries);
+    discovered = await discoverSupplierReceivableGlAccounts(ctx, orgId, cutoff, 1 + limits.openingRecoveries, {
+      ...limits, rows: Math.max(receivables.length, recoveries.length),
+      openingRecoveries: recoveries.filter(row => row.origin === "OPENING").length,
+    });
   } catch (error) {
     if (error instanceof SupplierGlDiscoveryRefusal) return unavailable(error.reason);
     throw error;
