@@ -422,7 +422,7 @@ export type CloseChecklistResult = {
  * statement line from within the period that's never been matched, all block
  * the close outright rather than silently landing in a later period.
  */
-async function computeCloseChecklist(
+export async function computeCloseChecklist(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   period: Doc<"accountingPeriods">

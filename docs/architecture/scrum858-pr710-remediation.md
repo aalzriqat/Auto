@@ -179,3 +179,46 @@ The first round-5 head `a69e5ba4390d15040faa6508195fa73baf43859b` reached green 
 The fresh Sonar report also identified one introduced MEDIUM `typescript:S3358` at `accountingReports.ts:1319`, despite a green quality gate. Native official-rule execution reproduced the nested ternary before editing. Extracting the optional row purpose into a local variable removes it without changing the account-family predicate. The native S3358 rule reports it on the starting HEAD and none in the working copy; the existing complexity and duplicate-import measurements remain unchanged. No threshold, rule, test assertion or financial behavior changed. On this source, all nine named files pass **247/247** again; the six mutations cause **2/2/1/5/1/1** failures and the restored control passes **15/15**, with matching restored hashes. Source lint and `pnpm typecheck:convex` pass, with the same entry-root exclusions described above. Final CI remains tied to the new full head in the PR body/Jira.
 
 Cleanup code commit `78a7ac5c484b703ec012f1e22348bb25bf3e8c4d` changes three production lines. Fresh fetch showed no main advance. Four affected report entries received fresh defining-file blob evidence, with all 930 non-renewal entry fields preserved. Identity **930 matched** and evidence **930 checked**, zero unrenewed/stale/malformed/missing, before the metadata follow-up commit.
+
+
+### Round 5 Seat 2 remediation - Bounded index-range budget for lifetime provenance discovery
+
+**Trigger & Validation:** Seat 2 reported a blocking MEDIUM finding: the lifetime provenance scan in `reconciliationJournalSupported` used individual `db.get` calls for candidate journals, original reversal journals, and accounting events. In Convex, each `db.get` point lookup consumes 1 index range against the platform's hard transaction limit of 4,096 index ranges. At pilot/production volume of ~2,048 native journals and reversals on control accounts (`EMPLOYEE_ADVANCES` or `SUPPLIER_RECOVERABLE`), `computeEmployeeAdvancesReconciliation` exceeded the limit, consuming 5,132 index ranges, and `computeCloseChecklist` consumed 5,247 index ranges. Both failed with platform limit errors rather than producing a successful reconciliation or an acknowledgeable refusal.
+
+**Design Alternatives Evaluated:**
+1. *Candidate A (Schema / Index Mutation with Denormalized Line Provenance):*
+   Denormalize `sourceFamily` onto `journalLines` schema and maintain/backfill it across all historic lines.
+   - *Rejected:* Altering core accounting schemas and backfilling millions of production lines elevates a reporting reader fix into a major live migration risk with concurrency and tenant-isolation hazards (consistent with the architectural decision recorded in PR #714).
+2. *Candidate B (Batched Indexed Source-Family & Event Discovery - Selected):*
+   Replaces per-journal point lookups with batched indexed scans leveraging existing `by_org_source` indexes on `journalEntries` and `accountingEvents`.
+   - Maps supported source families (`EMPLOYEE_ADVANCE` -> `employeeAdvances`, `payrollItems`, `cutover`; `SUPPLIER_RECOVERABLE` -> `supplierCostRecoveryReceipts`, `cutover`, `expenses`).
+   - Scans candidate journals via `journalEntries.by_org_source` using O(1) index ranges (1 range per source type, at most 3 ranges total per family).
+   - Resolves reversals and original journals from the loaded candidates in memory.
+   - Fetches candidate accounting events via `accountingEvents.by_org_source` using O(1) index ranges (1 range per event source type, at most 2 ranges).
+   - Validates reversal/original/event linkages and supported event payload rules in memory.
+   - If candidate journals or events exceed truncation bounds (5,000 journals or 2,500 events), returns acknowledgeable `"OVER_LIMIT"`.
+
+**Failing-First Reproduction:**
+A pilot-scale test was synthesized with 1,024 pairs of native employee advances and reversals (2,048 native journals) on `EMPLOYEE_ADVANCES`, alongside a native supplier recovery receipt.
+- *Before fix:* `computeEmployeeAdvancesReconciliation` consumed **5,132 index ranges** (>4,096 platform limit); `computeCloseChecklist` consumed **5,247 index ranges** (>4,096 platform limit). Both failed assertion `< 4096`.
+- *After fix:*
+  - `computeEmployeeAdvancesReconciliation`: dropped from 5,132 to **16 index ranges** (7,188 documents read, well below the 32,000 document limit).
+  - `computeSupplierRecoverablesReconciliation`: **28 index ranges** (40 documents read).
+  - `computeCloseChecklist`: dropped from 5,247 to **133 index ranges** (15,565 documents read, well below the 32,000 document limit).
+
+**Mutation Testing:**
+- Injected Mutant A into `convex/accountingReports.ts` (prematurely returning `"SOURCE_FAMILY_UNSUPPORTED"` when `neededOriginals` is non-empty).
+- The pilot-scale regression immediately failed with `AssertionError: expected status UNAVAILABLE to be AVAILABLE`.
+- Restoring code byte-for-byte restored 100% test pass (3.5s).
+
+**Worst-Case Read Budget Metrics:**
+- *Index Ranges:*
+  - Advances reconciliation: 16 ranges (0.39% of 4,096 limit).
+  - Supplier recoverables reconciliation: 28 ranges (0.68% of 4,096 limit).
+  - Combined close checklist: 133 ranges (3.25% of 4,096 limit, down 97.5% from 5,247).
+- *Documents Read:*
+  - Advances reconciliation: 7,188 documents (22.5% of 32,000 limit).
+  - Supplier recoverables reconciliation: 40 documents.
+  - Combined close checklist: 15,565 documents (48.6% of 32,000 limit).
+- *Bytes Read:*
+  - Combined close checklist total: ~1.2 MB (3.75% of 32 MB transaction byte limit).

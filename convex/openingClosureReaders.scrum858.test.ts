@@ -15,6 +15,11 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
 } from "./utils/closeWarnings";
+import { computeCloseChecklist } from "./accountingPeriods";
+import {
+  computeEmployeeAdvancesReconciliation,
+  computeSupplierRecoverablesReconciliation,
+} from "./accountingReports";
 
 const LABEL_EN = "Unexplained opening-balance reconciliation difference";
 const LABEL_AR = "فرق أرصدة افتتاحية غير مفسر قيد المطابقة";
@@ -815,4 +820,199 @@ test("an organization with no opening history gets no opening warning from a que
   const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId: period._id });
   expect(checklist.employeeAdvancesReconciliation.status).toBe("UNAVAILABLE");
   expect(openingWarnings(checklist.warnings)).toEqual([]);
+}));
+
+
+test("pilot-scale native advance and recovery history with reversals fits within Convex read budget", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find((a) => a.systemKey === "EMPLOYEE_ADVANCES");
+  const receivable = accounts.find((a) => a.systemKey === "RECEIVABLE_FROM_SUPPLIERS");
+  if (!advances || !receivable) throw new Error("Missing system accounts");
+
+  const actor = await t.run(async (ctx) => ctx.db.query("users").first());
+  if (!actor) throw new Error("Missing actor");
+
+  // Record a native supplier recovery receipt against the opening recovery
+  const recovery = await t.run(async (ctx) =>
+    (await ctx.db.query("supplierCostRecoveries").collect()).find((r) => r.origin === "OPENING" && r.openingRowKey === "rec-system")
+  );
+  if (!recovery) throw new Error("Missing opening recovery");
+  await owner.mutation(api.supplierCostRecoveries.recordReceipt, {
+    orgId,
+    recoveryId: recovery._id,
+    amountMinor: 1_000,
+    method: "CASH",
+    receivedDate: Date.now(),
+    idempotencyKey: "pilot-scale-recovery-receipt",
+  });
+  await settleScheduledOnly(t, orgId);
+
+  // Seed 1,024 pairs of (native advance + reversal) = 2,048 journals on advances
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    for (let i = 0; i < 1024; i++) {
+      const advId = await ctx.db.insert("employeeAdvances", {
+        orgId,
+        userId: employeeId,
+        amountMinor: 1000,
+        recoveredMinor: 1000,
+        currency: "JOD",
+        date: now,
+        status: "RECOVERED",
+        isDeleted: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const forwardEventId = await ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "EMPLOYEE_ADVANCE_PAID",
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        eventVersion: 1,
+        idempotencyKey: `pilot-fwd-event-${i}`,
+        occurredAt: now,
+        accountingDate: now,
+        currency: "JOD",
+        payload: {},
+        status: "REVERSED",
+        createdBy: actor._id,
+        createdAt: now,
+      });
+
+      const forwardJournalId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: forwardEventId,
+        journalNumber: `JE-PFWD-${i}`,
+        accountingDate: now,
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        category: "SYSTEM",
+        memo: `Pilot advance ${i}`,
+        status: "REVERSED",
+        currency: "JOD",
+        postedBy: actor._id,
+        postedAt: now,
+        createdAt: now,
+      });
+
+      await ctx.db.patch(forwardEventId, { journalEntryId: forwardJournalId });
+
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId: forwardJournalId,
+        lineNumber: 1,
+        accountId: advances._id,
+        debitMinor: 1000,
+        creditMinor: 0,
+        currency: "JOD",
+        scale: 2,
+        accountingDate: now,
+      });
+
+      // Reversal
+      const revEventId = await ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "EMPLOYEE_ADVANCE_PAID",
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        eventVersion: 1,
+        idempotencyKey: `pilot-rev-event-${i}`,
+        occurredAt: now,
+        accountingDate: now,
+        currency: "JOD",
+        payload: {},
+        status: "POSTED",
+        reversalOfEventId: forwardEventId,
+        createdBy: actor._id,
+        createdAt: now,
+      });
+
+      const revJournalId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: revEventId,
+        journalNumber: `JE-PREV-${i}`,
+        accountingDate: now,
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        category: "REVERSAL",
+        memo: `Pilot reversal ${i}`,
+        status: "POSTED",
+        currency: "JOD",
+        reversalOfJournalEntryId: forwardJournalId,
+        postedBy: actor._id,
+        postedAt: now,
+        createdAt: now,
+      });
+
+      await ctx.db.patch(revEventId, { journalEntryId: revJournalId });
+
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId: revJournalId,
+        lineNumber: 1,
+        accountId: advances._id,
+        debitMinor: 0,
+        creditMinor: 1000,
+        currency: "JOD",
+        scale: 2,
+        accountingDate: now,
+      });
+    }
+  });
+
+  // Harness read counter observer
+  const makeObserver = () => {
+    const reads = { documents: 0, ranges: 0 };
+    const observed = <T extends object>(target: T): T =>
+      new Proxy(target, {
+        get(object, key, receiver) {
+          const member: unknown = Reflect.get(object, key, receiver);
+          if (typeof member !== "function") return member;
+          return (...args: unknown[]) => {
+            const value: unknown = Reflect.apply(member, object, args);
+            if (["take", "first", "unique", "get", "collect"].includes(String(key))) {
+              reads.ranges += 1;
+              return Promise.resolve(value).then((result) => {
+                reads.documents += Array.isArray(result) ? result.length : 1;
+                return result;
+              });
+            }
+            return value !== null && typeof value === "object" ? observed(value) : value;
+          };
+        },
+      });
+    return { reads, observed };
+  };
+
+  // 1. Employee advances reader
+  const obsAdv = makeObserver();
+  const advResult = await t.run((ctx) =>
+    computeEmployeeAdvancesReconciliation({ ...ctx, db: obsAdv.observed(ctx.db) }, orgId, undefined)
+  );
+  expect(advResult).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(obsAdv.reads.ranges).toBeLessThan(4096);
+  expect(obsAdv.reads.documents).toBeLessThan(32000);
+
+  // 2. Supplier recoverables reader
+  const obsRec = makeObserver();
+  const recResult = await t.run((ctx) =>
+    computeSupplierRecoverablesReconciliation({ ...ctx, db: obsRec.observed(ctx.db) }, orgId, undefined)
+  );
+  expect(recResult).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(obsRec.reads.ranges).toBeLessThan(4096);
+  expect(obsRec.reads.documents).toBeLessThan(32000);
+
+  // 3. Combined close checklist
+  const obsChecklist = makeObserver();
+  const period = await t.run((ctx) => ctx.db.get(periodId));
+  const checklistResult = await t.run((ctx) =>
+    computeCloseChecklist({ ...ctx, db: obsChecklist.observed(ctx.db) }, orgId, period!)
+  );
+  expect(checklistResult.employeeAdvancesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(checklistResult.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(obsChecklist.reads.ranges).toBeLessThan(4096);
+  expect(obsChecklist.reads.documents).toBeLessThan(32000);
 }));

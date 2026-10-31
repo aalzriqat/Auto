@@ -1393,43 +1393,115 @@ function reconciliationEventFamilySupported(event: Doc<"accountingEvents">, fami
     (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts");
 }
 
-async function reconciliationJournalSupported(
-  ctx: QueryCtx, orgId: Id<"organizations">, journalId: Id<"journalEntries">,
-  family: ReconciliationControlFamily,
-): Promise<boolean> {
-  const journal = await ctx.db.get(journalId);
-  if (!journal || journal.orgId !== orgId) return false;
-  if (journal.status !== "POSTED" && journal.status !== "REVERSED") return true;
-  const original = journal.reversalOfJournalEntryId ? await ctx.db.get(journal.reversalOfJournalEntryId) : journal;
-  if (!original || original.orgId !== orgId) return false;
-  if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) return true;
-  if (!original.accountingEventId) return false;
-  const event = await ctx.db.get(original.accountingEventId);
-  return event?.orgId === orgId && event.journalEntryId === original._id &&
-    event.sourceType === original.sourceType && event.sourceId === original.sourceId &&
-    reconciliationEventFamilySupported(event, family);
-}
+const SUPPORTED_SOURCE_FAMILIES: Record<
+  ReconciliationControlFamily,
+  {
+    journalSourceTypes: readonly string[];
+    eventSourceTypes: readonly string[];
+  }
+> = {
+  EMPLOYEE_ADVANCE: {
+    journalSourceTypes: ["employeeAdvances", "payrollItems", "cutover"],
+    eventSourceTypes: ["employeeAdvances", "payrollItems"],
+  },
+  SUPPLIER_RECOVERABLE: {
+    journalSourceTypes: ["supplierCostRecoveryReceipts", "cutover", "expenses"],
+    eventSourceTypes: ["supplierCostRecoveryReceipts", "expenses"],
+  },
+};
 
 /** Prove family coverage independently of surviving subledger rows. All cumulative lines count,
  * including REVERSED originals; a net-zero foreign family still cannot certify this subledger.
- * The shared line budget bounds this additional scan, not the full report or close checklist. */
+ * The shared line budget bounds this additional scan, not the full report or close checklist.
+ * Batching family journals and events across indexed source types replaces one index range
+ * per historical journal. */
 async function controlSourceFamilyRefusal(
-  ctx: QueryCtx, orgId: Id<"organizations">, controls: ReadonlySet<Id<"chartOfAccounts">>,
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  controls: ReadonlySet<Id<"chartOfAccounts">>,
   family: ReconciliationControlFamily,
 ): Promise<"OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null> {
   let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const checked = new Map<Id<"journalEntries">, boolean>();
+  const controlLines: Doc<"journalLines">[] = [];
   for (const accountId of controls) {
-    const lines = await ctx.db.query("journalLines").withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", accountId)).take(remaining + 1);
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
+      .take(remaining + 1);
     if (lines.length > remaining) return "OVER_LIMIT";
     remaining -= lines.length;
-    for (const line of lines) {
-      if (!checked.has(line.journalEntryId)) {
-        checked.set(line.journalEntryId, await reconciliationJournalSupported(ctx, orgId, line.journalEntryId, family));
-      }
-      if (checked.get(line.journalEntryId) === false) return "SOURCE_FAMILY_UNSUPPORTED";
+    controlLines.push(...lines);
+  }
+  if (controlLines.length === 0) return null;
+
+  const distinctJournalIds = new Set<Id<"journalEntries">>();
+  for (const line of controlLines) {
+    distinctJournalIds.add(line.journalEntryId);
+  }
+
+  const config = SUPPORTED_SOURCE_FAMILIES[family];
+
+  // Batch-load candidate journals for the family's supported sourceTypes.
+  // One index range per sourceType replaces one range per historical journal.
+  const journalsById = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
+  for (const sourceType of config.journalSourceTypes) {
+    const batch = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
+      .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
+    if (batch.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return "OVER_LIMIT";
+    for (const journal of batch) {
+      journalsById.set(journal._id, journal);
     }
   }
+
+  // Any journal on the control account not in the family's supported sourceTypes is unsupported.
+  const neededOriginals = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
+  for (const journalId of distinctJournalIds) {
+    const journal = journalsById.get(journalId);
+    if (!journal || journal.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
+    const original = journal.reversalOfJournalEntryId
+      ? journalsById.get(journal.reversalOfJournalEntryId)
+      : journal;
+    if (!original || original.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) {
+      continue;
+    }
+    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
+    neededOriginals.set(original._id, original);
+  }
+
+  if (neededOriginals.size === 0) return null;
+
+  // Batch-load candidate accounting events for the family's supported event sourceTypes.
+  const eventsById = new Map<Id<"accountingEvents">, Doc<"accountingEvents">>();
+  for (const sourceType of config.eventSourceTypes) {
+    const batch = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
+      .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
+    if (batch.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return "OVER_LIMIT";
+    for (const event of batch) {
+      eventsById.set(event._id, event);
+    }
+  }
+
+  for (const original of neededOriginals.values()) {
+    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
+    const event = eventsById.get(original.accountingEventId);
+    if (!event) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (
+      event.orgId !== orgId ||
+      event.journalEntryId !== original._id ||
+      event.sourceType !== original.sourceType ||
+      event.sourceId !== original.sourceId ||
+      !reconciliationEventFamilySupported(event, family)
+    ) {
+      return "SOURCE_FAMILY_UNSUPPORTED";
+    }
+  }
+
   return null;
 }
 
