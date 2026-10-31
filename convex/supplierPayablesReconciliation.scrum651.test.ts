@@ -155,14 +155,14 @@ describe("SCRUM-651 - reconciliation counts every non-CANCELLED payable by its o
     const s = await seedDealer("disp");
     const { payableId } = await sourcedSale(s);
 
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong figure" });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong figure", idempotencyKey: crypto.randomUUID() });
     expect((await payableOf(s, payableId))?.status).toBe("DISPUTED");
     expect(await apNetMinor(s)).toBe(JOD(19_000));
     const disputed = await recon(s);
     expect(disputed.byCurrency.JOD.subledgerBalanceMinor).toBe(JOD(19_000));
     expect(disputed.isReconciled).toBe(true);
 
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: false });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: false, idempotencyKey: crypto.randomUUID() });
     expect((await payableOf(s, payableId))?.status).toBe("DUE_ON_SALE");
     const lifted = await recon(s);
     expect(lifted.byCurrency.JOD.subledgerBalanceMinor).toBe(JOD(19_000));
@@ -360,7 +360,7 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
   test("a DISPUTED payable is cancelled with the sale and AP nets to zero", async () => {
     const s = await seedDealer("c_disp");
     const { saleId, payableId } = await sourcedSale(s);
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong figure" });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "Wrong figure", idempotencyKey: crypto.randomUUID() });
     await cancel(s, saleId);
     const after = await payableOf(s, payableId);
     expect(after?.status).toBe("CANCELLED");
@@ -372,8 +372,8 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
   test("a DUE_ON_SALE payable (dispute lifted) is cancelled with the sale and AP nets to zero", async () => {
     const s = await seedDealer("c_due");
     const { saleId, payableId } = await sourcedSale(s);
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "x" });
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: false });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "x", idempotencyKey: crypto.randomUUID() });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: false, idempotencyKey: crypto.randomUUID() });
     expect((await payableOf(s, payableId))?.status).toBe("DUE_ON_SALE");
     await cancel(s, saleId);
     expect((await payableOf(s, payableId))?.status).toBe("CANCELLED");
@@ -414,7 +414,7 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
     await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
       orgId: s.orgId, payableId, amount: 1_000, idempotencyKey: "ap651_c_dp_1",
     });
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "x" });
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId, disputed: true, reason: "x", idempotencyKey: crypto.randomUUID() });
     expect(await refusalCode(cancel(s, saleId))).toBe("SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED");
     expect((await payableOf(s, payableId))?.status).toBe("DISPUTED");
   });
@@ -478,7 +478,10 @@ describe("SCRUM-651 - sale cancellation tears down every unpaid payable and refu
   test("the refusal has English and Arabic copy", async () => {
     const { commonEn, commonAr } = await import("../lib/i18n/domains/common");
     const key = "ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED";
-    expect((commonEn as Record<string, string>)[key]).toMatch(/manual accounting correction/);
+    // SCRUM-869 round 2: manual journals are disabled for the pilot, so the refusal must not send the user to one.
+    expect((commonEn as Record<string, string>)[key]).not.toMatch(/manual accounting correction/);
+    expect((commonEn as Record<string, string>)[key]).toMatch(/Cannot automatically cancel a sale after the supplier payable has been paid/);
     expect((commonAr as Record<string, string>)[key]).toMatch(/[؀-ۿ]/);
+    expect((commonAr as Record<string, string>)[key]).not.toMatch(/تصحيح محاسبي يدوي/);
   });
 });

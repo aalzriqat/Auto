@@ -25,7 +25,7 @@ import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
 // executed IDs, and the real-preview validator uses the same list.
 export const REQUIRED_REHEARSAL_CASE_IDS = Object.freeze([
   "A1", "A2", "D1", "D2", "D3", "D4", "C1", "C2", "UNAUTH", "TEN", "A3",
-  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP", "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CC-CASH",
+  "B1", "B2", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "S853", "S811", "S858-OPENING", "S858-CONTAINMENT", "P1", "SETUP", "S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CC-CASH", "SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS",
 ]);
 
 function fail(message) {
@@ -3733,6 +3733,230 @@ export async function runRehearsalCases(ctx) {
         "accountingReports.incomeStatement"] };
   });
 
+  // ── SUP-* — the supplier settlement doors (SCRUM-869 S1b, owner ruling SCRUM-869#c23881) ──
+  //
+  // Supplier payable payment, consignment margin receipt and supplier cost-recovery receipt are IN the pilot and
+  // must be certified on a real backend; every reversal and correction door for the three refuses server-side.
+  // Every expected figure is a literal from the harness cells in `convex/supplierSettlementCertification.test.ts`
+  // (payable 8,000: 3,000 then 5,000; margin 7,000: 2,000 then 5,000; recovery 200: 80 then 120). Only public
+  // mutations and queries are used, and the movement is read from the GL itself: the net (debit minus credit) of
+  // AP-Suppliers 2400, Receivable-from-Suppliers 1240 and cash, before and after each call.
+  const supNet = async (key) => {
+    const { accountOf } = await chartIndex({ orgId, ownerMust });
+    const accountId = accountOf.get(key);
+    if (!accountId) unproven(`SUP chart account ${key} is unavailable`);
+    const { lines } = await allAccountActivityLines({ orgId, ownerMust, accountId });
+    return lines.reduce((sum, l) => sum + (l.debitMinor ?? 0) - (l.creditMinor ?? 0), 0);
+  };
+  const supNets = async () => ({
+    ap: await supNet("ACCOUNTS_PAYABLE_SUPPLIERS"),
+    recv: await supNet("RECEIVABLE_FROM_SUPPLIERS"),
+    cash: await supNet("CASH_ON_HAND"),
+  });
+  const expectNetMoved = (before, after, delta, what) => {
+    for (const k of ["ap", "recv", "cash"]) {
+      expectEqual(after[k] - before[k], delta[k] ?? 0, `${what}: net movement of ${k}`);
+    }
+  };
+  const supVin = (tag) => `RHS${tag}${uuid().replace(/-/g, "").slice(0, 12)}`.toUpperCase();
+  const supCar = (tag, stamp, extra) => createVehicleForRehearsal(ownerMust, {
+    orgId, vin: supVin(tag), make: "Toyota", model: `Camry-${tag}`, year: 2022, mileage: 800, color: "Blue",
+    fuelType: "Gasoline", transmission: "Automatic", status: "AVAILABLE",
+    idempotencyKey: `rehearsal-${tag.toLowerCase()}-vehicle-${stamp}`, ...extra,
+  });
+  const supSourcedCar = (tag, stamp) => supCar(tag, stamp, {
+    sellingPrice: 22_000, sourceType: "SOURCED", sourcedFromName: `Rehearsal Supplier ${stamp}`, sourceCost: 15_000,
+  });
+  const supOnAccountCar = (tag, stamp, price) => supCar(tag, stamp, {
+    sellingPrice: price + 4_000, sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT",
+    purchaseSupplierName: `Rehearsal Supplier ${stamp}`,
+  });
+  const supPayableOf = async (vehicleId) => {
+    const rows = await ownerMust("query", "sourcingPayables:list", { orgId });
+    const mine = (rows ?? []).filter((r) => String(r.vehicleId) === String(vehicleId));
+    expectEqual(mine.length, 1, "supplier payables for this car");
+    return mine[0];
+  };
+  const supRecoveryOf = async (expenseId) => {
+    const page = await ownerMust("query", "supplierCostRecoveries:list", { orgId });
+    const mine = (page?.items ?? []).filter((r) => String(r.expenseId) === String(expenseId));
+    expectEqual(mine.length, 1, "supplier cost recoveries for this expense");
+    return mine[0];
+  };
+  // `supplierCostRecoveries.recordReceipt` requires `receivedDate`: a past instant that is not before the cost
+  // posting (the expense below is dated 60 s ago). Taken ONCE per case, after the cost exists, and reused for every
+  // call of that case, because a replay under the same idempotency key must carry the same inputs (SCRUM-869 F2).
+  const supReceivedDate = () => Date.now() - 5_000;
+  const supPayCost = async (tag, stamp, vehicleId, amount) => ownerMust("mutation", "expenses:create", {
+    orgId, vehicleId, title: `Rehearsal supplier cost ${tag}-${stamp}`, amount, date: Date.now() - 60_000,
+    category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER",
+    idempotencyKey: `rehearsal-${tag.toLowerCase()}-expense-${stamp}`,
+  });
+
+  await recordCase(results, "SUP-PAY", "SCRUM-869: a supplier payable is paid in part and then in full; each payment debits AP-Suppliers and credits cash by exactly the amount, a replay posts once, an over-payment writes nothing", async () => {
+    const { minorPerMajor: scale, currency } = await orgDenomination({ orgId, ownerMust });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const vehicleId = await supOnAccountCar("SP", stamp, 8_000);
+    const payable = await supPayableOf(vehicleId);
+    expectEqual(payable.amountDue, 8_000, "payable amount for an 8,000 ON_ACCOUNT car");
+    const payArgs = { orgId, payableId: payable._id, paymentMethod: "CASH" };
+    const start = await supNets();
+
+    await ownerMust("mutation", "sourcingPayables:recordPartialPayment", { ...payArgs, amount: 3_000, idempotencyKey: `rehearsal-sp-part-${stamp}` });
+    const afterPart = await supNets();
+    expectNetMoved(start, afterPart, { ap: 3_000 * scale, cash: -3_000 * scale }, "SUP-PAY 3,000 instalment");
+    const part = await supPayableOf(vehicleId);
+    expectEqual(part.status, "PARTIALLY_PAID", "payable status after 3,000");
+    expectEqual(part.amountPaid, 3_000, "payable amountPaid after 3,000");
+
+    // The same key again posts nothing; 5,000.001 would pay more than is owed and is refused with nothing written.
+    const replay = await ownerCall("mutation", "sourcingPayables:recordPartialPayment", { ...payArgs, amount: 3_000, idempotencyKey: `rehearsal-sp-part-${stamp}` });
+    if (!replay.ok) fail(`replaying the 3,000 instalment under the same key was refused: ${String(replay.error).slice(0, 200)}`);
+    const over = await ownerCall("mutation", "sourcingPayables:recordPartialPayment", { ...payArgs, amount: 5_000.001, idempotencyKey: `rehearsal-sp-over-${stamp}` });
+    if (over.ok) fail("paying 5,000.001 against 5,000 still owed was ACCEPTED");
+    expectNetMoved(afterPart, await supNets(), {}, "SUP-PAY a replay and a refused over-payment");
+    expectEqual((await supPayableOf(vehicleId)).amountPaid, 3_000, "payable amountPaid after the replay and the refusal");
+
+    await ownerMust("mutation", "sourcingPayables:markPaid", { ...payArgs, idempotencyKey: `rehearsal-sp-full-${stamp}` });
+    expectNetMoved(afterPart, await supNets(), { ap: 5_000 * scale, cash: -5_000 * scale }, "SUP-PAY the remaining 5,000");
+    const paid = await supPayableOf(vehicleId);
+    expectEqual(paid.status, "PAID", "payable status after settling");
+    expectEqual(paid.amountPaid, 8_000, "payable amountPaid after settling");
+    const again = await ownerCall("mutation", "sourcingPayables:markPaid", { ...payArgs, idempotencyKey: `rehearsal-sp-again-${stamp}` });
+    if (again.ok) fail("settling an already PAID payable a second time was ACCEPTED");
+    expectNetMoved(start, await supNets(), { ap: 8_000 * scale, cash: -8_000 * scale }, "SUP-PAY the whole payable");
+    return { vehicleId: String(vehicleId), payableId: String(payable._id), currency, paidMinor: 8_000 * scale,
+      commandsExercised: ["vehicles.create (ON_ACCOUNT)", "sourcingPayables.recordPartialPayment", "sourcingPayables.markPaid"] };
+  });
+
+  await recordCase(results, "SUP-MARGIN", "SCRUM-869: a consignment margin claim (DIRECT_TO_SUPPLIER sale) is collected in part and then in full; each receipt debits cash and credits Receivable-from-Suppliers by exactly the amount, an over-receipt writes nothing", async () => {
+    const { minorPerMajor: scale, currency } = await orgDenomination({ orgId, ownerMust });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const vehicleId = await supSourcedCar("SM", stamp);
+    const customerId = await ownerMust("mutation", "customers:create", { orgId, firstName: "Rehearsal", lastName: `sm-${stamp}` });
+    const me = await ownerMust("query", "users:getMe", {});
+    if (!me?._id) fail("users:getMe returned no user for the OWNER token — the sale has no salesperson to name");
+    const saleId = await ownerMust("mutation", "sales:create", {
+      orgId, vehicleId, customerId, salespersonId: me._id, salePrice: 22_000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      idempotencyKey: `rehearsal-sm-sale-${stamp}`,
+    });
+    const claimOf = async () => {
+      const page = await ownerMust("query", "supplierReceivables:list", { orgId });
+      const mine = (page?.items ?? []).filter((r) => String(r.vehicleId) === String(vehicleId));
+      expectEqual(mine.length, 1, "margin claims for this car");
+      return mine[0];
+    };
+    const claim = await claimOf();
+    expectEqual(claim.amountDue, 7_000, "margin claim = sale price 22,000 less the supplier's 15,000");
+    const recvArgs = { orgId, receivableId: claim._id, receiptMethod: "CASH" };
+    const start = await supNets();
+
+    await ownerMust("mutation", "supplierReceivables:recordReceipt", { ...recvArgs, amount: 2_000, idempotencyKey: `rehearsal-sm-part-${stamp}` });
+    const afterPart = await supNets();
+    expectNetMoved(start, afterPart, { recv: -2_000 * scale, cash: 2_000 * scale }, "SUP-MARGIN 2,000 receipt");
+    const part = await claimOf();
+    expectEqual(part.status, "PARTIALLY_PAID", "claim status after 2,000");
+    expectEqual(part.remainingAmount, 5_000, "claim remaining after 2,000");
+
+    const replay = await ownerCall("mutation", "supplierReceivables:recordReceipt", { ...recvArgs, amount: 2_000, idempotencyKey: `rehearsal-sm-part-${stamp}` });
+    if (!replay.ok) fail(`replaying the 2,000 receipt under the same key was refused: ${String(replay.error).slice(0, 200)}`);
+    const over = await ownerCall("mutation", "supplierReceivables:recordReceipt", { ...recvArgs, amount: 5_000.001, idempotencyKey: `rehearsal-sm-over-${stamp}` });
+    if (over.ok) fail("receiving 5,000.001 against 5,000 still owed was ACCEPTED");
+    expectNetMoved(afterPart, await supNets(), {}, "SUP-MARGIN a replay and a refused over-receipt");
+
+    await ownerMust("mutation", "supplierReceivables:recordReceipt", { ...recvArgs, amount: 5_000, idempotencyKey: `rehearsal-sm-full-${stamp}` });
+    expectNetMoved(start, await supNets(), { recv: -7_000 * scale, cash: 7_000 * scale }, "SUP-MARGIN the whole margin");
+    const done = await claimOf();
+    expectEqual(done.status, "PAID", "claim status after collecting it all");
+    expectEqual(done.remainingAmount, 0, "claim remaining after collecting it all");
+    return { saleId: String(saleId), vehicleId: String(vehicleId), currency, collectedMinor: 7_000 * scale,
+      commandsExercised: ["vehicles.create (SOURCED)", "sales.create (DIRECT_TO_SUPPLIER)", "supplierReceivables.recordReceipt"] };
+  });
+
+  await recordCase(results, "SUP-RECOVERY", "SCRUM-869: a supplier cost recovery (200) is received in part and then in full; each receipt debits cash and credits Receivable-from-Suppliers by exactly the amount, an over-receipt writes nothing", async () => {
+    const { minorPerMajor: scale, currency } = await orgDenomination({ orgId, ownerMust });
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const vehicleId = await supSourcedCar("SC", stamp);
+    const before = await supNets();
+    const expenseId = await supPayCost("SC", stamp, vehicleId, 200);
+    const recovery = await supRecoveryOf(expenseId);
+    expectEqual(recovery.amountDueMinor, 200 * scale, "recovery amount for a 200 supplier-borne cost");
+    const start = await supNets();
+    expectNetMoved(before, start, { recv: 200 * scale, cash: -200 * scale }, "SUP-RECOVERY the supplier-borne cost and its claim");
+    const recvArgs = { orgId, recoveryId: recovery._id, method: "CASH", receivedDate: supReceivedDate() };
+
+    await ownerMust("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 80 * scale, idempotencyKey: `rehearsal-sc-part-${stamp}` });
+    const afterPart = await supNets();
+    expectNetMoved(start, afterPart, { recv: -80 * scale, cash: 80 * scale }, "SUP-RECOVERY 80 receipt");
+    const part = await supRecoveryOf(expenseId);
+    expectEqual(part.status, "PARTIALLY_RECOVERED", "recovery status after 80");
+    expectEqual(part.remainingMinor, 120 * scale, "recovery remaining after 80");
+
+    const replay = await ownerCall("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 80 * scale, idempotencyKey: `rehearsal-sc-part-${stamp}` });
+    if (!replay.ok) fail(`replaying the 80 receipt under the same key was refused: ${String(replay.error).slice(0, 200)}`);
+    const over = await ownerCall("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 130 * scale, idempotencyKey: `rehearsal-sc-over-${stamp}` });
+    if (over.ok) fail("receiving 130 against 120 still outstanding was ACCEPTED");
+    expectNetMoved(afterPart, await supNets(), {}, "SUP-RECOVERY a replay and a refused over-receipt");
+
+    await ownerMust("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 120 * scale, idempotencyKey: `rehearsal-sc-full-${stamp}` });
+    expectNetMoved(start, await supNets(), { recv: -200 * scale, cash: 200 * scale }, "SUP-RECOVERY the whole recovery");
+    const done = await supRecoveryOf(expenseId);
+    expectEqual(done.status, "RECOVERED", "recovery status after receiving it all");
+    expectEqual(done.remainingMinor, 0, "recovery remaining after receiving it all");
+    const extra = await ownerCall("mutation", "supplierCostRecoveries:recordReceipt", { ...recvArgs, amountMinor: 1, idempotencyKey: `rehearsal-sc-extra-${stamp}` });
+    if (extra.ok) fail("one more minor unit against a fully RECOVERED cost was ACCEPTED");
+    return { expenseId: String(expenseId), vehicleId: String(vehicleId), currency, recoveredMinor: 200 * scale,
+      commandsExercised: ["vehicles.create (SOURCED)", "expenses.create (costBearer SUPPLIER)", "supplierCostRecoveries.recordReceipt"] };
+  });
+
+  await recordCase(results, "SUP-REFUSALS", "SCRUM-869: reversing a recovery receipt, reversing a supplier-borne expense and correcting an unpaid supplier payable are each refused with a pilot containment code and change nothing", async () => {
+    const stamp = `${Date.now().toString(36)}-${uuid().slice(0, 8)}`;
+    const sourcedId = await supSourcedCar("SR", stamp);
+    const expenseId = await supPayCost("SR", stamp, sourcedId, 200);
+    const recovery = await supRecoveryOf(expenseId);
+    const { minorPerMajor: scale } = await orgDenomination({ orgId, ownerMust });
+    await ownerMust("mutation", "supplierCostRecoveries:recordReceipt", {
+      orgId, recoveryId: recovery._id, method: "CASH", amountMinor: 80 * scale, receivedDate: supReceivedDate(), idempotencyKey: `rehearsal-sr-receipt-${stamp}`,
+    });
+    const onAccountId = await supOnAccountCar("SX", stamp, 12_500);
+    const payable = await supPayableOf(onAccountId);
+
+    const readState = async () => {
+      const receipts = await ownerMust("query", "supplierCostRecoveries:listReceipts", { orgId, recoveryId: recovery._id });
+      const events = await ownerMust("query", "accountingLedger:listAccountingEvents", { orgId, limit: 200 });
+      const car = await ownerMust("query", "vehicles:get", { orgId, vehicleId: onAccountId });
+      const nowPayable = await supPayableOf(onAccountId);
+      const nowRecovery = await supRecoveryOf(expenseId);
+      return JSON.stringify({
+        nets: await supNets(),
+        receipts: (receipts ?? []).map((r) => [String(r._id), r.status, r.amountMinor]).sort((a, b) => a[0].localeCompare(b[0])),
+        events: (events ?? []).map((e) => String(e._id)).sort((a, b) => a.localeCompare(b)),
+        carCost: car?.purchasePrice ?? null,
+        payable: [nowPayable.amountDue, nowPayable.amountPaid, nowPayable.status],
+        recovery: [nowRecovery.amountRecoveredMinor, nowRecovery.status],
+      });
+    };
+    const receipts = await ownerMust("query", "supplierCostRecoveries:listReceipts", { orgId, recoveryId: recovery._id });
+    const liveReceipt = (receipts ?? []).find((r) => r.status === "LIVE");
+    if (!liveReceipt) fail("the 80 receipt is not listed as LIVE before the reversal is attempted");
+
+    const before = await readState();
+    const refusals = [
+      ["supplierCostRecoveries:reverseReceipt", { orgId, receiptId: liveReceipt._id, reason: "Rehearsal reversal", idempotencyKey: `rehearsal-sr-rev-${stamp}` }, "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED"],
+      ["expenses:reverseExpense", { orgId, expenseId, reason: "Rehearsal reversal" }, "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED"],
+      ["vehicles:correctAcquisitionCost", { orgId, vehicleId: onAccountId, newCost: 9_800, reason: "Supplier invoice was wrong", correctionType: "SUPPLIER_INVOICE_ERROR" }, "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"],
+    ];
+    for (const [fnPath, args, code] of refusals) {
+      const result = await ownerCall("mutation", fnPath, args);
+      if (result.ok) fail(`${fnPath} was ACCEPTED, but the pilot blocks that door server-side`);
+      expectEqual(result.errorCode, code, `${fnPath} refusal code`);
+    }
+    if ((await readState()) !== before) fail("a refused supplier reversal or correction changed the receipts, the events, the cost, the payable, the recovery or the ledger");
+    expectEqual(payable.amountDue, 12_500, "the unpaid payable amount the refused correction left alone");
+    return { refusals: refusals.map(([fnPath, , code]) => ({ fnPath, code })), stateUnchanged: true,
+      commandsExercised: ["supplierCostRecoveries.reverseReceipt", "expenses.reverseExpense", "vehicles.correctAcquisitionCost"] };
+  });
   await runOpeningRehearsalCases(ctx);
   // U-RET is NOT run here: it must run after the cleanup cases. See `runRehearsalSequence` in accountingPreviewRehearsal.mjs.
 

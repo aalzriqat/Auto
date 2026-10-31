@@ -17,6 +17,13 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
+// SCRUM-869#c23881: historical receipt-reversal mechanics with the pilot door explicitly open.
+// The shipped-state refusal lives in supplierSettlementContainment.test.ts.
+vi.mock("./utils/supplierSettlementContainment", async (importOriginal) =>
+  (await import("../test-utils/supplierSettlementSwitches")).openSupplierSettlementDoors(
+    await importOriginal<typeof import("./utils/supplierSettlementContainment")>()
+  ));
+
 const families = [
   {
     name: "supplier recoverable",

@@ -15,6 +15,7 @@ import { toast } from "@/components/ui/sonner";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { getErrorMessage, getLocalizedErrorMessage } from "@/lib/errors";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { type SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 import { SupplierPaymentDialog } from "@/components/sourcing/SupplierPaymentDialog";
 import { SupplierCostRecoveriesSection } from "@/components/sourcing/SupplierCostRecoveriesSection";
 
@@ -84,7 +85,7 @@ export function SourcingClient() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("PENDING");
   const [payDialogPayable, setPayDialogPayable] = useState<SourcingPayable | null>(null);
   const [paymentNotes, setPaymentNotes] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [paymentMethod, setPaymentMethod] = useState<SupplierSettlementPilotMethod>("CASH");
   const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | null>(null);
   const [taxAmount, setTaxAmount] = useState("");
   const [isPaying, setIsPaying] = useState(false);
@@ -103,7 +104,7 @@ export function SourcingClient() {
     api.sourcingPayables.listPaymentBankOptions,
     activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
   );
-  const bankMethod = paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE";
+  const bankMethod = paymentMethod === "BANK_TRANSFER";
 
   // The live special-order pipeline — cars on order for a customer that have
   // not sold yet. Payables below only exist once the sale completes, so without

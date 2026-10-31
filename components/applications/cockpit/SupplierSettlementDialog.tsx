@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 import type { Id } from "@/convex/_generated/dataModel";
+import { SUPPLIER_SETTLEMENT_PILOT_METHODS, type SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,15 @@ import {
  * The two look similar and mean opposite things, and conflating them is the
  * confusion this whole settlement track exists to remove.
  */
+/**
+ * SCRUM-869 F1: the pilot accepts cash and bank transfer only. A cheque or card
+ * receipt would post without the custody / bounce lifecycle, and the server
+ * refuses both (`SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED`). The list is the
+ * server's own (`SUPPLIER_SETTLEMENT_PILOT_METHODS`), imported, not copied.
+ */
+type SupplierReceiptMethod = SupplierSettlementPilotMethod;
+const SUPPLIER_RECEIPT_METHODS: readonly SupplierReceiptMethod[] = SUPPLIER_SETTLEMENT_PILOT_METHODS;
+
 type SupplierSettlementDialogProps = {
   open: boolean;
   submitting: boolean;
@@ -66,10 +76,10 @@ export function SupplierSettlementDialog({
   const [amount, setAmount] = useState("");
   const [reference, setReference] = useState("");
   const [receivedOn, setReceivedOn] = useState("");
-  // A supplier repaying a margin does it by transfer or cheque far more often
-  // than in cash, so the default is the common case rather than the first
+  // A supplier repaying a margin usually does it by transfer rather than in
+  // cash, so the default is the common case rather than the first
   // alphabetically.
-  const [method, setMethod] = useState<PaymentMethod>("BANK_TRANSFER");
+  const [method, setMethod] = useState<SupplierReceiptMethod>("BANK_TRANSFER");
   const [bankAccountId, setBankAccountId] = useState("");
 
   // Reset on the closed -> open TRANSITION, reading the current outstanding
@@ -99,7 +109,7 @@ export function SupplierSettlementDialog({
   // must count as invalid. `NaN <= 0` is false, which would let it through.
   const amountInvalid = entered && !(parsed > 0);
   const exceedsClaim = entered && parsed > 0 && parsed > outstandingMajor;
-  const needsBank = method === "BANK_TRANSFER" || method === "CARD";
+  const needsBank = method === "BANK_TRANSFER";
   const chosenBank = bankOptions?.banks.find((bank) => bank._id === bankAccountId);
   const canSubmit = entered && parsed > 0 && !exceedsClaim && !submitting &&
     (!needsBank || (chosenBank !== undefined && bankOptions?.truncated === false));
@@ -150,6 +160,7 @@ export function SupplierSettlementDialog({
             <Label>{t("SupplierReceiptAccount")}</Label>
             <PaymentMethodSelect
               t={t}
+              methods={SUPPLIER_RECEIPT_METHODS}
               value={method}
               onValueChange={(next) => { setMethod(next); setBankAccountId(""); }}
               ariaLabel={t("SupplierReceiptAccount")}

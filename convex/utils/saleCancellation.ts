@@ -327,8 +327,8 @@ async function cancelProductDeferrals(
 }
 
 /** Must equal ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED (EN) in lib/i18n/domains/common.ts. */
-const SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE =
-  "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.";
+export const SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE =
+  "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Nothing has been changed. The sale and the supplier payment stay as recorded.";
 
 /**
  * SCRUM-651 (D-42). Money has left on this payable: a recorded payment of any size, or the legacy

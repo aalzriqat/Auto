@@ -16,9 +16,15 @@
  * exists for, and nothing here substitutes for it.
  */
 import { describe, expect, test, vi } from "vitest";
+// SCRUM-869: registered sales validators pull in the backend fixture graph. Load that dependency during
+// collection, rather than charging its cold Vite transforms to the first SCRUM-811 assertion (5.541 s
+// at 8d4df51b on 2026-10-30; main control: 0.255 s). Keep per-call registered validation below unchanged.
+// Vitest separates import time from test time: https://vitest.dev/guide/profiling-test-performance
+import "../convex/sales";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
+import { exportedArgsOf, registeredArgsProblems } from "../test-utils/registeredArgs";
 import {
   CURRENCY_SCALES,
   DEFAULT_ORG_CURRENCY,
@@ -498,7 +504,55 @@ type Defects = {
   saleReferenceWrongRefusal?: boolean;
   saleReferenceWritesBeforeRefusing?: boolean;
   saleOwnReferenceRefused?: boolean;
+  /** SCRUM-869 supplier settlement negative controls. */
+  supplierPaymentPostsWrongAccount?: boolean;
+  supplierPaymentOverApplied?: boolean;
+  supplierReplayDoublePosts?: boolean;
+  marginReceiptPostsWrongAmount?: boolean;
+  marginOverReceiptAccepted?: boolean;
+  costRecoveryReceiptNotPosted?: boolean;
+  costRecoveryOverReceiptAccepted?: boolean;
+  receiptReversalAccepted?: boolean;
+  expenseReversalAccepted?: boolean;
+  payableCorrectionAccepted?: boolean;
+  refusedSupplierDoorWrites?: boolean;
 };
+
+/**
+ * The registered Convex function behind `module:name`, loaded lazily so a case that never touches a module
+ * never imports it. A path that resolves to no registered function THROWS: the fake would otherwise model the
+ * call by hand against a backend that no longer has it, and a rename (or a failed import) would stay green.
+ * A thrown error fails the case that made the call, in a positive step and in a refusal step alike; a returned
+ * `{ ok: false }` would instead be read as a refusal by every case that expects one.
+ */
+async function registeredFunction(fnPath: string): Promise<unknown> {
+  const unresolved = (why: string) =>
+    new Error(`${fnPath} is not a registered Convex function (${why}); the rehearsal refuses the call instead of modelling it`);
+  const [module, name] = fnPath.split(":");
+  if (!module || !name || !/^[A-Za-z0-9_/]+$/.test(module)) throw unresolved("not a module:name path");
+  let loaded: Record<string, unknown>;
+  try {
+    loaded = (await import(`../convex/${module}.ts`)) as Record<string, unknown>;
+  } catch (error) {
+    throw unresolved(`the module cannot be imported: ${String((error as Error)?.message ?? error).slice(0, 120)}`);
+  }
+  let registered: unknown;
+  try {
+    registered = loaded[name];
+  } catch {
+    // A vitest module mock throws on an export it does not define; that is the same "not exported".
+    registered = undefined;
+  }
+  if (registered === undefined || registered === null) throw unresolved("the module does not export it");
+  if (exportedArgsOf(registered) === null) throw unresolved("the export is not a registered function");
+  return registered;
+}
+
+async function registeredArgsRefusal(registered: unknown, fnPath: string, args: Record<string, unknown>): Promise<string | null> {
+  const problems = registeredArgsProblems(registered, args);
+  if (!problems || problems.length === 0) return null;
+  return `ArgumentValidationError in ${fnPath}: ${problems.join("; ")}`;
+}
 
 function makeBackend(defects: Defects = {}) {
   const deposits = new Map<string, Deposit>();
@@ -539,6 +593,12 @@ function makeBackend(defects: Defects = {}) {
   const MINOR_SCALE = 1000;
   const LINE_SCALE = defects.linesAtWrongScale ? 2 : 3;
   const vehicles = new Map<string, Record<string, any>>();
+  /** SCRUM-869 supplier settlement subledgers. */
+  const supPayables = new Map<string, Record<string, any>>();
+  const supClaims = new Map<string, Record<string, any>>();
+  const supRecoveries = new Map<string, Record<string, any>>();
+  const supReceipts = new Map<string, Record<string, any>>();
+  const supKeys = new Set<string>();
   const sales = new Map<string, Record<string, any>>();
   let commissionRate = 0;
   let commissionMode = "AUTO_MEMBER";
@@ -564,6 +624,7 @@ function makeBackend(defects: Defects = {}) {
     { _id: "acct_comm_exp", code: "6100", type: "EXPENSE", name: "Commission Expense", systemKey: "COMMISSION_EXPENSE", normalBalance: "DEBIT" },
     { _id: "acct_misc", code: "4400", type: "OTHER_INCOME", name: "Misc Income", systemKey: "MISCELLANEOUS_INCOME", normalBalance: "CREDIT" },
     { _id: "acct_forfeit", code: "4410", type: "OTHER_INCOME", name: "Deposit Forfeiture", systemKey: "DEPOSIT_FORFEITURE_INCOME", normalBalance: "CREDIT" },
+    { _id: "acct_recv_sup", code: "1240", type: "ASSET", name: "Receivable from Suppliers", systemKey: "RECEIVABLE_FROM_SUPPLIERS", normalBalance: "DEBIT" },
     { _id: "acct_ap", code: "2400", type: "LIABILITY", name: "AP Suppliers", systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS", normalBalance: "CREDIT" },
     { _id: "acct_rev", code: defects.cashSaleWrongAccountCode ? "4000" : "4100", type: "REVENUE", name: "Sales Revenue", systemKey: "SALES_REVENUE", normalBalance: "CREDIT" },
     { _id: "acct_cogs", code: "5100", type: "COGS", name: "COGS", systemKey: "COST_OF_VEHICLES_SOLD", normalBalance: "DEBIT" },
@@ -1029,6 +1090,18 @@ function makeBackend(defects: Defects = {}) {
     fnPath: string,
     args: Record<string, any>
   ) => {
+    // SCRUM-869 F2: refuse what the REGISTERED function's own validator would refuse (missing required
+    // field, unknown field, wrong type), before any modelled handler runs. The handlers below were
+    // hand-written and never looked at the signature, which let a case omit `receivedDate` and pass.
+    // Two injected defects model a backend whose validator no longer demands a field (a missing command
+    // identity, a missing currency); with either on, the registered check would hide the defect the case
+    // exists to catch, so it stands down for that run only.
+    const validatorDropped = Boolean(defects.acceptUnidentified || defects.feeMissingCurrencyAccepted);
+    // The registration itself is never skipped, even when the validator stands down: resolving it throws for a
+    // function the registry cannot find (see `registeredFunction`).
+    const registered = await registeredFunction(fnPath);
+    const invalid = validatorDropped ? null : await registeredArgsRefusal(registered, fnPath, args);
+    if (invalid) return { ok: false as const, error: invalid };
     switch (fnPath) {
       case "orgSettings:get":
         // The product resolves the denomination from orgSettings, defaulting to
@@ -1374,7 +1447,8 @@ function makeBackend(defects: Defects = {}) {
         // SCRUM-802 (owner ruling, Option A): a cash sale completes only when its full price is held as a deposit.
         // The real backend refuses otherwise, so the rehearsal fake must too: a case that completes an unpaid cash
         // sale is red here exactly as it would be against the real backend.
-        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE") {
+        if (args.status === "COMPLETED" && args.financingType !== "FINANCED" && args.financingType !== "LEASE" &&
+            args.supplierSettlementRoute !== "DIRECT_TO_SUPPLIER") {
           const requiredMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
           const heldMinor = [...deposits.values()]
             .filter((row) => row.vehicleId === String(args.vehicleId) && row.customerId === String(args.customerId) && row.status === "HELD")
@@ -1429,6 +1503,17 @@ function makeBackend(defects: Defects = {}) {
         const vehicle = vehicles.get(String(args.vehicleId));
         const priceMinor = Math.round(Number(args.salePrice) * MINOR_SCALE);
         const costMinor = Math.round((vehicle?.purchasePrice ?? 0) * MINOR_SCALE);
+        if (args.supplierSettlementRoute === "DIRECT_TO_SUPPLIER" && vehicle?.sourceType === "SOURCED") {
+          // The buyer paid the supplier: nothing gross reaches these books, only the margin claim.
+          post("SALE_COMPLETED", "sales", saleId, [
+            { key: "RECEIVABLE_FROM_SUPPLIERS", debitMinor: priceMinor - costMinor },
+            { key: "CONSIGNMENT_COMMISSION_REVENUE", creditMinor: priceMinor - costMinor },
+          ], { payload: { saleAmountMinor: priceMinor } });
+          const claimId = id("srecv");
+          supClaims.set(claimId, { _id: claimId, vehicleId: String(args.vehicleId), saleId, amountDue: (priceMinor - costMinor) / MINOR_SCALE,
+            amountReceived: 0, remainingAmount: (priceMinor - costMinor) / MINOR_SCALE, status: "OPEN" });
+          return { ok: true as const, value: saleId };
+        }
         if (defects.silentConsignedSale) {
           events.push({ _id: id("evt"), eventType: "SALE_COMPLETED", sourceType: "sales", sourceId: saleId, status: "POSTED", payload: { saleAmountMinor: priceMinor } });
           return { ok: true as const, value: saleId };
@@ -1566,6 +1651,15 @@ function makeBackend(defects: Defects = {}) {
             status: args.status,
             purchasePrice: Number(args.sourceType === "SOURCED" ? args.sourceCost : (args.purchasePrice ?? 0)),
           });
+          if (args.purchasePaymentMethod === "ON_ACCOUNT" && !(args.idempotencyKey && createdByKey.has(args.idempotencyKey) && supPayables.has(`pay_${madeVehicle.value}`))) {
+            const owed = Number(args.purchasePrice ?? 0);
+            const payableId = `pay_${madeVehicle.value}`;
+            supPayables.set(payableId, { _id: payableId, vehicleId: String(madeVehicle.value), amountDue: owed, amountPaid: 0, status: "DUE_ON_SALE" });
+            post("VEHICLE_ACQUIRED", "vehicles", String(madeVehicle.value), [
+              { key: "VEHICLE_INVENTORY", debitMinor: Math.round(owed * MINOR_SCALE), vehicleId: String(madeVehicle.value) },
+              { key: "ACCOUNTS_PAYABLE_SUPPLIERS", creditMinor: Math.round(owed * MINOR_SCALE) },
+            ]);
+          }
           if (/^rehearsal-m486c[1235]-vehicle-/.test(String(args.idempotencyKey ?? "")) &&
               !defects.cashSaleAcquisitionMissingPosting) {
             const costMinor = defects.cashSaleAcquisitionWrongAmount ? 9_000_000 : 10_000_000;
@@ -2017,7 +2111,9 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: fee._id };
       }
       case "applications:handoverStamp":
-        return { ok: true as const, value: { stamp: "economics" } };
+        // The real query returns the bare stamp string (convex/applications.ts handoverStamp); the registered
+        // argument check on registerVehicleHandover caught this fake handing back an object.
+        return { ok: true as const, value: "economics" };
       case "financeDealCosts:recordDealFee": {
         const app = financeApps.get(String(args.applicationId));
         if (!app) return { ok: false as const, error: "Application not found." };
@@ -2375,6 +2471,125 @@ function makeBackend(defects: Defects = {}) {
         if (!defects.financeReceivableNotSettled) receivable.status = amount >= receivable.originalAmountMinor ? "PAID" : "PARTIALLY_PAID";
         return { ok: true as const, value: null };
       }
+      case "sourcingPayables:list":
+        return { ok: true as const, value: [...supPayables.values()].map((p) => ({ ...p })) };
+      case "sourcingPayables:recordPartialPayment":
+      case "sourcingPayables:markPaid": {
+        const payable = supPayables.get(String(args.payableId));
+        if (!payable) return { ok: false as const, error: "Supplier payable not found." };
+        const key = String(args.idempotencyKey);
+        const settle = (amountMinor: number) => post("SUPPLIER_PAYMENT_SETTLED", "vehicleSupplierPayables", `${payable._id}:${++seq}`, [
+          { key: defects.supplierPaymentPostsWrongAccount ? "GENERAL_EXPENSE" : "ACCOUNTS_PAYABLE_SUPPLIERS", debitMinor: amountMinor },
+          { key: "CASH_ON_HAND", creditMinor: amountMinor },
+        ]);
+        if (supKeys.has(key)) {
+          if (defects.supplierReplayDoublePosts) settle(Math.round(Number(args.amount ?? 0) * MINOR_SCALE));
+          return { ok: true as const, value: null };
+        }
+        if (payable.status === "PAID") return { ok: false as const, error: "This payable is already paid." };
+        const remainingMinor = Math.round((payable.amountDue - payable.amountPaid) * MINOR_SCALE);
+        const amountMinor = fnPath.endsWith("markPaid") ? remainingMinor : Math.round(Number(args.amount) * MINOR_SCALE);
+        if (!defects.supplierPaymentOverApplied && amountMinor > remainingMinor) {
+          return { ok: false as const, error: "That would pay more than is still owed." };
+        }
+        supKeys.add(key);
+        payable.amountPaid += amountMinor / MINOR_SCALE;
+        payable.status = payable.amountPaid >= payable.amountDue ? "PAID" : "PARTIALLY_PAID";
+        settle(amountMinor);
+        return { ok: true as const, value: null };
+      }
+      case "supplierReceivables:list":
+        return { ok: true as const, value: { complete: true, items: [...supClaims.values()].map((c) => ({ ...c })) } };
+      case "supplierReceivables:recordReceipt": {
+        const claim = supClaims.get(String(args.receivableId));
+        if (!claim) return { ok: false as const, error: "Supplier receivable not found." };
+        const key = String(args.idempotencyKey);
+        if (supKeys.has(key)) return { ok: true as const, value: null };
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        if (!defects.marginOverReceiptAccepted && amountMinor > Math.round(claim.remainingAmount * MINOR_SCALE)) {
+          return { ok: false as const, error: "That would record more than is owed." };
+        }
+        supKeys.add(key);
+        claim.amountReceived += amountMinor / MINOR_SCALE;
+        claim.remainingAmount = Math.max(0, claim.amountDue - claim.amountReceived);
+        claim.status = claim.remainingAmount === 0 ? "PAID" : "PARTIALLY_PAID";
+        post("SUPPLIER_RECEIVABLE_COLLECTED", "vehicleSupplierReceivables", `${claim._id}:${++seq}`, [
+          { key: "CASH_ON_HAND", debitMinor: amountMinor },
+          { key: "RECEIVABLE_FROM_SUPPLIERS", creditMinor: defects.marginReceiptPostsWrongAmount ? amountMinor + 1 : amountMinor },
+        ]);
+        return { ok: true as const, value: null };
+      }
+      case "expenses:create": {
+        const made = replayableCreate("exp", args, true);
+        if (made) return made;
+        const expenseId = id("exp");
+        createdByKey.set(String(args.idempotencyKey), expenseId);
+        const amountMinor = Math.round(Number(args.amount) * MINOR_SCALE);
+        post("EXPENSE_POSTED", "expenses", expenseId, [
+          { key: "GENERAL_EXPENSE", debitMinor: amountMinor }, { key: "CASH_ON_HAND", creditMinor: amountMinor },
+        ]);
+        if (args.costBearer === "SUPPLIER") {
+          const recoveryId = id("srec");
+          supRecoveries.set(recoveryId, { _id: recoveryId, expenseId, vehicleId: String(args.vehicleId), amountDueMinor: amountMinor,
+            amountRecoveredMinor: 0, remainingMinor: amountMinor, status: "OPEN" });
+          post("SUPPLIER_COST_RECOVERY_RECOGNIZED", "supplierCostRecoveries", recoveryId, [
+            { key: "RECEIVABLE_FROM_SUPPLIERS", debitMinor: amountMinor }, { key: "GENERAL_EXPENSE", creditMinor: amountMinor },
+          ]);
+        }
+        return { ok: true as const, value: expenseId };
+      }
+      case "supplierCostRecoveries:list":
+        return { ok: true as const, value: { complete: true, items: [...supRecoveries.values()].map((r) => ({ ...r })) } };
+      case "supplierCostRecoveries:listReceipts":
+        return { ok: true as const, value: [...supReceipts.values()].filter((r) => r.recoveryId === String(args.recoveryId)).map((r) => ({ ...r })) };
+      case "supplierCostRecoveries:recordReceipt": {
+        const recovery = supRecoveries.get(String(args.recoveryId));
+        if (!recovery) return { ok: false as const, error: "Supplier cost recovery not found." };
+        const key = String(args.idempotencyKey);
+        if (supKeys.has(key)) return { ok: true as const, value: null };
+        const amountMinor = Number(args.amountMinor);
+        if (!defects.costRecoveryOverReceiptAccepted && amountMinor > recovery.remainingMinor) {
+          return { ok: false as const, error: "That would recover more than is owed." };
+        }
+        supKeys.add(key);
+        recovery.amountRecoveredMinor += amountMinor;
+        recovery.remainingMinor = Math.max(0, recovery.amountDueMinor - recovery.amountRecoveredMinor);
+        recovery.status = recovery.remainingMinor === 0 ? "RECOVERED" : "PARTIALLY_RECOVERED";
+        const receiptId = id("srcpt");
+        supReceipts.set(receiptId, { _id: receiptId, recoveryId: recovery._id, amountMinor, status: "LIVE" });
+        if (!defects.costRecoveryReceiptNotPosted) post("SUPPLIER_COST_RECOVERY_RECEIVED", "supplierCostRecoveryReceipts", receiptId, [
+          { key: "CASH_ON_HAND", debitMinor: amountMinor }, { key: "RECEIVABLE_FROM_SUPPLIERS", creditMinor: amountMinor },
+        ]);
+        return { ok: true as const, value: null };
+      }
+      case "supplierCostRecoveries:reverseReceipt": {
+        const receipt = supReceipts.get(String(args.receiptId));
+        if (!receipt) return { ok: false as const, error: "Receipt not found." };
+        if (!defects.receiptReversalAccepted) {
+          if (defects.refusedSupplierDoorWrites) post("SUPPLIER_COST_RECOVERY_RECEIVED", "supplierCostRecoveryReceipts", receipt._id, []);
+          return { ok: false as const, errorCode: "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED", error: "Reversing a supplier receipt is not available in the pilot. Nothing has been changed." };
+        }
+        receipt.status = "REVERSED";
+        return { ok: true as const, value: null };
+      }
+      case "expenses:reverseExpense": {
+        const live = [...supRecoveries.values()].find((r) => r.expenseId === String(args.expenseId));
+        if (live && !defects.expenseReversalAccepted) {
+          return { ok: false as const, errorCode: "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED", error: "An expense the supplier owes the dealership for cannot be reversed in the pilot. Nothing has been changed." };
+        }
+        if (live) live.status = "REVERSED";
+        return { ok: true as const, value: null };
+      }
+      case "vehicles:correctAcquisitionCost": {
+        const payable = [...supPayables.values()].find((p) => p.vehicleId === String(args.vehicleId));
+        if (payable && payable.amountPaid === 0 && !defects.payableCorrectionAccepted) {
+          return { ok: false as const, errorCode: "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED", error: "An unpaid supplier payable cannot be corrected in the pilot. Nothing has been changed." };
+        }
+        if (payable) payable.amountDue = Number(args.newCost);
+        const vehicle = vehicles.get(String(args.vehicleId));
+        if (vehicle) vehicle.purchasePrice = Number(args.newCost);
+        return { ok: true as const, value: null };
+      }
       default:
         return { ok: false as const, error: `unmodelled function ${fnPath}` };
     }
@@ -2562,13 +2777,13 @@ describe("the rehearsal passes against a backend that behaves", () => {
     // quoted as a complete one. Against a healthy backend nothing may decline.
     const declined = results.filter((r) => r.status === "UNPROVEN");
     expect(declined.map((d) => d.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING"]);
-    expect(summarize(results)).toMatchObject({total:32,passed:29,failed:0,unproven:3,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT"],complete:false});
+    expect(summarize(results)).toMatchObject({total:36,passed:33,failed:0,unproven:3,unprovenIds:["CC-CASH","S858-OPENING","S858-CONTAINMENT"],complete:false});
     // And it actually ran the cases rather than finding nothing to do.
     // Cleanup callbacks, then U-RET, execute after this driver, in the trusted main entry point (runRehearsalSequence).
     const originalIds = REQUIRED_REHEARSAL_CASE_IDS.filter(id => id !== "S858-CLEANUP-HISTORY" && id !== "S858-CLEANUP-SPLIT" && id !== "U-RET");
-    expect(originalIds).toHaveLength(32);
+    expect(originalIds).toHaveLength(36);
     expect(results.map((r) => r.id).sort()).toEqual([...originalIds].sort());
-  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2"]) {
+  for (const id of ["A3", "B1", "B2", "P1", "RT1", "RT2", "RC1", "RV1", "SR1", "M486C1", "M486C2", "M486C3", "M486C4", "M486C5", "FD1", "FD2", "C1", "C2", "SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS"]) {
       expect(statusOf(results, id), `${id} must actually execute`).toBe("PASS");
     }
   });
@@ -2643,8 +2858,91 @@ describe("SCRUM-834 the rehearsal runs from main against either reconcile contra
     const results = await runAgainst(defects);
     expect(results.filter((r) => r.status === "FAIL")).toEqual([]);
     expect(results.filter((r) => r.status === "UNPROVEN").map(r=>r.id).sort()).toEqual(["CC-CASH","S858-CONTAINMENT","S858-OPENING"]);
-    expect(results.filter(r=>r.status === "PASS")).toHaveLength(29);
+    expect(results.filter(r=>r.status === "PASS")).toHaveLength(33);
     for (const id of ["M486C5", "FD1"]) expect(statusOf(results, id), `${id} reconciles a fee`).toBe("PASS");
+  });
+});
+
+// SCRUM-869 F2: the fake used to accept any payload, so a case could call a registered mutation without
+// a field its validator requires (`supplierCostRecoveries.recordReceipt` needs `receivedDate`) and the
+// rehearsal stayed green while the real backend refused it. The fake now checks every call against the
+// registered function's own `exportArgs()` validator, the way Convex does before a handler runs.
+describe("SCRUM-869 F2 the fake refuses what the registered mutation's validator refuses", () => {
+  const goodReceipt = {
+    orgId: "org_1", recoveryId: "no-such-recovery", amountMinor: 80_000, method: "CASH",
+    receivedDate: 1_700_000_000_000, idempotencyKey: "f2-valid",
+  };
+  const recordReceipt = (args: Record<string, unknown>) =>
+    makeBackend().authedCall("mutation", "supplierCostRecoveries:recordReceipt", args);
+
+  test("a payload that omits a required field is refused by name, before the handler runs", async () => {
+    const { receivedDate: _omitted, ...withoutDate } = goodReceipt;
+    const result = await recordReceipt(withoutDate);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(/receivedDate/);
+  });
+
+  test("an unknown field is refused as an extra field", async () => {
+    const result = await recordReceipt({ ...goodReceipt, receivedAt: 1 });
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toMatch(/extra field.*receivedAt/);
+  });
+
+  test("a value of the wrong type or outside a literal union is refused", async () => {
+    const wrongType = await recordReceipt({ ...goodReceipt, amountMinor: "80000" });
+    expect(wrongType.ok).toBe(false);
+    expect(String((wrongType as { error?: string }).error)).toMatch(/amountMinor/);
+    const wrongLiteral = await recordReceipt({ ...goodReceipt, method: "CHEQUE" });
+    expect(wrongLiteral.ok).toBe(false);
+    expect(String((wrongLiteral as { error?: string }).error)).toMatch(/method/);
+  });
+
+  test("a valid payload gets past validation to the modelled handler", async () => {
+    const result = await recordReceipt(goodReceipt);
+    expect(result.ok).toBe(false);
+    expect(String((result as { error?: string }).error)).toBe("Supplier cost recovery not found.");
+  });
+});
+
+// SCRUM-869 review round 2 (P1): the lookup used to return null for a missing export or a failed import, and
+// null meant "nothing to validate", so renaming `sourcingPayables.markPaid` left every rehearsal test green and
+// SUP-PAY still reported PASS. A call the registry cannot resolve is now refused, never skipped.
+describe("SCRUM-869 the fake refuses a call whose registered function cannot be resolved", () => {
+  const unresolved = /not a registered Convex function/;
+
+  test("a missing export is refused before any handler runs", async () => {
+    await expect(makeBackend().authedCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+  });
+
+  test("a module that cannot be imported is refused", async () => {
+    await expect(makeBackend().authedCall("mutation", "noSuchModule:markPaid", {})).rejects.toThrow(unresolved);
+  });
+
+  test("an export that is not a registered function is refused", async () => {
+    // `SUPPLIER_RECEIVABLES_LIST_LIMIT` is a plain constant exported next to the registered functions.
+    await expect(makeBackend().authedCall("query", "supplierReceivables:SUPPLIER_RECEIVABLES_LIST_LIMIT", {})).rejects.toThrow(unresolved);
+  });
+
+  test("the anonymous caller and a validator-dropped run are held to the same rule", async () => {
+    await expect(makeBackend().anonymousCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+    await expect(makeBackend({ acceptUnidentified: true }).authedCall("mutation", "sourcingPayables:noSuchDoor", {})).rejects.toThrow(unresolved);
+  });
+
+  test("SUP-PAY goes red when sourcingPayables.markPaid is renamed away, and is green before", async () => {
+    expect(statusOf(await runAgainst({}), "SUP-PAY")).toBe("PASS");
+    vi.resetModules();
+    vi.doMock("../convex/sourcingPayables.ts", async (importOriginal) => {
+      const { markPaid: _renamedAway, ...rest } = (await importOriginal()) as Record<string, unknown>;
+      return rest;
+    });
+    try {
+      const results = await runAgainst({});
+      expect(statusOf(results, "SUP-PAY")).toBe("FAIL");
+      expect(String(results.find((r) => r.id === "SUP-PAY")?.detail)).toMatch(/sourcingPayables:markPaid.*not a registered Convex function/);
+    } finally {
+      vi.doUnmock("../convex/sourcingPayables.ts");
+      vi.resetModules();
+    }
   });
 });
 
@@ -2826,6 +3124,27 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     expect(String(results.find((r) => r.id === "SR1")?.detail)).toMatch(/NO journal entry/);
   });
 
+  test.each([
+    ["SUP-PAY", "supplierPaymentPostsWrongAccount", /net movement of ap/],
+    ["SUP-PAY", "supplierPaymentOverApplied", /5,000\.001 against 5,000 still owed was ACCEPTED/],
+    ["SUP-PAY", "supplierReplayDoublePosts", /net movement of ap/],
+    ["SUP-MARGIN", "marginReceiptPostsWrongAmount", /net movement of recv/],
+    ["SUP-MARGIN", "marginOverReceiptAccepted", /5,000\.001 against 5,000 still owed was ACCEPTED/],
+    ["SUP-RECOVERY", "costRecoveryReceiptNotPosted", /net movement of (recv|cash)/],
+    ["SUP-RECOVERY", "costRecoveryOverReceiptAccepted", /130 against 120 still outstanding was ACCEPTED/],
+    ["SUP-REFUSALS", "receiptReversalAccepted", /reverseReceipt was ACCEPTED/],
+    ["SUP-REFUSALS", "expenseReversalAccepted", /reverseExpense was ACCEPTED/],
+    ["SUP-REFUSALS", "payableCorrectionAccepted", /correctAcquisitionCost was ACCEPTED/],
+    ["SUP-REFUSALS", "refusedSupplierDoorWrites", /changed the receipts, the events/],
+  ] as const)("SCRUM-869 %s catches %s", async (caseId, defect, reason) => {
+    const results = await runAgainst({ [defect]: true });
+    expect(statusOf(results, caseId)).toBe("FAIL");
+    expect(String(results.find((r) => r.id === caseId)?.detail)).toMatch(reason);
+    // The other three supplier cases are not collateral damage of one defect.
+    for (const other of ["SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS"].filter((id) => id !== caseId)) {
+      expect(statusOf(results, other), `${other} must stay green when only ${defect} is injected`).toBe("PASS");
+    }
+  });
   test("M486C1 rejects a balanced owned cash sale credited to the wrong revenue account", async () => {
     const results = await runAgainst({ cashSaleWrongRevenueAccount: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");

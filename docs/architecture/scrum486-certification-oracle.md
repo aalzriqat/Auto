@@ -48,6 +48,42 @@ The RT11 refusal suite uses real switches. This is serial `convex-test` evidence
 not Convex platform, OCC, browser or production certification. Enabled controls
 still need independent pilot certification before launch.
 
+## SCRUM-869-SUPPLIER-SETTLE
+
+Owner ruling SCRUM-869#c23881, 2026-10-29: supplier payable payment, consignment margin receipt and supplier cost-recovery receipt are in the pilot. No reversal is indispensable, so every reversal door for the three refuses server-side. Amounts and postings are unchanged by this slice. The ruling digest in `regression/rulings.json` is computed from the owner's verbatim comment text (`refreshRulings.mjs`, commit 52067abd), and every `supplier-*` record cites it.
+
+Hand-computed JOD figures (1 JOD = 1,000 minor units). Control 2400 is credit-normal, so a payment is a net debit; control 1240 is debit-normal, so a receipt is a net credit. Every row is a public-mutation call in `convex/supplierSettlementCertification.test.ts` unless a file is named.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Payable 8,000, pay 3,000 then the remaining 5,000 | PARTIALLY_PAID then PAID; 2400 net +8,000,000; cash net -8,000,000; no unbalanced entry | `8,000 payable: 3,000 then the remaining 5,000 posts Dr 2400 / Cr cash, balanced, status PARTIALLY_PAID then PAID` |
+| Payable over-application, finer than 3 decimals, second settlement | 5,000.001 after 3,000 refused ("That would pay"); 0.0005 refused; 0.001 after PAID refused; markPaid after PAID refused; database unchanged | `over-application, fractions and a second settlement are refused with nothing written` |
+| Payable bank payment | missing, wrong-currency, foreign-org bank refused; JOD bank posts to the bank account, not cash | `a bank-funded payment needs an active JOD bank of this organization` |
+| Payable replay | one journal, one payment, 2400 net +3,000,000 | `a replay under the same key posts once and audits once` |
+| Payable permission and tenancy | view-only caller FORBIDDEN on all three doors; other organization refused; database unchanged | `MANAGE_FINANCE is required; another organization sees the payable as not found` |
+| Payable closed period | subledger moves, one PENDING queued event, zero journals | `payable payment: a closed period: the subledger moves, the event is QUEUED, and the GL stays empty until the period reopens` |
+| Margin 500: 200, 350, 300 | PARTIALLY_PAID remaining 300 (1240 net -200,000); 350 refused ("That would record 550 against 500 owed"); then PAID (1240 net -500,000, cash +500,000) | `500 commission: 200 then 300 posts Dr cash / Cr 1240, balanced, PARTIALLY_PAID then PAID; 350 is refused` |
+| Margin bank, replay, permission, tenancy, closed period | same guards as the payable cells | the three `margin receipt:` tests |
+| Recovery 200: 80, 130, 120 | 1240 net 120,000 after 80; 130 refused; RECOVERED at 0; one more minor unit refused | `200 cost: 80 then 120 recovers it; 130 is refused; the receivable ends at zero and every entry balances` |
+| Recovery bank, replay, permission, tenancy | same guards | the two `recovery receipt:` tests |
+| Margin receipt by CHEQUE or CARD (SCRUM-869 review F1: a cheque posts to cheques-in-hand with no `postDatedCheques` custody row, so no deposit or bounce lifecycle) | `SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED`, EN and AR, refused before the idempotency claim; no table or scheduler change, no journal entry, no cheque row, a replay also refused; CASH, BANK_TRANSFER and an omitted method still record | `convex/supplierSettlementContainment.test.ts`, `consignment margin receipt method`, four tests |
+| Supplier payable payment by CHEQUE or CARD (SCRUM-869 follow-up to F1: `markPaid` and `recordPartialPayment` credit the bank immediately for a cheque, with no issued-cheque record and no clearing or bounce lifecycle) | `SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED`, EN and AR, refused on both doors before the idempotency claim; no table or scheduler change, no journal entry, the payable stays PENDING, a replay also refused, a viewer gets FORBIDDEN; CASH, BANK_TRANSFER and an omitted method still pay (an 8,000 payable paid in cash, bank transfer and omitted-method parts, then settled: accounts payable to suppliers nets 8,000 and cash on hand nets -2,000) | `convex/supplierSettlementContainment.test.ts`, `supplier payable payment method`, four tests |
+| Cancelling a sale after a margin receipt (SCRUM-869 round 3 P2: the refusal was an uncoded English string, so an Arabic user saw English) | `SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED` through `throwAppError`, same English text, refused before any write: claim stays PARTIALLY_PAID, sale stays COMPLETED; the Arabic dictionary entry is what an Arabic user sees (also `lib/errors.test.ts`) | `convex/supplierRefusalTexts.scrum869.test.ts`, two `margin-claim refusal` tests; scenario `supplier-margin-claim-sale-cancel-refusal-is-coded-en-ar` |
+| Receipt reversal (the only reversal door) | `SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED`, EN and AR, no table or scheduler change, a replay also refused, receipt stays LIVE, 1240 net 120,000 | `convex/supplierSettlementContainment.test.ts`, four tests |
+| Dispute and payment audit, idempotent dispute, completeness flags | `ALLOCATE_PAYMENT` and `SET_SUPPLIER_DISPUTE` entries; replay is a no-op; same key with a changed payload or direction is refused; list queries report `complete` | `convex/supplierSettlementAudit.test.ts`, eleven tests |
+
+Correction doors (SCRUM-869 S1b), bound in `convex/supplierObligationCorrections.test.ts`. Two further doors could silently undo the settlement figures above, so they refuse server-side behind the same switch file, with a coded EN/AR error before any write:
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `vehicles.correctAcquisitionCost` SUPPLIER_INVOICE_ERROR or VENDOR_CREDIT on an unpaid ON_ACCOUNT car (12,500) | `SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED`; payable stays 12,500; 2400 net 12,500,000 credit; no table or scheduler change | `refuses to rewrite the supplier payable, coded EN/AR, and changes nothing` |
+| Correction dialog context for the same car | no allowed types while unpaid; CASH_REFUND offered once paid | `the correction dialog is not offered the refused types for an unpaid ON_ACCOUNT car` |
+| CASH_REFUND on a PAID ON_ACCOUNT car (ruled pilot route) | cost corrected, payable untouched | `control: a CASH_REFUND on a PAID ON_ACCOUNT car still corrects the cost and leaves the payable alone` |
+| `expenses.reverseExpense` while a 200 cost recovery is open | `SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED`; 1240 net 200,000 debit unchanged | `refuses while the cost recovery is open, coded EN/AR, and changes nothing` |
+| Same after an 80 receipt | same code, receipt stays LIVE | `refuses with the same code once the supplier has paid part of it` |
+| Expense with no supplier obligation | still reversed | `control: an ordinary expense with no supplier obligation is still reversed` |
+
+The expense-reversal message that advised reversing every receipt first is replaced: it now says the expense cannot be reversed while those receipts stand, because the receipt reversal door is itself closed. The expenses screen disables the reverse action for a supplier-borne expense. Not covered: OCC, browser rendering of the screen and dialog, and any real-backend run. The rehearsal cases `SUP-PAY` (payable 8,000: 3,000 then 5,000), `SUP-MARGIN` (margin 7,000: 2,000 then 5,000), `SUP-RECOVERY` (cost 200: 80 then 120) and `SUP-REFUSALS` (the three refusals above, state unchanged) in `scripts/accountingRehearsalCases.mjs` repeat these figures through public API calls and are required case ids. Their only run so far is against the in-memory model backend in `scripts/accountingRehearsalCases.test.ts`, which catches eleven injected defects; a green real-backend run remains a SCRUM-762 obligation.
 ## SCRUM-179-mobile-expense-categories
 
 One shared category tuple preserves the independently captured native twelve-value domain and order for registered create/update arguments and stored expense records. Forms without amortization inputs derive the eleven non-prepaid choices; mobile reads retain PREPAID. DETAILING, TRANSPORT and FEES are offered under their existing meanings; INSPECTION, REGISTRATION, CLEANING and INSURANCE are removed without remapping. Server payroll and prepaid business guards remain authoritative.
