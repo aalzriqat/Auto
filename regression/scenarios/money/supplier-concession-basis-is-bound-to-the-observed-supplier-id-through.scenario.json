@@ -1,0 +1,78 @@
+{
+  "id": "supplier-concession-basis-is-bound-to-the-observed-supplier-id-through",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum868-p3-review-fixes",
+    "hunter": "scripted",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "action": "financingEconomics.supplierConcessionBasis",
+      "actor": {
+        "org": "A",
+        "role": "approver"
+      },
+      "input": {
+        "route": "THROUGH_DEALERSHIP"
+      }
+    },
+    {
+      "action": "fixture.moveVehicleToSameNameSupplier",
+      "actor": {
+        "org": "A",
+        "role": "owner"
+      },
+      "input": {
+        "supplierId": "OTHER_SUPPLIER_ID",
+        "vehicleId": "VEHICLE_ID"
+      }
+    },
+    {
+      "action": "financingEconomics.resolveAppraisalGap",
+      "actor": {
+        "org": "A",
+        "role": "approver"
+      },
+      "input": {
+        "netShortfallMinor": 850000,
+        "observedEntitlementMinor": 9500000,
+        "dealerShareMinor": 450000,
+        "observedSupplierId": "SUPPLIER_A_ID",
+        "supplierShareMinor": 400000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "resolve.refusal",
+      "value": "supplier-concession-basis-stale"
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "control.obligationSupplierId",
+      "value": "observed-supplier"
+    }
+  ],
+  "rulings": [
+    {
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67",
+      "id": "SCRUM-868#c23794"
+    },
+    {
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44",
+      "id": "SCRUM-760#c23812"
+    }
+  ],
+  "impl": {
+    "testName": "THROUGH_DEALERSHIP: a basis observed for supplier A is refused after the vehicle moves to same-name supplier B, with no write",
+    "file": "convex/supplierConcession.scrum766c.test.ts"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "26ed4bad8d9a6e19bd6058ca60f37060adc264d9d2dc0cb59c7a02fbff16f01c"
+}

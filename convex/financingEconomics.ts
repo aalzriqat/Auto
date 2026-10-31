@@ -3087,12 +3087,14 @@ export const resolveAppraisalGap = mutation({
      */
     supplierGapShareMinor: v.optional(v.number()),
     /**
-     * The supplier terms the operator OBSERVED when agreeing the concession (the entitlement
-     * and the supplier's name, from `supplierConcessionBasis`). Required with a concession;
-     * only ever COMPARED to the vehicle, never used as a figure.
+     * The supplier terms the operator OBSERVED when agreeing the concession (the entitlement,
+     * the supplier's name and the supplier's ID, from `supplierConcessionBasis`). All three are
+     * required with a concession; they are only ever COMPARED to the vehicle, never used as a
+     * figure. The ID is the identity: a name can be shared by two suppliers (SCRUM-868 P3).
      */
     observedSupplierEntitlementMinor: v.optional(v.number()),
     observedSupplierName: v.optional(v.string()),
+    observedSupplierId: v.optional(v.id("suppliers")),
     customerGapCashToDealerMinor: v.number(),
     customerGapInstallmentToDealerMinor: v.number(),
     customerGapToFinanceCompanyMinor: v.number(),
@@ -3304,6 +3306,7 @@ export const resolveAppraisalGap = mutation({
         concessionMinor: supplierShare,
         observedEntitlementMinor: args.observedSupplierEntitlementMinor,
         observedSupplierName: args.observedSupplierName,
+        observedSupplierId: args.observedSupplierId,
       });
     }
 
@@ -3399,6 +3402,10 @@ export const supplierConcessionBasis = query({
     // A stock car has no supplier name: answer before the currency read.
     const supplierName = (vehicle.sourcedFromName ?? "").trim();
     if (supplierName === "") return { eligible: false as const };
+    // The identity is the id, not the name: a car with no supplier id cannot be bound to a
+    // counterparty, so no concession is offered against it (SCRUM-868 P3).
+    const supplierId = vehicle.sourcedSupplierId;
+    if (supplierId === undefined) return { eligible: false as const };
     const currency = await getOrgCurrency(ctx, args.orgId);
     const entitlementMinor = contractEntitlementMinorOf(vehicle, currency);
     if (entitlementMinor === undefined) return { eligible: false as const };
@@ -3407,6 +3414,7 @@ export const supplierConcessionBasis = query({
       entitlementMinor,
       currency,
       supplierName,
+      supplierId,
     };
   },
 });
