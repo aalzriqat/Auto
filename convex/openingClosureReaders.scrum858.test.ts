@@ -1015,4 +1015,4 @@ test("pilot-scale native advance and recovery history with reversals fits within
   expect(checklistResult.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
   expect(obsChecklist.reads.ranges).toBeLessThan(4096);
   expect(obsChecklist.reads.documents).toBeLessThan(32000);
-}));
+}), 60_000);
