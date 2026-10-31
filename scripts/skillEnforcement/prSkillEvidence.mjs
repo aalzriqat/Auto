@@ -5,8 +5,9 @@
  *
  * It verifies form only. The seats' own signed PR comments, not this check,
  * are the authoritative evidence that a review happened. It checks that the
- * evidence is present, well formed and internally consistent: Seat 1 is a different session and Opus 5.5, Seat 2 is gpt-6-sol
- * or gpt-6.1-sol at medium or lower, the red run shows a failure, and certified SHAs are the
+ * evidence is present, well formed and internally consistent: Seat 1 is a different session and Opus 5.5
+ * (or explicitly waived by owner-proxy ruling with expiry and scope), Seat 2 is gpt-6-sol
+ * or gpt-6.1-sol (or Codex) at medium or lower with independent same-PR certification, the red run shows a failure, and certified SHAs are the
  * PR head or a commit in the PR's own range, and the red run names a test file
  * that is in the PR diff. It cannot prove the text is true; the links let the
  * owner verify.
@@ -14,18 +15,23 @@
 import { classifyPaths, requiredSkills } from "./policy.mjs";
 
 export const SECTION = "## Skill evidence";
+export const CANONICAL_ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/;
+export const MAX_WAIVER_HORIZON_DAYS = 90;
+export const MAX_WAIVER_HORIZON_MS = MAX_WAIVER_HORIZON_DAYS * 24 * 60 * 60 * 1000;
 const SESSION_URL = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const LOCAL_SESSION = new RegExp(`^local:(${UUID})$`, "i");
 const SESSION_ID = new RegExp(`^${UUID}$`, "i");
-const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pending", "placeholder"]);
+const PLACEHOLDER_WORDS = new Set(["", "n/a", "none", "-", "todo", "tbd", "pending", "placeholder", "mock", "dummy", "fake"]);
 // A failure needs a non-zero count ("1 failed"), an upper-case FAIL, an AssertionError or a cross mark.
 // "0 failed" and prose such as "no error" do not count.
 const FAILURE_SIGNS = /\b[1-9]\d*\s+(?:failed|failing|failures?)\b|\bFAIL(?:ED)?\b|AssertionError|[✗✕×]/;
 const SEAT1_MODEL = /^(?:claude-)?opus[\s-]5[.\s-]5(?:\s*\(.*\))?$/i;
-// Exactly gpt-6-sol or gpt-6.1-sol; the dot is escaped so "gpt-6x1-sol" cannot match.
-const SEAT2_MODEL = /^gpt-6(?:\.1)?-sol(?:\s*\(.*\))?$/i;
-const SEAT2_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
+const SEAT1_WAIVED = /^WAIVED(?:\s*\(.*\))?$/i;
+// Exactly gpt-6-sol, gpt-6.1-sol or Codex; the dot is escaped so "gpt-6x1-sol" cannot match.
+const SEAT2_MODEL = /^(?:gpt-6(?:\.1)?-sol|codex)(?:\s*\(.*\))?$/i;
+const SEAT2_CLI_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
+const SEAT2_CHAT_EFFORT = /^(?:low|medium|unasserted|chat)(?:\s*\(.*\))?$/i;
 
 /**
  * A block is a placeholder only when it is the whole content: empty, a single
@@ -36,6 +42,40 @@ export function isPlaceholder(block) {
   const t = String(block ?? "").trim().toLowerCase().replace(/\.$/, "");
   if (PLACEHOLDER_WORDS.has(t)) return true;
   return t.startsWith("<") && t.endsWith(">") && !t.slice(1, -1).includes("<") && !t.includes("\n");
+}
+
+const CLAUDE_SESSION_RE = /^https:\/\/claude\.ai\/code\/session_([a-z0-9]+)$/i;
+const LOCAL_SESSION_RE = /^(?:local:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * Normalizes a session identifier or URL to a canonical lowercase token.
+ * Returns null if the session is not in a recognized canonical format.
+ */
+export function canonicalSessionId(session) {
+  if (!session || typeof session !== "string") return null;
+  const s = session.trim();
+  const claudeMatch = CLAUDE_SESSION_RE.exec(s);
+  if (claudeMatch) return claudeMatch[1].toLowerCase();
+  const localMatch = LOCAL_SESSION_RE.exec(s);
+  if (localMatch) return localMatch[1].toLowerCase();
+  return null;
+}
+
+/**
+ * Validates that a session ID or URL does not use trivial placeholder / mock patterns
+ * (e.g. repeating characters like session_1111111111111111 or local:00000000-0000-0000-0000-000000000000),
+ * and confirms that the session conforms to a supported canonical format.
+ */
+export function isPlaceholderSession(session) {
+  if (!session) return true;
+  const s = String(session).trim();
+  if (isPlaceholder(s)) return true;
+  if (/(?:mock|dummy|placeholder|fake|example)/i.test(s)) return true;
+  const canonical = canonicalSessionId(s);
+  if (!canonical) return true;
+  const rawId = canonical.replaceAll("-", "").toLowerCase();
+  const distinct = new Set(rawId);
+  return distinct.size <= 2;
 }
 
 function section(body) {
@@ -56,6 +96,19 @@ const line = (text, label) =>
 export function localReviewUrl(body) {
   const text = section(body ?? "")?.text;
   return text && LOCAL_SESSION.test(line(text, "Seat 1 session") ?? "") ? line(text, "Seat 1 review") : undefined;
+}
+
+export function referencedCommentUrls(body) {
+  const text = section(body ?? "")?.text;
+  if (!text) return [];
+  const urls = [];
+  const s1Review = line(text, "Seat 1 review");
+  if (s1Review) urls.push(s1Review);
+  const s1Waiver = line(text, "Seat 1 waiver") ?? line(text, "Seat 1 waiver review");
+  if (s1Waiver) urls.push(s1Waiver);
+  const s2Review = line(text, "Seat 2 review");
+  if (s2Review) urls.push(s2Review);
+  return urls;
 }
 
 /**
@@ -143,28 +196,178 @@ async function checkLocalSeat(t, otherSessionText, local, localReview) {
   return problems;
 }
 
-async function checkSeats(t, otherSessionText, localReview) {
-  const problems = [];
-  const sessionText = line(t, "Seat 1 session") ?? "";
-  const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
-  if (local) problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
-  else {
-    const urls = sessionText.match(SESSION_URL) ?? [];
-    if (urls.length !== 1) {
-      problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');
-    } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
-      problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
-    }
+async function checkCommentWaiver(waiverUrl, ruling, headSha, ownerWaiver) {
+  if (!ownerWaiver) {
+    return ["Seat 1 waiver could not be verified against its signed PR comment."];
   }
-  if (!SEAT1_MODEL.test(line(t, "Seat 1 model") ?? "")) problems.push('"Seat 1 model" must be Opus 5.5.');
-  if (!SEAT2_MODEL.test(line(t, "Seat 2 model") ?? "")) problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
-  if (!SEAT2_EFFORT.test(line(t, "Seat 2 effort") ?? "")) problems.push('"Seat 2 effort" must be low or medium.');
+  return await ownerWaiver({ url: waiverUrl, ruling, seat: "Seat 1", sha: headSha });
+}
+
+function checkRegistryWaiver(waivers, prNumber, headSha, ruling) {
+  const matching = (waivers ?? []).find(
+    (w) => Number(w.pr) === Number(prNumber) &&
+           String(w.seat ?? "").trim().toLowerCase() === "seat 1" &&
+           (!headSha || String(w.head ?? "").trim().toLowerCase() === String(headSha).trim().toLowerCase())
+  );
+  if (!matching) {
+    return ["Waived Seat 1 must link to an owner-proxy waiver comment or be registered in skill-waivers.json."];
+  }
+  const problems = [];
+  if (ruling && matching.ruling && matching.ruling.trim() !== ruling.trim()) {
+    problems.push(`Seat 1 waiver in skill-waivers.json specifies ruling "${matching.ruling}", which does not match declared ruling "${ruling}".`);
+  }
+  const expires = matching.expires;
+  const expiryMs = Date.parse(expires ?? "");
+  if (Number.isNaN(expiryMs) || expiryMs <= Date.now()) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} expired on ${expires}.`);
+    return problems;
+  }
+  if (!CANONICAL_ISO_DATE.test(String(expires).trim())) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} has an invalid expiration date in skill-waivers.json.`);
+    return problems;
+  }
+  if (expiryMs > Date.now() + MAX_WAIVER_HORIZON_MS) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} expiration date ${expires} exceeds maximum policy horizon of ${MAX_WAIVER_HORIZON_DAYS} days.`);
+  }
   return problems;
 }
 
-async function checkShas(t, isPrCommit) {
+async function checkWaivedSeat1(t, options) {
+  const { ownerWaiver, waivers = [], prNumber, headSha } = options;
+  const problems = [];
+  const ruling = line(t, "Seat 1 waiver ruling") ?? line(t, "Seat 1 ruling") ?? line(t, "Waiver ruling");
+  if (!ruling || isPlaceholder(ruling)) {
+    problems.push('Waived Seat 1 requires an explicit "Seat 1 waiver ruling" (e.g. SCRUM-760 c24127).');
+  }
+  const waiverUrl = line(t, "Seat 1 waiver") ?? line(t, "Seat 1 waiver review");
+  if (waiverUrl) {
+    problems.push(...await checkCommentWaiver(waiverUrl, ruling, headSha, ownerWaiver));
+  } else {
+    problems.push(...checkRegistryWaiver(waivers, prNumber, headSha, ruling));
+  }
+  return problems;
+}
+
+async function checkStandardSeat1(t, otherSessionText, seat1Model, localReview) {
+  const problems = [];
+  const sessionText = line(t, "Seat 1 session") ?? "";
+  if (isPlaceholderSession(sessionText)) {
+    problems.push('"Seat 1 session" is an unverified placeholder session pattern.');
+  } else {
+    const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
+    if (local) {
+      problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
+    } else {
+      const urls = sessionText.match(SESSION_URL) ?? [];
+      if (urls.length !== 1) {
+        problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');
+      } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
+        problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
+      }
+    }
+  }
+  if (!SEAT1_MODEL.test(seat1Model)) {
+    problems.push('"Seat 1 model" must be Opus 5.5.');
+  }
+  return problems;
+}
+
+function checkSeat2Effort(t) {
+  const problems = [];
+  const seat2Mode = (line(t, "Seat 2 mode") ?? line(t, "Seat 2 execution") ?? "").trim().toLowerCase();
+  const isChatMode = seat2Mode === "chat" || seat2Mode === "primary-chat";
+  const seat2Effort = line(t, "Seat 2 effort") ?? "";
+  const isUnassertedEffort = /^(?:unasserted|chat)(?:\s*\(.*\))?$/i.test(seat2Effort);
+
+  if (!isChatMode) {
+    if (isUnassertedEffort) {
+      problems.push('"Seat 2 effort" must be low or medium for CLI execution; unasserted effort is only permitted for authorized primary-chat execution with explicit "Seat 2 mode: chat".');
+    } else if (!SEAT2_CLI_EFFORT.test(seat2Effort)) {
+      problems.push('"Seat 2 effort" must be low or medium.');
+    }
+  } else if (!SEAT2_CHAT_EFFORT.test(seat2Effort)) {
+    problems.push('"Seat 2 effort" must be low, medium, or unasserted (chat review).');
+  }
+
+  return { problems, seat2Mode, isChatMode, isUnassertedEffort };
+}
+
+function checkSeat2ChatUnasserted(seat2Review, codexReview) {
+  if (!seat2Review || isPlaceholder(seat2Review)) {
+    return ['Seat 2 primary-chat execution with unasserted effort requires an independent current-head review comment on this PR.'];
+  }
+  if (!codexReview) {
+    return ['Seat 2 primary-chat execution with unasserted effort requires an independent current-head review certificate.'];
+  }
+  return [];
+}
+
+async function checkSeat2Review(t, isWaived, codexReview, { seat2Mode, isChatMode, isUnassertedEffort }) {
+  const problems = [];
+  const seat2Review = line(t, "Seat 2 review");
+  const implementerSession = line(t, "Implementer session") ?? line(t, "Implementer");
+
+  if (isChatMode && isUnassertedEffort) {
+    problems.push(...checkSeat2ChatUnasserted(seat2Review, codexReview));
+  }
+
+  if (isWaived) {
+    if (!implementerSession || isPlaceholder(implementerSession) || !canonicalSessionId(implementerSession)) {
+      problems.push('Waived Seat 1 requires a declared "Implementer session" UUID for reviewer independence verification.');
+    }
+    if (!seat2Review || isPlaceholder(seat2Review)) {
+      problems.push('When Seat 1 is waived, "Seat 2 review" must link to an independent Codex review comment on this PR.');
+    } else if (codexReview) {
+      const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
+      problems.push(...await codexReview({ url: seat2Review, sha, implementerSession, mode: seat2Mode }));
+    }
+  } else if (seat2Review && !isPlaceholder(seat2Review) && codexReview) {
+    const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
+    problems.push(...await codexReview({ url: seat2Review, sha, implementerSession, mode: seat2Mode }));
+  }
+
+  return problems;
+}
+
+async function checkSeat2(t, isWaived, codexReview) {
+  const problems = [];
+  const seat2Model = line(t, "Seat 2 model") ?? "";
+  if (!SEAT2_MODEL.test(seat2Model)) {
+    problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
+  }
+
+  const effortResult = checkSeat2Effort(t);
+  problems.push(...effortResult.problems);
+
+  const reviewProblems = await checkSeat2Review(t, isWaived, codexReview, effortResult);
+  problems.push(...reviewProblems);
+
+  return problems;
+}
+
+async function checkSeats(t, otherSessionText, options) {
+  const opts = typeof options === "function" ? { localReview: options } : (options ?? {});
+  const problems = [];
+  const waivedSeats = new Set();
+
+  const seat1Model = line(t, "Seat 1 model") ?? "";
+  const isSeat1Waived = SEAT1_WAIVED.test(seat1Model) || line(t, "Seat 1") === "WAIVED" || line(t, "Seat 1 status") === "WAIVED";
+
+  if (isSeat1Waived) {
+    waivedSeats.add("Seat 1");
+    problems.push(...await checkWaivedSeat1(t, opts));
+  } else {
+    problems.push(...await checkStandardSeat1(t, otherSessionText, seat1Model, opts.localReview));
+  }
+
+  problems.push(...await checkSeat2(t, waivedSeats.has("Seat 1"), opts.codexReview));
+  return { problems, waivedSeats };
+}
+
+async function checkShas(t, isPrCommit, waivedSeats = new Set()) {
   const problems = [];
   for (const seat of ["Seat 1", "Seat 2"]) {
+    if (waivedSeats.has(seat)) continue;
     const sha = line(t, `${seat} SHA`)?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
     if (!sha) problems.push(`"${seat} SHA" must be the certified head SHA.`);
     else if (isPrCommit && !(await isPrCommit(sha))) {
@@ -176,22 +379,45 @@ async function checkShas(t, isPrCommit) {
 
 /**
  * @param {{body:string, files:string[], isPrCommit?:(sha:string)=>Promise<boolean>, commitText?:string,
- * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>}} p
+ * localReview?:(evidence:{url:string|undefined,session:string,sha:string|undefined})=>Promise<string[]>,
+ * ownerWaiver?:(evidence:{url:string|undefined,ruling:string|undefined,seat:string,sha:string|undefined})=>Promise<string[]>,
+ * codexReview?:(evidence:{url:string|undefined,sha:string|undefined})=>Promise<string[]>,
+ * waivers?:Array<{pr:number,head?:string,seat?:string,ruling?:string,expires?:string,authority?:string,reason?:string}>,
+ * prNumber?:number|string, headSha?:string}} p
  * `commitText` is the PR commit messages, which carry the implementing session link.
- * @returns {Promise<{required:boolean, ok:boolean, problems:string[]}>}
+ * @returns {Promise<{required:boolean, ok:boolean, problems:string[], waivedSeats:Set<string>}>}
  */
-export async function evaluate({ body, files, isPrCommit, commitText = "", localReview }) {
+export async function evaluate({
+  body,
+  files,
+  isPrCommit,
+  commitText = "",
+  localReview,
+  ownerWaiver,
+  codexReview,
+  waivers = [],
+  prNumber,
+  headSha,
+}) {
   const classes = classifyPaths(files);
   if (classes.sensitive.length === 0 && classes.gate.length === 0) return { required: false, ok: true, problems: [] };
   const sec = section(body ?? "");
   if (!sec) return { required: true, ok: false, problems: [`PR body has no "${SECTION}" section.`] };
+  const seatsResult = await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, {
+    localReview,
+    ownerWaiver,
+    codexReview,
+    waivers,
+    prNumber,
+    headSha,
+  });
   const problems = [
     ...checkSkills(sec.text, classes),
     ...checkOutputs(sec.text, files, classes),
-    ...(await checkSeats(sec.text, `${withoutSeat1Line(body)}\n${commitText}`, localReview)),
-    ...(await checkShas(sec.text, isPrCommit)),
+    ...seatsResult.problems,
+    ...(await checkShas(sec.text, isPrCommit, seatsResult.waivedSeats)),
   ];
-  return { required: true, ok: problems.length === 0, problems };
+  return { required: true, ok: problems.length === 0, problems, ...(seatsResult.waivedSeats.size > 0 ? { waivedSeats: seatsResult.waivedSeats } : {}) };
 }
 
 export const TEMPLATE = `${SECTION}
@@ -204,11 +430,14 @@ export const TEMPLATE = `${SECTION}
 \`\`\`
 <real output>
 \`\`\`
-- Seat 1 session: local:<UUID> OR https://claude.ai/code/session_…
+- Seat 1 session: local:<UUID> OR https://claude.ai/code/session_… (OR Seat 1 model: WAIVED)
 - Implementer session: <UUID, required for local reviews>
 - Seat 1 review: <same-PR signed issue-comment URL, required for local reviews>
-- Seat 1 model: claude-opus-5-5
-- Seat 1 SHA: <head sha>
+- Seat 1 model: claude-opus-5-5 (OR WAIVED)
+- Seat 1 waiver ruling: <e.g. SCRUM-760 c24127, required if Seat 1 waived>
+- Seat 1 waiver: <same-PR owner waiver comment URL, if Seat 1 waived>
+- Seat 1 SHA: <head sha, required if Seat 1 not waived>
 - Seat 2 model: gpt-6.1-sol
 - Seat 2 effort: medium
+- Seat 2 review: <same-PR signed Codex review comment URL, required if Seat 1 waived>
 - Seat 2 SHA: <head sha>`;

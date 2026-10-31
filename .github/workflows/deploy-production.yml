@@ -77,11 +77,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── One-Time Computed Policy Validation Mode (PR #734 Bootstrap) ─────────
+  #
+  # SCRUM-760: Runs ONLY when dispatched with confirm: 'VALIDATE POLICY PR 734'.
+  # Zero secrets, zero deploy credentials, zero rollout side-effects.
+  # Least-privilege ephemeral GITHUB_TOKEN only.
+  # Executes the real computed policy check and records the actual check run on PR #734.
+  validate_policy_bootstrap:
+    if: inputs.confirm == 'VALIDATE POLICY PR 734'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+
+      - name: Validate PR 734 policy and publish computed check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_SHA: ${{ inputs.commit_sha }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          GITHUB_REF: ${{ github.ref }}
+        run: node scripts/skillEnforcement/validatePolicyBootstrap.mjs
+
   # ── 1. Decide, while there is still nothing to steal ──────────────────────
   #
   # No `environment:`, so this job cannot reach the production credentials at
   # all — the refusals below happen before the secrets exist in the run.
   authorize:
+    if: inputs.confirm != 'VALIDATE POLICY PR 734'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
