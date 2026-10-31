@@ -59,8 +59,10 @@ import {
   calendarKeyOf,
   getOrgTimeZone,
   orgDayCalendarKeyRange,
-  orgDayPaymentDateRanges,
+  orgDayWindow,
+  paymentOnOrgDay,
   type InstantRange,
+  type OrgDayWindow,
 } from "./utils/orgBusinessDay";
 import {
   assertNoSaleIdOnNewReceivable,
@@ -245,15 +247,50 @@ async function takeAcrossRanges<T>(
 }
 
 /**
- * The `collectionPayments` of one organization day (SCRUM-264): instants inside the zone's span of
- * the date plus the date's own calendar key. Read with one extra row so `capRows` can flag a cap.
+ * What one organization day's `collectionPayments` read can honestly say (SCRUM-264).
+ *  - `rows`: the payments the stored facts place on the date (any status; callers filter).
+ *  - `uncertain`: a POSTED payment in the read could be on this date or on a neighbouring one and
+ *    nothing stored says which (`paymentOnOrgDay` UNPLACEABLE). It is left out of `rows`.
+ *  - `incomplete`: the figures built from `rows` are partial - the read hit its budget, or `uncertain`.
+ */
+interface OrgDayPaymentsRead {
+  rows: Doc<"collectionPayments">[];
+  incomplete: boolean;
+  uncertain: boolean;
+}
+
+/**
+ * Files a raw `paymentDate` index read under one organization day, decided per row by the writer's
+ * stored footprint (`paymentOnOrgDay`), never by the shape of the number. The raw read is at most
+ * `cap + 1` rows across the day's ranges: seeing more than `cap` proves the prefix may hide
+ * qualifying rows (the extra row may be a neighbouring date's key that merely sits inside the span,
+ * which is why the flag is conservative), and only the first `cap` are placed.
+ */
+function placeOrgDayPayments(
+  window: OrgDayWindow,
+  raw: Doc<"collectionPayments">[],
+  cap: number
+): OrgDayPaymentsRead {
+  const rows: Doc<"collectionPayments">[] = [];
+  let uncertain = false;
+  for (const payment of raw.slice(0, cap)) {
+    const verdict = paymentOnOrgDay(window, payment);
+    if (verdict === "IN_DAY") rows.push(payment);
+    else if (verdict === "UNPLACEABLE" && payment.status === "POSTED") uncertain = true;
+  }
+  return { rows, incomplete: raw.length > cap || uncertain, uncertain };
+}
+
+/**
+ * The `collectionPayments` of one organization day (SCRUM-264): the rows in the zone's span of the
+ * date plus the date's own calendar key, then placed by provenance (`placeOrgDayPayments`).
  */
 async function readOrgDayPayments(
   ctx: Pick<QueryCtx, "db">,
   orgId: Id<"organizations">,
-  ranges: InstantRange[]
-): Promise<Doc<"collectionPayments">[]> {
-  return takeAcrossRanges(ranges, COLLECTIONS_REPORT_ROW_CAP + 1, (range, take) =>
+  window: OrgDayWindow
+): Promise<OrgDayPaymentsRead> {
+  const raw = await takeAcrossRanges(window.ranges, COLLECTIONS_REPORT_ROW_CAP + 1, (range, take) =>
     ctx.db
       .query("collectionPayments")
       .withIndex("by_org_paymentDate", (q) =>
@@ -261,20 +298,20 @@ async function readOrgDayPayments(
       )
       .take(take)
   );
+  return placeOrgDayPayments(window, raw, COLLECTIONS_REPORT_ROW_CAP);
 }
 
 /**
  * SCRUM-264: the business date the caller named, as the organization's own day. `businessDate` is a
  * calendar date sent as its UTC midnight (lib/dateInput.ts `dateInputToUtcMs`). `key` is that same
- * calendar key (what `cashierReconciliations.businessDate` stores); `paymentRanges` are the
- * `paymentDate` index ranges of that date: the real span of the date in the organization's time zone
- * for event instants, plus the date's own calendar key for payments entered through the form.
+ * calendar key (what `cashierReconciliations.businessDate` stores); `window` carries the
+ * `paymentDate` index ranges of that date and what is needed to place each row on it.
  */
 async function orgBusinessDay(ctx: Pick<QueryCtx, "db">, orgId: Id<"organizations">, businessDate: number) {
   if (!Number.isFinite(businessDate)) throw new ConvexError("Business date is invalid.");
   const timeZone = await getOrgTimeZone(ctx, orgId);
   const date = calendarDateOfKey(businessDate);
-  return { key: calendarKeyOf(businessDate), paymentRanges: orgDayPaymentDateRanges(timeZone, date) };
+  return { key: calendarKeyOf(businessDate), window: orgDayWindow(timeZone, date) };
 }
 
 function addMonths(timestamp: number, months: number) {
@@ -799,7 +836,7 @@ export const summary = query({
     // bounded by the real span of that day; a due date is a calendar key (UTC midnight).
     const timeZone = await getOrgTimeZone(ctx, args.orgId);
     const today = calendarDateInTimeZone(timeZone, now);
-    const paymentRanges = orgDayPaymentDateRanges(timeZone, today);
+    const todayWindow = orgDayWindow(timeZone, today);
     const dueDay = orgDayCalendarKeyRange(timeZone, now);
     const openStatuses: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
     let totalOutstanding = 0;
@@ -821,8 +858,7 @@ export const summary = query({
       }
     }
 
-    const todaysPaymentsRead = await readOrgDayPayments(ctx, args.orgId, paymentRanges);
-    const todaysPayments = capRows(todaysPaymentsRead, COLLECTIONS_REPORT_ROW_CAP);
+    const todaysPayments = await readOrgDayPayments(ctx, args.orgId, todayWindow);
     const collectedToday = todaysPayments.rows
       .filter((payment) => payment.status === "POSTED")
       .reduce((sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount), 0);
@@ -856,6 +892,12 @@ export const summary = query({
         receivables: receivablesIncomplete,
         collectedToday: todaysPayments.incomplete,
         upcomingCheques: upcomingCheques.incomplete,
+      },
+      // Additive (SCRUM-264): true means a posted payment could be on today or on a neighbouring day
+      // and nothing stored says which, so it is left out of `collectedToday` (which is then also
+      // `incomplete`). Only a refund the sale-completion deposit refund wrote at a date key can do this.
+      paymentDateUncertain: {
+        collectedToday: todaysPayments.uncertain,
       },
       // Additive (SCRUM-724): false while the pilot payout switch is on.
       retainedCreditPayoutAvailable: !isCustomerCreditPayoutDisabled(),
@@ -3709,6 +3751,10 @@ export const respondToApproval = mutation({
 const RECONCILIATION_DAY_LIMIT = 499;
 const RECONCILIATION_DAY_TOO_LARGE =
   "This business day has too many unreconciled payments to reconcile in one step. Contact support.";
+// SCRUM-264: a refund written at a sale-date key cannot be told from one at the same instant, so west of
+// UTC the day it belongs to is unknown. Neutral wording: it names no date and promises no outcome.
+const RECONCILIATION_DATE_UNCERTAIN =
+  "A payment in this business day cannot be placed on one day, so the day cannot be reconciled yet. Contact support.";
 
 /**
  * SCRUM-259: the drawer cash a reconciliation certifies, shared by the draft and
@@ -3724,13 +3770,13 @@ async function readCashierDayCashPayments(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   cashierId: Id<"users">,
-  paymentRanges: InstantRange[]
+  window: OrgDayWindow
 ): Promise<
-  | { complete: false }
+  | { complete: false; reason: "TOO_LARGE" | "DATE_UNCERTAIN" }
   | { complete: true; payments: Doc<"collectionPayments">[]; expectedCash: number }
 > {
   const readMethod = (method: "CASH" | "REFUND", budget: number) =>
-    takeAcrossRanges(paymentRanges, budget, (range, take) =>
+    takeAcrossRanges(window.ranges, budget, (range, take) =>
       ctx.db
         .query("collectionPayments")
         .withIndex("by_org_cashier_unreconciled_method_date", (q) =>
@@ -3750,8 +3796,18 @@ async function readCashierDayCashPayments(
   // Never issue a zero-budget read: CASH alone already proves the day incomplete.
   const refundBudget = RECONCILIATION_DAY_LIMIT + 1 - cash.length;
   const refunds = refundBudget > 0 ? await readMethod("REFUND", refundBudget) : [];
-  const payments = [...cash, ...refunds];
-  if (payments.length > RECONCILIATION_DAY_LIMIT) return { complete: false };
+  const raw = [...cash, ...refunds];
+  // The raw read may include a neighbouring date's key that sits inside the span, so exceeding the
+  // limit is refused conservatively: the part that was read cannot be certified as the whole day.
+  if (raw.length > RECONCILIATION_DAY_LIMIT) return { complete: false, reason: "TOO_LARGE" };
+  const payments: Doc<"collectionPayments">[] = [];
+  for (const payment of raw) {
+    const verdict = paymentOnOrgDay(window, payment);
+    // Certifying a drawer total that may include or exclude a payment of another day is the defect
+    // this refuses: the cashier would attach (and so close) a payment that may belong to another day.
+    if (verdict === "UNPLACEABLE") return { complete: false, reason: "DATE_UNCERTAIN" };
+    if (verdict === "IN_DAY") payments.push(payment);
+  }
   const expectedCash = payments.reduce(
     (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
     0
@@ -3766,10 +3822,10 @@ export const getReconciliationDraft = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const { key: businessDate, paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-    const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, paymentRanges);
+    const { key: businessDate, window } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+    const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, window);
     if (!day.complete) {
-      return { businessDate, complete: false as const, expectedCash: null, paymentCount: null };
+      return { businessDate, complete: false as const, reason: day.reason, expectedCash: null, paymentCount: null };
     }
     return {
       businessDate,
@@ -3810,12 +3866,14 @@ export const submitCashierReconciliation = mutation({
           throw new ConvexError("Counted cash must be zero or greater.");
         }
         const currency = await getOrgCurrency(ctx, args.orgId);
-        const { key: businessDate, paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-        const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, paymentRanges);
+        const { key: businessDate, window } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+        const day = await readCashierDayCashPayments(ctx, args.orgId, user._id, window);
         if (!day.complete) {
           // Certifying the part we could read would be the defect this replaced.
           // The throw also rolls back the idempotency record, so a retry is fresh.
-          throw new ConvexError(RECONCILIATION_DAY_TOO_LARGE);
+          throw new ConvexError(
+            day.reason === "DATE_UNCERTAIN" ? RECONCILIATION_DATE_UNCERTAIN : RECONCILIATION_DAY_TOO_LARGE
+          );
         }
         const expectedCash = roundMoney(day.expectedCash, currency);
         const countedCash = roundMoney(args.countedCash, currency);
@@ -3905,9 +3963,8 @@ export const dailyCollectionList = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const { paymentRanges } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
-    const read = await readOrgDayPayments(ctx, args.orgId, paymentRanges);
-    const { rows: payments, incomplete } = capRows(read, COLLECTIONS_REPORT_ROW_CAP);
+    const { window } = await orgBusinessDay(ctx, args.orgId, args.businessDate);
+    const { rows: payments, incomplete, uncertain } = await readOrgDayPayments(ctx, args.orgId, window);
     const rows = payments.filter((payment) => payment.status === "POSTED");
     const totalsByMethod: Record<string, number> = {};
     for (const payment of rows) {
@@ -3924,6 +3981,9 @@ export const dailyCollectionList = query({
       // rows and totals are partial. The total nets refunds, so it may be higher or lower than the
       // true figure.
       incomplete,
+      // Additive (SCRUM-264): true means a posted payment could be on this day or a neighbouring one and
+      // nothing stored says which; it is left out of the rows and totals (and `incomplete` is also true).
+      paymentDateUncertain: uncertain,
     };
   },
 });

@@ -7,13 +7,21 @@
  *
  * Two different things are called a "day" and must not be mixed:
  *  - an INSTANT range ([start, end] in epoch ms): the real 24-hour (or 23/25-hour on a daylight-saving
- *    change) span of a calendar date in the zone. Use it for event timestamps such as `paymentDate`.
+ *    change) span of a calendar date in the zone. Use it for event timestamps such as the clearing
+ *    time of a cheque.
  *  - a CALENDAR KEY: the UTC midnight of a calendar date. This repository stores due dates, cheque
  *    dates and business dates this way (`dateInputToUtcMs` in lib/dateInput.ts), so a calendar date
- *    compares against them with no zone arithmetic at all.
+ *    compares against them with no zone arithmetic at all. This is the TC39 Temporal `PlainDate`
+ *    idea: a date that belongs to no zone, carried here as the UTC midnight of that date.
+ *    https://tc39.es/proposal-temporal/docs/plaindate.html
+ *
+ * WHICH KIND A STORED VALUE IS comes from the field and the writer that stored it, never from the
+ * shape of the number. `collectionPayments.paymentDate` is the one field that holds both kinds; see
+ * `paymentDateProvenance` for the writer table and the rule.
  *
  * The zone arithmetic uses `Intl.DateTimeFormat` (ECMA-402), which reads the IANA tz database for each
- * instant, so it is correct across daylight-saving changes and does not assume a fixed offset.
+ * instant, so it is correct across daylight-saving changes and does not assume a fixed offset. A zone
+ * can also skip a whole calendar date (Pacific/Apia skipped 2011-12-30), which no instant belongs to.
  * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat
  * https://www.iana.org/time-zones
  */
@@ -21,6 +29,9 @@ import type { QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// The tz database has never skipped more than one calendar date in a row; the bound only keeps a
+// corrupt zone from looping.
+const MAX_SKIPPED_DATES_IN_A_ROW = 7;
 
 // Asia/Amman - this platform's primary/founding market - is the business time zone when an
 // organization has not configured `orgSettings.timezone`.
@@ -124,15 +135,21 @@ function sameDate(a: CalendarDate, b: CalendarDate): boolean {
   return a.year === b.year && a.month === b.month && a.day === b.day;
 }
 
+function describeDate(date: CalendarDate): string {
+  return `${date.year}-${date.month}-${date.day}`;
+}
+
 /**
- * The first instant of a calendar date in `timeZone`.
+ * The first instant of a calendar date in `timeZone`, or `undefined` when no instant of the zone
+ * reads that date (the zone skipped it).
  *
  * The offset can differ before and after a daylight-saving change, so both candidates are tried and
  * the earliest one whose local clock reads that date's midnight wins. When a zone skips midnight
  * (the clock jumps from 23:xx to 01:00) no candidate reads 00:00, so the earliest instant that
- * already belongs to the date is the start.
+ * already belongs to the date is the start. When a zone skips the whole date no candidate belongs to
+ * it at all.
  */
-export function startOfCalendarDateInZone(timeZone: string, date: CalendarDate): number {
+function firstInstantOfCalendarDate(timeZone: string, date: CalendarDate): number | undefined {
   const wallMidnight = Date.UTC(date.year, date.month - 1, date.day);
   const offsets = new Set([
     offsetAt(timeZone, wallMidnight - DAY_MS),
@@ -144,10 +161,17 @@ export function startOfCalendarDateInZone(timeZone: string, date: CalendarDate):
     return sameDate(w, date) && w.hour === 0 && w.minute === 0 && w.second === 0;
   });
   if (exact !== undefined) return exact;
-  const onDate = candidates.find((candidate) => sameDate(wallClockOf(timeZone, candidate), date));
-  // Unreachable for real tz data; fail loudly rather than return a day that is off by an offset.
-  if (onDate === undefined) throw new Error(`Cannot resolve the start of ${date.year}-${date.month}-${date.day} in ${timeZone}.`);
-  return onDate;
+  return candidates.find((candidate) => sameDate(wallClockOf(timeZone, candidate), date));
+}
+
+/**
+ * The first instant of a calendar date that exists in `timeZone`. Throws for a date the zone skipped
+ * (use `instantSpanOfCalendarDate` when the date comes from a caller).
+ */
+export function startOfCalendarDateInZone(timeZone: string, date: CalendarDate): number {
+  const start = firstInstantOfCalendarDate(timeZone, date);
+  if (start === undefined) throw new Error(`Cannot resolve the start of ${describeDate(date)} in ${timeZone}.`);
+  return start;
 }
 
 function nextCalendarDate(date: CalendarDate): CalendarDate {
@@ -155,11 +179,37 @@ function nextCalendarDate(date: CalendarDate): CalendarDate {
   return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
 }
 
-/** [first instant, last millisecond] of a calendar date in `timeZone` - for event timestamps. */
+/**
+ * The first instant of the first calendar date AFTER `date` that exists in the zone. A skipped date
+ * (Pacific/Apia, 2011-12-30) has no instants, so the day before it runs up to the start of the date
+ * after it.
+ */
+function startOfNextExistingDate(timeZone: string, date: CalendarDate): number {
+  let candidate = date;
+  for (let skipped = 0; skipped <= MAX_SKIPPED_DATES_IN_A_ROW; skipped += 1) {
+    candidate = nextCalendarDate(candidate);
+    const start = firstInstantOfCalendarDate(timeZone, candidate);
+    if (start !== undefined) return start;
+  }
+  throw new Error(`Cannot resolve the date after ${describeDate(date)} in ${timeZone}.`);
+}
+
+/**
+ * [first instant, last millisecond] of a calendar date in `timeZone`, or `null` when the zone skipped
+ * that date and no instant belongs to it. Consecutive existing dates tile the timeline: the end of one
+ * is one millisecond before the start of the next existing one.
+ */
+export function instantSpanOfCalendarDate(timeZone: string, date: CalendarDate): InstantRange | null {
+  const start = firstInstantOfCalendarDate(timeZone, date);
+  if (start === undefined) return null;
+  return { start, end: startOfNextExistingDate(timeZone, date) - 1 };
+}
+
+/** [first instant, last millisecond] of a calendar date in `timeZone` - for event timestamps. Throws for a skipped date. */
 export function instantRangeOfCalendarDate(timeZone: string, date: CalendarDate): InstantRange {
-  const start = startOfCalendarDateInZone(timeZone, date);
-  const nextStart = startOfCalendarDateInZone(timeZone, nextCalendarDate(date));
-  return { start, end: nextStart - 1 };
+  const span = instantSpanOfCalendarDate(timeZone, date);
+  if (span === null) throw new Error(`Cannot resolve the start of ${describeDate(date)} in ${timeZone}.`);
+  return span;
 }
 
 /** The org's business day that contains `at`, as an instant range. */
@@ -174,42 +224,114 @@ export function orgDayCalendarKeyRange(timeZone: string, at: number): InstantRan
   return { start, end: start + DAY_MS - 1 };
 }
 
-/**
- * True when a stored date has the shape of a calendar key (an exact UTC midnight).
- *
- * `collectionPayments.paymentDate` is written in both forms: the Record Payment form stores the picked
- * date as a calendar key, while refunds, cheque clearing and payment links store the instant they
- * happened. The two cannot be told apart by a marker (the row has none), so the shape decides: a value
- * that is an exact UTC midnight is read as the calendar date it names. An instant that lands on
- * 00:00:00.000Z to the millisecond (about 1 in 86 million) is therefore filed under that UTC date.
- */
-export function isCalendarKey(value: number): boolean {
+/** True when `value` is exactly 00:00:00.000 UTC. A calendar key always is; nothing else can be one. */
+export function isUtcMidnight(value: number): boolean {
   return Number.isInteger(value) && value % DAY_MS === 0;
 }
 
 /**
- * The inclusive `paymentDate` index ranges whose union is exactly the rows of one organization day:
- *  - every INSTANT inside the zone's real span of the date, except those shaped like another date's
- *    calendar key, and
- *  - the date's own CALENDAR KEY, wherever it falls relative to that span.
- * East of UTC the key sits inside the span; west of UTC it sits before it, and the span contains the
- * NEXT date's key instead, which is why the span is split around foreign keys. The ranges are sorted
- * and disjoint, and across consecutive dates every `paymentDate` falls in exactly one day.
- * https://tc39.es/proposal-temporal/docs/plaindate.html (a calendar date is independent of any zone)
+ * WHICH KIND OF DATE `collectionPayments.paymentDate` HOLDS, decided by the writer's stored footprint.
+ *
+ * Writers (every `insert("collectionPayments"` outside tests, checked 2026-11-01):
+ *
+ *  | writer                                   | paymentDate                | createdAt       | kind |
+ *  | collections.ts recordPayment :1816       | args.paymentDate           | Date.now()      | KEY from both UIs (`dateInputToUtcMs`), any integer from an API caller |
+ *  | collections.ts clearCheque :2547         | clearedAt ?? Date.now()    | Date.now()      | INSTANT, and the only writer that sets `chequeId` |
+ *  | collections.ts refund approval :3609     | Date.now()                 | same            | INSTANT |
+ *  | paymentIntents.ts settlement :430        | Date.now() (occurredAt)    | same            | INSTANT |
+ *  | utils/depositRecording.ts :190           | Date.now()                 | same            | INSTANT |
+ *  | utils/depositHelpers.ts payOutDepositSlice :981   | Date.now() (deposits.ts) | same      | INSTANT |
+ *  | utils/depositHelpers.ts releaseHeldDeposit :1250  | occurredAt ?? Date.now() | same      | INSTANT from deposits.ts; the sale's date from utils/saleCompletion.ts (`occurredAt: saleDate`, a UTC midnight key from SaleDialog, an instant from sales.ts completeFromQuote) |
+ *
+ * So, from the row alone:
+ *  1. `chequeId` set               -> EVENT_INSTANT (clearCheque).
+ *  2. not a UTC midnight           -> EVENT_INSTANT (a calendar key is always a UTC midnight, so a
+ *                                     value that is not one cannot be a key).
+ *  3. UTC midnight, createdAt differs -> CALENDAR_KEY. The form stamps createdAt with the write time,
+ *                                     which is not the picked date's midnight.
+ *  4. UTC midnight, createdAt equal  -> system writers store one clock reading in both fields, so this
+ *                                     is an EVENT_INSTANT; except an OUT/REFUND row, which the sale
+ *                                     completion deposit refund also writes with the sale's date key.
+ *                                     Nothing stored tells the two apart: KEY_OR_INSTANT.
+ *
+ * KEY_OR_INSTANT has no truthful single answer when the key's date and the instant's date differ (a
+ * zone west of UTC); `paymentOnOrgDay` reports it UNPLACEABLE then, so a report says it is incomplete
+ * instead of filing the payment under a day it may not belong to. East of UTC both readings name the
+ * same date and it is filed there.
  */
-export function orgDayPaymentDateRanges(timeZone: string, date: CalendarDate): InstantRange[] {
+export type PaymentDateProvenance = "CALENDAR_KEY" | "EVENT_INSTANT" | "KEY_OR_INSTANT";
+
+export interface PaymentDateFacts {
+  paymentDate: number;
+  createdAt: number;
+  direction: "IN" | "OUT";
+  method: string;
+  chequeId?: unknown;
+}
+
+export function paymentDateProvenance(row: PaymentDateFacts): PaymentDateProvenance {
+  if (row.chequeId !== undefined) return "EVENT_INSTANT";
+  if (!isUtcMidnight(row.paymentDate)) return "EVENT_INSTANT";
+  if (row.createdAt !== row.paymentDate) return "CALENDAR_KEY";
+  if (row.direction === "OUT" && row.method === "REFUND") return "KEY_OR_INSTANT";
+  return "EVENT_INSTANT";
+}
+
+/**
+ * Everything needed to decide, for one organization date, which `collectionPayments` rows are on it.
+ *  - `ranges` are the inclusive `paymentDate` index ranges to read: the zone's real span of the date
+ *    (instants) and the date's own calendar key (a key is a date label, wherever its UTC midnight falls
+ *    relative to the span; for a date the zone skipped there is only the key). Sorted and disjoint.
+ *  - `span` is that real span, `null` for a skipped date.
+ */
+export interface OrgDayWindow {
+  date: CalendarDate;
+  ownKey: number;
+  span: InstantRange | null;
+  ranges: InstantRange[];
+}
+
+export function orgDayWindow(timeZone: string, date: CalendarDate): OrgDayWindow {
   const ownKey = Date.UTC(date.year, date.month - 1, date.day);
-  const span = instantRangeOfCalendarDate(timeZone, date);
-  const ranges: InstantRange[] = [];
-  let cursor = span.start;
-  for (let midnight = Math.ceil(span.start / DAY_MS) * DAY_MS; midnight <= span.end; midnight += DAY_MS) {
-    if (midnight === ownKey) continue;
-    if (cursor <= midnight - 1) ranges.push({ start: cursor, end: midnight - 1 });
-    cursor = midnight + 1;
+  const span = instantSpanOfCalendarDate(timeZone, date);
+  const key: InstantRange = { start: ownKey, end: ownKey };
+  let ranges: InstantRange[];
+  if (span === null) ranges = [key];
+  else if (ownKey >= span.start && ownKey <= span.end) ranges = [span];
+  else if (ownKey < span.start) ranges = ownKey + 1 === span.start ? [{ start: ownKey, end: span.end }] : [key, span];
+  else ranges = ownKey - 1 === span.end ? [{ start: span.start, end: ownKey }] : [span, key];
+  return { date, ownKey, span, ranges };
+}
+
+/** The `paymentDate` index ranges of one organization day (see `OrgDayWindow`). */
+export function orgDayPaymentDateRanges(timeZone: string, date: CalendarDate): InstantRange[] {
+  return orgDayWindow(timeZone, date).ranges;
+}
+
+/**
+ * IN_DAY       the payment is on this organization date
+ * NOT_IN_DAY   it is on another date
+ * UNPLACEABLE  stored facts cannot say whether it is on this date or another one (KEY_OR_INSTANT whose
+ *              two readings differ); the caller leaves it out and reports the figure as incomplete
+ *
+ * Defined by membership - an instant belongs to the span that contains it, a key to the date it names -
+ * so across consecutive dates every row has exactly one owner, or is UNPLACEABLE on exactly the two
+ * dates its readings name.
+ */
+export type PaymentDayVerdict = "IN_DAY" | "NOT_IN_DAY" | "UNPLACEABLE";
+
+export function paymentOnOrgDay(window: OrgDayWindow, row: PaymentDateFacts): PaymentDayVerdict {
+  const inSpan = window.span !== null && row.paymentDate >= window.span.start && row.paymentDate <= window.span.end;
+  const isOwnKey = row.paymentDate === window.ownKey;
+  switch (paymentDateProvenance(row)) {
+    case "EVENT_INSTANT":
+      return inSpan ? "IN_DAY" : "NOT_IN_DAY";
+    case "CALENDAR_KEY":
+      return isOwnKey ? "IN_DAY" : "NOT_IN_DAY";
+    case "KEY_OR_INSTANT":
+      if (inSpan && isOwnKey) return "IN_DAY";
+      return inSpan || isOwnKey ? "UNPLACEABLE" : "NOT_IN_DAY";
   }
-  if (cursor <= span.end) ranges.push({ start: cursor, end: span.end });
-  if (ownKey < span.start || ownKey > span.end) ranges.push({ start: ownKey, end: ownKey });
-  return ranges.sort((a, b) => a.start - b.start);
 }
 
 /** The calendar date a client-sent business-date key (a UTC midnight) names. */

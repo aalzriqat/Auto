@@ -32,6 +32,19 @@ describe("Collections incomplete wording", () => {
     }
   });
 
+  test("SCRUM-264: a payment left out because its day cannot be placed has EN and AR strings and claims no bound", () => {
+    const keys = ["CollectionReportDateUncertain", "CollectionMetricDateUncertain", "CashierReconciliationDateUncertain"];
+    for (const key of keys) {
+      expect(en[key], `${key} EN`).toBeTruthy();
+      expect(ar[key], `${key} AR`).toBeTruthy();
+      expect(en[key]).not.toMatch(/at least|lower than|no less than|minimum/i);
+      expect(ar[key]).not.toContain("لا يقل");
+      expect(ar[key]).not.toContain("أقل من");
+    }
+    expect(en.CollectionReportDateUncertain).toMatch(/higher or lower/i);
+    expect(en.CollectionMetricDateUncertain).toMatch(/higher or lower/i);
+  });
+
   test("non-negative figures keep the lower-bound wording", () => {
     expect(en.CollectionMetricIncomplete).toMatch(/at least/i);
     expect(en.CollectionReportIncomplete).toMatch(/lower than/i);

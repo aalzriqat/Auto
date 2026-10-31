@@ -76,7 +76,9 @@ async function insertPayments(
         amount,
         paymentDate: at,
         status: "POSTED",
-        createdAt: at,
+        // The Record Payment form writes a UTC-midnight calendar key but stamps createdAt with the write
+        // time, never with that midnight; every other value here is an event instant stamped alike.
+        createdAt: at % (24 * 60 * 60 * 1000) === 0 ? at - 3_600_000 : at,
         ...over,
       });
     }

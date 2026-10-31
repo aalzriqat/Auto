@@ -76,6 +76,37 @@ describe("Collections incomplete totals", () => {
     expect(screen.queryByText("CollectionMetricIncomplete")).toBeNull();
   });
 
+  test("SCRUM-264: a collected-today figure that left out a payment it cannot place says so, not 'partial'", () => {
+    stubs.queryResults.set("collections:summary", {
+      ...summary({ receivables: false, collectedToday: true, upcomingCheques: false }),
+      paymentDateUncertain: { collectedToday: true },
+    });
+    render(<CollectionsTab />);
+    expect(screen.getAllByText("CollectionMetricDateUncertain")).toHaveLength(1);
+    expect(screen.queryByText("CollectionMetricIncompleteNet")).toBeNull();
+    expect(screen.queryByText("CollectionMetricIncomplete")).toBeNull();
+  });
+
+  test("SCRUM-264: the reconciliation says the day cannot be placed, apart from the too-large message", () => {
+    stubs.queryResults.set("collections:summary", summary({ receivables: false, collectedToday: false, upcomingCheques: false }));
+    stubs.queryResults.set("collections:getReconciliationDraft", {
+      businessDate: 1, complete: false, reason: "DATE_UNCERTAIN", expectedCash: null, paymentCount: null,
+    });
+    const { unmount } = render(<CollectionsTab />);
+    fireEvent.click(screen.getByText("ReconcileCashier"));
+    expect(screen.getByText("CashierReconciliationDateUncertain").getAttribute("role")).toBe("alert");
+    expect(screen.queryByText("CashierReconciliationIncomplete")).toBeNull();
+    unmount();
+
+    stubs.queryResults.set("collections:getReconciliationDraft", {
+      businessDate: 1, complete: false, reason: "TOO_LARGE", expectedCash: null, paymentCount: null,
+    });
+    render(<CollectionsTab />);
+    fireEvent.click(screen.getByText("ReconcileCashier"));
+    expect(screen.getByText("CashierReconciliationIncomplete").getAttribute("role")).toBe("alert");
+    expect(screen.queryByText("CashierReconciliationDateUncertain")).toBeNull();
+  });
+
   test("says nothing when every read was complete, and for a backend that does not report it", () => {
     stubs.queryResults.set(
       "collections:summary",
@@ -94,7 +125,7 @@ describe("Collections incomplete totals", () => {
 
   test("the reports tab warns under each report that stopped at its cap", async () => {
     stubs.queryResults.set("collections:summary", summary({ receivables: false, collectedToday: false, upcomingCheques: false }));
-    stubs.queryResults.set("collections:dailyCollectionList", { total: 5, totalsByMethod: { CASH: 5 }, rows: [], incomplete: true });
+    stubs.queryResults.set("collections:dailyCollectionList", { total: 5, totalsByMethod: { CASH: 5 }, rows: [], incomplete: true, paymentDateUncertain: false });
     stubs.queryResults.set("collections:upcomingChequeReport", { total: 0, rows: [], incomplete: true });
     stubs.queryResults.set("collections:agingReport", {
       current: { count: 0, amount: 0 }, days1To30: { count: 0, amount: 0 }, days31To60: { count: 0, amount: 0 },
@@ -111,5 +142,19 @@ describe("Collections incomplete totals", () => {
     const net = await screen.findAllByText("CollectionReportIncompleteNet", undefined, { timeout: 3000 });
     expect(net).toHaveLength(1);
     for (const notice of [...lowerBound, ...net]) expect(notice.getAttribute("role")).toBe("alert");
+  });
+
+  test("SCRUM-264: the daily report says a payment it cannot place was left out", async () => {
+    stubs.queryResults.set("collections:summary", summary({ receivables: false, collectedToday: false, upcomingCheques: false }));
+    stubs.queryResults.set("collections:dailyCollectionList", {
+      total: 5, totalsByMethod: { CASH: 5 }, rows: [], incomplete: true, paymentDateUncertain: true,
+    });
+    render(<CollectionsTab />);
+    const tab = screen.getByRole("tab", { name: "Reports" });
+    fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+    fireEvent.focus(tab);
+    const notice = await screen.findByText("CollectionReportDateUncertain", undefined, { timeout: 3000 });
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(screen.queryByText("CollectionReportIncompleteNet")).toBeNull();
   });
 });
