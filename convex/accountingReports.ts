@@ -960,8 +960,20 @@ export async function computePrepaidRecognitionShortfall(
  */
 export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
-  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE";
+  unavailableReason?: SupplierPayablesUnavailableReason;
 };
+
+/**
+ * SCRUM-876. POST_CUTOFF_ACTIVITY: the subledger and the GL cannot be shown to be measured at the
+ * cutoff (a native payable row moved after it, or the AP control account holds a line dated after it).
+ * INVALID_DATE: the cutoff is not a finite instant.
+ */
+type SupplierPayablesUnavailableReason =
+  | "OVER_LIMIT"
+  | "PENDING_POSTINGS"
+  | "OPENING_SOURCE_UNAVAILABLE"
+  | "POST_CUTOFF_ACTIVITY"
+  | "INVALID_DATE";
 
 /**
  * How many supplier-payable rows (all open-balance statuses together) and, separately, how many
@@ -1096,6 +1108,13 @@ async function supplierPayableOpenBalanceAsOf(
   return { status: "AVAILABLE", openMinor, accountId: basis?.accountId };
 }
 
+/** True when any lifecycle stamp on the row is after the cutoff, or is not a finite instant (it cannot be placed before it). */
+function nativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables">, cutoff: number): boolean {
+  return [payable.createdAt, payable.updatedAt, payable.paidAt, payable.disputedAt, payable.cancelledAt].some(
+    (stamp) => stamp !== undefined && (!Number.isFinite(stamp) || stamp > cutoff),
+  );
+}
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -1107,13 +1126,18 @@ export async function computeSupplierPayablesReconciliation(
   } = {}
 ): Promise<SupplierPayablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const unavailable = (unavailableReason: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE"): SupplierPayablesReconciliationResult => ({
+  const unavailable = (unavailableReason: SupplierPayablesUnavailableReason): SupplierPayablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
     isReconciled: false,
     status: "UNAVAILABLE",
     unavailableReason,
   });
+
+  // ONE cutoff for the row guard and the ledger read. NaN and +/-Infinity pass `v.number()`, and every
+  // comparison against NaN is false, so an unchecked value would read as "nothing is later".
+  const cutoff = toDate ?? Date.now();
+  if (!Number.isFinite(cutoff)) return unavailable("INVALID_DATE");
 
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
   // The outbox and draft reads are independent, so they run together; the verdicts below are
@@ -1159,17 +1183,34 @@ export async function computeSupplierPayablesReconciliation(
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
   const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
-  const cutoff=toDate ?? Date.now();
+  let hasNativeRow = false;
   for (const p of rows) {
     const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
     if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
     if (balance.accountId) controlAccounts.add(balance.accountId);
+    else {
+      // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
+      // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
+      hasNativeRow = true;
+      if (nativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
+    }
     if (balance.openMinor === null) continue;
     const openMinor = balance.openMinor;
     subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
   }
   for (const [currency, minor] of subByCurrency) {
     if (minor === 0) subByCurrency.delete(currency);
+  }
+
+  // A native payable's AP credit is dated by its sale/acquisition, which can be after the row was written
+  // (sales.create accepts a future saleDate). A GL line on the control account dated after the cutoff is
+  // therefore invisible to the GL read while the row already counts its effect.
+  if (hasNativeRow && canonical) {
+    const laterLine = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", canonical._id).gt("accountingDate", cutoff))
+      .first();
+    if (laterLine) return unavailable("POST_CUTOFF_ACTIVITY");
   }
 
   const glByCurrency=new Map<string,number>();
