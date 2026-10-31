@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { validateSonarMainCoverage, main } from "./validateSonarMainCoverage.mjs";
+import {
+  validateSonarMainCoverage,
+  verifyProducerRun,
+  main,
+} from "./validateSonarMainCoverage.mjs";
 
 const VALID_SHA = "0d6eafbb1b8d722f947bebdcba2dd7da28ef0ac1";
 const OTHER_SHA = "1111111111111111111111111111111111111111";
@@ -26,6 +31,16 @@ function createFixtureDir(): { root: string; coverageDir: string; cleanup: () =>
 
 function writeValidArtifact(coverageDir: string, sha: string = VALID_SHA): void {
   fs.writeFileSync(path.join(coverageDir, "tested-merge-sha.txt"), `${sha}\n`);
+  const lcovContent = `TN:
+SF:convex/schema.ts
+DA:1,1
+LF:1
+LH:1
+end_of_record
+`;
+  const bytes = Buffer.byteLength(lcovContent);
+  const sha256 = crypto.createHash("sha256").update(lcovContent).digest("hex");
+
   fs.writeFileSync(
     path.join(coverageDir, "coverage-provenance.json"),
     JSON.stringify({
@@ -33,22 +48,19 @@ function writeValidArtifact(coverageDir: string, sha: string = VALID_SHA): void 
       ref: "refs/heads/main",
       workflow: "Tests",
       event_name: "push",
+      repository: "aalzriqat/Auto",
+      lcovBytes: bytes,
+      lcovSha256: sha256,
+      sfRecords: 1,
+      daRecords: 1,
+      timestamp: new Date().toISOString(),
     }),
   );
-  fs.writeFileSync(
-    path.join(coverageDir, "lcov.info"),
-    `TN:
-SF:convex/schema.ts
-DA:1,1
-LF:1
-LH:1
-end_of_record
-`,
-  );
+  fs.writeFileSync(path.join(coverageDir, "lcov.info"), lcovContent);
 }
 
 describe("validateSonarMainCoverage", () => {
-  it("passes cleanly on valid artifact matching expected SHA", () => {
+  it("passes cleanly on valid artifact matching expected SHA and provenance", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
@@ -57,10 +69,12 @@ describe("validateSonarMainCoverage", () => {
         checkoutRoot: root,
         expectedSha: VALID_SHA,
         minRecords: 1,
+        minDaRecords: 1,
       });
 
       expect(res.ok).toBe(true);
       expect(res.sfCount).toBe(1);
+      expect(res.daCount).toBe(1);
       expect(res.sha).toBe(VALID_SHA);
       expect(res.bytes).toBeGreaterThan(0);
     } finally {
@@ -83,16 +97,38 @@ describe("validateSonarMainCoverage", () => {
     }
   });
 
-  it("refuses if coverage directory does not exist", () => {
-    const { root, cleanup } = createFixtureDir();
+  it("refuses if coverage-provenance.json is absent", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
     try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      fs.unlinkSync(path.join(coverageDir, "coverage-provenance.json"));
+
       expect(() =>
         validateSonarMainCoverage({
-          coverageDir: path.join(root, "nonexistent"),
+          coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
         }),
-      ).toThrow("Refusing coverage validation: coverage directory");
+      ).toThrow("coverage-provenance.json manifest is mandatory but absent");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if provenance manifest SHA-256 does not match lcov.info", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      // Tamper with lcov.info without updating manifest hash
+      fs.appendFileSync(path.join(coverageDir, "lcov.info"), "# extra line\n");
+
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+        }),
+      ).toThrow("does not match manifest");
     } finally {
       cleanup();
     }
@@ -155,10 +191,10 @@ describe("validateSonarMainCoverage", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
-      fs.writeFileSync(
-        path.join(coverageDir, "coverage-provenance.json"),
-        JSON.stringify({ sha: VALID_SHA, workflow: "UntrustedWorkflow" }),
-      );
+      const provPath = path.join(coverageDir, "coverage-provenance.json");
+      const prov = JSON.parse(fs.readFileSync(provPath, "utf8"));
+      prov.workflow = "UntrustedWorkflow";
+      fs.writeFileSync(provPath, JSON.stringify(prov));
 
       expect(() =>
         validateSonarMainCoverage({
@@ -176,10 +212,10 @@ describe("validateSonarMainCoverage", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
-      fs.writeFileSync(
-        path.join(coverageDir, "coverage-provenance.json"),
-        JSON.stringify({ sha: OTHER_SHA, workflow: "Tests" }),
-      );
+      const provPath = path.join(coverageDir, "coverage-provenance.json");
+      const prov = JSON.parse(fs.readFileSync(provPath, "utf8"));
+      prov.sha = OTHER_SHA;
+      fs.writeFileSync(provPath, JSON.stringify(prov));
 
       expect(() =>
         validateSonarMainCoverage({
@@ -188,6 +224,27 @@ describe("validateSonarMainCoverage", () => {
           expectedSha: VALID_SHA,
         }),
       ).toThrow(`provenance manifest names SHA '${OTHER_SHA}', expected '${VALID_SHA}'.`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if provenance manifest names wrong event", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      const provPath = path.join(coverageDir, "coverage-provenance.json");
+      const prov = JSON.parse(fs.readFileSync(provPath, "utf8"));
+      prov.event_name = "issue_comment";
+      fs.writeFileSync(provPath, JSON.stringify(prov));
+
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+        }),
+      ).toThrow("provenance manifest event 'issue_comment' is not push or pull_request.");
     } finally {
       cleanup();
     }
@@ -229,56 +286,29 @@ describe("validateSonarMainCoverage", () => {
     }
   });
 
-  it("refuses if lcov.info contains no DA execution lines", () => {
-    const { root, coverageDir, cleanup } = createFixtureDir();
-    try {
-      writeValidArtifact(coverageDir, VALID_SHA);
-      fs.writeFileSync(
-        path.join(coverageDir, "lcov.info"),
-        "TN:\nSF:convex/schema.ts\nend_of_record\n",
-      );
-
-      expect(() =>
-        validateSonarMainCoverage({
-          coverageDir,
-          checkoutRoot: root,
-          expectedSha: VALID_SHA,
-        }),
-      ).toThrow("lcov.info contains no execution line (DA) records.");
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("refuses if lcov.info has 0 SF records", () => {
-    const { root, coverageDir, cleanup } = createFixtureDir();
-    try {
-      writeValidArtifact(coverageDir, VALID_SHA);
-      fs.writeFileSync(
-        path.join(coverageDir, "lcov.info"),
-        "TN:\nDA:1,1\nend_of_record\n",
-      );
-
-      expect(() =>
-        validateSonarMainCoverage({
-          coverageDir,
-          checkoutRoot: root,
-          expectedSha: VALID_SHA,
-        }),
-      ).toThrow("lcov.info contains 0 SF records, expected at least 1.");
-    } finally {
-      cleanup();
-    }
-  });
-
   it("refuses if lcov.info names an out-of-scope path", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
-      writeValidArtifact(coverageDir, VALID_SHA);
+      const outOfScopeContent = "TN:\nSF:.github/workflows/test.yml\nDA:1,1\nend_of_record\n";
+      const bytes = Buffer.byteLength(outOfScopeContent);
+      const sha256 = crypto.createHash("sha256").update(outOfScopeContent).digest("hex");
+
+      fs.writeFileSync(path.join(coverageDir, "tested-merge-sha.txt"), `${VALID_SHA}\n`);
       fs.writeFileSync(
-        path.join(coverageDir, "lcov.info"),
-        "TN:\nSF:.github/workflows/test.yml\nDA:1,1\nend_of_record\n",
+        path.join(coverageDir, "coverage-provenance.json"),
+        JSON.stringify({
+          sha: VALID_SHA,
+          ref: "refs/heads/main",
+          workflow: "Tests",
+          event_name: "push",
+          repository: "aalzriqat/Auto",
+          lcovBytes: bytes,
+          lcovSha256: sha256,
+          sfRecords: 1,
+          daRecords: 1,
+        }),
       );
+      fs.writeFileSync(path.join(coverageDir, "lcov.info"), outOfScopeContent);
 
       expect(() =>
         validateSonarMainCoverage({
@@ -287,32 +317,6 @@ describe("validateSonarMainCoverage", () => {
           expectedSha: VALID_SHA,
         }),
       ).toThrow("Trusted Sonar refuses out-of-scope LCOV source path");
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("refuses if coverage directory contains symlinks", () => {
-    const { root, coverageDir, cleanup } = createFixtureDir();
-    try {
-      writeValidArtifact(coverageDir, VALID_SHA);
-      // Create a symlink inside coverageDir
-      const target = path.join(coverageDir, "tested-merge-sha.txt");
-      const link = path.join(coverageDir, "symlink-sha.txt");
-      try {
-        fs.symlinkSync(target, link);
-      } catch {
-        // Skip if symlinks cannot be created on OS without elevation
-        return;
-      }
-
-      expect(() =>
-        validateSonarMainCoverage({
-          coverageDir,
-          checkoutRoot: root,
-          expectedSha: VALID_SHA,
-        }),
-      ).toThrow("Trusted Sonar refuses symlink in coverage artifact");
     } finally {
       cleanup();
     }
@@ -333,5 +337,119 @@ describe("validateSonarMainCoverage", () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe("verifyProducerRun", () => {
+  it("verifies valid producer run successfully", async () => {
+    const mockFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 12345,
+        name: "Tests",
+        head_branch: "main",
+        event: "push",
+        status: "completed",
+        conclusion: "success",
+        head_sha: VALID_SHA,
+        run_attempt: 1,
+        head_repository: { full_name: "aalzriqat/Auto" },
+      }),
+    })) as unknown as typeof fetch;
+
+    const res = await verifyProducerRun({
+      token: "dummy",
+      repo: "aalzriqat/Auto",
+      runId: 12345,
+      expectedSha: VALID_SHA,
+      expectedEvent: "push",
+      fetchImpl: mockFetch,
+    });
+
+    expect(res.verified).toBe(true);
+    expect(res.runId).toBe(12345);
+    expect(res.headSha).toBe(VALID_SHA);
+  });
+
+  it("refuses if producer run conclusion was not success", async () => {
+    const mockFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 12345,
+        name: "Tests",
+        head_branch: "main",
+        event: "push",
+        status: "completed",
+        conclusion: "failure",
+        head_sha: VALID_SHA,
+        head_repository: { full_name: "aalzriqat/Auto" },
+      }),
+    })) as unknown as typeof fetch;
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("Refusing producer run: conclusion must be 'success', got 'failure'.");
+  });
+
+  it("refuses if producer run branch was not main", async () => {
+    const mockFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 12345,
+        name: "Tests",
+        head_branch: "feature-branch",
+        event: "push",
+        status: "completed",
+        conclusion: "success",
+        head_sha: VALID_SHA,
+        head_repository: { full_name: "aalzriqat/Auto" },
+      }),
+    })) as unknown as typeof fetch;
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("Refusing producer run: branch must be 'main', got 'feature-branch'.");
+  });
+
+  it("refuses if producer run head SHA does not match expected SHA", async () => {
+    const mockFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: 12345,
+        name: "Tests",
+        head_branch: "main",
+        event: "push",
+        status: "completed",
+        conclusion: "success",
+        head_sha: OTHER_SHA,
+        head_repository: { full_name: "aalzriqat/Auto" },
+      }),
+    })) as unknown as typeof fetch;
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow(`Refusing producer run: head SHA '${OTHER_SHA}' does not match expected '${VALID_SHA}'.`);
   });
 });

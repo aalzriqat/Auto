@@ -101,21 +101,23 @@ describe("Sonar coverage resource contract", () => {
     const scan = workflow.jobs.scan;
     expect(scan).toBeDefined();
     expect(scan["timeout-minutes"]).toBeGreaterThanOrEqual(MIN_SCAN_BUDGET_MINUTES);
+    // Job-level env must NOT expose SONAR_TOKEN
+    expect((scan as { env?: Record<string, string> }).env?.SONAR_TOKEN).toBeUndefined();
 
-    // Step 1: Verify producer run conclusion
-    const verifyProducer = scan.steps.find((s) => s.name === "Verify producer run conclusion");
-    expect(verifyProducer).toBeDefined();
-    expect(verifyProducer?.if).toBe("github.event_name == 'workflow_run'");
-    expect(verifyProducer?.run).toContain('Producer Tests workflow did not succeed');
-
-    // Step 2: Checkout target commit
+    // Step 1: Checkout target commit
     const checkout = scan.steps.find((s) => s.name === "Checkout target commit");
     expect(checkout?.uses).toBe("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5");
     expect(checkout?.with?.["fetch-depth"]).toBe(0);
 
-    // Step 3: Resolve producer run ID
-    const resolveProducer = scan.steps.find((s) => s.name === "Resolve producer run ID");
+    // Step 2: Install dependencies to preserve full AST / TSConfig compiler resolution
+    const install = scan.steps.find((s) => s.name === "Install dependencies without lifecycle scripts");
+    expect(install).toBeDefined();
+    expect(install?.run).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+
+    // Step 3: Resolve and verify producer run
+    const resolveProducer = scan.steps.find((s) => s.name === "Resolve and verify producer run");
     expect(resolveProducer?.id).toBe("producer");
+    expect(resolveProducer?.run).toContain("verifyProducerRun");
 
     // Step 4: Download coverage report
     const download = scan.steps.find((s) => s.name === "Download coverage report from Tests");
@@ -126,8 +128,11 @@ describe("Sonar coverage resource contract", () => {
     const validate = scan.steps.find((s) => s.name === "Validate coverage artifact provenance and census");
     expect(validate?.run).toContain("node scripts/validateSonarMainCoverage.mjs coverage . \"$EXPECTED_SHA\"");
 
-    // Step 6: SonarCloud scan
+    // Step 6: SonarCloud scan scoped with SONAR_TOKEN and explicit revision binding
     const scanStep = scan.steps.find((s) => s.name === "SonarCloud scan");
     expect(scanStep?.uses).toBe("SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f");
+    expect(scanStep?.env?.SONAR_TOKEN).toBe("${{ secrets.SONAR_TOKEN }}");
+    expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.scm.revision=");
+    expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.branch.name=main");
   });
 });

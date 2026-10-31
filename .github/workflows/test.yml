@@ -191,8 +191,13 @@ jobs:
         printf '%s\n' "$GITHUB_SHA" > coverage/tested-merge-sha.txt
         node -e "
           const fs = require('node:fs');
+          const crypto = require('node:crypto');
           const lcovPath = 'coverage/lcov.info';
-          const bytes = fs.existsSync(lcovPath) ? fs.statSync(lcovPath).size : 0;
+          const content = fs.existsSync(lcovPath) ? fs.readFileSync(lcovPath, 'utf8') : '';
+          const bytes = Buffer.byteLength(content);
+          const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+          const sfRecords = (content.match(/^SF:/gm) || []).length;
+          const daRecords = (content.match(/^DA:/gm) || []).length;
           const manifest = {
             sha: process.env.GITHUB_SHA,
             ref: process.env.GITHUB_REF,
@@ -202,6 +207,9 @@ jobs:
             run_attempt: process.env.GITHUB_RUN_ATTEMPT,
             repository: process.env.GITHUB_REPOSITORY,
             lcovBytes: bytes,
+            lcovSha256: sha256,
+            sfRecords,
+            daRecords,
             timestamp: new Date().toISOString()
           };
           fs.writeFileSync('coverage/coverage-provenance.json', JSON.stringify(manifest, null, 2));

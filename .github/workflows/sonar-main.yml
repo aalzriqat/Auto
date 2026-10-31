@@ -26,45 +26,8 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
-      - name: Verify producer run conclusion
-        if: github.event_name == 'workflow_run'
-        env:
-          PRODUCER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          PRODUCER_WORKFLOW: ${{ github.event.workflow_run.name }}
-          PRODUCER_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          PRODUCER_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
-          EXPECTED_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          echo "Producer workflow: $PRODUCER_WORKFLOW (run id: ${{ github.event.workflow_run.id }})"
-          echo "Producer conclusion: $PRODUCER_CONCLUSION"
-          echo "Producer repository: $PRODUCER_REPO (expected: $EXPECTED_REPO)"
-          echo "Producer branch: $PRODUCER_BRANCH"
-
-          if [ "$PRODUCER_REPO" != "$EXPECTED_REPO" ]; then
-            echo "::error::Producer repository '$PRODUCER_REPO' does not match '$EXPECTED_REPO'."
-            exit 1
-          fi
-
-          if [ "$PRODUCER_WORKFLOW" != "Tests" ]; then
-            echo "::error::Triggering workflow must be 'Tests', got '$PRODUCER_WORKFLOW'."
-            exit 1
-          fi
-
-          if [ "$PRODUCER_BRANCH" != "main" ]; then
-            echo "::error::Triggering branch must be 'main', got '$PRODUCER_BRANCH'."
-            exit 1
-          fi
-
-          if [ "$PRODUCER_CONCLUSION" != "success" ]; then
-            echo "::error::Producer Tests workflow did not succeed (conclusion: '$PRODUCER_CONCLUSION'); refusing Sonar scan."
-            exit 1
-          fi
-
       - name: Checkout target commit
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -72,17 +35,33 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Resolve producer run ID
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      # Restores full AST / TSConfig compiler resolution for Expo/Next/Clerk semantic analysis
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Resolve and verify producer run
         id: producer
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          TARGET_SHA="$(git rev-parse HEAD)"
+
           if [ "$EVENT_NAME" = "workflow_run" ]; then
             RUN_ID="${{ github.event.workflow_run.id }}"
           else
-            TARGET_SHA="${{ github.sha }}"
             echo "Searching for successful Tests run for commit $TARGET_SHA on main..."
             RUN_ID="$(gh run list --workflow=test.yml --commit="$TARGET_SHA" --status=success --limit=1 --json databaseId --jq '.[0].databaseId // empty')"
             if [ -z "$RUN_ID" ]; then
@@ -90,7 +69,22 @@ jobs:
               exit 1
             fi
           fi
+
+          echo "Verifying producer run $RUN_ID via GitHub API..."
+          node -e "
+            const { verifyProducerRun } = await import('./scripts/validateSonarMainCoverage.mjs');
+            await verifyProducerRun({
+              token: process.env.GH_TOKEN,
+              repo: process.env.REPO,
+              runId: '$RUN_ID',
+              expectedSha: '$TARGET_SHA',
+              expectedEvent: 'push',
+            });
+            console.log('Producer run $RUN_ID verified successfully.');
+          "
+
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Download coverage report from Tests
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -102,9 +96,15 @@ jobs:
 
       - name: Validate coverage artifact provenance and census
         env:
-          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          EXPECTED_SHA: ${{ steps.producer.outputs.target_sha }}
         run: |
           node scripts/validateSonarMainCoverage.mjs coverage . "$EXPECTED_SHA"
 
       - name: SonarCloud scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        with:
+          args: >
+            -Dsonar.scm.revision=${{ steps.producer.outputs.target_sha }}
+            -Dsonar.branch.name=main
