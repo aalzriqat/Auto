@@ -14,6 +14,7 @@ import schema from "./schema";
 import { settleOutbox, makeDue } from "../test-utils/outboxWork";
 import { api, internal } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -100,11 +101,11 @@ async function seedLegacyPrincipalSale(
 ) {
   const salePrice = opts.salePrice ?? SALE_PRICE;
   const cogsMajor = opts.cogs ?? ENTITLEMENT;
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin: opts.vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: salePrice,
-      status: "SOLD", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co",
+      status: "SOLD", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"),
       ...(opts.sourceCost === undefined ? {} : { sourceCost: opts.sourceCost }),
       ...(opts.purchasePrice ? { purchasePrice: opts.purchasePrice } : {}),
     })
@@ -298,12 +299,12 @@ describe("re-running it", () => {
   test("a sale already on agent basis is left alone rather than counted as work", async () => {
     const s = await seedDealer("agentAlready");
     // Posted correctly by the current code — no vehicle revenue, no COGS.
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINMIG6", make: "Kia", model: "Rio", year: 2023, mileage: 5,
         color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),

@@ -175,6 +175,13 @@ export const listReceiptBankOptions = query({
 const OUTSTANDING_SUMMARY_LIMIT = 1000;
 
 /**
+ * The grouping key of an obligation that carries no supplier id (written before SCRUM-868 P3).
+ * Its OWN row id: a name is a snapshot, not an identity (N2), so two unresolved rows with the same
+ * text must never be reported as one party. Each stays a separate, unattributed entry until an
+ * identity is assigned; totals are summed independently of this grouping.
+ */
+const unresolvedPartyKey = (rowId: string): string => `unresolved:${rowId}`;
+/**
  * What suppliers still owe the dealership, in total and by supplier. The aging
  * view the GL balance alone could never produce.
  *
@@ -226,7 +233,7 @@ export const outstandingSummary = query({
       totalOutstanding += view.remainingAmount;
       if (row.status === "DISPUTED") disputedAmount += view.remainingAmount;
       if (view.remainingAmount > 0) {
-        const key = row.supplierId ? String(row.supplierId) : "unresolved:" + row.sourcedFromName;
+        const key = row.supplierId ? String(row.supplierId) : unresolvedPartyKey(row._id);
         const entry = bySupplier.get(key) ?? {
           supplierId: row.supplierId,
           sourcedFromName: row.sourcedFromName,
@@ -267,7 +274,7 @@ export const outstandingSummary = query({
       totalOutstanding += remaining;
       costRecoveryOutstanding += remaining;
       if (remaining > 0) {
-        const key = recovery.supplierId ? String(recovery.supplierId) : "unresolved:" + recovery.sourcedFromName;
+        const key = recovery.supplierId ? String(recovery.supplierId) : unresolvedPartyKey(recovery._id);
         const entry = bySupplier.get(key) ?? {
           supplierId: recovery.supplierId,
           sourcedFromName: recovery.sourcedFromName,

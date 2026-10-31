@@ -353,23 +353,24 @@ export async function requireResolvedSupplierId(
   return row.supplierId;
 }
 /**
- * Resolves the supplier master snapshot version for a vehicle's stored supplier ID at sale completion.
- * Returns empty if no supplierId is provided or if the row belongs to another organization (corruption guard).
- * Does not refuse inactive suppliers (author self-attack #4 / N10: deactivation does not block completion or settlement).
+ * Resolves the supplier a SOURCED sale will owe (or be owed by) and its snapshot version, before any write.
+ * Fails closed with SUPPLIER_IDENTITY_UNRESOLVED when the vehicle carries no supplier id, when the id
+ * does not exist, or when it belongs to another organization (N5, N6). One message for all three, so
+ * the refusal is not an existence oracle (TEN-1). A completed sale must never write a payable or a
+ * receivable that the settlement doors would then refuse for the rest of its life.
+ * Does not refuse an inactive supplier: deactivation never strands an obligation (N10).
  */
-export async function getSupplierSnapshotForCompletion(
+export async function requireSupplierSnapshotForCompletion(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   supplierId: Id<"suppliers"> | undefined,
-): Promise<{ supplierId?: Id<"suppliers">; supplierSnapshotVersion?: number }> {
-  if (!supplierId) return {};
-  const supplier = await ctx.db.get("suppliers", supplierId);
+): Promise<{ supplierId: Id<"suppliers">; supplierSnapshotVersion: number }> {
+  const supplier = supplierId ? await ctx.db.get("suppliers", supplierId) : null;
   if (!supplier || supplier.orgId !== orgId) {
-    return {};
+    return throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
   }
   return { supplierId: supplier._id, supplierSnapshotVersion: supplier.version };
 }
-
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,

@@ -2,7 +2,7 @@ import {
   SUPPLIER_ERROR,
   SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
   throwSupplierError,
-  getSupplierSnapshotForCompletion,
+  requireSupplierSnapshotForCompletion,
 } from "./supplierRegistry";
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
@@ -533,11 +533,12 @@ async function prepareSaleCompletion(
         SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
       );
     }
-    if (vehicle.sourcedSupplierId) {
-      const snap = await getSupplierSnapshotForCompletion(ctx, args.orgId, vehicle.sourcedSupplierId);
-      resolvedSupplierId = snap.supplierId;
-      supplierSnapshotVersion = snap.supplierSnapshotVersion;
-    }
+    // The id, not the name, is the identity (N5/N6): a SOURCED car with no id, a missing supplier or
+    // another organization's supplier refuses HERE, before any write, so no obligation is created
+    // that the settlement doors would later refuse for good.
+    const snap = await requireSupplierSnapshotForCompletion(ctx, args.orgId, vehicle.sourcedSupplierId);
+    resolvedSupplierId = snap.supplierId;
+    supplierSnapshotVersion = snap.supplierSnapshotVersion;
   }
 
   const customer = await ctx.db.get(args.customerId);

@@ -9,6 +9,7 @@ import { FC_RETURN_MESSAGES } from "./utils/fcCheque";
 import { allocatePaymentToReceivable } from "./subledger";
 import { salesAr } from "../lib/i18n/domains/sales";
 import { payForwardBeforeFinalize } from "../test-utils/financedDealFixture";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -81,7 +82,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
     await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
     const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "CF", lastName: "Customer" }));
-    const vehicleId = await t.run((ctx) =>
+    const vehicleId = await t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId,
         vin: `CFVIN${tag}`,
@@ -95,7 +96,7 @@ describe("SCRUM-567: the financier leg of a finalized CASH deal", () => {
         sellingPrice: 10_500,
         status: "AVAILABLE",
         ...(opts.sourced
-          ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: 9_500 }
+          ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co"), sourceCost: 9_500 }
           : { sourceType: "STOCK" as const, purchasePrice: 9_500, landedCostTotal: 100 }),
       })
     );

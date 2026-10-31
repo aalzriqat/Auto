@@ -937,3 +937,463 @@ describe("SCRUM-868 Phase 3: Concession basis compares supplierId (Author self-a
   });
 });
 
+
+// ─── Review round 1 at bc963feeb (Seat 1 B1/B2/B3, Seat 2 findings 1 and 2) ─────────────────────
+//
+// Invariant: sale completion never creates a supplier obligation that cannot later be settled.
+// A SOURCED car with no resolvable, tenant-owned supplier id refuses (SUPPLIER_IDENTITY_UNRESOLVED)
+// before any write, on both settlement routes, whatever the stored name says. A missing id, a
+// nonexistent id and another organization's id all give the same coded refusal and message
+// (TEN-1: no existence oracle).
+
+type SaleRoute = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+type SetupResult = Awaited<ReturnType<typeof setupTest>>;
+type ThrownDomainError = { data?: { code?: string; message?: string } };
+
+async function insertSourcedVehicle(
+  s: SetupResult,
+  vin: string,
+  fields: { sourcedSupplierId?: Id<"suppliers">; sourcedFromName: string }
+): Promise<Id<"vehicles">> {
+  return await s.t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId: s.orgId,
+      vin,
+      make: "Toyota",
+      model: "Camry",
+      year: 2024,
+      mileage: 1000,
+      color: "White",
+      fuelType: "Gas",
+      transmission: "Auto",
+      sellingPrice: 15_000,
+      status: "AVAILABLE",
+      sourceType: "SOURCED",
+      sourceCost: 12_000,
+      ...fields,
+    } as never)
+  );
+}
+
+/** Funds the sale the way the route needs, then returns the attempt (the thrown error, or undefined). */
+async function prepareSaleAttempt(s: SetupResult, vehicleId: Id<"vehicles">, route: SaleRoute) {
+  let quoteId: Id<"quotes"> | undefined;
+  if (route === "THROUGH_DEALERSHIP") {
+    quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId,
+      vehiclePrice: 15_000,
+      downPayment: 0,
+      termMonths: 0,
+    });
+    await s.asUser.mutation(api.deposits.create, {
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      quoteId,
+      amount: 15_000,
+    });
+  }
+  return async (idempotencyKey: string): Promise<unknown> => {
+    try {
+      await s.asUser.mutation(api.sales.create, {
+        idempotencyKey,
+        orgId: s.orgId,
+        vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: 15_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        supplierSettlementRoute: route,
+        ...(quoteId ? { quoteId } : {}),
+      });
+      return undefined;
+    } catch (err) {
+      return err;
+    }
+  };
+}
+
+async function foreignOrgSupplier(s: SetupResult): Promise<Id<"suppliers">> {
+  const otherOrgId = await s.t.run((ctx) =>
+    ctx.db.insert("organizations", { name: "Other dealership", createdAt: Date.now() })
+  );
+  return await seedSupplier(s.t, {
+    orgId: otherOrgId,
+    userId: s.userId,
+    displayName: "Foreign Supplier Co",
+  });
+}
+
+async function deletedSupplier(s: SetupResult): Promise<Id<"suppliers">> {
+  const id = await seedSupplier(s.t, {
+    orgId: s.orgId,
+    userId: s.userId,
+    displayName: "Deleted Supplier Co",
+  });
+  await s.t.run((ctx) => ctx.db.delete(id));
+  return id;
+}
+
+async function expectNameOnlyCompletionRefused(route: SaleRoute) {
+  const s = await setupTest(`complete_name_only_${route}`);
+  const vehicleId = await insertSourcedVehicle(s, "VINNAMEONLY01", {
+    sourcedFromName: "Acme Motors",
+  });
+  const attempt = await prepareSaleAttempt(s, vehicleId, route);
+  const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+  const key = crypto.randomUUID();
+  const thrown = (await attempt(key)) as ThrownDomainError | undefined;
+  expect(thrown?.data?.code).toBe(SUPPLIER_ERROR.IDENTITY_UNRESOLVED);
+  expect(thrown?.data?.message).toBe(SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+
+  // Replaying the same command key is refused the same way and still writes nothing.
+  const replay = (await attempt(key)) as ThrownDomainError | undefined;
+  expect(replay?.data?.code).toBe(SUPPLIER_ERROR.IDENTITY_UNRESOLVED);
+  expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+}
+
+async function expectForeignAndMissingIdCompletionRefused(route: SaleRoute) {
+  const messages: Array<string | undefined> = [];
+  for (const [label, makeId] of [
+    ["foreign", foreignOrgSupplier],
+    ["deleted", deletedSupplier],
+  ] as const) {
+    const s = await setupTest(`complete_${label}_${route}`);
+    const vehicleId = await insertSourcedVehicle(s, `VIN${label.toUpperCase()}01`, {
+      sourcedSupplierId: await makeId(s),
+      sourcedFromName: "Acme Motors",
+    });
+    const attempt = await prepareSaleAttempt(s, vehicleId, route);
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+
+    const thrown = (await attempt(crypto.randomUUID())) as ThrownDomainError | undefined;
+    expect(thrown?.data?.code).toBe(SUPPLIER_ERROR.IDENTITY_UNRESOLVED);
+    messages.push(thrown?.data?.message);
+    expect(await dbSnapshot(s.t, Object.keys(schema.tables))).toEqual(before);
+  }
+  expect(messages).toEqual([SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE]);
+}
+
+async function expectValidSupplierCompletes(route: SaleRoute) {
+  for (const status of ["ACTIVE", "INACTIVE"] as const) {
+    const s = await setupTest(`complete_control_${status}_${route}`);
+    const supplierId = await seedSupplier(s.t, {
+      orgId: s.orgId,
+      userId: s.userId,
+      displayName: "Al-Safeer Trading Co",
+      status,
+      version: 3,
+    });
+    const vehicleId = await insertSourcedVehicle(s, `VINCTRL${status}1`, {
+      sourcedSupplierId: supplierId,
+      sourcedFromName: "Al-Safeer Trading Co",
+    });
+    const attempt = await prepareSaleAttempt(s, vehicleId, route);
+
+    expect(await attempt(crypto.randomUUID())).toBeUndefined();
+
+    const table =
+      route === "THROUGH_DEALERSHIP" ? "vehicleSupplierPayables" : "vehicleSupplierReceivables";
+    const rows = await s.t.run((ctx) => ctx.db.query(table).collect());
+    expect(rows.length).toBe(1);
+    expect(rows[0].supplierId).toBe(supplierId);
+    expect(rows[0].supplierSnapshotVersion).toBe(3);
+  }
+}
+
+describe("SCRUM-868 P3 review: completion refuses an unresolvable supplier identity on both routes", () => {
+  test("THROUGH_DEALERSHIP: a real supplier name with no sourcedSupplierId refuses and writes nothing, replay included", async () => {
+    await expectNameOnlyCompletionRefused("THROUGH_DEALERSHIP");
+  });
+
+  test("DIRECT_TO_SUPPLIER: a real supplier name with no sourcedSupplierId refuses and writes nothing, replay included", async () => {
+    await expectNameOnlyCompletionRefused("DIRECT_TO_SUPPLIER");
+  });
+
+  test("THROUGH_DEALERSHIP: a foreign-organization id and a nonexistent id refuse with the identical coded message", async () => {
+    await expectForeignAndMissingIdCompletionRefused("THROUGH_DEALERSHIP");
+  });
+
+  test("DIRECT_TO_SUPPLIER: a foreign-organization id and a nonexistent id refuse with the identical coded message", async () => {
+    await expectForeignAndMissingIdCompletionRefused("DIRECT_TO_SUPPLIER");
+  });
+
+  test("THROUGH_DEALERSHIP control: an active or inactive own-organization supplier still completes and the payable carries its id", async () => {
+    await expectValidSupplierCompletes("THROUGH_DEALERSHIP");
+  });
+
+  test("DIRECT_TO_SUPPLIER control: an active or inactive own-organization supplier still completes and the receivable carries its id", async () => {
+    await expectValidSupplierCompletes("DIRECT_TO_SUPPLIER");
+  });
+});
+describe("SCRUM-868 P3 review: a supplier id of another organization, or one that no longer exists, is refused at every settlement door", () => {
+  async function seedUnresolvableIdObligations(tag: string, kind: "foreign" | "deleted") {
+    const s = await setupTest(tag);
+    const foreignId = kind === "foreign" ? await foreignOrgSupplier(s) : await deletedSupplier(s);
+    const vehicleId = await insertSourcedVehicle(s, `VIN${tag.toUpperCase().slice(0, 8)}`, {
+      sourcedFromName: "Acme Motors",
+    });
+    const saleId = await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId,
+        vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: 15_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+    const now = Date.now();
+    const payableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId,
+        vehicleId,
+        saleId,
+        supplierId: foreignId,
+        sourcedFromName: "Acme Motors",
+        amountDue: 8_000,
+        currency: "JOD",
+        status: "PENDING",
+        createdBy: s.userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    const receivableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: s.orgId,
+        vehicleId,
+        saleId,
+        supplierId: foreignId,
+        sourcedFromName: "Acme Motors",
+        amountDue: 2_000,
+        currency: "JOD",
+        status: "OPEN",
+        createdBy: s.userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+    const expenseId = await s.t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId: s.orgId,
+        vehicleId,
+        title: "Transport cost",
+        amount: 300,
+        date: now - 60_000,
+        category: "TRANSPORT",
+        status: "PAID",
+        paymentMethod: "CASH",
+        costBearer: "SUPPLIER",
+      } as never)
+    );
+    const recoveryId = await s.t.run((ctx) =>
+      ctx.db.insert("supplierCostRecoveries", {
+        orgId: s.orgId,
+        vehicleId,
+        expenseId,
+        origin: "EXPENSE",
+        supplierId: foreignId,
+        sourcedFromName: "Acme Motors",
+        amountDueMinor: 300_000,
+        amountRecoveredMinor: 0,
+        currency: "JOD",
+        receiptSeq: 0,
+        status: "OPEN",
+        sourceEventKey: `expense:${expenseId}:created`,
+        createdBy: s.userId,
+        createdAt: now,
+        updatedAt: now,
+      } as never)
+    );
+    return { s, payableId, receivableId, recoveryId };
+  }
+
+  async function expectAllSixDoorsRefuse(kind: "foreign" | "deleted") {
+    const { s, payableId, receivableId, recoveryId } = await seedUnresolvableIdObligations(`${kind}door`, kind);
+    const doors: Array<[string, () => Promise<unknown>]> = [
+      [
+        "sourcingPayables.markPaid",
+        () =>
+          s.asUser.mutation(api.sourcingPayables.markPaid, {
+            orgId: s.orgId,
+            payableId,
+            paymentMethod: "CASH",
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+      [
+        "sourcingPayables.recordPartialPayment",
+        () =>
+          s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+            orgId: s.orgId,
+            payableId,
+            amount: 1000,
+            paymentMethod: "CASH",
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+      [
+        "sourcingPayables.setDisputed",
+        () =>
+          s.asUser.mutation(api.sourcingPayables.setDisputed, {
+            orgId: s.orgId,
+            payableId,
+            disputed: true,
+            reason: "Cost dispute",
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+      [
+        "supplierReceivables.recordReceipt",
+        () =>
+          s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+            orgId: s.orgId,
+            receivableId,
+            amount: 1000,
+            receiptMethod: "CASH",
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+      [
+        "supplierReceivables.setDisputed",
+        () =>
+          s.asUser.mutation(api.supplierReceivables.setDisputed, {
+            orgId: s.orgId,
+            receivableId,
+            disputed: true,
+            reason: "Margin dispute",
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+      [
+        "supplierCostRecoveries.recordReceipt",
+        () =>
+          s.asUser.mutation(api.supplierCostRecoveries.recordReceipt, {
+            orgId: s.orgId,
+            recoveryId,
+            amountMinor: 300_000,
+            method: "CASH",
+            receivedDate: Date.now(),
+            idempotencyKey: crypto.randomUUID(),
+          }),
+      ],
+    ];
+    const before = await dbSnapshot(s.t, Object.keys(schema.tables));
+    for (const [door, call] of doors) {
+      let thrown: ThrownDomainError | undefined;
+      try {
+        await call();
+      } catch (err) {
+        thrown = err as ThrownDomainError;
+      }
+      expect(thrown?.data?.code, door).toBe(SUPPLIER_ERROR.IDENTITY_UNRESOLVED);
+      expect(thrown?.data?.message, door).toBe(SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+      expect(await dbSnapshot(s.t, Object.keys(schema.tables)), door).toEqual(before);
+    }
+  }
+
+  test("all six doors refuse a supplier id owned by another organization with the coded message and write nothing", async () => {
+    await expectAllSixDoorsRefuse("foreign");
+  });
+
+  test("all six doors refuse a supplier id that no longer exists with the coded message and write nothing", async () => {
+    await expectAllSixDoorsRefuse("deleted");
+  });
+});
+
+describe("SCRUM-868 P3 review: unresolved legacy rows are never merged by name in outstandingSummary", () => {
+  test("same-name unresolved claims and recoveries stay separate entries; identified rows stay grouped by id; totals unchanged", async () => {
+    const s = await setupTest("summary_unresolved_same_name");
+    const identifiedId = await seedSupplier(s.t, {
+      orgId: s.orgId,
+      userId: s.userId,
+      displayName: "Same Name Co",
+    });
+    const vehicleId = await insertSourcedVehicle(s, "VINUNRSUM01", { sourcedFromName: "Same Name Co" });
+    const saleId = await s.t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId: s.orgId,
+        vehicleId,
+        customerId: s.customerId,
+        salespersonId: s.userId,
+        salePrice: 15_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+    const now = Date.now();
+    const receivable = (amountDue: number, supplierId?: Id<"suppliers">) =>
+      s.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierReceivables", {
+          orgId: s.orgId,
+          vehicleId,
+          saleId,
+          ...(supplierId ? { supplierId, supplierSnapshotVersion: 1 } : {}),
+          sourcedFromName: "Same Name Co",
+          amountDue,
+          currency: "JOD",
+          status: "OPEN",
+          createdBy: s.userId,
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+    await receivable(1_000);
+    await receivable(2_000);
+    await receivable(4_000, identifiedId);
+    // A real posted recovery (the summary only counts recoveries whose posting is on the books),
+    // then stripped of its id: the shape of a recovery written before this change.
+    const recoveryVehicleId = await insertSourcedVehicle(s, "VINUNRSUM02", {
+      sourcedSupplierId: identifiedId,
+      sourcedFromName: "Same Name Co",
+    });
+    // Two such recoveries with the same name: a name key would merge them into one 1,000 entry.
+    for (const [title, offsetMs] of [
+      ["Transport, borne by the supplier", 60_000],
+      ["Inspection, borne by the supplier", 120_000],
+    ] as const) {
+      await s.asUser.mutation(api.expenses.create, {
+        orgId: s.orgId,
+        vehicleId: recoveryVehicleId,
+        title,
+        amount: 500,
+        date: now - offsetMs,
+        category: "TRANSPORT",
+        status: "PAID",
+        paymentMethod: "CASH",
+        costBearer: "SUPPLIER",
+        idempotencyKey: crypto.randomUUID(),
+      });
+    }
+    await s.t.run(async (ctx) => {
+      const recoveries = await ctx.db.query("supplierCostRecoveries").collect();
+      expect(recoveries.length).toBe(2);
+      for (const recovery of recoveries) {
+        expect(recovery.supplierId).toBe(identifiedId);
+        await ctx.db.patch(recovery._id, { supplierId: undefined });
+      }
+    });
+
+    const summary = await s.asUser.query(api.supplierReceivables.outstandingSummary, {
+      orgId: s.orgId,
+    });
+    // Aggregate money is unchanged by how the parties are attributed.
+    expect(summary.totalOutstanding).toBe(8_000);
+    expect(summary.costRecoveryOutstanding).toBe(1_000);
+    // One identified entry plus four unresolved entries (two claims, two recoveries): never one merged entry.
+    expect(summary.bySupplier.map((e) => [e.supplierId, e.outstanding, e.claims])).toEqual([
+      [identifiedId, 4_000, 1],
+      [undefined, 2_000, 1],
+      [undefined, 1_000, 1],
+      [undefined, 500, 1],
+      [undefined, 500, 1],
+    ]);
+  });
+});

@@ -23,6 +23,7 @@ import { api } from "./_generated/api";
 import { SYSTEM_KEYS, DEFAULT_CHART } from "./utils/defaultChart";
 import { depositStatusForTreatment } from "./utils/depositHelpers";
 import type { Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -217,21 +218,21 @@ async function seed(
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
   const sourceType = opts.sourceType ?? "SOURCED";
-  const vehicleId = await t.run((ctx) =>
+  const vehicleId = await t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINDEP${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE",
       sourceType,
       ...(sourceType === "SOURCED"
-        ? { sourcedFromName: "Amman Importer Co", sourceCost: opts.sourceCost ?? SUPPLIER_ENTITLEMENT }
+        ? { sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co"), sourceCost: opts.sourceCost ?? SUPPLIER_ENTITLEMENT }
         : { purchasePrice: SUPPLIER_ENTITLEMENT }),
     })
   );
 
   // The second car, when the test needs the split to be a decision.
   const secondVehicleId = opts.extraLine
-    ? await t.run((ctx) =>
+    ? await t.run(async (ctx) =>
         ctx.db.insert("vehicles", {
           orgId, vin: `VINDEP2${tag}`, make: "Toyota", model: "Corolla", year: 2024, mileage: 12,
           color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: opts.extraLine!.price,
@@ -240,7 +241,7 @@ async function seed(
           ...(opts.extraLine!.sourceType === "STOCK"
             ? { purchasePrice: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN }
             : {
-                sourcedFromName: "Amman Importer Co",
+                sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co"),
                 sourceCost: opts.extraLine!.sourceCost ?? opts.extraLine!.price - MARGIN,
               }),
         })

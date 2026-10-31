@@ -23,6 +23,7 @@ import {
   consignedSettlementRoute,
   dealershipCollectsGross,
 } from "./utils/vehicleOwnership";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -91,12 +92,12 @@ async function seedDealer(tag: string) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: "One" })
   );
-  const vehicleId = await t.run((ctx) =>
+  const vehicleId = await t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINRT${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE",
-      sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: SUPPLIER_ENTITLEMENT,
+      sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co"), sourceCost: SUPPLIER_ENTITLEMENT,
     })
   );
 
