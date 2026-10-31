@@ -2,11 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_LCOV_BYTES,
+  checkSymlinks,
+  isEntrypoint,
+  main,
+  runAsScript,
   validateSonarMainCoverage,
   verifyProducerRun,
-  main,
 } from "./validateSonarMainCoverage.mjs";
 
 const VALID_SHA = "0d6eafbb1b8d722f947bebdcba2dd7da28ef0ac1";
@@ -808,5 +814,629 @@ describe("verifyProducerRun", () => {
         fetchImpl: mockFetch,
       }),
     ).rejects.toThrow("incomplete artifact inventory (1 of 150 fetched)");
+  });
+
+  it.each([
+    ["token", { token: "" }],
+    ["repo", { repo: "" }],
+    ["runId", { runId: 0 }],
+    ["expectedSha", { expectedSha: "" }],
+  ])("refuses before any request when %s is missing", async (_name, missing) => {
+    const fetchImpl = vi.fn(createMockFetch());
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl,
+        ...missing,
+      }),
+    ).rejects.toThrow("verifyProducerRun requires token, repo, runId, and expectedSha.");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the workflow definition cannot be fetched", async () => {
+    const fetchImpl = (async () => ({ ok: false, status: 500, json: async () => ({}) })) as unknown as typeof fetch;
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl }),
+    ).rejects.toThrow("Could not fetch workflow definition from GitHub API (HTTP 500).");
+  });
+
+  it("refuses when the workflow definition has no workflow ID", async () => {
+    const mockFetch = createMockFetch({ workflow: { id: 0 } });
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl: mockFetch }),
+    ).rejects.toThrow("Workflow definition returned by GitHub API missing workflow ID.");
+  });
+
+  it("refuses when the producer run cannot be fetched", async () => {
+    const base = createMockFetch();
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.endsWith("/actions/runs/12345")) {
+        return { ok: false, status: 503, json: async () => ({}) };
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl }),
+    ).rejects.toThrow("Could not fetch producer run 12345 from GitHub API (HTTP 503).");
+  });
+
+  it("refuses if producer run workflow name is not Tests", async () => {
+    const mockFetch = createMockFetch({ run: { name: "Build" } });
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl: mockFetch }),
+    ).rejects.toThrow("Refusing producer run: workflow name must be 'Tests', got 'Build'.");
+  });
+
+  it("refuses if producer run workflow path is not .github/workflows/test.yml", async () => {
+    const mockFetch = createMockFetch({ run: { path: ".github/workflows/other.yml" } });
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl: mockFetch }),
+    ).rejects.toThrow(
+      "Refusing producer run: workflow path must be '.github/workflows/test.yml', got '.github/workflows/other.yml'.",
+    );
+  });
+
+  it("refuses if producer run has not completed", async () => {
+    const mockFetch = createMockFetch({ run: { status: "in_progress" } });
+
+    await expect(
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl: mockFetch }),
+    ).rejects.toThrow("Refusing producer run: status must be 'completed', got 'in_progress'.");
+  });
+
+  describe("artifact inventory API", () => {
+    function artifactsFetch(
+      respond: (page: number) => unknown,
+      requests: string[] = [],
+    ): typeof fetch {
+      const base = createMockFetch();
+      return (async (url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+        if (!urlStr.includes("/artifacts")) {
+          return base(url, init);
+        }
+        requests.push(urlStr);
+        const page = Number(new URL(urlStr).searchParams.get("page"));
+        const body = respond(page);
+        if (typeof body === "number") {
+          return { ok: false, status: body, json: async () => ({}) };
+        }
+        return { ok: true, status: 200, json: async () => body };
+      }) as unknown as typeof fetch;
+    }
+
+    const filler = (count: number, firstId: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: firstId + i,
+        name: "other-artifact",
+        size_in_bytes: 1,
+        expired: false,
+      }));
+
+    const verify = (fetchImpl: typeof fetch) =>
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl });
+
+    it("refuses when the artifact listing cannot be fetched", async () => {
+      await expect(verify(artifactsFetch(() => 502))).rejects.toThrow(
+        "Could not fetch artifacts for producer run 12345 (HTTP 502).",
+      );
+    });
+
+    it("refuses with a TypeError when total_count is not a number", async () => {
+      const error = await verify(artifactsFetch(() => ({ total_count: "1", artifacts: [] }))).catch(
+        (e: unknown) => e,
+      );
+
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe(
+        "Refusing producer run: invalid artifacts API response, total_count is not a number.",
+      );
+    });
+
+    it("refuses with a TypeError when the artifacts array is missing", async () => {
+      const error = await verify(artifactsFetch(() => ({ total_count: 1 }))).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe(
+        "Refusing producer run: invalid artifacts API response, artifacts array missing.",
+      );
+    });
+
+    it("reads every page with the bearer token and finds the artifact on the later page", async () => {
+      const requests: string[] = [];
+      const wanted = { id: 777, name: "coverage-report", size_in_bytes: 4096, expired: false };
+      const fetchImpl = artifactsFetch(
+        (page) => ({
+          total_count: 101,
+          artifacts: page === 1 ? filler(100, 1000) : [wanted],
+        }),
+        requests,
+      );
+
+      const res = await verify(fetchImpl);
+
+      expect(res.artifactId).toBe(777);
+      expect(res.artifactSizeBytes).toBe(4096);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]).toContain("per_page=100&page=1");
+      expect(requests[1]).toContain("per_page=100&page=2");
+    });
+
+    it("sends the bearer token and GitHub API headers on every request", async () => {
+      const seen: Array<Record<string, string>> = [];
+      const base = createMockFetch();
+      const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+        seen.push(init?.headers as Record<string, string>);
+        return base(url, init);
+      }) as unknown as typeof fetch;
+
+      await verify(fetchImpl);
+
+      expect(seen).toHaveLength(3);
+      for (const headers of seen) {
+        expect(headers.authorization).toBe("Bearer dummy");
+        expect(headers.accept).toBe("application/vnd.github+json");
+      }
+    });
+
+    it("refuses an inventory that needs more than 10 pages", async () => {
+      const requests: string[] = [];
+      const fetchImpl = artifactsFetch(
+        (page) => ({ total_count: 5000, artifacts: filler(100, page * 1000) }),
+        requests,
+      );
+
+      await expect(verify(fetchImpl)).rejects.toThrow(
+        "Refusing producer run: artifact pagination exceeded 10 pages (1000/5000 fetched).",
+      );
+      expect(requests).toHaveLength(10);
+    });
+  });
+});
+
+describe("validateSonarMainCoverage refusal branches", () => {
+  type Fixture = ReturnType<typeof createFixtureDir>;
+
+  function withArtifact(
+    run: (fixture: Fixture) => void,
+    manifestOverrides: Record<string, unknown> = {},
+  ): void {
+    const fixture = createFixtureDir();
+    try {
+      writeValidArtifact(fixture.coverageDir, VALID_SHA, manifestOverrides);
+      run(fixture);
+    } finally {
+      fixture.cleanup();
+    }
+  }
+
+  function validate(fixture: Fixture, extra: Record<string, unknown> = {}) {
+    return validateSonarMainCoverage({
+      coverageDir: fixture.coverageDir,
+      checkoutRoot: fixture.root,
+      expectedSha: VALID_SHA,
+      producerContext: VALID_PRODUCER_CONTEXT,
+      ...extra,
+    });
+  }
+
+  it.each([
+    ["an empty expected SHA", ""],
+    ["an abbreviated expected SHA", "0d6eafb"],
+    ["a non-hex expected SHA", "z".repeat(40)],
+  ])("refuses %s before reading anything", (_name, expectedSha) => {
+    withArtifact((fixture) => {
+      expect(() => validate(fixture, { expectedSha })).toThrow(
+        `Refusing coverage validation: invalid expected SHA '${expectedSha}'.`,
+      );
+    });
+  });
+
+  it.each([
+    ["headSha", { headSha: OTHER_SHA }, `producerContext headSha '${OTHER_SHA}' does not match expected SHA '${VALID_SHA}'`],
+    ["workflowName", { workflowName: "Build" }, "producerContext workflowName must be 'Tests', got 'Build'"],
+    ["repository", { repository: "fork-user/Auto" }, "producerContext repository 'fork-user/Auto' does not match expected 'aalzriqat/Auto'"],
+    ["event", { event: "pull_request" }, "producerContext event must be 'push', got 'pull_request'"],
+    ["ref", { ref: "refs/heads/feature" }, "producerContext ref must be 'refs/heads/main', got 'refs/heads/feature'"],
+  ])("refuses a producerContext with the wrong %s", (_field, override, message) => {
+    withArtifact((fixture) => {
+      expect(() => validate(fixture, { producerContext: { ...VALID_PRODUCER_CONTEXT, ...override } })).toThrow(
+        message,
+      );
+    });
+  });
+
+  it("refuses a producerContext that is not an object with a TypeError", () => {
+    withArtifact((fixture) => {
+      let error: unknown;
+      try {
+        validate(fixture, { producerContext: "not-an-object" });
+      } catch (e) {
+        error = e;
+      }
+
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe(
+        "Refusing coverage validation: valid, complete trusted producerContext is mandatory.",
+      );
+    });
+  });
+
+  it("refuses a coverage directory that does not exist", () => {
+    withArtifact((fixture) => {
+      const missing = path.join(fixture.root, "no-such-dir");
+
+      expect(() => validate(fixture, { coverageDir: missing })).toThrow(
+        `Refusing coverage validation: coverage directory '${missing}' does not exist.`,
+      );
+    });
+  });
+
+  it("refuses a coverage path that is a file, not a directory", () => {
+    withArtifact((fixture) => {
+      const asFile = path.join(fixture.coverageDir, "lcov.info");
+
+      expect(() => validate(fixture, { coverageDir: asFile })).toThrow(
+        `Refusing coverage validation: coverage directory '${asFile}' does not exist.`,
+      );
+    });
+  });
+
+  it("refuses a malformed tested-merge-sha.txt", () => {
+    withArtifact((fixture) => {
+      fs.writeFileSync(path.join(fixture.coverageDir, "tested-merge-sha.txt"), "not-a-sha\n");
+
+      expect(() => validate(fixture)).toThrow(
+        "Refusing coverage validation: tested-merge-sha.txt contains malformed SHA 'not-a-sha'.",
+      );
+    });
+  });
+
+  it("refuses a missing coverage-provenance.json", () => {
+    withArtifact((fixture) => {
+      fs.rmSync(path.join(fixture.coverageDir, "coverage-provenance.json"));
+
+      expect(() => validate(fixture)).toThrow(
+        "Refusing coverage validation: coverage-provenance.json manifest is mandatory but absent.",
+      );
+    });
+  });
+
+  it("refuses a coverage-provenance.json that is not valid JSON", () => {
+    withArtifact((fixture) => {
+      fs.writeFileSync(path.join(fixture.coverageDir, "coverage-provenance.json"), "{ nope");
+
+      expect(() => validate(fixture)).toThrow(
+        /Refusing coverage validation: coverage-provenance\.json is malformed JSON: .+/,
+      );
+    });
+  });
+
+  it.each([
+    ["run_id is not a positive integer", { run_id: 0 }, "manifest run_id must be a positive integer, got '0'"],
+    ["run_attempt is not a positive integer", { run_attempt: -3 }, "manifest run_attempt must be a positive integer, got '-3'"],
+    ["sha names another commit", { sha: OTHER_SHA }, `provenance manifest names SHA '${OTHER_SHA}', expected '${VALID_SHA}'`],
+    ["sha is empty", { sha: "" }, `provenance manifest names SHA '', expected '${VALID_SHA}'`],
+    ["workflow is not Tests", { workflow: "Build" }, "provenance manifest names workflow 'Build', expected 'Tests'"],
+    ["lcovBytes disagrees with the file", { lcovBytes: 1 }, "does not match manifest 1."],
+    ["lcovBytes is absent", { lcovBytes: undefined }, "does not match manifest undefined."],
+    ["daRecords disagrees with the file", { daRecords: 7 }, "DA record count 1 does not match manifest 7"],
+    ["sfRecords disagrees with the file", { sfRecords: 7 }, "SF count 1 does not match manifest 7"],
+  ])("refuses a manifest whose %s", (_name, override, message) => {
+    withArtifact(
+      (fixture) => {
+        expect(() => validate(fixture)).toThrow(message);
+      },
+      override,
+    );
+  });
+
+  it("refuses a missing lcov.info", () => {
+    withArtifact((fixture) => {
+      fs.rmSync(path.join(fixture.coverageDir, "lcov.info"));
+
+      expect(() => validate(fixture)).toThrow("Refusing coverage validation: lcov.info is absent from coverage-report.");
+    });
+  });
+
+  it("refuses an lcov.info larger than 50 MiB before reading it", () => {
+    withArtifact((fixture) => {
+      fs.truncateSync(path.join(fixture.coverageDir, "lcov.info"), MAX_LCOV_BYTES + 1);
+
+      expect(() => validate(fixture)).toThrow(
+        `Refusing coverage validation: lcov.info (${MAX_LCOV_BYTES + 1} bytes) exceeds 50 MiB limit.`,
+      );
+    });
+  });
+
+  it("refuses fewer DA records than the required minimum", () => {
+    withArtifact((fixture) => {
+      expect(() => validate(fixture, { minDaRecords: 5 })).toThrow(
+        "Refusing coverage validation: lcov.info contains 1 DA records, expected at least 5.",
+      );
+    });
+  });
+
+  it("refuses fewer SF records than the required minimum", () => {
+    withArtifact((fixture) => {
+      expect(() => validate(fixture, { minRecords: 5 })).toThrow(
+        "Refusing coverage validation: lcov.info contains 1 SF records, expected at least 5.",
+      );
+    });
+  });
+
+  it("accepts a nested directory tree that contains no symlink", () => {
+    withArtifact((fixture) => {
+      const nested = path.join(fixture.coverageDir, "reports", "unit");
+      fs.mkdirSync(nested, { recursive: true });
+      fs.writeFileSync(path.join(nested, "note.txt"), "plain file\n");
+
+      expect(validate(fixture).ok).toBe(true);
+    });
+  });
+
+  it("refuses a symlink hidden in a nested directory", () => {
+    withArtifact((fixture) => {
+      const nested = path.join(fixture.coverageDir, "reports", "unit");
+      fs.mkdirSync(nested, { recursive: true });
+      const link = path.join(nested, "linked-dir");
+      const linkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sonar-cov-link-target-"));
+      try {
+        // A directory junction needs no elevated privilege on Windows; POSIX ignores the type.
+        fs.symlinkSync(linkTarget, link, "junction");
+
+        expect(() => validate(fixture)).toThrow(`Trusted Sonar refuses symlink in coverage artifact: ${link}`);
+        expect(() => checkSymlinks(fixture.coverageDir)).toThrow(link);
+      } finally {
+        fs.rmSync(link, { force: true, recursive: false });
+        fs.rmSync(linkTarget, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+describe("validateSonarMainCoverage command line", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function silence() {
+    return {
+      log: vi.spyOn(console, "log").mockImplementation(() => {}),
+      error: vi.spyOn(console, "error").mockImplementation(() => {}),
+    };
+  }
+
+  const verifyArgs = (extra: string[] = []) => [
+    "verify-producer",
+    "--token",
+    "dummy",
+    "--repo",
+    "aalzriqat/Auto",
+    "--run-id",
+    "12345",
+    "--expected-sha",
+    VALID_SHA,
+    ...extra,
+  ];
+
+  it("verify-producer prints the verdict, writes the context file and appends GITHUB_OUTPUT", async () => {
+    const { log, error } = silence();
+    const { root, cleanup } = createFixtureDir();
+    const outputFile = path.join(root, "github-output.txt");
+    const contextFile = path.join(root, "nested", "producer-context.json");
+    vi.stubEnv("GITHUB_OUTPUT", outputFile);
+    try {
+      const code = await main(verifyArgs(["--context-file", contextFile]), createMockFetch());
+
+      expect(code).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(
+        `Producer run 12345 (attempt 1) verified successfully for SHA ${VALID_SHA}. Unique artifact ID: 554433.`,
+      );
+      expect(JSON.parse(fs.readFileSync(contextFile, "utf8"))).toMatchObject({
+        verified: true,
+        runId: 12345,
+        runAttempt: 1,
+        headSha: VALID_SHA,
+        artifactId: 554433,
+        artifactSizeBytes: 12345,
+        ref: "refs/heads/main",
+      });
+      expect(fs.readFileSync(outputFile, "utf8")).toBe(
+        `run_id=12345\nrun_attempt=1\nartifact_id=554433\ntarget_sha=${VALID_SHA}\n`,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+      cleanup();
+    }
+  });
+
+  it("verify-producer writes neither file when no context file or GITHUB_OUTPUT is given", async () => {
+    silence();
+    vi.stubEnv("GITHUB_OUTPUT", "");
+
+    try {
+      expect(await main(verifyArgs(), createMockFetch())).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("verify-producer returns 1 and prints the refusal when the producer run is wrong", async () => {
+    const { error } = silence();
+
+    const code = await main(verifyArgs(), createMockFetch({ run: { conclusion: "failure" } }));
+
+    expect(code).toBe(1);
+    expect(error).toHaveBeenCalledWith("Refusing producer run: conclusion must be 'success', got 'failure'.");
+  });
+
+  it("verify-producer ignores a trailing flag with no value and refuses the missing input", async () => {
+    const { error } = silence();
+
+    const code = await main(["verify-producer", "--repo", "aalzriqat/Auto", "--token"], createMockFetch());
+
+    expect(code).toBe(1);
+    expect(error).toHaveBeenCalledWith("verifyProducerRun requires token, repo, runId, and expectedSha.");
+  });
+
+  it("verify-producer reports a non-Error failure by its string form", async () => {
+    const { error } = silence();
+    const failingFetch = (async () => {
+      throw "network down";
+    }) as unknown as typeof fetch;
+
+    expect(await main(verifyArgs(), failingFetch)).toBe(1);
+    expect(error).toHaveBeenCalledWith("network down");
+  });
+
+  it("validates an artifact when the validate-artifact subcommand is given", async () => {
+    const { log } = silence();
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      const contextFile = path.join(root, "producer-context.json");
+      fs.writeFileSync(contextFile, JSON.stringify(VALID_PRODUCER_CONTEXT));
+
+      const code = await main(["validate-artifact", coverageDir, root, VALID_SHA, contextFile]);
+
+      expect(code).toBe(0);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(`Validated coverage artifact for SHA ${VALID_SHA}: 1 source records, 1 DA lines`),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("prints the usage line and returns 1 when a validation argument is missing", async () => {
+    const { error } = silence();
+
+    const code = await main(["coverage", "root", VALID_SHA]);
+
+    expect(code).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      "usage: node validateSonarMainCoverage.mjs <coverageDir> <checkoutRoot> <expectedSha> <producerContextFile>",
+    );
+  });
+
+  it("prints both usage lines when called with no arguments", async () => {
+    const { error } = silence();
+
+    expect(await main([])).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("verify-producer --token <token>"));
+  });
+
+  it("names the missing or malformed producer context file", async () => {
+    const { error } = silence();
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      const missing = path.join(root, "absent.json");
+      expect(await main([coverageDir, root, VALID_SHA, missing])).toBe(1);
+      expect(error).toHaveBeenLastCalledWith(
+        `Refusing coverage validation: producerContext file '${missing}' does not exist.`,
+      );
+
+      const malformed = path.join(root, "malformed.json");
+      fs.writeFileSync(malformed, "not-valid-json");
+      expect(await main([coverageDir, root, VALID_SHA, malformed])).toBe(1);
+      expect(error).toHaveBeenLastCalledWith(
+        expect.stringContaining(`Refusing coverage validation: producerContext file '${malformed}' is invalid JSON: `),
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("returns 1 and prints the refusal when the artifact does not match the producer context", async () => {
+    const { error } = silence();
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      const contextFile = path.join(root, "producer-context.json");
+      fs.writeFileSync(contextFile, JSON.stringify({ ...VALID_PRODUCER_CONTEXT, runId: 999 }));
+
+      expect(await main([coverageDir, root, VALID_SHA, contextFile])).toBe(1);
+      expect(error).toHaveBeenCalledWith(
+        "Refusing coverage validation: manifest run_id '12345' does not match trusted producer run_id '999'.",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("validateSonarMainCoverage entrypoint", () => {
+  const script = path.resolve(__dirname, "validateSonarMainCoverage.mjs");
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("recognises only its own script path as the entrypoint", () => {
+    const moduleUrl = pathToFileURL(script).href;
+
+    expect(isEntrypoint(script, moduleUrl)).toBe(true);
+    expect(isEntrypoint(path.resolve(__dirname, "other.mjs"), moduleUrl)).toBe(false);
+    expect(isEntrypoint(undefined, moduleUrl)).toBe(false);
+  });
+
+  it("runAsScript passes the exit code through", async () => {
+    expect(await runAsScript(async () => 0)).toBe(0);
+    expect(await runAsScript(async () => 1)).toBe(1);
+  });
+
+  it("runAsScript reports an unexpected rejection and returns 1", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const boom = new Error("boom");
+
+    expect(
+      await runAsScript(async () => {
+        throw boom;
+      }),
+    ).toBe(1);
+    expect(error).toHaveBeenCalledWith(boom);
+  });
+
+  it("the script run directly exits 1 with usage when given no arguments", () => {
+    const result = spawnSync(process.execPath, [script], { encoding: "utf8" });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("usage:");
+    expect(result.stderr).toContain("verify-producer --token <token>");
+  });
+
+  it("the script run directly exits 0 for a valid artifact and 1 for a refused one", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA);
+      const contextFile = path.join(root, "producer-context.json");
+      fs.writeFileSync(contextFile, JSON.stringify(VALID_PRODUCER_CONTEXT));
+
+      const ok = spawnSync(process.execPath, [script, coverageDir, root, VALID_SHA, contextFile], { encoding: "utf8" });
+      expect(ok.status).toBe(0);
+      expect(ok.stdout).toContain(`Validated coverage artifact for SHA ${VALID_SHA}`);
+
+      fs.writeFileSync(contextFile, JSON.stringify({ ...VALID_PRODUCER_CONTEXT, event: "pull_request" }));
+      const refused = spawnSync(process.execPath, [script, coverageDir, root, VALID_SHA, contextFile], {
+        encoding: "utf8",
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("producerContext event must be 'push', got 'pull_request'");
+    } finally {
+      cleanup();
+    }
   });
 });
