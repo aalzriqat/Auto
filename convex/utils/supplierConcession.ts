@@ -29,6 +29,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { denominationOf, toMinorUnits } from "./money";
+import { SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE, SUPPLIER_ERROR, throwSupplierError } from "./supplierRegistry";
 import { isConsignedAgentSale } from "./vehicleOwnership";
 
 /**
@@ -241,10 +242,17 @@ export function resolveEffectiveEntitlementForCompletion(args: {
     contractEntitlementMinor === undefined ||
     basis.contractEntitlementMinor !== contractEntitlementMinor ||
     basis.currency !== args.currency ||
-    !sameName(args.vehicle.sourcedFromName, basis.supplierName) ||
-    !basis.supplierId ||
-    basis.supplierId !== args.vehicle.sourcedSupplierId
+    !sameName(args.vehicle.sourcedFromName, basis.supplierName)
   ) {
+    throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+  }
+  // A basis recorded before supplier ids existed is not stale: nothing changed under it, it was never
+  // bound. Re-recording is impossible after handover, so the truthful remedy is the release repair or a
+  // reviewed correction, not "record the concession again".
+  if (!basis.supplierId) {
+    throwSupplierError(SUPPLIER_ERROR.CONCESSION_BASIS_UNBOUND, SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE);
+  }
+  if (basis.supplierId !== args.vehicle.sourcedSupplierId) {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }
   // Called for its refusal (a concession must stay strictly below the entitlement); the

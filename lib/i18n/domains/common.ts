@@ -592,8 +592,13 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
   ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
-    "Supplier identity is unresolved.",
-    "هوية المورّد غير محددة.",
+    "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.",
+    "هوية المورّد غير محددة لهذا السجل. تأكد من ربط المركبة بالمورّد الصحيح، وإن كانت مربوطة به فاطلب من المحاسب تصحيحاً مراجعاً.",
+  ],
+  // SCRUM-868 P3 round 2. English equals the server message exactly.
+  ServerError_SUPPLIER_CONCESSION_BASIS_UNBOUND: [
+    "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.",
+    "سُجّل تنازل المورّد هذا قبل تتبّع المورّدين بالهوية، ولم يُربط بمورّده بعد. لا تُسجّله من جديد، فلا يمكن تغييره بعد التسليم. تأكد من ربط المركبة بالمورّد الصحيح، وإن كانت مربوطة به فاطلب من المحاسب تصحيحاً مراجعاً.",
   ],
   ServerError_SUPPLIER_IDENTITY_REQUIRED: [
     "A supplier is required.",

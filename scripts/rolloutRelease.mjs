@@ -35,14 +35,24 @@ import {
   rebuildBankBalances,
   recoverSupplierVatHolds,
   renderBankRebuildSummary,
+  renderSupplierIdentitySummary,
   renderReleaseSummary,
+  repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
+  supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
 const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
 const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
 const SUPPLIER_VAT_HOLD_FN = "accountingOutbox:recoverPeriodHeldSupplierVat";
+/** SCRUM-868 P3: bind P2-era supplier rows to their vehicle's frozen supplier, then count what is left. */
+const SUPPLIER_IDENTITY_REPAIR_FN = "supplierIdentityRepair:repairPage";
+const SUPPLIER_IDENTITY_COUNT_FN = "supplierIdentityRepair:countPage";
+/** The backend clamps a page to 100 rows; each row reads a bounded number of documents. */
+const SUPPLIER_IDENTITY_PAGE_SIZE = 100;
+/** 100 rows per page, so this bounds one organization and row kind at 1,000,000 rows. */
+const MAX_SUPPLIER_IDENTITY_PAGES_PER_PHASE = 10_000;
 /** At most two parked rows per page, with a durable completion marker. */
 const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
@@ -76,6 +86,7 @@ let lastVerdict = null;
 let lastOutcome = "continue";
 let bankSummary = null;
 let supplierVatSummary = null;
+let supplierIdentitySummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -97,6 +108,7 @@ function writeSummary(extra) {
   });
   if (bankSummary) body += `\n### Bank balances\n\n${bankSummary}\n`;
   if (supplierVatSummary) body += `\n### Supplier VAT holds\n\n${supplierVatSummary}\n`;
+  if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -315,6 +327,31 @@ console.log(`  ${bankSummary}`);
 const bankStop = bankRebuildStopMessage(bank, MAX_BANK_PAGES_PER_ORG);
 if (bankStop) fail(bankStop);
 
+// ─── 2c. Give P2-era supplier rows their supplier id, then count what is left ─
+
+// SCRUM-868 P3: every settlement door refuses a supplier row with no supplier
+// id, and sale completion on main before this release wrote such rows. The
+// repair binds a row ONLY to its vehicle's frozen supplier link and only when
+// the stored name agrees; the check then re-counts from the data. A failed or
+// unreadable call ends the run here (fail closed). Leftover rows are reported
+// below, after the Social Inbox verification, so that verification still runs.
+// Counts and opaque org refs only: this output is public.
+console.log(`Binding supplier rows to their supplier identity…`);
+lastVerdict = before.verdict;
+const supplierIdentity = repairAndVerifySupplierIdentity({
+  orgs: before.orgs,
+  repair: (args) => convex(["run", SUPPLIER_IDENTITY_REPAIR_FN, JSON.stringify(args)]),
+  count: (args) => convex(["run", SUPPLIER_IDENTITY_COUNT_FN, JSON.stringify(args)]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPagesPerPhase: MAX_SUPPLIER_IDENTITY_PAGES_PER_PHASE,
+  pageSize: SUPPLIER_IDENTITY_PAGE_SIZE,
+});
+supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
+console.log(`  ${supplierIdentitySummary}`);
+if (!supplierIdentity.ok) fail(supplierIdentity.reason);
+
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
 const startedAt = rolloutStartedAt;
@@ -348,6 +385,12 @@ if (bankRefusal) {
   // The heading must not read "verified" on a run that fails.
   lastOutcome = "failed";
   fail(bankRefusal);
+}
+
+const supplierIdentityRefusal = lastOutcome === "verified" ? supplierIdentityRefusalMessage(supplierIdentity) : null;
+if (supplierIdentityRefusal) {
+  lastOutcome = "failed";
+  fail(supplierIdentityRefusal);
 }
 
 if (lastOutcome === "verified") {

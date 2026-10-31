@@ -22,13 +22,14 @@
  * pin the fail-closed default for one say so in their name.
  */
 import { describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { supplierIdFor } from "../test-utils/supplierFixture";
-import { finalizeAsOwner, newApplication, payForwardAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { finalizeAsOwner, newApplication, payForwardAsOwner, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE, SUPPLIER_ERROR } from "./utils/supplierRegistry";
 import { classifyGapResolution, validateGapShares } from "../lib/financingEconomics";
 import { appraisalGapIsSettled } from "./utils/financingEconomics";
 import { SUPPLIER_CONCESSION_REFUSALS } from "./utils/supplierConcession";
@@ -974,6 +975,139 @@ describe("SCRUM-868 P3: a concession is bound to the supplier identity the opera
     const refusal = await refusalOf(resolve(s, applicationId, V3));
     expect(refusal?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
     expect(await stateOf(s)).toEqual(before);
+  });
+});
+describe("SCRUM-868 P3 repair: a handed-over deal with a concession basis recorded before supplier ids existed", () => {
+  type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+  const ROUTES: Route[] = ["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"];
+
+  /** The basis exactly as main's `resolveAppraisalGap` stored it: no supplier id. */
+  async function stripBasisId(s: Seeded, applicationId: Id<"financeApplications">) {
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const { supplierId: _dropped, supplierIdentityRepair: _stamp, ...mainShaped } = app.supplierGapBasis!;
+      await ctx.db.patch(applicationId, { supplierGapBasis: mainShaped });
+    });
+  }
+
+  async function repairConcessions(s: Seeded) {
+    let cursor: string | null = null;
+    const total = { repaired: 0, unresolved: 0 };
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page: { status: "MORE" | "READY"; cursor: string | null; repaired: number; unresolved: number } =
+        await s.t.mutation(internal.supplierIdentityRepair.repairPage, { orgId: s.orgId, phase: "CONCESSIONS", cursor });
+      total.repaired += page.repaired;
+      total.unresolved += page.unresolved;
+      if (page.status === "READY") return total;
+      cursor = page.cursor;
+    }
+    throw new Error("the repair never finished");
+  }
+
+  async function handedOverMainShapedDeal(tag: string, route: Route) {
+    const s = await seed(tag);
+    const applicationId = await approvedDeal(s, route);
+    await resolve(s, applicationId, V3);
+    await handOver(s, applicationId);
+    await stripBasisId(s, applicationId);
+    return { s, applicationId };
+  }
+
+  async function obligation(s: Seeded, route: Route) {
+    return await s.t.run(async (ctx) => {
+      const table = route === "THROUGH_DEALERSHIP" ? "vehicleSupplierPayables" : "vehicleSupplierReceivables";
+      return (await ctx.db.query(table).collect()).find((row) => row.orgId === s.orgId && row.status !== "CANCELLED");
+    });
+  }
+
+  async function expectRepairedThenCompletes(route: Route) {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_${route}`, route);
+
+    // Before the repair: refused, with the truthful coded refusal, and the refused finalize wrote nothing.
+    await payForwardAsOwner(s, applicationId);
+    const before = await stateOf(s);
+    const refusal = await refusalDataOf(finalizeAsOwner(s, applicationId));
+    expect(refusal?.code).toBe(SUPPLIER_ERROR.CONCESSION_BASIS_UNBOUND);
+    expect(refusal?.message).toBe(SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE);
+    expect(await stateOf(s)).toEqual(before);
+
+    // The remedy the message names exists: the repair binds the basis to the vehicle's frozen supplier link.
+    expect(await repairConcessions(s)).toEqual({ repaired: 1, unresolved: 0 });
+    const app = await appOf(s, applicationId);
+    expect(app?.supplierGapBasis?.supplierId).toBe(s.supplierId);
+    expect(app?.supplierGapBasis?.supplierIdentityRepair).toMatchObject({ source: "VEHICLE_LINK", nameMatchedOn: "DISPLAY_NAME" });
+
+    await finalizeAsOwner(s, applicationId);
+    const row = await obligation(s, route);
+    expect(row?.supplierId).toBe(s.supplierId);
+    expect(row?.amountDue).toBe(route === "THROUGH_DEALERSHIP" ? 9_100 : 2_400);
+  }
+
+  test("THROUGH_DEALERSHIP: refused with the coded refusal until the repair binds the basis, then completes against the vehicle's supplier", () =>
+    expectRepairedThenCompletes("THROUGH_DEALERSHIP"));
+  test("DIRECT_TO_SUPPLIER: refused with the coded refusal until the repair binds the basis, then completes against the vehicle's supplier", () =>
+    expectRepairedThenCompletes("DIRECT_TO_SUPPLIER"));
+
+  test.each(ROUTES)("%s: a basis whose recorded supplier name is not the vehicle supplier's stays unbound, counted, and refused", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_name_${route}`, route);
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      await ctx.db.patch(applicationId, { supplierGapBasis: { ...app.supplierGapBasis!, supplierName: "Some Other Importer" } });
+    });
+    const before = await stateOf(s);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await stateOf(s)).toEqual(before);
+    expect((await refusalDataOf(finalizeAsOwner(s, applicationId)))?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    expect((await appOf(s, applicationId))?.finalizedSaleId).toBeUndefined();
+  });
+
+  test.each(ROUTES)("%s: a vehicle with no supplier link leaves the basis unbound, counted, and refused", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_nolink_${route}`, route);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourcedSupplierId: undefined }));
+    const before = await stateOf(s);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await stateOf(s)).toEqual(before);
+    expect((await refusalDataOf(finalizeAsOwner(s, applicationId)))?.code).toBeDefined();
+  });
+
+  test.each(ROUTES)("%s: a basis already bound to a supplier, even a wrong one, is never rewritten by the repair", async (route) => {
+    const s = await seed(`rep_basis_bound_${route}`);
+    const applicationId = await approvedDeal(s, route);
+    await resolve(s, applicationId, V3);
+    const before = await appOf(s, applicationId);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 0 });
+    expect((await appOf(s, applicationId))?.supplierGapBasis).toEqual(before?.supplierGapBasis);
+  });
+
+  async function countConcessions(s: Seeded) {
+    let cursor: string | null = null;
+    let unresolved = 0;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page: { status: "MORE" | "READY"; cursor: string | null; unresolved: number } = await s.t.query(
+        internal.supplierIdentityRepair.countPage,
+        { orgId: s.orgId, phase: "CONCESSIONS", cursor }
+      );
+      unresolved += page.unresolved;
+      if (page.status === "READY") return unresolved;
+      cursor = page.cursor;
+    }
+    throw new Error("the count never finished");
+  }
+
+  test.each(ROUTES)("%s: the counts-only check counts a held concession whose basis has no id, and no longer after the repair", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`cnt_basis_${route}`, route);
+    expect(await countConcessions(s)).toBe(1);
+    await repairConcessions(s);
+    expect(await countConcessions(s)).toBe(0);
+    expect((await appOf(s, applicationId))?.supplierGapBasis?.supplierId).toBe(s.supplierId);
+  });
+
+  test.each(ROUTES)("%s: a held concession with NO recorded basis at all is counted and stays unrepaired", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`cnt_nobasis_${route}`, route);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierGapBasis: undefined }));
+    expect(await countConcessions(s)).toBe(1);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await countConcessions(s)).toBe(1);
   });
 });
 // RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.

@@ -1,7 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { codeUnitCompare } from "./supplierNames";
+import { codeUnitCompare, normalizeNameKey } from "./supplierNames";
 import { requireOwnedRow } from "./tenancy";
 
 /**
@@ -60,13 +60,23 @@ export const SUPPLIER_ERROR = {
   LINK_FROZEN: "SUPPLIER_LINK_FROZEN",
   /** SCRUM-868 P2 (N9): a supplier id was sent in a role the vehicle's shape does not have. */
   ROLE_CONFLICT: "SUPPLIER_ROLE_CONFLICT",
+  /**
+   * SCRUM-868 P3 round 2: a supplier concession recorded before supplier ids existed, not yet bound to its
+   * supplier. Distinct from a stale basis because the remedy differs: re-recording is impossible after
+   * handover, and the release repair or a reviewed correction is the step that exists.
+   */
+  CONCESSION_BASIS_UNBOUND: "SUPPLIER_CONCESSION_BASIS_UNBOUND",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
 /** Same message for a missing and a foreign id: no existence oracle (TEN-1, invariant I2). */
 export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
-export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE = "Supplier identity is unresolved.";
+/** English equals the dictionary entry under ServerError_<code> (lib/i18n/domains/common.ts). */
+export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE =
+  "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.";
+export const SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE =
+  "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.";
 const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 export function throwSupplierError(
@@ -387,6 +397,44 @@ export async function ownedStoredSupplierId(
   if (storedId === undefined) return undefined;
   const row = await ctx.db.get("suppliers", storedId);
   return row !== null && row.orgId === orgId ? storedId : undefined;
+}
+
+/** The alias keys read for one name before the lookup gives up and treats it as no evidence (fail closed). */
+const ALIAS_EVIDENCE_READ_BOUND = 50;
+
+export type SupplierNameEvidence =
+  | { kind: "MATCH"; matchedOn: "DISPLAY_NAME" | "ALIAS"; version: number }
+  | { kind: "NOT_IN_ORG" }
+  | { kind: "NO_NAME_MATCH" };
+
+/**
+ * Whether `name` is the display name, or an ACTIVE or RETIRED alias, of a supplier of this organization
+ * (SCRUM-868 P3 release repair). Read-only; never throws and never writes. Corroboration only: the caller
+ * already holds the supplier id from a frozen vehicle link, and this never searches for a supplier BY name.
+ * An alias lookup that fills its read bound without finding this supplier counts as no evidence.
+ * Returns the master's current version so the caller can reject a snapshot version the master never reached.
+ */
+export async function supplierNameEvidence(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers">,
+  name: string,
+): Promise<SupplierNameEvidence> {
+  const supplier = await ctx.db.get("suppliers", supplierId);
+  if (!supplier || supplier.orgId !== orgId) return { kind: "NOT_IN_ORG" };
+  const key = normalizeNameKey(name);
+  if (key === "") return { kind: "NO_NAME_MATCH" };
+  if (supplier.displayNameKey === key) return { kind: "MATCH", matchedOn: "DISPLAY_NAME", version: supplier.version };
+  for (const status of ["ACTIVE", "RETIRED"] as const) {
+    const aliases = await ctx.db
+      .query("supplierAliases")
+      .withIndex("by_org_and_aliasKey_and_status", (q) => q.eq("orgId", orgId).eq("aliasKey", key).eq("status", status))
+      .take(ALIAS_EVIDENCE_READ_BOUND);
+    if (aliases.some((alias) => alias.supplierId === supplier._id)) {
+      return { kind: "MATCH", matchedOn: "ALIAS", version: supplier.version };
+    }
+  }
+  return { kind: "NO_NAME_MATCH" };
 }
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────

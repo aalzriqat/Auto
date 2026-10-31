@@ -34,6 +34,7 @@ import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import {
   SUPPLIER_ERROR,
+  SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE,
   SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
 } from "./utils/supplierRegistry";
 import {
@@ -882,7 +883,7 @@ describe("SCRUM-868 Phase 3: Concession basis compares supplierId (Author self-a
       sourcedSupplierId: s1Id,
     };
 
-    // 1. Basis without supplierId throws BASIS_STALE
+    // 1. Basis without supplierId (recorded before supplier ids existed) throws the coded, truthful BASIS_UNBOUND refusal
     expect(() =>
       resolveEffectiveEntitlementForCompletion({
         app: {
@@ -897,7 +898,7 @@ describe("SCRUM-868 Phase 3: Concession basis compares supplierId (Author self-a
         vehicle,
         currency: "JOD",
       })
-    ).toThrow(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    ).toThrow(SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE);
 
     // 2. Basis with mismatched supplierId throws BASIS_STALE
     expect(() =>
