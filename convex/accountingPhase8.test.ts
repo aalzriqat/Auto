@@ -284,11 +284,26 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
   test("cancelling a sourced sale is blocked after the supplier payable is paid", async () => {
     const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_supplier");
+    const supplierId = await t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId,
+        displayName: "Paid Supplier Dealer",
+        displayNameKey: "paid supplier dealer",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedBy: userId,
+        updatedAt: Date.now(),
+      })
+    );
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId, vin: "VIN_CANCEL_PAID_SUPPLIER", make: "Kia", model: "Sorento", year: 2023,
         mileage: 0, color: "Black", fuelType: "Petrol", transmission: "Automatic",
         sellingPrice: 22_000, sourceType: "SOURCED", sourcedFromName: "Paid Supplier Dealer",
+        sourcedSupplierId: supplierId,
         sourceCost: 18_000, status: "AVAILABLE",
       })
     );

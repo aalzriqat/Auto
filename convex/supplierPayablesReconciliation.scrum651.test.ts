@@ -77,11 +77,12 @@ let keySeq = 0;
 /** A COMPLETED consigned sale: the real SALE_COMPLETED posting credits AP-Suppliers and writes the payable. */
 async function sourcedSale(s: Seed, cost = 19_000) {
   const n = ++keySeq;
+  const supplierId = await supplierIdFor(s.t, s.orgId, "Partner Dealer");
   const vehicleId = await s.t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin: `VIN651_${n}`, make: "Nissan", model: "Patrol", year: 2023, mileage: 0, color: "White",
       fuelType: "Petrol", transmission: "Automatic", sellingPrice: cost + 5_000, sourceType: "SOURCED",
-      sourcedFromName: "Partner Dealer", sourceCost: cost, status: "AVAILABLE",
+      sourcedFromName: "Partner Dealer", sourcedSupplierId: supplierId, sourceCost: cost, status: "AVAILABLE",
     })
   );
   const saleId = await s.asUser.mutation(api.sales.create, {
@@ -131,11 +132,13 @@ const eventCount = (s: Seed, eventType: string) =>
   );
 
 /** A hand-seeded supplier payable (no writer reaches these shapes); defaults to a JOD row from an old dealer. */
-const insertPayable = (s: Seed, vehicleId: Id<"vehicles">, fields: Record<string, unknown>) => {
+const insertPayable = async (s: Seed, vehicleId: Id<"vehicles">, fields: Record<string, unknown>) => {
   const now = Date.now();
+  const supplierName = (fields.sourcedFromName as string | undefined) ?? "Old Dealer";
+  const supplierId = await supplierIdFor(s.t, s.orgId, supplierName);
   return s.t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId: s.orgId, vehicleId, sourcedFromName: "Old Dealer", currency: "JOD", createdBy: s.userId, createdAt: now, updatedAt: now,
+      orgId: s.orgId, vehicleId, sourcedFromName: supplierName, supplierId, currency: "JOD", createdBy: s.userId, createdAt: now, updatedAt: now,
       ...fields,
     } as never)
   );

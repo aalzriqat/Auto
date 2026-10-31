@@ -658,10 +658,25 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
       consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
       consignedMarginCurrency: "JOD",
     });
+    const supplierId = await s.t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId: s.orgId,
+        displayName: "Amman Importer Co",
+        displayNameKey: "amman importer co",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: s.userId,
+        createdAt: Date.now(),
+        updatedBy: s.userId,
+        updatedAt: Date.now(),
+      })
+    );
     const receivableId = await s.t.run((ctx) =>
       ctx.db.insert("vehicleSupplierReceivables", {
         orgId: s.orgId, vehicleId, saleId,
         sourcedFromName: "Amman Importer Co",
+        supplierId,
         amountDue: MARGIN, currency: "JOD", status: "OPEN",
         createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
       })
