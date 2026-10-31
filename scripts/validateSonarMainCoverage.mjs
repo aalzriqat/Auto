@@ -10,8 +10,10 @@
  * 5. Contains non-empty `lcov.info` within bounded size limits (<= 50 MiB).
  * 6. Passes all source allowlist and regular-file checks via `validateLcovSources.cjs`.
  * 7. Contains a full SF record census (>= minRecords) and execution DA lines.
- * 8. Live API admission verifies producer run ID, attempt, workflow path/ID, status,
- *    event, branch, complete pagination, and unique non-expired artifact binding.
+ * 8. Live API admission verifies producer run ID, workflow path/ID, status, event,
+ *    branch, the successful `unit-and-integration` job (and the attempt it really
+ *    ran in, which a re-run may have reused), complete pagination, and the unique
+ *    non-expired artifact created inside that job's window.
  *
  * Each admission rule is a small named helper so that every refusal stays
  * individually readable and testable (SonarSource S3776: extract function).
@@ -31,6 +33,8 @@ export const MAX_LCOV_BYTES = 52428800; // 50 MiB limit matching trusted PR Sona
 const ARTIFACTS_PER_PAGE = 100;
 const MAX_ARTIFACT_PAGES = 10;
 const SHA40 = /^[0-9a-f]{40}$/;
+// The Tests job that merges the slices and uploads `coverage-report`.
+const COVERAGE_JOB_NAME = "unit-and-integration";
 
 const VERIFY_PRODUCER_FLAGS = new Map([
   ["--token", "token"],
@@ -168,60 +172,158 @@ function assertRunOutcome(run, expectedSha) {
   return normalizedRunSha;
 }
 
-async function fetchArtifactsPage({ fetchImpl, repositoryPath, runId, headers, page }) {
-  const url = `https://api.github.com/repos/${repositoryPath}/actions/runs/${runId}/artifacts?per_page=${ARTIFACTS_PER_PAGE}&page=${page}`;
-  const data = await fetchGitHubJson(
-    fetchImpl,
-    url,
-    headers,
-    (status) => `Could not fetch artifacts for producer run ${runId} (HTTP ${status}).`
-  );
+async function fetchInventoryPage({ fetchImpl, headers, url, itemsKey, describeFailure }) {
+  const data = await fetchGitHubJson(fetchImpl, url, headers, describeFailure);
   failIf(
     typeof data.total_count !== "number",
-    "Refusing producer run: invalid artifacts API response, total_count is not a number.",
+    `Refusing producer run: invalid ${itemsKey} API response, total_count is not a number.`,
     TypeError
   );
   failIf(
-    !Array.isArray(data.artifacts),
-    "Refusing producer run: invalid artifacts API response, artifacts array missing.",
+    !Array.isArray(data[itemsKey]),
+    `Refusing producer run: invalid ${itemsKey} API response, ${itemsKey} array missing.`,
     TypeError
   );
-  return { totalCount: data.total_count, artifacts: data.artifacts };
+  return { totalCount: data.total_count, items: data[itemsKey] };
 }
 
-/** Fetches every artifact page (bounded) and refuses a truncated inventory. */
-async function fetchArtifactInventory(request) {
-  const allArtifacts = [];
+/**
+ * Fetches every page (bounded) of a GitHub list endpoint and refuses a
+ * truncated inventory. `pageUrl(page)` builds the request for one page.
+ */
+async function fetchInventory({ fetchImpl, headers, pageUrl, itemsKey, noun, describeFailure }) {
+  const allItems = [];
   let totalCount = null;
 
   for (let page = 1; page <= MAX_ARTIFACT_PAGES; page++) {
-    const current = await fetchArtifactsPage({ ...request, page });
+    const current = await fetchInventoryPage({ fetchImpl, headers, url: pageUrl(page), itemsKey, describeFailure });
     totalCount ??= current.totalCount;
-    allArtifacts.push(...current.artifacts);
+    allItems.push(...current.items);
 
-    if (allArtifacts.length >= totalCount || current.artifacts.length < ARTIFACTS_PER_PAGE) {
+    if (allItems.length >= totalCount || current.items.length < ARTIFACTS_PER_PAGE) {
       failIf(
-        allArtifacts.length < totalCount,
-        `Refusing producer run: incomplete artifact inventory (${allArtifacts.length} of ${totalCount} fetched).`
+        allItems.length < totalCount,
+        `Refusing producer run: incomplete ${noun} inventory (${allItems.length} of ${totalCount} fetched).`
       );
-      return allArtifacts;
+      return allItems;
     }
   }
   throw new Error(
-    `Refusing producer run: artifact pagination exceeded ${MAX_ARTIFACT_PAGES} pages (${allArtifacts.length}/${totalCount} fetched).`
+    `Refusing producer run: ${noun} pagination exceeded ${MAX_ARTIFACT_PAGES} pages (${allItems.length}/${totalCount} fetched).`
   );
 }
 
-/** Returns the id and size of the one unique, non-expired coverage-report artifact. */
-function selectCoverageArtifact(allArtifacts, runId) {
-  const matchingArtifacts = allArtifacts.filter((a) => a.name === "coverage-report" && !a.expired);
+function fetchArtifactInventory({ fetchImpl, repositoryPath, runId, headers }) {
+  return fetchInventory({
+    fetchImpl,
+    headers,
+    itemsKey: "artifacts",
+    noun: "artifact",
+    pageUrl: (page) =>
+      `https://api.github.com/repos/${repositoryPath}/actions/runs/${runId}/artifacts?per_page=${ARTIFACTS_PER_PAGE}&page=${page}`,
+    describeFailure: (status) => `Could not fetch artifacts for producer run ${runId} (HTTP ${status}).`,
+  });
+}
+
+/**
+ * Lists the jobs of EVERY attempt of the run (`filter=all`). The default
+ * (`latest`) would hide the attempt in which the coverage job really ran.
+ */
+function fetchJobInventory({ fetchImpl, repositoryPath, runId, headers }) {
+  return fetchInventory({
+    fetchImpl,
+    headers,
+    itemsKey: "jobs",
+    noun: "job",
+    pageUrl: (page) =>
+      `https://api.github.com/repos/${repositoryPath}/actions/runs/${runId}/jobs?filter=all&per_page=${ARTIFACTS_PER_PAGE}&page=${page}`,
+    describeFailure: (status) => `Could not fetch jobs for producer run ${runId} (HTTP ${status}).`,
+  });
+}
+
+/** Reads a job record's attempt number, refusing anything but a positive integer. */
+function readJobAttempt(job) {
+  const attempt = Number(job.run_attempt);
+  failIf(
+    !isPositiveInteger(attempt),
+    `Refusing producer run: a '${COVERAGE_JOB_NAME}' job record has an invalid run_attempt '${job.run_attempt}'.`
+  );
+  return attempt;
+}
+
+/** Returns the job's execution window in epoch milliseconds, refusing a missing or inverted one. */
+function readJobWindow(job) {
+  const startMs = typeof job.started_at === "string" ? Date.parse(job.started_at) : Number.NaN;
+  const endMs = typeof job.completed_at === "string" ? Date.parse(job.completed_at) : Number.NaN;
+  failIf(
+    Number.isNaN(startMs) || Number.isNaN(endMs) || startMs > endMs,
+    `Refusing producer run: the '${COVERAGE_JOB_NAME}' job has no valid started_at/completed_at window.`
+  );
+  return { startMs, endMs, startedAt: job.started_at, completedAt: job.completed_at };
+}
+
+/**
+ * Finds the execution of the `unit-and-integration` job that produced
+ * `coverage-report` and the attempt it ran in (SCRUM-764 M1).
+ *
+ * "Re-run failed jobs" lists a reused copy of a passed job in the new attempt
+ * with the same started_at/completed_at as the original, so the run's own
+ * `run_attempt` is not the attempt that uploaded the artifact. The execution is
+ * the newest job record, which must have succeeded; its attempt is the oldest
+ * record that shares its window. Anything ambiguous is refused.
+ */
+function selectCoverageProducerJob(allJobs, runId, runAttempt) {
+  const records = allJobs
+    .filter((job) => job.name === COVERAGE_JOB_NAME)
+    .map((job) => ({ job, attempt: readJobAttempt(job) }));
+  failIf(
+    records.length === 0,
+    `Refusing producer run: no '${COVERAGE_JOB_NAME}' job found for producer run ${runId}.`
+  );
+  const newestAttempt = Math.max(...records.map((record) => record.attempt));
+  const newest = records.filter((record) => record.attempt === newestAttempt);
+  failIf(
+    newest.length > 1,
+    `Refusing producer run: more than one '${COVERAGE_JOB_NAME}' job record for attempt ${newestAttempt}; expected exactly one.`
+  );
+  failIf(
+    newestAttempt > runAttempt,
+    `Refusing producer run: '${COVERAGE_JOB_NAME}' job attempt ${newestAttempt} is newer than the run attempt ${runAttempt}.`
+  );
+  const { job: latest } = newest[0];
+  failIf(
+    latest.status !== "completed" || latest.conclusion !== "success",
+    `Refusing producer run: the latest '${COVERAGE_JOB_NAME}' job (attempt ${newestAttempt}) must be completed with conclusion 'success', got status '${latest.status}' and conclusion '${latest.conclusion}'.`
+  );
+  const window = readJobWindow(latest);
+  const sameExecution = records.filter(
+    (record) => record.job.started_at === latest.started_at && record.job.completed_at === latest.completed_at
+  );
+  return { producerAttempt: Math.min(...sameExecution.map((record) => record.attempt)), window };
+}
+
+function isCreatedInsideWindow(artifact, window) {
+  const createdMs = typeof artifact.created_at === "string" ? Date.parse(artifact.created_at) : Number.NaN;
+  return createdMs >= window.startMs && createdMs <= window.endMs;
+}
+
+/**
+ * Returns the id and size of the one unique, non-expired coverage-report
+ * artifact that was created while the successful coverage job ran. Artifacts
+ * of the same name from other attempts fall outside that window.
+ */
+function selectCoverageArtifact(allArtifacts, runId, window) {
+  const matchingArtifacts = allArtifacts.filter(
+    (a) => a.name === "coverage-report" && !a.expired && isCreatedInsideWindow(a, window)
+  );
+  const windowText = `created inside the successful '${COVERAGE_JOB_NAME}' job window (${window.startedAt} to ${window.completedAt})`;
   failIf(
     matchingArtifacts.length === 0,
-    `Refusing producer run: no non-expired 'coverage-report' artifact found for run ${runId}.`
+    `Refusing producer run: no non-expired 'coverage-report' artifact found for run ${runId} ${windowText}.`
   );
   failIf(
     matchingArtifacts.length > 1,
-    `Refusing producer run: multiple (${matchingArtifacts.length}) non-expired 'coverage-report' artifacts found for run ${runId}; expected unique artifact.`
+    `Refusing producer run: multiple (${matchingArtifacts.length}) non-expired 'coverage-report' artifacts found for run ${runId}; expected unique artifact ${windowText}.`
   );
   const verifiedArtifact = matchingArtifacts[0];
 
@@ -286,14 +388,22 @@ export async function verifyProducerRun({
   assertRunOrigin(run, { repo, expectedEvent });
   const normalizedRunSha = assertRunOutcome(run, expectedSha);
 
-  // 3. Fetch and verify unique non-expired coverage-report artifact with complete pagination
+  // 3. Find the execution of the coverage job and the attempt it ran in. A re-run reuses a passed
+  //    job, so the run's latest attempt is not necessarily the attempt that produced the artifact.
+  const allJobs = await fetchJobInventory({ fetchImpl, repositoryPath, runId, headers });
+  const { producerAttempt, window } = selectCoverageProducerJob(allJobs, runId, numericRunAttempt);
+
+  // 4. Fetch and verify the unique non-expired coverage-report artifact created inside that job's
+  //    window, with complete pagination
   const allArtifacts = await fetchArtifactInventory({ fetchImpl, repositoryPath, runId, headers });
-  const { artifactId, artifactSizeBytes } = selectCoverageArtifact(allArtifacts, runId);
+  const { artifactId, artifactSizeBytes } = selectCoverageArtifact(allArtifacts, runId, window);
 
   return {
     verified: true,
     runId: numericRunId,
-    runAttempt: numericRunAttempt,
+    // The attempt in which the coverage job executed; the manifest's run_attempt must equal it.
+    runAttempt: producerAttempt,
+    latestRunAttempt: numericRunAttempt,
     headSha: normalizedRunSha,
     workflowId: run.workflow_id,
     workflowPath: run.path,
@@ -671,9 +781,30 @@ export async function main(argv = process.argv.slice(2), fetchImpl = fetch) {
   return runValidateArtifact(argv[0] === "validate-artifact" ? argv.slice(1) : argv);
 }
 
-/** True when this module is the script node was started with (not an import). */
+/** Resolves links in a path; a path that cannot be resolved (for example one that does not exist) stays as given. */
+function realPathOrSelf(absolutePath) {
+  try {
+    return fs.realpathSync(absolutePath);
+  } catch {
+    return absolutePath;
+  }
+}
+
+/**
+ * True when this module is the script node was started with (not an import).
+ *
+ * Node resolves links in `import.meta.url` but leaves `process.argv[1]` as the
+ * caller typed it, so a script launched through a symlink or junction must be
+ * compared by its real path. Comparing only the unresolved path made the CLI a
+ * silent no-op (exit 0) behind a link (SCRUM-764 B1). The unresolved path is
+ * still accepted, which is what `--preserve-symlinks-main` produces.
+ */
 export function isEntrypoint(scriptPath, moduleUrl) {
-  return Boolean(scriptPath) && moduleUrl === pathToFileURL(path.resolve(scriptPath)).href;
+  if (!scriptPath) {
+    return false;
+  }
+  const absolutePath = path.resolve(scriptPath);
+  return [absolutePath, realPathOrSelf(absolutePath)].some((candidate) => pathToFileURL(candidate).href === moduleUrl);
 }
 
 /** Runs the CLI and turns an unexpected rejection into exit code 1. */

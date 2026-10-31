@@ -91,6 +91,43 @@ end_of_record
   return { bytes, sha256 };
 }
 
+/** The window of the one successful `unit-and-integration` job that uploads `coverage-report`. */
+const JOB_STARTED = "2026-10-31T10:00:00Z";
+const JOB_COMPLETED = "2026-10-31T10:10:00Z";
+const IN_WINDOW = "2026-10-31T10:09:00Z";
+
+type MockArtifact = {
+  id: number;
+  name: string;
+  size_in_bytes: number;
+  expired: boolean;
+  created_at?: string | null;
+};
+
+type MockJob = {
+  id: number;
+  name: string;
+  run_attempt: number;
+  status: string;
+  conclusion: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+/** One record of the coverage job, as the jobs API (`filter=all`) lists it for an attempt. */
+function producerJob(attempt: number, overrides: Partial<MockJob> = {}): MockJob {
+  return {
+    id: 9000 + attempt,
+    name: "unit-and-integration",
+    run_attempt: attempt,
+    status: "completed",
+    conclusion: "success",
+    started_at: JOB_STARTED,
+    completed_at: JOB_COMPLETED,
+    ...overrides,
+  };
+}
+
 function createMockFetch(overrides: {
   workflow?: Partial<{ id: number; name: string; path: string; state: string }>;
   run?: Partial<{
@@ -106,8 +143,10 @@ function createMockFetch(overrides: {
     run_attempt: number;
     head_repository: { full_name: string };
   }>;
-  artifacts?: Array<{ id: number; name: string; size_in_bytes: number; expired: boolean }>;
+  artifacts?: MockArtifact[];
   artifactsTotalCount?: number;
+  jobs?: MockJob[];
+  jobsTotalCount?: number;
 } = {}) {
   const workflowData = {
     id: 998877,
@@ -130,10 +169,13 @@ function createMockFetch(overrides: {
     head_repository: { full_name: "aalzriqat/Auto" },
     ...overrides.run,
   };
-  const artifacts = overrides.artifacts ?? [
-    { id: 554433, name: "coverage-report", size_in_bytes: 12345, expired: false },
-  ];
+  // An artifact that states no created_at is uploaded inside the default producer job window.
+  const artifacts = (
+    overrides.artifacts ?? [{ id: 554433, name: "coverage-report", size_in_bytes: 12345, expired: false }]
+  ).map((artifact) => ("created_at" in artifact ? artifact : { ...artifact, created_at: IN_WINDOW }));
   const totalCount = overrides.artifactsTotalCount ?? artifacts.length;
+  const jobs = overrides.jobs ?? [producerJob(1)];
+  const jobsTotalCount = overrides.jobsTotalCount ?? jobs.length;
 
   return (async (url: string | URL) => {
     const urlStr = String(url);
@@ -142,6 +184,13 @@ function createMockFetch(overrides: {
         ok: true,
         status: 200,
         json: async () => workflowData,
+      };
+    }
+    if (/\/actions\/runs\/\d+\/jobs/.test(urlStr)) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ total_count: jobsTotalCount, jobs }),
       };
     }
     if (urlStr.includes("/artifacts")) {
@@ -955,7 +1004,7 @@ describe("verifyProducerRun", () => {
 
     it("reads every page with the bearer token and finds the artifact on the later page", async () => {
       const requests: string[] = [];
-      const wanted = { id: 777, name: "coverage-report", size_in_bytes: 4096, expired: false };
+      const wanted = { id: 777, name: "coverage-report", size_in_bytes: 4096, expired: false, created_at: IN_WINDOW };
       const fetchImpl = artifactsFetch(
         (page) => ({
           total_count: 101,
@@ -983,7 +1032,8 @@ describe("verifyProducerRun", () => {
 
       await verify(fetchImpl);
 
-      expect(seen).toHaveLength(3);
+      // workflow definition, producer run, producer jobs, artifact inventory
+      expect(seen).toHaveLength(4);
       for (const headers of seen) {
         expect(headers.authorization).toBe("Bearer dummy");
         expect(headers.accept).toBe("application/vnd.github+json");
@@ -1002,6 +1052,289 @@ describe("verifyProducerRun", () => {
       );
       expect(requests).toHaveLength(10);
     });
+  });
+});
+
+describe("verifyProducerRun producer job and attempt binding (SCRUM-764 M1)", () => {
+  const SECOND_STARTED = "2026-10-31T11:00:00Z";
+  const SECOND_COMPLETED = "2026-10-31T11:10:00Z";
+  const SECOND_IN_WINDOW = "2026-10-31T11:09:00Z";
+
+  const coverage = (id: number, createdAt: string | null = IN_WINDOW): MockArtifact => ({
+    id,
+    name: "coverage-report",
+    size_in_bytes: 4096,
+    expired: false,
+    created_at: createdAt,
+  });
+
+  const verify = (overrides: Parameters<typeof createMockFetch>[0]) =>
+    verifyProducerRun({
+      token: "dummy",
+      repo: "aalzriqat/Auto",
+      runId: 12345,
+      expectedSha: VALID_SHA,
+      fetchImpl: createMockFetch(overrides),
+    });
+
+  it("binds to the attempt that executed the coverage job after Re-run failed jobs reused it", async () => {
+    // Live shape (run 40799037554): attempt 2 lists a reused copy of the attempt-1 job with the same window.
+    const res = await verify({
+      run: { run_attempt: 2 },
+      jobs: [producerJob(1), producerJob(2)],
+      artifacts: [coverage(701)],
+    });
+
+    expect(res.runAttempt).toBe(1);
+    expect(res.artifactId).toBe(701);
+  });
+
+  it("binds to the original attempt when the job was reused more than once", async () => {
+    const res = await verify({
+      run: { run_attempt: 3 },
+      jobs: [producerJob(1), producerJob(2), producerJob(3)],
+      artifacts: [coverage(701)],
+    });
+
+    expect(res.runAttempt).toBe(1);
+  });
+
+  it("selects the new artifact after Re-run all jobs left one artifact per attempt", async () => {
+    const res = await verify({
+      run: { run_attempt: 2 },
+      jobs: [
+        producerJob(1),
+        producerJob(2, { started_at: SECOND_STARTED, completed_at: SECOND_COMPLETED }),
+      ],
+      artifacts: [coverage(701), coverage(702, SECOND_IN_WINDOW)],
+    });
+
+    expect(res.runAttempt).toBe(2);
+    expect(res.artifactId).toBe(702);
+  });
+
+  it("ignores the artifact a failed first attempt uploaded before the job was re-run", async () => {
+    const res = await verify({
+      run: { run_attempt: 2 },
+      jobs: [
+        producerJob(1, { conclusion: "failure" }),
+        producerJob(2, { started_at: SECOND_STARTED, completed_at: SECOND_COMPLETED }),
+      ],
+      artifacts: [coverage(701), coverage(702, SECOND_IN_WINDOW)],
+    });
+
+    expect(res.runAttempt).toBe(2);
+    expect(res.artifactId).toBe(702);
+  });
+
+  it("accepts an artifact created exactly at the start or the end of the job window", async () => {
+    for (const edge of [JOB_STARTED, JOB_COMPLETED]) {
+      const res = await verify({ jobs: [producerJob(1)], artifacts: [coverage(701, edge)] });
+      expect(res.artifactId).toBe(701);
+    }
+  });
+
+  it("ignores the per-slice jobs and other jobs whose name only starts with the coverage job name", async () => {
+    const res = await verify({
+      jobs: [
+        producerJob(1, { id: 1, name: "unit-and-integration slice 1/4", conclusion: "failure" }),
+        producerJob(1, { id: 2, name: "unit-and-integration-extra", conclusion: "failure" }),
+        producerJob(1),
+      ],
+    });
+
+    expect(res.runAttempt).toBe(1);
+  });
+
+  it("still refuses two coverage-report artifacts uploaded inside the same job window", async () => {
+    await expect(verify({ artifacts: [coverage(701), coverage(702)] })).rejects.toThrow(
+      "multiple (2) non-expired 'coverage-report' artifacts found for run 12345",
+    );
+  });
+
+  it("refuses when the only artifact predates the successful job (a stale attempt)", async () => {
+    await expect(
+      verify({
+        run: { run_attempt: 2 },
+        jobs: [
+          producerJob(1),
+          producerJob(2, { started_at: SECOND_STARTED, completed_at: SECOND_COMPLETED }),
+        ],
+        artifacts: [coverage(701)],
+      }),
+    ).rejects.toThrow("no non-expired 'coverage-report' artifact found for run 12345");
+  });
+
+  it("refuses an artifact created after the job completed", async () => {
+    await expect(verify({ artifacts: [coverage(701, "2026-10-31T10:10:01Z")] })).rejects.toThrow(
+      "no non-expired 'coverage-report' artifact found for run 12345",
+    );
+  });
+
+  it("refuses an artifact that carries no usable creation time", async () => {
+    for (const createdAt of [null, "not-a-date", ""]) {
+      await expect(verify({ artifacts: [coverage(701, createdAt)] })).rejects.toThrow(
+        "no non-expired 'coverage-report' artifact found for run 12345",
+      );
+    }
+  });
+
+  it("refuses when the run has no coverage job at all", async () => {
+    await expect(
+      verify({ jobs: [producerJob(1, { name: "unit-and-integration slice 1/4" })] }),
+    ).rejects.toThrow("no 'unit-and-integration' job found for producer run 12345");
+  });
+
+  it.each([
+    ["failed", { conclusion: "failure" }],
+    ["cancelled", { conclusion: "cancelled" }],
+    ["skipped", { conclusion: "skipped" }],
+    ["unfinished", { status: "in_progress", conclusion: null }],
+  ])("refuses when the newest coverage job record is %s", async (_label, jobOverride) => {
+    await expect(verify({ jobs: [producerJob(1, jobOverride)] })).rejects.toThrow(
+      "Refusing producer run: the latest 'unit-and-integration' job (attempt 1) must be completed with conclusion 'success'",
+    );
+  });
+
+  it("refuses when a later attempt failed the coverage job even though an earlier attempt passed it", async () => {
+    await expect(
+      verify({
+        run: { run_attempt: 2 },
+        jobs: [producerJob(1), producerJob(2, { conclusion: "failure", started_at: SECOND_STARTED, completed_at: SECOND_COMPLETED })],
+        artifacts: [coverage(701)],
+      }),
+    ).rejects.toThrow("the latest 'unit-and-integration' job (attempt 2) must be completed with conclusion 'success'");
+  });
+
+  it("refuses two coverage job records for the same attempt (ambiguous)", async () => {
+    await expect(verify({ jobs: [producerJob(1), producerJob(1, { id: 9999 })] })).rejects.toThrow(
+      "more than one 'unit-and-integration' job record for attempt 1",
+    );
+  });
+
+  it("refuses a coverage job from an attempt newer than the run's attempt", async () => {
+    await expect(verify({ run: { run_attempt: 1 }, jobs: [producerJob(2)] })).rejects.toThrow(
+      "'unit-and-integration' job attempt 2 is newer than the run attempt 1",
+    );
+  });
+
+  it.each([
+    ["no start time", { started_at: null }],
+    ["no completion time", { completed_at: null }],
+    ["an unparseable start time", { started_at: "yesterday" }],
+    ["a window that ends before it starts", { started_at: JOB_COMPLETED, completed_at: JOB_STARTED }],
+  ])("refuses a coverage job with %s", async (_label, jobOverride) => {
+    await expect(verify({ jobs: [producerJob(1, jobOverride)] })).rejects.toThrow(
+      "the 'unit-and-integration' job has no valid started_at/completed_at window",
+    );
+  });
+
+  it.each([
+    ["a non-integer attempt", { run_attempt: 1.5 }],
+    ["a zero attempt", { run_attempt: 0 }],
+    ["a missing attempt", { run_attempt: undefined as unknown as number }],
+  ])("refuses a coverage job record with %s", async (_label, jobOverride) => {
+    await expect(verify({ jobs: [producerJob(1, jobOverride)] })).rejects.toThrow(
+      "'unit-and-integration' job record has an invalid run_attempt",
+    );
+  });
+
+  describe("jobs inventory API", () => {
+    function jobsFetch(respond: (page: number) => unknown, requests: string[] = []): typeof fetch {
+      const base = createMockFetch();
+      return (async (url: string | URL, init?: RequestInit) => {
+        const urlStr = String(url);
+        if (!/\/actions\/runs\/\d+\/jobs/.test(urlStr)) {
+          return base(url, init);
+        }
+        requests.push(urlStr);
+        const body = respond(Number(new URL(urlStr).searchParams.get("page")));
+        if (typeof body === "number") {
+          return { ok: false, status: body, json: async () => ({}) };
+        }
+        return { ok: true, status: 200, json: async () => body };
+      }) as unknown as typeof fetch;
+    }
+
+    const run = (fetchImpl: typeof fetch) =>
+      verifyProducerRun({ token: "dummy", repo: "aalzriqat/Auto", runId: 12345, expectedSha: VALID_SHA, fetchImpl });
+
+    it("asks for the jobs of every attempt, not only the latest", async () => {
+      const requests: string[] = [];
+      await run(jobsFetch(() => ({ total_count: 1, jobs: [producerJob(1)] }), requests));
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toContain("/actions/runs/12345/jobs?filter=all&per_page=100&page=1");
+    });
+
+    it("refuses when the job listing cannot be fetched", async () => {
+      await expect(run(jobsFetch(() => 502))).rejects.toThrow(
+        "Could not fetch jobs for producer run 12345 (HTTP 502).",
+      );
+    });
+
+    it("refuses with a TypeError when the job listing is malformed", async () => {
+      const noCount = await run(jobsFetch(() => ({ total_count: "1", jobs: [] }))).catch((e: unknown) => e);
+      expect(noCount).toBeInstanceOf(TypeError);
+      expect((noCount as Error).message).toBe(
+        "Refusing producer run: invalid jobs API response, total_count is not a number.",
+      );
+
+      const noJobs = await run(jobsFetch(() => ({ total_count: 1 }))).catch((e: unknown) => e);
+      expect(noJobs).toBeInstanceOf(TypeError);
+      expect((noJobs as Error).message).toBe("Refusing producer run: invalid jobs API response, jobs array missing.");
+    });
+
+    it("refuses a truncated job inventory", async () => {
+      await expect(run(jobsFetch(() => ({ total_count: 150, jobs: [producerJob(1)] })))).rejects.toThrow(
+        "incomplete job inventory (1 of 150 fetched)",
+      );
+    });
+
+    it("reads every job page and finds the coverage job on the later page", async () => {
+      const requests: string[] = [];
+      const filler = Array.from({ length: 100 }, (_, i) => producerJob(1, { id: 100 + i, name: `other-${i}` }));
+      const res = await run(
+        jobsFetch((page) => ({ total_count: 101, jobs: page === 1 ? filler : [producerJob(1)] }), requests),
+      );
+
+      expect(res.runAttempt).toBe(1);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toContain("per_page=100&page=2");
+    });
+  });
+
+  it("hands the producer attempt to coverage validation, so a reused coverage job still admits its manifest", async () => {
+    const producer = await verify({
+      run: { run_attempt: 2 },
+      jobs: [producerJob(1), producerJob(2)],
+      artifacts: [coverage(701)],
+    });
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      // The manifest records GITHUB_RUN_ATTEMPT of the attempt that actually ran the job.
+      writeValidArtifact(coverageDir, VALID_SHA, { run_attempt: 1 });
+      const res = validateSonarMainCoverage({
+        coverageDir,
+        checkoutRoot: root,
+        expectedSha: VALID_SHA,
+        producerContext: { ...producer },
+      });
+      expect(res.runAttempt).toBe(1);
+
+      // A manifest that names the re-run attempt did not come from the reused job.
+      writeValidArtifact(coverageDir, VALID_SHA, { run_attempt: 2 });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: { ...producer },
+        }),
+      ).toThrow("manifest run_attempt '2' does not match trusted producer run_attempt '1'");
+    } finally {
+      cleanup();
+    }
   });
 });
 
@@ -1140,6 +1473,20 @@ describe("validateSonarMainCoverage refusal branches", () => {
       },
       override,
     );
+  });
+
+  it("refuses lcov.info content of the same byte length through the SHA-256 check alone", () => {
+    withArtifact((fixture) => {
+      const lcovPath = path.join(fixture.coverageDir, "lcov.info");
+      const original = fs.readFileSync(lcovPath, "utf8");
+      // Same length, same SF and DA counts, different content: only the digest can see it.
+      const substituted = original.replace("DA:1,1", "DA:1,9");
+      expect(Buffer.byteLength(substituted)).toBe(Buffer.byteLength(original));
+      expect(substituted).not.toBe(original);
+      fs.writeFileSync(lcovPath, substituted);
+
+      expect(() => validate(fixture)).toThrow(/lcov\.info SHA-256 '[0-9a-f]{64}' does not match manifest '[0-9a-f]{64}'/);
+    });
   });
 
   it("refuses a missing lcov.info", () => {
@@ -1458,6 +1805,59 @@ describe("validateSonarMainCoverage entrypoint", () => {
     expect(isEntrypoint(script, moduleUrl)).toBe(true);
     expect(isEntrypoint(path.resolve(__dirname, "other.mjs"), moduleUrl)).toBe(false);
     expect(isEntrypoint(undefined, moduleUrl)).toBe(false);
+  });
+
+  /**
+   * Makes a directory link (a junction on Windows, a symlink elsewhere) that
+   * points at the real scripts directory. Node resolves links in
+   * `import.meta.url` but leaves `process.argv[1]` unresolved, so a script
+   * launched through a link is a different string from its own module URL.
+   */
+  function withScriptsDirectoryLink(run: (linkedScript: string) => void): void {
+    const holder = fs.mkdtempSync(path.join(os.tmpdir(), "sonar-entry-link-"));
+    try {
+      const link = path.join(holder, "linked-scripts");
+      fs.symlinkSync(__dirname, link, "junction");
+      run(path.join(link, "validateSonarMainCoverage.mjs"));
+    } finally {
+      fs.rmSync(holder, { recursive: true, force: true });
+    }
+  }
+
+  it("B1: recognises its own script when it is launched through a directory link", () => {
+    withScriptsDirectoryLink((linkedScript) => {
+      // import.meta.url always carries the resolved real path.
+      const moduleUrl = pathToFileURL(fs.realpathSync(script)).href;
+
+      expect(path.resolve(linkedScript)).not.toBe(fs.realpathSync(script));
+      expect(isEntrypoint(linkedScript, moduleUrl)).toBe(true);
+    });
+  });
+
+  it("B1: a link to a different script is still not the entrypoint", () => {
+    withScriptsDirectoryLink((linkedScript) => {
+      const otherUrl = pathToFileURL(path.resolve(__dirname, "validateLcovSources.cjs")).href;
+
+      expect(isEntrypoint(linkedScript, otherUrl)).toBe(false);
+    });
+  });
+
+  it("B1: a script path that does not exist is not the entrypoint and does not throw", () => {
+    const missing = path.join(os.tmpdir(), "sonar-entry-missing", "validateSonarMainCoverage.mjs");
+
+    expect(isEntrypoint(missing, pathToFileURL(script).href)).toBe(false);
+  });
+
+  it("B1: the script launched through a directory link still runs and exits 1 with usage", () => {
+    withScriptsDirectoryLink((linkedScript) => {
+      const noArguments = spawnSync(process.execPath, [linkedScript], { encoding: "utf8" });
+      expect(noArguments.status).toBe(1);
+      expect(noArguments.stderr).toContain("usage:");
+
+      const verify = spawnSync(process.execPath, [linkedScript, "verify-producer"], { encoding: "utf8" });
+      expect(verify.status).toBe(1);
+      expect(verify.stderr).toContain("verifyProducerRun requires token, repo, runId, and expectedSha.");
+    });
   });
 
   it("runAsScript passes the exit code through", async () => {

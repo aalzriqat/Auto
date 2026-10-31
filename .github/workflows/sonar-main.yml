@@ -92,6 +92,49 @@ jobs:
           echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
+      # Fail closed before anything is downloaded. If the admission script did not
+      # run to completion (for example it was started through a link and exited
+      # without doing its work), `artifact_id` is empty, and `download-artifact`
+      # treats an empty `artifact-ids` as "download every artifact of the run".
+      # Nothing downstream checks the Tests conclusion, so this step must.
+      - name: Require an admitted coverage artifact before download
+        env:
+          ARTIFACT_ID: ${{ steps.admission.outputs.artifact_id }}
+          RUN_ID: ${{ steps.admission.outputs.run_id }}
+          TARGET_SHA: ${{ steps.admission.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+
+          for value in "$ARTIFACT_ID" "$RUN_ID"; do
+            if ! [[ "$value" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::Admission did not produce a positive integer artifact id and run id; refusing to download."
+              exit 1
+            fi
+          done
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Admission did not produce a 40-character target SHA; refusing to download."
+            exit 1
+          fi
+          if [ ! -s "$RUNNER_TEMP/producer-context.json" ]; then
+            echo "::error::Admission did not write $RUNNER_TEMP/producer-context.json; refusing to download."
+            exit 1
+          fi
+
+          # The verified context must name the same artifact, run and commit as the step outputs.
+          CONTEXT_FILE="$RUNNER_TEMP/producer-context.json" node -e '
+            const fs = require("node:fs");
+            const context = JSON.parse(fs.readFileSync(process.env.CONTEXT_FILE, "utf8"));
+            const mismatches = [];
+            if (context.verified !== true) mismatches.push("verified");
+            if (String(context.artifactId) !== process.env.ARTIFACT_ID) mismatches.push("artifactId");
+            if (String(context.runId) !== process.env.RUN_ID) mismatches.push("runId");
+            if (String(context.headSha).toLowerCase() !== process.env.TARGET_SHA.toLowerCase()) mismatches.push("headSha");
+            if (mismatches.length > 0) {
+              console.error("::error::Admission context disagrees with the step outputs on: " + mismatches.join(", "));
+              process.exit(1);
+            }
+          '
+
       - name: Checkout admitted target commit as data only
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

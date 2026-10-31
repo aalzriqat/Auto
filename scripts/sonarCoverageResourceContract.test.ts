@@ -194,10 +194,38 @@ describe("Sonar coverage resource contract", () => {
     expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.scm.revision=");
     expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.branch.name=main");
 
+    // Step 3b (SCRUM-764 B1): an empty `artifact-ids` makes download-artifact fetch EVERY artifact of the
+    // run, so a fail-closed step must prove admission produced real outputs before anything is downloaded.
+    const guard = scan.steps.find((s) => s.name === "Require an admitted coverage artifact before download");
+    expect(guard).toBeDefined();
+    expect(guard?.env).toMatchObject({
+      ARTIFACT_ID: "${{ steps.admission.outputs.artifact_id }}",
+      RUN_ID: "${{ steps.admission.outputs.run_id }}",
+      TARGET_SHA: "${{ steps.admission.outputs.target_sha }}",
+    });
+    expect(guard?.run).toContain("set -euo pipefail");
+    expect(guard?.run).toContain('for value in "$ARTIFACT_ID" "$RUN_ID"');
+    expect(guard?.run).toContain("^[1-9][0-9]*$");
+    expect(guard?.run).toContain("^[0-9a-fA-F]{40}$");
+    expect(guard?.run).toContain('[ ! -s "$RUNNER_TEMP/producer-context.json" ]');
+    expect(guard?.run).toContain('String(context.artifactId) !== process.env.ARTIFACT_ID');
+    expect(guard?.run).toContain('String(context.runId) !== process.env.RUN_ID');
+    expect(guard?.run).toContain("process.exit(1)");
+    for (const name of [
+      "Verify producer run and admission provenance",
+      "Require an admitted coverage artifact before download",
+      "Download coverage report from Tests",
+      "Validate coverage artifact provenance and census",
+    ]) {
+      const step = scan.steps.find((s) => s.name === name) as { "continue-on-error"?: unknown } | undefined;
+      expect(step?.["continue-on-error"], `${name} must not continue on error`).toBeUndefined();
+    }
+
     // Strict trust-order verification:
     // Trusted controller checkout (1) -> Admission verification (2) -> Candidate checkout (3) -> Install (6) -> Scan (7)
     const idxTrusted = stepNames.indexOf("Checkout immutable trusted controller");
     const idxAdmission = stepNames.indexOf("Verify producer run and admission provenance");
+    const idxGuard = stepNames.indexOf("Require an admitted coverage artifact before download");
     const idxCandidate = stepNames.indexOf("Checkout admitted target commit as data only");
     const idxDownload = stepNames.indexOf("Download coverage report from Tests");
     const idxValidate = stepNames.indexOf("Validate coverage artifact provenance and census");
@@ -206,6 +234,8 @@ describe("Sonar coverage resource contract", () => {
 
     expect(idxTrusted).toBe(0);
     expect(idxTrusted).toBeLessThan(idxAdmission);
+    expect(idxAdmission).toBeLessThan(idxGuard);
+    expect(idxGuard).toBeLessThan(idxDownload);
     expect(idxAdmission).toBeLessThan(idxCandidate);
     expect(idxCandidate).toBeLessThan(idxDownload);
     expect(idxDownload).toBeLessThan(idxValidate);
