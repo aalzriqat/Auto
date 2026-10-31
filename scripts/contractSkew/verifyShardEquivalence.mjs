@@ -19,7 +19,7 @@
 import { parseArgs } from "node:util";
 import { assertSafeRevision, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { resolveInside } from "./baselineFile.mjs";
-import { BASELINE_DIRECTORY, LEGACY_BASELINE_FILE, buildShardFiles, canonicalJson, entrySetDifferences, identityOf, readShardFiles, shardNameFor } from "./baselineShards.mjs";
+import { BASELINE_DIRECTORY, LEGACY_BASELINE_FILE, buildShardFiles, canonicalJson, entrySetDifferences, identityOf, shardNameFor } from "./baselineShards.mjs";
 import { loadBaseline } from "./baseline.mjs";
 import { entriesOfLegacyText } from "./shardBaseline.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
@@ -67,19 +67,18 @@ function compare(legacy, directory, origin, io, label) {
     return EXIT_NOT_EQUIVALENT;
   }
   const difference = entrySetDifferences(legacy, loaded.entries);
-  const read = readShardFiles(directory);
-  if (!read.ok) throw new Error(read.problem);
-  const regenerated = buildShardFiles(legacy, read.files);
+  const onDisk = loaded.files;
+  const regenerated = buildShardFiles(legacy, onDisk);
   const regenerationDiffers = [
-    ...[...regenerated].filter(([name, text]) => read.files.get(name) !== text).map(([name]) => name),
-    ...[...read.files.keys()].filter((name) => !regenerated.has(name)),
+    ...[...regenerated].filter(([name, text]) => onDisk.get(name) !== text).map(([name]) => name),
+    ...[...onDisk.keys()].filter((name) => !regenerated.has(name)),
   ];
-  const misplaced = loaded.entries.filter((entry) => !read.files.has(shardNameFor(entry.file))).map((entry) => identityOf(entry).replaceAll("\u0001", " "));
+  const misplaced = loaded.entries.filter((entry) => !onDisk.has(shardNameFor(entry.file))).map((entry) => identityOf(entry).replaceAll("\u0001", " "));
   const surfaces = (/** @type {Array<Record<string, any>>} */ entries) => canonicalJson(Object.fromEntries(
     [...new Set(entries.map((e) => e.surface))].sort().map((s) => [s, entries.filter((e) => e.surface === s).length])));
 
   io.log(`legacy ${origin}: ${legacy.length} entries ${surfaces(legacy)}`);
-  io.log(`shards ${label}:${loaded.entries.length} entries in ${read.files.size} shards ${surfaces(loaded.entries)}`);
+  io.log(`shards ${label}:${loaded.entries.length} entries in ${onDisk.size} shards ${surfaces(loaded.entries)}`);
   io.log(`entry sets: ${difference.equal ? "EQUAL" : "DIFFERENT"} (only in legacy ${difference.onlyBefore.length}, only in shards ${difference.onlyAfter.length}, value differences ${difference.different.length}, duplicates ${difference.duplicates.length})`);
   io.log(`byte-stable regeneration: ${regenerationDiffers.length === 0 ? "every shard reproduced exactly" : `${regenerationDiffers.length} shard(s) differ: ${regenerationDiffers.slice(0, 5).join(", ")}`}`);
   io.log(`entries in the wrong shard: ${misplaced.length}`);
