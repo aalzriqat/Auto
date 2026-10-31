@@ -1,28 +1,37 @@
 name: Sonar Main
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
     branches: ["main"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: sonar-main-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   scan:
-    if: github.ref == 'refs/heads/main'
+    name: scan
+    # SCRUM-764: Runs on main when Tests workflow completes, or on manual workflow_dispatch.
+    # Reuses the exact same-commit coverage report produced by Tests across 4 slices + mobile + shared.
+    # Fails closed on missing, failed, cancelled, stale, truncated, or unverified producer coverage.
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    # SCRUM-384: a cancelled run leaves no SonarCloud result, which refuses the
-    # production release (no waiver). SCRUM-763: coverage + scan now take ~45 min
-    # (three runs were cancelled at the old 45-minute budget), so 75 leaves headroom
-    # until the coverage step is split or sped up.
-    timeout-minutes: 75
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout target commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -36,34 +45,66 @@ jobs:
           node-version: "22.21.1"
           cache: "pnpm"
 
+      # Restores full AST / TSConfig compiler resolution for Expo/Next/Clerk semantic analysis
       - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Generate coverage for Sonar
-        run: pnpm test:coverage:sonar
+      - name: Resolve and verify producer run
+        id: producer
         env:
-          NODE_ENV: test
-          # Keep the same bounded ceiling proven by PR coverage. This does not
-          # relax coverage or buy success with unbounded memory; it prevents the
-          # main-only Sonar path from reintroducing the V8 OOM already reproduced
-          # in the identical coverage runner.
-          NODE_OPTIONS: --max-old-space-size=5632
-
-      # SCRUM-293: append mobile jest coverage to the report Sonar reads.
-      - name: Mobile coverage for Sonar
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
         run: |
-          pnpm mobile:coverage:sonar
-          node scripts/appendMobileLcov.mjs
-        env:
-          NODE_ENV: test
+          set -euo pipefail
+          TARGET_SHA="$(git rev-parse HEAD)"
 
-      # SCRUM-552: append packages/shared vitest coverage the same way.
-      - name: Shared coverage for Sonar
-        run: |
-          pnpm shared:coverage:sonar
-          node scripts/appendSharedLcov.mjs
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+          else
+            echo "Searching for successful Tests run for commit $TARGET_SHA on main..."
+            RUN_ID="$(gh run list --workflow=test.yml --commit="$TARGET_SHA" --status=success --limit=1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No successful Tests workflow run found for commit $TARGET_SHA on main."
+              exit 1
+            fi
+          fi
+
+          echo "Verifying producer run $RUN_ID via GitHub API..."
+          node -e "
+            const { verifyProducerRun } = await import('./scripts/validateSonarMainCoverage.mjs');
+            await verifyProducerRun({
+              token: process.env.GH_TOKEN,
+              repo: process.env.REPO,
+              runId: '$RUN_ID',
+              expectedSha: '$TARGET_SHA',
+              expectedEvent: 'push',
+            });
+            console.log('Producer run $RUN_ID verified successfully.');
+          "
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Download coverage report from Tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report
+          path: coverage
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.producer.outputs.run_id }}
+
+      - name: Validate coverage artifact provenance and census
         env:
-          NODE_ENV: test
+          EXPECTED_SHA: ${{ steps.producer.outputs.target_sha }}
+        run: |
+          node scripts/validateSonarMainCoverage.mjs coverage . "$EXPECTED_SHA"
 
       - name: SonarCloud scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        with:
+          args: >
+            -Dsonar.scm.revision=${{ steps.producer.outputs.target_sha }}
+            -Dsonar.branch.name=main
