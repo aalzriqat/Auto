@@ -129,8 +129,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-651. The English text must equal SUPPLIER_PAYABLE_PAID_CANCEL_MESSAGE in convex/utils/saleCancellation.ts.
   ServerError_SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: [
-    "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Use a manual accounting correction.",
-    "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. يلزم إجراء تصحيح محاسبي يدوي.",
+    "Cannot automatically cancel a sale after the supplier payable has been paid, in whole or in part. Nothing has been changed. The sale and the supplier payment stay as recorded.",
+    "لا يمكن إلغاء البيع تلقائياً بعد سداد ذمة المورّد كلياً أو جزئياً. لم يتم تغيير أي شيء، ويبقى البيع ودفعة المورّد كما هما مسجّلتان.",
+  ],
+  // SCRUM-869 (owner ruling c23881). The English text must equal SUPPLIER_RECEIVABLE_PAID_CANCEL_MESSAGE in
+  // convex/supplierReceivables.ts. Names no action that is unavailable in the pilot.
+  ServerError_SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED: [
+    "Cannot automatically cancel a sale after the supplier has paid against its commission claim. Nothing has been changed. The sale and the supplier's receipts stay as recorded.",
+    "لا يمكن إلغاء البيع تلقائياً بعد أن يسدّد المورّد جزءاً من مطالبة العمولة أو كلها. لم يتم تغيير أي شيء، ويبقى البيع وإيصالات المورّد كما هي مسجّلة.",
   ],
   // SCRUM-781 (owner rulings SCRUM-773 c22401, SCRUM-760 c23812). The English text must equal
   // CONSIGNED_PAYABLE_VAT_REFUSAL in convex/sourcingPayables.ts. PayableNoVatReclass is the neutral
@@ -372,6 +378,33 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "Fixed assets are not available during the pilot. Nothing has been changed.",
     "الأصول الثابتة غير متاحة خلال المرحلة التجريبية. لم يتم تغيير أي شيء.",
   ],
+  // SCRUM-869#c23881: convex/utils/supplierSettlementContainment.ts.
+  ServerError_SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: [
+    "Reversing a supplier cost-recovery receipt is not available during the pilot. Record any further money received as a new receipt. Nothing has been changed.",
+    "عكس إيصال استرداد تكلفة من المورد غير متاح خلال المرحلة التجريبية. سجّل أي مبلغ إضافي مستلم كإيصال جديد. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: [
+    "Correcting the amount of an unpaid supplier payable is not available during the pilot. Pay the payable as recorded and ask your accountant about any difference. Nothing has been changed.",
+    "تصحيح مبلغ مستحق مورد غير مدفوع غير متاح خلال المرحلة التجريبية. سدّد المستحق كما هو مسجّل واسأل المحاسب عن أي فرق. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: [
+    "Reversing an expense the supplier owes the dealership for is not available during the pilot. Record any money received from the supplier as a receipt. Nothing has been changed.",
+    "عكس مصروف يستحق التاجر استرداده من المورد غير متاح خلال المرحلة التجريبية. سجّل أي مبلغ مستلم من المورد كإيصال. لم يتم تغيير أي شيء.",
+  ],
+  ServerError_SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED: [
+    "During the pilot a supplier margin receipt can be recorded in cash or by bank transfer only. Cheque and card receipts are not available. Nothing has been recorded.",
+    "خلال المرحلة التجريبية يمكن تسجيل إيصال هامش المورد نقداً أو بحوالة بنكية فقط. إيصالات الشيك والبطاقة غير متاحة. لم يتم تسجيل أي شيء.",
+  ],
+  ServerError_SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED: [
+    "During the pilot a supplier payable can be paid in cash or by bank transfer only. Cheque and card payments are not available. Nothing has been paid.",
+    "خلال المرحلة التجريبية يمكن سداد مستحقات المورد نقداً أو بحوالة بنكية فقط. الدفع بالشيك أو بالبطاقة غير متاح. لم يتم دفع أي مبلغ.",
+  ],
+  // SCRUM-869. The English text must equal supplierPaymentExceedsBalanceMessage in convex/sourcingPayables.ts once
+  // {projected} and {due} are filled. Payable correction is pilot-disabled, so the only action offered is reducing the amount.
+  ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE: [
+    "That would pay {projected} against {due} owed. Reduce the amount to the balance still owed.",
+    "سيؤدي هذا إلى دفع {projected} مقابل {due} مستحق. خفّض المبلغ إلى الرصيد المتبقي المستحق.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
@@ -491,8 +524,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "تكلفة الشراء الجديدة مطابقة للتكلفة الحالية، لذلك لا يوجد ما يستدعي التصحيح.",
   ],
   ServerError_COST_CORRECTION_SOURCED: [
-    "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead.",
-    "المركبات الموردة لا تُسجَّل ضمن المخزون. عدّل ذمة المورد بدلاً من ذلك.",
+    "Sourced vehicles are not capitalized into inventory, so their cost cannot be corrected here. Nothing has been changed.",
+    "المركبات الموردة لا تُسجَّل ضمن المخزون، لذلك لا يمكن تصحيح تكلفتها من هنا. لم يتم تغيير أي شيء.",
   ],
   ServerError_COST_CORRECTION_SOLD: [
     "This vehicle has already been sold, so its cost can no longer be corrected here. Ask your accountant for a manual journal entry.",

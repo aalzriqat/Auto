@@ -379,7 +379,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
       idempotencyKey: "supplier-full-missing-bank", orgId, payableId, paymentMethod: "BANK_TRANSFER",
     })).rejects.toThrow(/Choose the bank account/i);
     await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
-      idempotencyKey: "supplier-partial-missing-bank", orgId, payableId, amount: 1000, paymentMethod: "CHEQUE",
+      idempotencyKey: "supplier-partial-missing-bank", orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER",
     })).rejects.toThrow(/Choose the bank account/i);
     expect((await t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("PENDING");
     const events = await t.run((ctx) => ctx.db.query("accountingEvents")
@@ -392,11 +392,11 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
     const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
     await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: false }));
     await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
-      idempotencyKey: "supplier-inactive-bank", orgId, payableId, paymentMethod: "CARD", bankAccountId,
+      idempotencyKey: "supplier-inactive-bank", orgId, payableId, paymentMethod: "BANK_TRANSFER", bankAccountId,
     })).rejects.toThrow(/inactive/i);
     await t.run((ctx) => ctx.db.patch(bankAccountId, { isActive: true, currency: "USD" }));
     await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
-      idempotencyKey: "supplier-wrong-currency", orgId, payableId, amount: 1000, paymentMethod: "CHEQUE", bankAccountId,
+      idempotencyKey: "supplier-wrong-currency", orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER", bankAccountId,
     })).rejects.toThrow(/denominated in USD/i);
     await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
       idempotencyKey: "supplier-cash-with-bank", orgId, payableId, paymentMethod: "CASH", bankAccountId,
@@ -406,7 +406,7 @@ describe("sourcingPayables.markPaid VAT reclassification", () => {
 
   test("partial bank payment retains its bank and the retry identity binds that bank", async () => {
     const { t, orgId, asOwner, payableId, bankAccountId } = await seedDealerWithPayable(5000);
-    const args = { idempotencyKey: "supplier-partial-bank-1", orgId, payableId, amount: 1000, paymentMethod: "CARD" as const, bankAccountId };
+    const args = { idempotencyKey: "supplier-partial-bank-1", orgId, payableId, amount: 1000, paymentMethod: "BANK_TRANSFER" as const, bankAccountId };
     await asOwner.mutation(api.sourcingPayables.recordPartialPayment, args);
     await asOwner.mutation(api.sourcingPayables.recordPartialPayment, args);
     expect((await t.run((ctx) => ctx.db.get(payableId)))?.amountPaid).toBe(1000);

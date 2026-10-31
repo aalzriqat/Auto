@@ -2,7 +2,7 @@ import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import type { SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 
 let locale: "en" | "ar" = "en";
 vi.mock("@/components/providers/LanguageProvider", () => ({ useLanguage: () => ({ locale }) }));
@@ -29,7 +29,7 @@ test.each(["en", "ar"] as const)("%s supplier payment requires a selected bank",
   locale = language;
   const confirm = vi.fn();
   function Harness() {
-    const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+    const [paymentMethod, setPaymentMethod] = useState<SupplierSettlementPilotMethod>("CASH");
     const [bankAccountId, setBankAccountId] = useState<Id<"bankAccounts"> | null>(null);
     return <SupplierPaymentDialog
       payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, settlementAmountMinor: 100000, currency: "JOD" }}

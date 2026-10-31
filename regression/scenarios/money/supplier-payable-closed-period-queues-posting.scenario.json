@@ -1,0 +1,55 @@
+{
+  "id": "supplier-payable-closed-period-queues-posting",
+  "fingerprint": "770b124ebfec15a7bb2626fbc0e6d2731c6d3f207c6b4929f6dee441281ea51e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "amount": 3000,
+        "paymentMethod": "CASH",
+        "period": "CLOSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.status",
+      "value": "PARTIALLY_PAID"
+    },
+    {
+      "observable": "pendingEvent.status",
+      "value": "PENDING"
+    },
+    {
+      "observable": "pendingEvent.count",
+      "value": 1
+    },
+    {
+      "observable": "journals.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "payable payment: a closed period: the subledger moves, the event is QUEUED, and the GL stays empty until the period reopens"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

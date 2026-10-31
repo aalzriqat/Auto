@@ -289,12 +289,18 @@ function ExpensesContent() {
                   onChange={(e) => setReversalReason(e.target.value)}
                   placeholder={t("ReversalReasonPlaceholder" as any)}
                 />
+                {/* SCRUM-869#c23881: the server refuses this during the pilot; say so instead of offering it. */}
+                {expenseToDelete?.costBearer === "SUPPLIER" && (
+                  <p className="text-sm text-destructive" role="alert">
+                    {t("ServerError_SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED" as any)}
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={closeDeleteDialog}>{t("Cancel" as any)}</Button>
                 <Button
                   variant="destructive"
-                  disabled={!reversalReason.trim() || isReversing}
+                  disabled={!reversalReason.trim() || isReversing || expenseToDelete?.costBearer === "SUPPLIER"}
                   onClick={handleReverse}
                 >
                   {t("ReverseAndDelete" as any)}

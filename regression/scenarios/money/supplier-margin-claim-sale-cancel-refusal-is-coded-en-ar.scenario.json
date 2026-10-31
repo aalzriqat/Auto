@@ -1,0 +1,69 @@
+{
+  "id": "supplier-margin-claim-sale-cancel-refusal-is-coded-en-ar",
+  "fingerprint": "807e8f73376c78f2a5af2ac4de611c59dd16970d6e9b107a8cbe4be4976358cb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum869-pr712-review-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.seedSupplierMarginReceipt",
+      "input": {
+        "receiptSeq": 1,
+        "amount": 100,
+        "claimDue": 500
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.update",
+      "input": {
+        "status": "CANCELLED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED"
+    },
+    {
+      "observable": "step2.englishText",
+      "value": "equalsServerMessage"
+    },
+    {
+      "observable": "step2.arabicUserSees",
+      "value": "arabicDictionaryEntry"
+    },
+    {
+      "observable": "refusal.claimStatus",
+      "value": "PARTIALLY_PAID"
+    },
+    {
+      "observable": "refusal.saleStatus",
+      "value": "COMPLETED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierRefusalTexts.scrum869.test.ts",
+    "testName": "the margin-claim refusal is refused at the sale-cancel door with a stable code, leaves the record as it stands and offers no manual correction"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

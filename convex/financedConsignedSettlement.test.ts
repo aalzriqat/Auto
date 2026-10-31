@@ -1509,7 +1509,7 @@ describe("the deal cockpit query", () => {
     const s = await seedDealership("cockpitDisputed");
     const { applicationId } = await runDeal(s, { route: "DIRECT_TO_SUPPLIER", finalize: true });
     const claim = (await supplierClaimsOf(s)).find((row) => row.status !== "CANCELLED")!;
-    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId: claim._id,
       disputed: true,
