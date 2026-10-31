@@ -361,6 +361,7 @@ type PreparedSaleCompletion = {
   // left unposted. Both branches below now set this from `commissionAmount`
   // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
+  resolvedSupplierId?: Id<"suppliers">;
   supplierSnapshotVersion?: number;
 };
 
