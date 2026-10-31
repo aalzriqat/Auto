@@ -2,7 +2,8 @@
  * Renew reviewed baseline entries ONLY where the code they were reviewed
  * against is provably unchanged (SCRUM-866).
  *
- * Why this exists: every entry in needs-evidence-baseline.json expires, and
+ * Why this exists: every entry in the needs-evidence baseline (the shard directory
+ * scripts/contractSkew/needs-evidence-baseline/, see baselineShards.mjs) expires, and
  * `evaluateBaseline` fails an expired entry, so the Contract skew monitor goes
  * red and refuses releases. An allow-list entry with an expiry is normally
  * renewed by moving the date and recording why (OSV-Scanner's `ignoreUntil` +
@@ -58,14 +59,16 @@
  * require review; this check proves file coverage/freshness only. Import-closure
  * loader refusals still apply unchanged to mechanical renewal, not this mode.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { CLIENT_SURFACES } from "./clientFiles.mjs";
 import { assertSafeRevision, isAncestor, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
-import { parseCanonicalBaseline, resolveInside, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
+import { parseCanonicalBaseline, resolveInside, serializeBaseline } from "./baselineFile.mjs";
+import { baselineAtRevision } from "./baselineRevision.mjs";
+import { documentTextOf, writeShardedBaseline } from "./baselineShards.mjs";
+import { loadBaseline } from "./baseline.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import { identityOf } from "./baseline.mjs";
@@ -421,9 +424,11 @@ function run(argv, io, root) {
   if (prBase) requireAncestor(prBase, "PR base revision");
   const dirty = new Set(runGitText(git, ["diff", "--name-only", "-z", "HEAD"], { cwd: root }).split("\0").filter(Boolean));
 
-  const baselineText = fs.readFileSync(baseline, "utf8");
-  const entries = parseCanonicalBaseline(baselineText)?.entries;
-  if (!Array.isArray(entries)) throw new Error("the baseline has no entries array");
+  // The shard directory, read as the single document the renewal functions below were written against.
+  const loaded = loadBaseline(baseline);
+  if (!loaded.ok) throw new Error(loaded.problem);
+  const { entries, files: baselineFiles } = loaded;
+  const baselineText = documentTextOf(entries);
   const compare = gitCompare({ git, cwd: root, reviewed, head: headSha });
   /** @type {Map<string, string> | undefined} */
   let headBlobs;
@@ -435,7 +440,8 @@ function run(argv, io, root) {
   if (args["check-evidence"]) {
     if (entries.length === 0) throw new Error("baseline has no entries to check");
     const backendDefinitionOf = createBackendDefinitionResolver({ root, functionIds: entries.map((entry) => entry.functionId) });
-    const reviewedText = runGitText(git, ["show", `${reviewed}:${DEFAULT_BASELINE}`], { cwd: root });
+    // The reviewed revision (c82890bd) holds the single file; later revisions hold shards. Either is read as one document.
+    const reviewedText = baselineAtRevision(git, root, reviewed).text;
     /** @type {Map<string, ReturnType<typeof gitCompare>>} */
     const evidenceComparisons = new Map();
     /** @param {string} sha @param {string} file */
@@ -453,7 +459,7 @@ function run(argv, io, root) {
       if (dirty.has(file)) throw new Error(`${file} has uncommitted changes; commit or discard them before checking evidence`);
       return compare(file);
     };
-    const prBaseText = prBase ? runGitText(git, ["show", `${prBase}:${DEFAULT_BASELINE}`], { cwd: root }) : undefined;
+    const prBaseText = prBase ? baselineAtRevision(git, root, prBase).text : undefined;
     const checkedPrCommits = new Set();
     const requireCommitOnPrBase = (sha) => {
       if (checkedPrCommits.has(sha)) return;
@@ -517,8 +523,8 @@ function run(argv, io, root) {
   io.log(`renewed ${result.renewed}, already current ${result.skipped}, refused ${result.refused.length}`);
   for (const r of result.refused) io.log(`REFUSED entry #${r.index + 1} ${r.entry}: ${r.reason}`);
   if (args.write) {
-    writeBaselineAtomically(baseline, result.text, baselineText, root);
-    io.log(`wrote ${baseline}`);
+    const written = writeShardedBaseline(baseline, parseCanonicalBaseline(result.text).entries, { before: baselineFiles, root });
+    io.log(`wrote ${baseline} (${written.written.length} shard(s) changed, ${written.unchanged} untouched)`);
   } else {
     io.log("dry run; pass --write to apply");
   }

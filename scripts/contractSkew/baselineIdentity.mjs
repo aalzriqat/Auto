@@ -2,10 +2,11 @@
 import path from "node:path";
 import ts from "typescript";
 import { loadBaseline } from "./baseline.mjs";
+import { BASELINE_DIRECTORY } from "./baselineShards.mjs";
 import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, toPosixRel } from "./clientFiles.mjs";
 
-export const DEFAULT_BASELINE = "scripts/contractSkew/needs-evidence-baseline.json";
+export const DEFAULT_BASELINE = BASELINE_DIRECTORY;
 
 /** Exit codes shared by the identity check and the relocation helper. */
 export const EXIT_IDENTITY_DRIFT = 10;
@@ -17,9 +18,18 @@ export const callKey = (entry) => JSON.stringify([entry.surface, entry.file, ent
 /** @param {CallIdentity} entry */
 export const describeEntry = (entry) => `${entry.surface}:${entry.file} ${entry.callSiteId} ${entry.functionId}`;
 
-/** @param {string} baselineFile */
-export function readIdentityBaseline(baselineFile) {
-  const loaded = loadBaseline(baselineFile);
+/** @param {string} baselineDirectory */
+export function readIdentityBaseline(baselineDirectory) {
+  return readIdentityBaselineSnapshot(baselineDirectory).entries;
+}
+
+/**
+ * The validated entries plus the shard snapshot they were read from, which `writeShardedBaseline` needs to refuse a
+ * write if the directory changed in between.
+ * @param {string} baselineDirectory
+ */
+export function readIdentityBaselineSnapshot(baselineDirectory) {
+  const loaded = loadBaseline(baselineDirectory);
   if (!loaded.ok) throw new Error(loaded.problem);
   loaded.entries.forEach((entry, index) => {
     const fields = ["surface", "file", "callSiteId", "functionId"];
@@ -34,7 +44,7 @@ export function readIdentityBaseline(baselineFile) {
       throw new Error(`Invalid call identity in baseline entry #${index + 1}: ${describeEntry(entry)}`);
     }
   });
-  return loaded.entries;
+  return { entries: loaded.entries, files: loaded.files };
 }
 
 /**
