@@ -94,15 +94,11 @@ describe("pull-request workflow secret boundary", () => {
     // false, so every non-PR run must fall back to its own run_id group.
     const prOnly =
       "${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}";
-    for (const [name, prefix] of [
-      ["invariant-governance.yml", "invariant-governance"],
-      ["security.yml", "security"],
-      ["skill-evidence.yml", "skill-evidence"],
-    ]) {
-      const parsed = parseYaml(readFileSync(path.join(workflowsDir, name), "utf8")) as {
+    for (const prefix of ["invariant-governance", "security", "skill-evidence"]) {
+      const parsed = parseYaml(readFileSync(path.join(workflowsDir, prefix + ".yml"), "utf8")) as {
         concurrency?: unknown;
       };
-      expect(parsed.concurrency, name).toEqual({
+      expect(parsed.concurrency, prefix).toEqual({
         group: prefix + "-${{ github.event.pull_request.number || github.run_id }}",
         "cancel-in-progress": prOnly,
       });
