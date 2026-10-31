@@ -386,3 +386,87 @@ describe("SCRUM-811 expense doors own every foreign reference before writing", (
     expect((await f.snapshot()).expenses.find((row) => row._id === replaced)).toMatchObject({ status: "PAID", vehicleId: live });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Direct query-id slots (SCRUM-811 c24219 follow-up, Seat 2 at 339c9cf90). `expenses.list` and `expenses.totalByVehicle`
+// take a `vehicleId` and never dereference it: the org-scoped `by_org_vehicle` index is the whole guard, so a foreign id
+// can only select an empty range. Each test below fails if that range ever stops being org-scoped. Top-level tests with
+// their controls inside, because the local runner anchors `^title$` against the full (describe + title) name.
+// ---------------------------------------------------------------------------------------------------------------------
+const FOREIGN_TITLE = "ORGB-VEHICLE-EXPENSE-MARKER";
+const FOREIGN_AMOUNT = 987_654;
+
+async function foreignVehicleExpense(f: Fixture, vehicleId: Id<"vehicles">, orgId: Id<"organizations">, extra: { title?: string; amount?: number; isDeleted?: boolean } = {}) {
+  return f.t.run((ctx) => ctx.db.insert("expenses", {
+    orgId, title: extra.title ?? FOREIGN_TITLE, amount: extra.amount ?? FOREIGN_AMOUNT, date: Date.now(), category: "OFFICE",
+    status: "PAID", vehicleId, ...(extra.isDeleted ? { isDeleted: true } : {}),
+  }));
+}
+
+test("expenses.list vehicleId: a foreign or missing vehicle returns nothing, a same-org vehicle returns its own expenses", async () => {
+  const failures: string[] = [];
+  const f = await fixture();
+  const list = (vehicleId: Id<"vehicles">) =>
+    f.owner.query(api.expenses.list, { orgId: f.orgId, vehicleId, paginationOpts: { numItems: 50, cursor: null } });
+  const vehicleB = await f.refs.vehicle("foreign");
+  await foreignVehicleExpense(f, vehicleB, f.orgBId);
+  const vehicleA = await f.refs.vehicle("live");
+  await foreignVehicleExpense(f, vehicleA, f.orgId, { title: "ORGA-ON-CAR", amount: 111 });
+  await f.t.run((ctx) => ctx.db.insert("expenses", {
+    orgId: f.orgId, title: "ORGA-NO-CAR", amount: 222, date: Date.now(), category: "OFFICE", status: "PAID",
+  }));
+
+  // Foreign vehicle id: org B's expense on it is not in org A's range, so the page is empty and nothing of org B leaks.
+  const foreign = await list(vehicleB);
+  if (foreign.page.length !== 0) failures.push(`foreign vehicle: returned ${foreign.page.map((row) => row.title).join(",")}`);
+  const foreignText = JSON.stringify(foreign);
+  if (foreignText.includes(FOREIGN_TITLE) || foreignText.includes(String(FOREIGN_AMOUNT))) failures.push("foreign vehicle: org B expense data leaked");
+
+  // Missing vehicle id (hard-deleted): nothing is selected, and there is no refusal to leak existence through.
+  const missing = await list(await f.refs.vehicle("missing"));
+  if (missing.page.length !== 0) failures.push(`missing vehicle: returned ${missing.page.length} rows`);
+
+  // Positive control: the same-org vehicle returns exactly its own expense, with its own vehicle summary.
+  const own = await list(vehicleA);
+  if (own.page.map((row) => row.title).join(",") !== "ORGA-ON-CAR") failures.push(`control: same-org vehicle returned ${own.page.map((row) => row.title).join(",")}`);
+  if (!own.page[0]?.vehicleSummary?.includes("QA-EXP-REF-")) failures.push("control: same-org vehicle summary missing");
+
+  // A planted link: an org A expense that names an org B car is org A's own row. It is returned, but the car it names
+  // is not (neutral fallback), and none of org B's own expense on that car appears.
+  const g = await fixture();
+  const carB = await g.refs.vehicle("foreign");
+  await foreignVehicleExpense(g, carB, g.orgBId);
+  await foreignVehicleExpense(g, carB, g.orgId, { title: "ORGA-PLANTED-LINK", amount: 333 });
+  const planted = await g.owner.query(api.expenses.list, {
+    orgId: g.orgId, vehicleId: carB, paginationOpts: { numItems: 50, cursor: null },
+  });
+  if (planted.page.map((row) => row.title).join(",") !== "ORGA-PLANTED-LINK") failures.push(`planted link: returned ${planted.page.map((row) => row.title).join(",")}`);
+  if (planted.page[0]?.vehicleSummary !== null) failures.push("planted link: org B vehicle summary returned");
+  const plantedText = JSON.stringify(planted);
+  if (plantedText.includes(FOREIGN_TITLE) || plantedText.includes(String(FOREIGN_AMOUNT)) || plantedText.includes("QA-EXP-REF-")) failures.push("planted link: org B data leaked");
+
+  expect(failures).toEqual([]);
+}, 120_000);
+
+test("expenses.totalByVehicle vehicleId: a foreign or missing vehicle totals zero, a same-org vehicle totals only its own live expenses", async () => {
+  const failures: string[] = [];
+  const f = await fixture();
+  const total = (vehicleId: Id<"vehicles">) => f.owner.query(api.expenses.totalByVehicle, { orgId: f.orgId, vehicleId });
+  const vehicleB = await f.refs.vehicle("foreign");
+  await foreignVehicleExpense(f, vehicleB, f.orgBId);
+  const vehicleA = await f.refs.vehicle("live");
+  await foreignVehicleExpense(f, vehicleA, f.orgId, { title: "ORGA-ONE", amount: 100 });
+  await foreignVehicleExpense(f, vehicleA, f.orgId, { title: "ORGA-TWO", amount: 250 });
+  await foreignVehicleExpense(f, vehicleA, f.orgId, { title: "ORGA-DELETED", amount: 5_000, isDeleted: true });
+  // An org B expense that names org A's car (a planted link the other way) must not add to org A's total.
+  await foreignVehicleExpense(f, vehicleA, f.orgBId, { title: "ORGB-ON-ORGA-CAR", amount: 9_999 });
+
+  const foreign = await total(vehicleB);
+  if (foreign !== 0) failures.push(`foreign vehicle: totalled ${foreign}, expected 0`);
+  const missing = await total(await f.refs.vehicle("missing"));
+  if (missing !== 0) failures.push(`missing vehicle: totalled ${missing}, expected 0`);
+  const own = await total(vehicleA);
+  if (own !== 350) failures.push(`control: same-org vehicle totalled ${own}, expected 350 (its two live expenses only)`);
+
+  expect(failures).toEqual([]);
+}, 120_000);

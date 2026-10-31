@@ -103,7 +103,7 @@ async function fixture() {
       });
     });
   };
-  return { t, reader, orgId, customerId, aCustomerId, link, aUser, mk, roleA };
+  return { t, reader, orgId, orgBId, customerId, aCustomerId, link, aUser, mk, roleA, bVehicle, bUser, bCompany, aVehicle };
 }
 
 const relations = (f: Awaited<ReturnType<typeof fixture>>) =>
@@ -260,3 +260,63 @@ test("a customers-only reader never receives vehicle cost or finance fields thro
 test("user attribution policy: an offboarding member keeps their name; a user with no membership in the org does not", async () => {
   expect(await attributionFailures()).toEqual([]);
 });
+
+// Direct query-id slot (SCRUM-811 c24219 follow-up, Seat 2 at 339c9cf90). `customers.getRelations` never dereferences its
+// `customerId`: sales, leads, tasks, quotes and deposits are each selected by an org-scoped range (quotes through the
+// unscoped `by_customer` index plus an explicit `orgId` filter). Bound by SCRUM-761 scenario
+// `customer-relations-select-only-the-callers-org-rows`. Top-level, controls inside (the runner anchors `^title$`).
+test("customers.getRelations customerId: a foreign or missing customer returns nothing, and another org's rows never join a same-org customer", async () => {
+  const failures: string[] = [];
+  const BR = { sale: 646_464, quote: 818_181, downPayment: 424_242, deposit: 535_353, task: "ORGB-REL-TASK", lead: "ORGB-REL-LEAD" };
+  const rowMarkers = [...Object.values(BR).map(String)];
+  const empty = (value: Awaited<ReturnType<typeof relations>>) =>
+    value.sales.length + value.leads.length + value.tasks.length + value.quotes.length + value.deposits.length === 0 && !value.depositsTruncated;
+  const plantOrgBRows = (f: Awaited<ReturnType<typeof fixture>>, customerId: Id<"customers">) =>
+    f.t.run(async (ctx) => {
+      await ctx.db.insert("sales", { orgId: f.orgBId, vehicleId: f.bVehicle, customerId, salespersonId: f.bUser, salePrice: BR.sale, saleDate: Date.now(), status: "COMPLETED" });
+      await ctx.db.insert("leads", { orgId: f.orgBId, customerId, source: BR.lead, stage: "NEW", vehicleId: f.bVehicle, assignedUserId: f.bUser });
+      await ctx.db.insert("tasks", { orgId: f.orgBId, customerId, assignedTo: f.bUser, title: BR.task, dueDate: Date.now(), status: "PENDING" });
+      await ctx.db.insert("quotes", {
+        orgId: f.orgBId, customerId, vehicleId: f.bVehicle, companyId: f.bCompany, vehiclePrice: BR.quote, downPayment: BR.downPayment,
+        termMonths: 12, status: "DRAFT", createdBy: f.bUser, createdAt: Date.now(),
+      } as never);
+      await ctx.db.insert("deposits", {
+        orgId: f.orgBId, customerId, amount: BR.deposit, status: "HELD", holdActive: false, createdBy: f.bUser, createdAt: Date.now(),
+      });
+    });
+  const leaked = (value: unknown) => [...rowMarkers, ...MARKERS].filter((marker) => JSON.stringify(value).includes(marker));
+
+  // 1. Foreign customer id: org B's own customer, with org B rows of every kind. The org A reader gets nothing.
+  const f = await fixture();
+  const customerB = await f.t.run((ctx) => ctx.db.insert("customers", { orgId: f.orgBId, firstName: "Foreign", lastName: "Customer" }));
+  await plantOrgBRows(f, customerB);
+  const foreign = await f.reader.query(api.customers.getRelations, { orgId: f.orgId, customerId: customerB });
+  if (!empty(foreign)) failures.push(`foreign customer: returned ${JSON.stringify({ s: foreign.sales.length, l: foreign.leads.length, t: foreign.tasks.length, q: foreign.quotes.length, d: foreign.deposits.length })}`);
+  if (leaked(foreign).length) failures.push(`foreign customer: leaked ${leaked(foreign).join(", ")}`);
+
+  // 2. Missing customer id (hard-deleted org A customer): nothing is selected.
+  const gone = await f.t.run(async (ctx) => {
+    const id = await ctx.db.insert("customers", { orgId: f.orgId, firstName: "Gone", lastName: "Customer" });
+    await ctx.db.delete(id);
+    return id;
+  });
+  const missing = await f.reader.query(api.customers.getRelations, { orgId: f.orgId, customerId: gone });
+  if (!empty(missing)) failures.push("missing customer: returned rows");
+
+  // 3. A same-org customer that org B rows ALSO name (a planted id collision): only org A's own rows join it. This is the
+  // check that each range is org-scoped, since the customer id alone would select org B's rows.
+  const g = await fixture();
+  await g.link("A");
+  await g.t.run((ctx) => ctx.db.insert("deposits", {
+    orgId: g.orgId, customerId: g.customerId, amount: 1_234, status: "HELD", holdActive: false, createdBy: g.aUser, createdAt: Date.now(),
+  }));
+  await plantOrgBRows(g, g.customerId);
+  const own = await relations(g);
+  const counts = { s: own.sales.length, l: own.leads.length, t: own.tasks.length, q: own.quotes.length, d: own.deposits.length };
+  if (JSON.stringify(counts) !== JSON.stringify({ s: 1, l: 1, t: 1, q: 1, d: 1 })) failures.push(`control: same-org customer joined ${JSON.stringify(counts)}, expected one row of each kind`);
+  if (own.deposits[0]?.amount !== 1_234) failures.push("control: the same-org deposit was not the one returned");
+  const ownLeaks = [...rowMarkers].filter((marker) => JSON.stringify(own).includes(marker));
+  if (ownLeaks.length) failures.push(`same-org customer: org B rows leaked ${ownLeaks.join(", ")}`);
+
+  expect(failures).toEqual([]);
+}, 120_000);

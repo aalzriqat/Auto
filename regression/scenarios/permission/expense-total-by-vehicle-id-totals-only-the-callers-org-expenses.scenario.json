@@ -1,0 +1,59 @@
+{
+  "id": "expense-total-by-vehicle-id-totals-only-the-callers-org-expenses",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.totalByVehicle",
+      "input": {
+        "vehicleId": "OTHER_ORG_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.totalByVehicle",
+      "input": {
+        "vehicleId": "DELETED_VEHICLE_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "foreignVehicle.total",
+      "value": 0
+    },
+    {
+      "observable": "missingVehicle.total",
+      "value": 0
+    },
+    {
+      "observable": "positiveControl.sameOrgTotalCountsOwnLiveExpensesOnly",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-expense-total-vehicle-id",
+  "impl": {
+    "file": "convex/expensesReferenceOwnership.test.ts",
+    "testName": "expenses.totalByVehicle vehicleId: a foreign or missing vehicle totals zero, a same-org vehicle totals only its own live expenses"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "d4a24c29265640b336293c48b5aeeafe54f2c15df7e9125c03e0b94b312ae08c"
+}
