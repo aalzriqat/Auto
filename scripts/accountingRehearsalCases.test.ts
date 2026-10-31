@@ -178,6 +178,97 @@ describe("vehicle fixture rate-limit retry", () => {
     expect(attempts).toBe(1);
     expect(sleeps).toEqual([]);
   });
+
+  describe("SCRUM-762: vehicle fixture supplier identity requirements", () => {
+    const baseVehicle = {
+      orgId: "org-1",
+      make: "Toyota",
+      model: "Camry",
+      year: 2022,
+      mileage: 800,
+      color: "Blue",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      sellingPrice: 22000,
+      status: "AVAILABLE",
+    };
+
+    test("a SOURCED vehicle requires sourcedSupplierId and rejects missing supplier", async () => {
+      const backend = makeBackend();
+      const result = await backend.authedCall("mutation", "vehicles:create", {
+        ...baseVehicle,
+        vin: "VIN-SOURCED-01",
+        sourceType: "SOURCED",
+        sourceCost: 15000,
+        idempotencyKey: "test-sourced-no-supplier",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/A supplier is required/);
+    });
+
+    test("a SOURCED vehicle rejects purchaseSupplierId as a role conflict", async () => {
+      const backend = makeBackend();
+      const result = await backend.authedCall("mutation", "vehicles:create", {
+        ...baseVehicle,
+        vin: "VIN-SOURCED-02",
+        sourceType: "SOURCED",
+        sourceCost: 15000,
+        sourcedSupplierId: "sup-1",
+        purchaseSupplierId: "sup-2",
+        idempotencyKey: "test-sourced-role-conflict",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/sourced vehicle cannot have a purchase supplier/);
+    });
+
+    test("an ON_ACCOUNT vehicle requires purchaseSupplierId and rejects missing supplier", async () => {
+      const backend = makeBackend();
+      const result = await backend.authedCall("mutation", "vehicles:create", {
+        ...baseVehicle,
+        vin: "VIN-ONACCOUNT-01",
+        sourceType: "STOCK",
+        purchasePrice: 8000,
+        purchasePaymentMethod: "ON_ACCOUNT",
+        idempotencyKey: "test-onaccount-no-supplier",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/A supplier is required/);
+    });
+
+    test("an ON_ACCOUNT vehicle rejects sourcedSupplierId as a role conflict", async () => {
+      const backend = makeBackend();
+      const result = await backend.authedCall("mutation", "vehicles:create", {
+        ...baseVehicle,
+        vin: "VIN-ONACCOUNT-02",
+        sourceType: "STOCK",
+        purchasePrice: 8000,
+        purchasePaymentMethod: "ON_ACCOUNT",
+        purchaseSupplierId: "sup-1",
+        sourcedSupplierId: "sup-2",
+        idempotencyKey: "test-onaccount-role-conflict",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/on-account stock vehicle cannot have a sourced supplier/);
+    });
+
+    test("createVehicleForRehearsal preserves and forwards canonical supplier ids to mutation", async () => {
+      const calls: Array<{ type: string; name: string; args: Record<string, unknown> }> = [];
+      const ownerMust = async (type: string, name: string, args: Record<string, unknown>) => {
+        calls.push({ type, name, args });
+        return "vehicle-id-123";
+      };
+      const res = await createVehicleForRehearsal(ownerMust, {
+        orgId: "org-1",
+        vin: "VIN-PRESERVE-01",
+        sourceType: "SOURCED",
+        sourceCost: 15000,
+        sourcedSupplierId: "sup-canonical-1",
+      });
+      expect(res).toBe("vehicle-id-123");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].args.sourcedSupplierId).toBe("sup-canonical-1");
+    });
+  });
 });
 
 type Deposit = {
@@ -201,6 +292,8 @@ type Deposit = {
 };
 
 type Defects = {
+  /** SCRUM-762: A vehicle created as SOURCED or ON_ACCOUNT omits its canonical supplier id. */
+  vehicleIntakeSupplierMissing?: boolean;
   /**
    * Not a defect: the backend predates SCRUM-834. `reconcileDealFee` takes only
    * `{ orgId, feeId, notes }` -- the validator rejects the pins as extra fields
@@ -1640,8 +1733,24 @@ function makeBackend(defects: Defects = {}) {
         // to the type checker instead of widening every caller's result.
         // The product refuses a SOURCED vehicle without `sourceCost` — and
         // ignores `purchasePrice` for it. Modelled so the wrong field fails here.
-        if (args.sourceType === "SOURCED" && (args.sourceCost === undefined || args.sourceCost === null)) {
-          return { ok: false as const, error: "Sourced vehicles require a supplier cost (sourceCost)." };
+        if (args.sourceType === "SOURCED") {
+          if (args.sourceCost === undefined || args.sourceCost === null) {
+            return { ok: false as const, error: "Sourced vehicles require a supplier cost (sourceCost)." };
+          }
+          if (args.purchaseSupplierId) {
+            return { ok: false as const, error: "A sourced vehicle cannot have a purchase supplier." };
+          }
+          if (!args.sourcedSupplierId || defects.vehicleIntakeSupplierMissing) {
+            return { ok: false as const, error: "A supplier is required." };
+          }
+        }
+        if (args.purchasePaymentMethod === "ON_ACCOUNT") {
+          if (args.sourcedSupplierId) {
+            return { ok: false as const, error: "An on-account stock vehicle cannot have a sourced supplier." };
+          }
+          if (!args.purchaseSupplierId || defects.vehicleIntakeSupplierMissing) {
+            return { ok: false as const, error: "A supplier is required." };
+          }
         }
         const madeVehicle = replayableCreate("veh", args)!;
         if (madeVehicle.ok) {
@@ -3144,6 +3253,17 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     for (const other of ["SUP-PAY", "SUP-MARGIN", "SUP-RECOVERY", "SUP-REFUSALS"].filter((id) => id !== caseId)) {
       expect(statusOf(results, other), `${other} must stay green when only ${defect} is injected`).toBe("PASS");
     }
+  });
+
+  test.each([
+    ["SUP-PAY", /vehicles:create failed: A supplier is required/],
+    ["SUP-MARGIN", /vehicles:create failed: A supplier is required/],
+    ["SUP-RECOVERY", /vehicles:create failed: A supplier is required/],
+    ["SUP-REFUSALS", /vehicles:create failed: A supplier is required/],
+  ] as const)("SCRUM-762 %s catches missing vehicle supplier identity in rehearsal vehicle intake", async (caseId, reason) => {
+    const results = await runAgainst({ vehicleIntakeSupplierMissing: true });
+    expect(statusOf(results, caseId)).toBe("FAIL");
+    expect(String(results.find((r) => r.id === caseId)?.detail)).toMatch(reason);
   });
   test("M486C1 rejects a balanced owned cash sale credited to the wrong revenue account", async () => {
     const results = await runAgainst({ cashSaleWrongRevenueAccount: true });
