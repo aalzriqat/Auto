@@ -1,0 +1,46 @@
+{
+  "id": "supplier-receivable-retained-gl-lines-not-reset",
+  "fingerprint": "02b6fcd6c762be604460e720122adb2eabed5c96b3f325c12a313e3ccada880c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-both-seat-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "deleteJournal": true,
+        "deleteReferencedAccounts": true,
+        "deleteRecovery": true,
+        "retainGl": "lines"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "retained opening GL lines cannot be mistaken for a completed reset"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

@@ -1,0 +1,55 @@
+{
+  "id": "supplier-receivable-lost-opening-row-is-gl-difference",
+  "fingerprint": "4c37ded7633312e179c5b6f79a2c5a01585b57223390cfad095f87c845c2fb56",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-seat2-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "deleteRecovery": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "reconciliation.subledgerBalanceMinor",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 100000
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a lost opening recovery leaves a difference on its independently discovered GL account"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}
