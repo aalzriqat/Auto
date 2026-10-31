@@ -976,7 +976,7 @@ type SupplierPayablesUnavailableReason =
   | "INVALID_DATE";
 
 /**
- * How many supplier-payable rows (all open-balance statuses together) and, separately, how many
+ * How many supplier-payable rows (all open-balance statuses and CANCELLED together) and, separately, how many
  * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
  * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
  * under the Convex 16,384-documents-per-function ceiling. The limit bounds only this function's own
@@ -1003,6 +1003,11 @@ const SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE = {
 const SUPPLIER_PAYABLE_OPEN_STATUSES = (
   Object.keys(SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE) as Array<keyof typeof SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE>
 ).filter((status) => SUPPLIER_PAYABLE_STATUS_CARRIES_BALANCE[status]);
+/** Open statuses first, then CANCELLED (see the cancelled-row guard in computeSupplierPayablesReconciliation). */
+const SUPPLIER_PAYABLE_RECON_READ_STATUSES: ReadonlyArray<Doc<"vehicleSupplierPayables">["status"]> = [
+  ...SUPPLIER_PAYABLE_OPEN_STATUSES,
+  "CANCELLED",
+];
 
 /** Posting event types whose rule touches ACCOUNTS_PAYABLE_SUPPLIERS (classified in postingRules.ts). */
 const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
@@ -1108,11 +1113,27 @@ async function supplierPayableOpenBalanceAsOf(
   return { status: "AVAILABLE", openMinor, accountId: basis?.accountId };
 }
 
-/** True when any lifecycle stamp on the row is after the cutoff, or is not a finite instant (it cannot be placed before it). */
+/** True when a lifecycle stamp is after the cutoff, or is not a finite instant (it cannot be placed before it). */
+const stampAfter = (stamp: number | undefined, cutoff: number): boolean =>
+  stamp !== undefined && (!Number.isFinite(stamp) || stamp > cutoff);
+
+/** True when any lifecycle stamp on a LIVE native row is after the cutoff. */
 function nativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables">, cutoff: number): boolean {
-  return [payable.createdAt, payable.updatedAt, payable.paidAt, payable.disputedAt, payable.cancelledAt].some(
-    (stamp) => stamp !== undefined && (!Number.isFinite(stamp) || stamp > cutoff),
+  return [payable.createdAt, payable.updatedAt, payable.paidAt, payable.disputedAt, payable.cancelledAt].some((stamp) =>
+    stampAfter(stamp, cutoff),
   );
+}
+
+/**
+ * True when a CANCELLED native row cannot be placed on the cutoff's side of its own life: it was written
+ * after the cutoff, or it was cancelled after it. Such a row contributes nothing now but stood for its
+ * AP credit at the cutoff, and its reversal is dated after the cutoff, so neither side can be restated.
+ * Cancellation stamps `cancelledAt` and `updatedAt` together; a legacy row without `cancelledAt` is
+ * placed by `updatedAt`. A row cancelled at or before the cutoff and merely touched later still
+ * contributes zero at the cutoff, so a later `updatedAt` alone does not refuse it.
+ */
+function cancelledNativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables">, cutoff: number): boolean {
+  return stampAfter(payable.createdAt, cutoff) || stampAfter(payable.cancelledAt ?? payable.updatedAt, cutoff);
 }
 
 export async function computeSupplierPayablesReconciliation(
@@ -1162,10 +1183,12 @@ export async function computeSupplierPayablesReconciliation(
   if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
 
-  // 2. Every non-CANCELLED payable, under one shared bound. Status is a label, not the balance: a
-  // payable leaves PENDING on a partial payment or a dispute while the liability stands.
+  // 2. Every payable, under one shared bound. Status is a label, not the balance: a payable leaves
+  // PENDING on a partial payment or a dispute while the liability stands. CANCELLED rows are read last
+  // (open-status verdicts keep their precedence) and contribute no balance, but a native one cancelled
+  // after the cutoff stood for its AP credit at it (SCRUM-876), so they are read under the same bound.
   const rows: Array<Doc<"vehicleSupplierPayables">> = [];
-  for (const status of SUPPLIER_PAYABLE_OPEN_STATUSES) {
+  for (const status of SUPPLIER_PAYABLE_RECON_READ_STATUSES) {
     const budget = readLimit - rows.length;
     const batch = await ctx.db
       .query("vehicleSupplierPayables")
@@ -1185,6 +1208,13 @@ export async function computeSupplierPayablesReconciliation(
   if(canonical)controlAccounts.add(canonical._id);
   let hasNativeRow = false;
   for (const p of rows) {
+    if (p.status === "CANCELLED") {
+      // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
+      if (p.origin === "OPENING") continue;
+      hasNativeRow = true;
+      if (cancelledNativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
+      continue;
+    }
     const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
     if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
     if (balance.accountId) controlAccounts.add(balance.accountId);
@@ -1204,7 +1234,8 @@ export async function computeSupplierPayablesReconciliation(
 
   // A native payable's AP credit is dated by its sale/acquisition, which can be after the row was written
   // (sales.create accepts a future saleDate). A GL line on the control account dated after the cutoff is
-  // therefore invisible to the GL read while the row already counts its effect.
+  // therefore invisible to the GL read while the row already counts its effect. A cancelled native row
+  // counts too: its credit can be dated after the cutoff while its reversal is dated before it.
   if (hasNativeRow && canonical) {
     const laterLine = await ctx.db
       .query("journalLines")

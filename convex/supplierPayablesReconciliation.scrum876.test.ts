@@ -3,7 +3,8 @@
  *
  * Invariant: the supplier-payable subledger and the GL control balance are compared at one cutoff. A
  * native payable row carries no per-event dates (one cumulative `amountPaid`, one `updatedAt`), so it
- * cannot be restated to an earlier date. When anything on the subledger side moved after the cutoff, or
+ * cannot be restated to an earlier date. When anything on the subledger side moved after the cutoff
+ * (including a payable that existed at the cutoff and was CANCELLED after it), or
  * the GL control account holds a line dated after it, or the cutoff is not a usable instant, the result
  * is UNAVAILABLE with a reason - never `isReconciled: true` and never an invented difference - and the
  * period close raises a warning (owner decision: reconciliation differences warn, they do not block).
@@ -253,5 +254,126 @@ describe("SCRUM-876 - an unusable cutoff is refused, never read as 'nothing is l
     const r = await reconAt(s, P1_END);
     expect(r.status).toBe("UNAVAILABLE");
     expect(r.isReconciled).toBe(false);
+  });
+});
+
+// SCRUM-876 round 2 (both seats, HIGH): a payable CANCELLED after the cutoff is not an open-status row, so it
+// used to leave the comparison entirely while its January AP credit stayed in the January GL.
+/** What saleCancellation.cancelPendingSupplierPayables writes: status, cancelledAt/By and updatedAt, all `now`. */
+const cancelPayable = (s: Seed, id: Id<"vehicleSupplierPayables">, at: number) =>
+  s.t.run((ctx) => ctx.db.patch(id, { status: "CANCELLED", cancelledAt: at, cancelledBy: s.userId, updatedAt: at } as never));
+
+describe("SCRUM-876 - a payable cancelled after the cutoff cannot be erased from the earlier period", () => {
+  test("a January payable cancelled in February cannot hide the January difference", async () => {
+    const s = await seedDealer("cxlmask");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    await postApLine(s, s.p1, IN_P1, { debitMinor: JOD(19_000) }); // a misposted January debit: GL 0 against a 19,000 payable
+
+    // CONTROL (live row): the real January difference is reported.
+    const live = await reconAt(s, P1_END);
+    expect(live.status).toBe("AVAILABLE");
+    expect(live.isReconciled).toBe(false);
+    expect(live.byCurrency.JOD).toMatchObject({ glBalanceMinor: 0, subledgerBalanceMinor: JOD(19_000), isReconciled: false });
+
+    await cancelPayable(s, id, IN_P2);
+    await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(19_000) }); // the February reversal of the AP credit
+
+    const r = await reconAt(s, P1_END);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+    expect(r.byCurrency).toEqual({});
+    const c = await checklist(s, s.p1._id);
+    expect(c.warnings).toContain(SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING);
+    expect(c.canClose).toBe(true); // owner decision: warns, never blocks
+  });
+
+  test("a reconciled January cannot read as a difference once its only payable is cancelled in February", async () => {
+    const s = await seedDealer("cxlinvent");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    expect((await reconAt(s, P1_END)).isReconciled).toBe(true);
+
+    await cancelPayable(s, id, IN_P2);
+    await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(19_000) });
+
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+    expect(r.isReconciled).toBe(false);
+    expect(r.byCurrency).toEqual({});
+    expect((await checklist(s, s.p1._id)).warnings).toContain(SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING);
+  });
+
+  test("a CLOSED January (read from snapshots) cannot be made to look reconciled by a February cancellation", async () => {
+    const s = await seedDealer("cxlclosed");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    await postApLine(s, s.p1, IN_P1, { debitMinor: JOD(19_000) });
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: s.p1._id });
+    const open = await checklist(s, s.p1._id);
+    await s.asUser.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId: s.p1._id, acknowledgedWarnings: open.warnings });
+    const closed = await s.t.run((ctx) => ctx.db.get(s.p1._id));
+    expect(closed?.status).toBe("CLOSED");
+    const before = await reconAt(s, P1_END);
+    expect(before.status).toBe("AVAILABLE");
+    expect(before.isReconciled).toBe(false);
+
+    await cancelPayable(s, id, IN_P2);
+    await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(19_000) });
+
+    const r = await reconAt(s, P1_END);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+
+  test("CONTROL: a payable created and cancelled inside January, with its reversal, still reconciles to zero", async () => {
+    const s = await seedDealer("cxlinside");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    await cancelPayable(s, id, IN_P1 + 1000);
+    await postApLine(s, s.p1, IN_P1 + 1000, { debitMinor: JOD(19_000) });
+
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+    expect(supplierWarnings((await checklist(s, s.p1._id)).warnings)).toEqual([]);
+  });
+
+  test("a legacy cancelled row with no cancelledAt is placed by its updatedAt", async () => {
+    const s = await seedDealer("cxllegacy");
+    await insertPayable(s, { amountDue: 19_000, status: "CANCELLED", createdAt: IN_P1, updatedAt: IN_P2 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+
+  test("a payable cancelled before the cutoff whose AP credit is dated after it is not compared against a GL that shows only the reversal", async () => {
+    const s = await seedDealer("cxlfuture");
+    // sales.create accepts a future saleDate: the credit is dated after the cutoff, the cancellation (and its reversal) before it.
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p2, IN_P2, { creditMinor: JOD(19_000) });
+    await cancelPayable(s, id, IN_P1 + 1000);
+    await postApLine(s, s.p1, IN_P1 + 1000, { debitMinor: JOD(19_000) });
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+
+  test("cancelled payables are read inside the same bounded budget and an over-budget read is refused, not summed", async () => {
+    const s = await seedDealer("cxlbudget");
+    for (let i = 0; i < 3; i += 1) {
+      const id = await insertPayable(s, { amountDue: 1_000, createdAt: IN_P1, updatedAt: IN_P1 });
+      await cancelPayable(s, id, IN_P1 + 1000);
+    }
+    const within = await s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, P1_END, { readLimit: 3 }));
+    expect(within.status).toBe("AVAILABLE");
+    const over = await s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, P1_END, { readLimit: 2 }));
+    expect(over.status).toBe("UNAVAILABLE");
+    expect(over.unavailableReason).toBe("OVER_LIMIT");
+    expect(over.isReconciled).toBe(false);
   });
 });
