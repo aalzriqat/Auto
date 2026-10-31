@@ -9,18 +9,101 @@ permissions:
   contents: read
 
 jobs:
-  scan:
+  coverage-slice:
+    name: coverage slice ${{ matrix.slice }}/4
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # SCRUM-384: a cancelled run leaves no SonarCloud result, which refuses the
-    # production release (no waiver). SCRUM-763: coverage + scan now take ~45 min
-    # (three runs were cancelled at the old 45-minute budget), so 75 leaves headroom
-    # until the coverage step is split or sped up.
-    timeout-minutes: 75
+    # SCRUM-763: On runs 41143529980 and 41150922288 at main d5b35624, the
+    # monolithic coverage step took ~64 min on a single runner, causing the
+    # 75-min job to be cancelled during the SonarCloud scan (6 of last 10 runs
+    # timed out). Slicing Sonar coverage into 4 parallel slices cuts coverage time
+    # to ~10-15 min per runner. 40 minutes provides ample headroom.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Generate coverage for Sonar
+        run: |
+          set -euo pipefail
+          # SCRUM-752 telemetry: the runner's resources and one JSON line per
+          # Vitest process, uploaded beside (never inside) the blob directory.
+          echo "runner: nproc=$(nproc) mem=$(free -m | awk '/^Mem:/{print $2}')MiB cpu.max=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a)"
+          mkdir -p coverage-timings
+          AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/sonar node scripts/runVitestCoverageShards.mjs sonar
+        env:
+          NODE_ENV: test
+          AUTOFLOW_COVERAGE_PHASE: run
+          AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/4
+          AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
+          AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
+          # SCRUM-752: two batch processes at a time on the 4-core runner.
+          VITEST_COVERAGE_CONCURRENCY: "2"
+          # Keep the same bounded ceiling proven by PR coverage. This does not
+          # relax coverage or buy success with unbounded memory; it prevents the
+          # main-only Sonar path from reintroducing the V8 OOM already reproduced
+          # in the identical coverage runner.
+          NODE_OPTIONS: --max-old-space-size=5632
+
+      - name: Upload coverage blobs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-blobs-${{ matrix.slice }}
+          path: coverage-blobs/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload coverage timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-timings-${{ matrix.slice }}
+          path: coverage-timings/
+          if-no-files-found: warn
+          retention-days: 14
+
+  scan:
+    needs: coverage-slice
+    # SCRUM-384 / SCRUM-763: Runs even when a slice failed or was cancelled.
+    # A job skipped by its condition satisfies a required status check in GitHub,
+    # so without always() a failed slice would let this check pass. The first
+    # step below turns any non-success slice result into a hard failure.
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
+      - name: Require every coverage slice to succeed
+        id: slices
+        env:
+          SLICES_RESULT: ${{ needs.coverage-slice.result }}
+        run: |
+          if [ "$SLICES_RESULT" != "success" ]; then
+            echo "::error::Coverage slices concluded '$SLICES_RESULT'; every slice must succeed."
+            exit 1
+          fi
+
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
@@ -39,14 +122,20 @@ jobs:
       - name: Install dependencies without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Generate coverage for Sonar
-        run: pnpm test:coverage:sonar
+      - name: Download coverage blobs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: coverage-blobs-*
+          path: coverage-blobs
+          merge-multiple: true
+
+      - name: Merge coverage from every slice
+        run: |
+          set -euo pipefail
+          AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/sonar node scripts/runVitestCoverageShards.mjs sonar
         env:
           NODE_ENV: test
-          # Keep the same bounded ceiling proven by PR coverage. This does not
-          # relax coverage or buy success with unbounded memory; it prevents the
-          # main-only Sonar path from reintroducing the V8 OOM already reproduced
-          # in the identical coverage runner.
+          AUTOFLOW_COVERAGE_PHASE: merge
           NODE_OPTIONS: --max-old-space-size=5632
 
       # SCRUM-293: append mobile jest coverage to the report Sonar reads.
