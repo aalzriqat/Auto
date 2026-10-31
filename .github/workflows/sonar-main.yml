@@ -88,9 +88,9 @@ jobs:
             --run-id "$RUN_ID" \
             --expected-sha "$TARGET_SHA" \
             --context-file "$RUNNER_TEMP/producer-context.json"
-
-          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # verify-producer writes run_id, run_attempt, artifact_id and target_sha to
+          # GITHUB_OUTPUT itself, from the values it verified. Do not append them again
+          # here: GitHub documents no precedence for a name written twice.
 
       # Fail closed before anything is downloaded. If the admission script did not
       # run to completion (for example it was started through a link and exited

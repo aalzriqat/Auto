@@ -1908,4 +1908,80 @@ describe("validateSonarMainCoverage entrypoint", () => {
       cleanup();
     }
   });
+
+  describe("the script run directly prints its refusal for every unusable producer context", () => {
+    const MANDATORY_REFUSAL =
+      "Refusing coverage validation: valid, complete trusted producerContext is mandatory.";
+
+    /** Runs the real CLI against a valid artifact and the given context file path. */
+    function runCliWithContext(prepare: (root: string) => string) {
+      const { root, coverageDir, cleanup } = createFixtureDir();
+      try {
+        writeValidArtifact(coverageDir, VALID_SHA);
+        const contextFile = prepare(root);
+        return {
+          contextFile,
+          result: spawnSync(process.execPath, [script, coverageDir, root, VALID_SHA, contextFile], {
+            encoding: "utf8",
+          }),
+        };
+      } finally {
+        cleanup();
+      }
+    }
+
+    it.each([
+      ["literal JSON null", "null"],
+      ["literal JSON false", "false"],
+      ["literal JSON zero", "0"],
+      ["an empty JSON string", '""'],
+    ])("%s exits 1 with the mandatory-context refusal on stderr", (_label, content) => {
+      const { result } = runCliWithContext((root) => {
+        const contextFile = path.join(root, "producer-context.json");
+        fs.writeFileSync(contextFile, content);
+        return contextFile;
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(MANDATORY_REFUSAL);
+    });
+
+    it("a missing context file exits 1 and names the file", () => {
+      const { contextFile, result } = runCliWithContext((root) => path.join(root, "absent.json"));
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(
+        safeLogValue(`Refusing coverage validation: producerContext file '${contextFile}' does not exist.`),
+      );
+    });
+
+    it("a context path that exists but cannot be read as a file exits 1 and names the file", () => {
+      const { contextFile, result } = runCliWithContext((root) => {
+        const directory = path.join(root, "context-is-a-directory.json");
+        fs.mkdirSync(directory);
+        return directory;
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        `Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: `,
+      );
+    });
+
+    it("a context file that is not JSON exits 1 and names the file", () => {
+      const { contextFile, result } = runCliWithContext((root) => {
+        const malformed = path.join(root, "producer-context.json");
+        fs.writeFileSync(malformed, "not-valid-json");
+        return malformed;
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: `,
+      );
+    });
+  });
 });

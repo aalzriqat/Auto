@@ -731,17 +731,24 @@ async function runVerifyProducer(args, fetchImpl) {
   }
 }
 
-/** Returns the parsed producer context, or null after reporting why it cannot be read. */
+/**
+ * Reads the producer context file. The outcome is a tagged result, not a bare
+ * value, because valid JSON can itself be `null`: a null return would be
+ * indistinguishable from "could not be read" and would skip the validator's own
+ * refusal message (SCRUM-764). `{ ok: false }` means the reason was already
+ * reported; `{ ok: true, value }` carries whatever the file parsed to, which the
+ * validator then accepts or refuses with its message.
+ */
 function readProducerContextFile(contextFile) {
   if (!fs.existsSync(contextFile)) {
     logError(`Refusing coverage validation: producerContext file '${contextFile}' does not exist.`);
-    return null;
+    return { ok: false };
   }
   try {
-    return JSON.parse(fs.readFileSync(contextFile, "utf8"));
+    return { ok: true, value: JSON.parse(fs.readFileSync(contextFile, "utf8")) };
   } catch (err) {
     logError(`Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: ${errorText(err)}`);
-    return null;
+    return { ok: false };
   }
 }
 
@@ -752,13 +759,13 @@ function runValidateArtifact(args) {
     return 1;
   }
 
-  const producerContext = readProducerContextFile(contextFile);
-  if (producerContext === null) {
+  const contextRead = readProducerContextFile(contextFile);
+  if (!contextRead.ok) {
     return 1;
   }
 
   try {
-    const res = validateSonarMainCoverage({ coverageDir, checkoutRoot, expectedSha, producerContext });
+    const res = validateSonarMainCoverage({ coverageDir, checkoutRoot, expectedSha, producerContext: contextRead.value });
     console.log(
       `Validated coverage artifact for SHA ${safeLogValue(res.sha)}: ${safeLogValue(res.sfCount)} source records, ${safeLogValue(res.daCount)} DA lines, ${safeLogValue(res.bytes)} bytes, hash ${safeLogValue(res.sha256.slice(0, 12))}...`
     );

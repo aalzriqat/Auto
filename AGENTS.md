@@ -509,7 +509,10 @@ accepts only the one `coverage-report` created while that job ran. So both
 "Re-run all jobs" (one artifact per attempt) work. If the re-run does not start
 `Sonar Main` by itself, dispatch it. The artifact is kept for 7 days
 (`retention-days: 7`), so past that window the commit needs a "Re-run all jobs"
-or a new commit. Two separate problems:
+or a new commit. Re-running a `Tests` run that is already green on the tip fires
+`Sonar Main` again and can produce a second SonarCloud result at the same SHA,
+which the release guard refuses; re-run `Tests` only after a failure, and cancel
+any extra `Sonar Main` run. Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
   on `main` (only when the run that follows a green `Tests` run did not report,
