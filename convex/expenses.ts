@@ -16,6 +16,7 @@ import { reverseAccountingEvent } from "./accounting/reversals";
 import { cancelPendingPostByKey } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
 import { costBearerValidator, isShowroomBorne, supplierBearerRefusal, type CostBearer } from "./utils/costBearer";
 import {
   openSupplierCostRecovery,
@@ -674,7 +675,7 @@ export const update = mutation({
     const bearerChanges = args.costBearer !== undefined && args.costBearer !== currentBearer;
     if (bearerChanges && currentStatus === "PAID") {
       throw new ConvexError(
-        "Who bears a paid expense cannot be changed. Reverse the expense and record it again instead."
+        "Who bears a paid expense cannot be changed once it is paid."
       );
     }
     const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
@@ -927,6 +928,17 @@ export const reverseExpense = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+
+    // SCRUM-869#c23881: an expense the supplier owes the dealership for cannot be reversed during the pilot,
+    // because that would cancel the supplier obligation. Read-only, tenant-scoped by the index, and before the
+    // rate limiter and every write. Expenses with no live supplier recovery are unaffected.
+    const liveRecovery = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_expense", (q) => q.eq("orgId", args.orgId).eq("expenseId", args.expenseId))
+      .first();
+    if (liveRecovery && liveRecovery.status !== "REVERSED") {
+      assertSupplierSettlementDoorAllowed("SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED");
+    }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
