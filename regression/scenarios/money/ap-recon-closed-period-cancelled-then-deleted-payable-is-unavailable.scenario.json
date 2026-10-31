@@ -1,0 +1,93 @@
+{
+  "id": "ap-recon-closed-period-cancelled-then-deleted-payable-is-unavailable",
+  "fingerprint": "d097295c872d50535a796ab844ee51023f22d92f5f5d9701b03901bff4b274e8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCreditAndMisposting",
+      "input": {
+        "creditMajor": 19000,
+        "misspostedDebitMajor": 19000,
+        "dated": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "period": "earlier",
+        "acknowledged": "allWarnings"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.cancel",
+      "input": {
+        "cancelledAt": "afterCutoff",
+        "reversalDated": "afterCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.hardDeletePayable",
+      "input": {
+        "payable": "cancelled"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "a CLOSED January (read from snapshots) is not made to look reconciled by a February cancellation plus a hard delete"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

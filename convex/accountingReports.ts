@@ -979,12 +979,21 @@ type SupplierPayablesUnavailableReason =
  * How many supplier-payable rows (all open-balance statuses and CANCELLED together) and, separately, how many
  * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
  * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
- * under the Convex 16,384-documents-per-function ceiling. The limit bounds only this function's own
+ * under the Convex ceiling of 32,000 documents scanned per transaction (16 MiB read, 4,096 index
+ * ranges; https://docs.convex.dev/production/state/limits). The limit bounds only this function's own
  * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
  * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
  * still count toward it.
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
+
+/**
+ * How many AP-control lines dated after the cutoff are attributed one by one (one journal-entry read each)
+ * when no native payable survives. Kept small because every attribution is a point read against Convex's
+ * 4,096-index-range ceiling, which the per-payable opening-basis lookups already draw on. The first later line
+ * is enough for the common case, so this bounds only the case where retained opening payables are being excused.
+ */
+const SUPPLIER_PAYABLES_RECON_LATER_LINE_LIMIT = 200;
 
 /**
  * Every status that can carry an open balance, in read order. Exhaustive over the schema's status
@@ -1136,6 +1145,51 @@ function cancelledNativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables"
   return stampAfter(payable.createdAt, cutoff) || stampAfter(payable.cancelledAt ?? payable.updatedAt, cutoff);
 }
 
+/**
+ * SCRUM-876 round 3. Is there AP-control activity dated after the cutoff that the comparison cannot account for?
+ *
+ * The GL side is always read as of the cutoff, so a later line cannot distort it. What a later line can do is
+ * mark that the NATIVE subledger moved after the cutoff: native rows are only their current state, and once a
+ * row is hard-deleted its own timestamps are gone with it. So:
+ * - while a native row survives, any later line is treated as possibly its effect (a future-dated credit,
+ *   a payment, a reversal): UNEXPLAINED, without further reads;
+ * - with no native row, each later line is attributed through its journal entry. It is EXPLAINED only when a
+ *   retained opening payable already rebuilt as of the cutoff accounts for it (a settlement or its reversal,
+ *   both of which carry the payable as their source) or when it is an opening-balance posting, whose own
+ *   date places it on the right side of the cutoff on both sides of the comparison. Anything else - a sale or
+ *   acquisition posting, a reversal of one, a payable that no longer exists, a manual journal - is UNEXPLAINED.
+ *
+ * `lineLimit` bounds the later lines attributed (one entry read each). More than that is OVER_LIMIT, never assumed explained.
+ */
+async function laterApControlActivity(
+  ctx: QueryCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    accountId: Id<"chartOfAccounts">;
+    cutoff: number;
+    hasNativeRow: boolean;
+    datedOpeningPayableIds: ReadonlySet<string>;
+    lineLimit: number;
+  }>,
+): Promise<"NONE" | "UNEXPLAINED" | "OVER_LIMIT"> {
+  const { orgId, accountId, cutoff, hasNativeRow, datedOpeningPayableIds, lineLimit } = request;
+  const lines = await ctx.db
+    .query("journalLines")
+    .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", cutoff))
+    .take(hasNativeRow ? 1 : lineLimit + 1);
+  if (lines.length === 0) return "NONE";
+  if (hasNativeRow) return "UNEXPLAINED";
+  if (lines.length > lineLimit) return "OVER_LIMIT";
+  for (const entryId of new Set(lines.map((line) => line.journalEntryId))) {
+    const entry = await ctx.db.get(entryId);
+    if (!entry || entry.orgId !== orgId) return "UNEXPLAINED";
+    if (entry.category === "OPENING_BALANCE") continue;
+    if (entry.sourceType === "vehicleSupplierPayables" && datedOpeningPayableIds.has(entry.sourceId)) continue;
+    return "UNEXPLAINED";
+  }
+  return "NONE";
+}
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -1207,6 +1261,8 @@ export async function computeSupplierPayablesReconciliation(
   const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
   let hasNativeRow = false;
+  // Opening-basis payables whose balance was rebuilt AS OF the cutoff from their dated payments.
+  const datedOpeningPayableIds = new Set<string>();
   for (const p of rows) {
     if (p.status === "CANCELLED") {
       // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
@@ -1217,8 +1273,10 @@ export async function computeSupplierPayablesReconciliation(
     }
     const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
     if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
-    if (balance.accountId) controlAccounts.add(balance.accountId);
-    else {
+    if (balance.accountId) {
+      controlAccounts.add(balance.accountId);
+      datedOpeningPayableIds.add(p._id);
+    } else {
       // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
       // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
       hasNativeRow = true;
@@ -1236,12 +1294,15 @@ export async function computeSupplierPayablesReconciliation(
   // (sales.create accepts a future saleDate). A GL line on the control account dated after the cutoff is
   // therefore invisible to the GL read while the row already counts its effect. A cancelled native row
   // counts too: its credit can be dated after the cutoff while its reversal is dated before it.
-  if (hasNativeRow && canonical) {
-    const laterLine = await ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", canonical._id).gt("accountingDate", cutoff))
-      .first();
-    if (laterLine) return unavailable("POST_CUTOFF_ACTIVITY");
+  // This runs whether or not a native row survives: a hard-deleted row takes its own timestamps with it,
+  // and the later GL line is then the only evidence left that the native subledger moved (SCRUM-876 round 3).
+  if (canonical) {
+    const later = await laterApControlActivity(ctx, {
+      orgId, accountId: canonical._id, cutoff, hasNativeRow, datedOpeningPayableIds,
+      lineLimit: Math.min(readLimit, SUPPLIER_PAYABLES_RECON_LATER_LINE_LIMIT),
+    });
+    if (later === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+    if (later === "UNEXPLAINED") return unavailable("POST_CUTOFF_ACTIVITY");
   }
 
   const glByCurrency=new Map<string,number>();

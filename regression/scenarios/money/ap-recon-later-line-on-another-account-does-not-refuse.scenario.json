@@ -1,0 +1,78 @@
+{
+  "id": "ap-recon-later-line-on-another-account-does-not-refuse",
+  "fingerprint": "54de9cf07f2f7edf35086bc4272d4b59ffe6014d428309cce5e3034ff5c58211",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postCashDebit",
+      "input": {
+        "debitMajor": 5,
+        "dated": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "periodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCredit",
+      "input": {
+        "creditMajor": 19000,
+        "dated": "earlierPeriod",
+        "withPayable": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "periodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "CONTROL: a later line on a DIFFERENT account does not refuse the AP reconciliation, with or without a payable row"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

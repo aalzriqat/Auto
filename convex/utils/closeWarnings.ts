@@ -23,6 +23,16 @@ export const SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING =
   "Supplier payables reconciliation could not be completed as of the period end: supplier payable or accounts payable activity is dated after that date (or the date is not usable), and the payables cannot be restated to it. Review supplier payables manually.";
 
 /**
+ * The warning for an UNAVAILABLE supplier-payables reconciliation, chosen by its reason. Any reason not named here
+ * (OVER_LIMIT, OPENING_SOURCE_UNAVAILABLE) keeps the over-limit text, as it did before the reasons were split.
+ */
+export function supplierPayablesUnavailableWarning(reason: string | undefined): string {
+  if (reason === "PENDING_POSTINGS") return SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING;
+  if (reason === "POST_CUTOFF_ACTIVITY" || reason === "INVALID_DATE") return SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING;
+  return SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING;
+}
+
+/**
  * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
  * the period end because deposit activity is dated after it. Server text is the acknowledgement key,
  * like the two above; the close dialog translates it at display time only.

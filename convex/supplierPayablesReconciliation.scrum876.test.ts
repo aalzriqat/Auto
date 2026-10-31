@@ -99,6 +99,24 @@ const postApLine = (s: Seed, period: { _id: Id<"accountingPeriods"> }, accountin
     await incrementAccountSnapshot(ctx, { orgId: s.orgId, accountId: account._id, currency: "JOD", periodId: period._id, debitMinor, creditMinor });
   });
 
+/** A GL line on some OTHER system account, so a test can prove only the AP control account is probed. */
+const postCashLine = (s: Seed, period: { _id: Id<"accountingPeriods"> }, accountingDate: number, debitMinor: number) =>
+  s.t.run(async (ctx) => {
+    const account = (await ctx.db
+      .query("chartOfAccounts")
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "CASH_ON_HAND"))
+      .unique())!;
+    const journalEntryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: `JRN-876-CASH-${accountingDate}-${debitMinor}`, accountingDate, sourceType: "vehicles",
+      sourceId: s.vehicleId, category: "SYSTEM", memo: "SCRUM-876 other-account fixture", status: "POSTED", currency: "JOD", postedBy: s.userId,
+      postedAt: accountingDate, createdAt: accountingDate,
+    });
+    await ctx.db.insert("journalLines", {
+      orgId: s.orgId, journalEntryId, lineNumber: 1, accountId: account._id, debitMinor, creditMinor: 0, currency: "JOD", scale: 3, accountingDate,
+    });
+    await incrementAccountSnapshot(ctx, { orgId: s.orgId, accountId: account._id, currency: "JOD", periodId: period._id, debitMinor, creditMinor: 0 });
+  });
+
 const reconAt = (s: Seed, toDate: number) => s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId, toDate });
 const checklist = (s: Seed, periodId: Id<"accountingPeriods">) => s.asUser.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
 const supplierWarnings = (warnings: string[]) => warnings.filter((w) => /supplier payables/i.test(w));
@@ -375,5 +393,125 @@ describe("SCRUM-876 - a payable cancelled after the cutoff cannot be erased from
     expect(over.status).toBe("UNAVAILABLE");
     expect(over.unavailableReason).toBe("OVER_LIMIT");
     expect(over.isReconciled).toBe(false);
+  });
+});
+
+// SCRUM-876 round 3 (Seat 2, HIGH): the later-AP-line probe used to run only while a native payable row survived,
+// so hard-deleting the last native row switched the only evidence of later AP activity off. The probe now runs for
+// every org; a later line is excused only when a retained OPENING payable's dated reconstruction accounts for it.
+/** The Seat 2 reproduction up to (not including) the deletion: a January payable, a misposted January debit (GL 0), then a February cancellation. */
+async function januaryPayableCancelledInFebruary(tag: string) {
+  const s = await seedDealer(tag);
+  const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+  await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+  await postApLine(s, s.p1, IN_P1, { debitMinor: JOD(19_000) });
+  const live = await reconAt(s, P1_END);
+  expect(live.status).toBe("AVAILABLE"); // CONTROL: while the row lives the real January difference is reported
+  expect(live.isReconciled).toBe(false);
+  await cancelPayable(s, id, IN_P2);
+  await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(19_000) });
+  const retained = await reconAt(s, P1_END);
+  expect(retained.unavailableReason).toBe("POST_CUTOFF_ACTIVITY"); // CONTROL: the retained cancelled row is refused
+  return { s, id };
+}
+
+describe("SCRUM-876 - hard-deleting the payable cannot restore a false reconciliation", () => {
+  test("REPRO (Seat 2): a January payable cancelled in February and then hard-deleted is not read as reconciled", async () => {
+    const { s, id } = await januaryPayableCancelledInFebruary("delcxl");
+    await s.t.run((ctx) => ctx.db.delete(id));
+
+    const r = await reconAt(s, P1_END);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+    expect(r.byCurrency).toEqual({});
+    const c = await checklist(s, s.p1._id);
+    expect(c.supplierPayablesReconciliation.status).toBe("UNAVAILABLE");
+    expect(c.warnings).toContain(SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING);
+    expect(c.canClose).toBe(true); // owner decision: warns, never blocks
+  });
+
+  test("a CLOSED January (read from snapshots) is not made to look reconciled by a February cancellation plus a hard delete", async () => {
+    const s = await seedDealer("delclosed");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    await postApLine(s, s.p1, IN_P1, { debitMinor: JOD(19_000) });
+    await s.asUser.mutation(api.accountingPeriods.open, { orgId: s.orgId, periodId: s.p1._id });
+    const open = await checklist(s, s.p1._id);
+    await s.asUser.mutation(api.accountingPeriods.close, { orgId: s.orgId, periodId: s.p1._id, acknowledgedWarnings: open.warnings });
+    expect((await s.t.run((ctx) => ctx.db.get(s.p1._id)))?.status).toBe("CLOSED");
+
+    await cancelPayable(s, id, IN_P2);
+    await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(19_000) });
+    await s.t.run((ctx) => ctx.db.delete(id));
+
+    const r = await reconAt(s, P1_END);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+
+  test("a part-paid January payable whose February payment survives only in the GL is not read as reconciled once the row is deleted", async () => {
+    const s = await seedDealer("delpaid");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    await postApLine(s, s.p1, IN_P1, { debitMinor: JOD(19_000) });
+    await s.t.run((ctx) => ctx.db.patch(id, { amountPaid: 5_000, status: "PARTIALLY_PAID", paidAt: IN_P2, updatedAt: IN_P2 } as never));
+    await postApLine(s, s.p2, IN_P2, { debitMinor: JOD(5_000) });
+    await s.t.run((ctx) => ctx.db.delete(id));
+
+    const r = await reconAt(s, P1_END);
+    expect(r.isReconciled).toBe(false);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+
+  test("a payable whose AP credit is dated after the cutoff is not compared once the row is deleted", async () => {
+    const s = await seedDealer("delfuture");
+    const id = await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p2, IN_P2, { creditMinor: JOD(19_000) });
+    await s.t.run((ctx) => ctx.db.delete(id));
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+    expect(r.isReconciled).toBe(false);
+  });
+
+  test("the omitted-cutoff (now) read refuses a future-dated AP line even with no payable row at all", async () => {
+    const s = await seedDealer("delnow");
+    await postApLine(s, s.p2, Date.now() + 24 * 60 * 60 * 1000, { creditMinor: JOD(19_000) });
+    const r = await s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, undefined));
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("POST_CUTOFF_ACTIVITY");
+  });
+});
+
+describe("SCRUM-876 - controls that the unconditional later-line probe must leave alone", () => {
+  test("CONTROL: an empty system (no payables, no AP lines) reconciles at zero and raises no supplier warning", async () => {
+    const s = await seedDealer("empty");
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+    expect(supplierWarnings((await checklist(s, s.p1._id)).warnings)).toEqual([]);
+  });
+
+  test("CONTROL: with no payable row, a January GL balance is still reported as a difference (never hidden, never unavailable)", async () => {
+    const s = await seedDealer("gloneonly");
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(false);
+    expect(r.byCurrency.JOD).toMatchObject({ glBalanceMinor: JOD(19_000), subledgerBalanceMinor: 0, isReconciled: false });
+  });
+
+  test("CONTROL: a later line on a DIFFERENT account does not refuse the AP reconciliation, with or without a payable row", async () => {
+    const s = await seedDealer("otheracct");
+    await postCashLine(s, s.p2, IN_P2, JOD(5_000));
+    expect((await reconAt(s, P1_END)).status).toBe("AVAILABLE"); // no rows
+    await insertPayable(s, { amountDue: 19_000, createdAt: IN_P1, updatedAt: IN_P1 });
+    await postApLine(s, s.p1, IN_P1, { creditMinor: JOD(19_000) });
+    const r = await reconAt(s, P1_END);
+    expect(r.status).toBe("AVAILABLE"); // a surviving row
+    expect(r.isReconciled).toBe(true);
   });
 });
