@@ -182,13 +182,30 @@ jobs:
       env:
         NODE_ENV: test
     - name: Record the tested merge for trusted Sonar
-      if: always() && steps.slices.outcome == 'success' && github.event_name == 'pull_request'
-      # A re-run keeps its original merge, so the trusted Sonar workflow binds
-      # coverage to this SHA instead of guessing from timestamps. This file is
-      # a staleness guard, not an authenticity proof: PR code controls this job.
+      if: always() && steps.slices.outcome == 'success'
+      # Records tested SHA and run metadata for trusted Sonar workflows (both PR and main).
+      # On PR, GITHUB_SHA is the tested merge; on push to main, GITHUB_SHA is the pushed commit.
+      # This file is a staleness and provenance guard, verified before SonarCloud analysis.
       run: |
         mkdir -p coverage
         printf '%s\n' "$GITHUB_SHA" > coverage/tested-merge-sha.txt
+        node -e "
+          const fs = require('node:fs');
+          const lcovPath = 'coverage/lcov.info';
+          const bytes = fs.existsSync(lcovPath) ? fs.statSync(lcovPath).size : 0;
+          const manifest = {
+            sha: process.env.GITHUB_SHA,
+            ref: process.env.GITHUB_REF,
+            event_name: process.env.GITHUB_EVENT_NAME,
+            workflow: process.env.GITHUB_WORKFLOW,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            repository: process.env.GITHUB_REPOSITORY,
+            lcovBytes: bytes,
+            timestamp: new Date().toISOString()
+          };
+          fs.writeFileSync('coverage/coverage-provenance.json', JSON.stringify(manifest, null, 2));
+        "
 
     - name: Upload coverage report
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

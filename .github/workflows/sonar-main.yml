@@ -1,158 +1,110 @@
 name: Sonar Main
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
     branches: ["main"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: sonar-main-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  coverage-slice:
-    name: coverage slice ${{ matrix.slice }}/4
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    # SCRUM-763: On runs 41143529980 and 41150922288 at main d5b35624, the
-    # monolithic coverage step took ~64 min on a single runner, causing the
-    # 75-min job to be cancelled during the SonarCloud scan (6 of last 10 runs
-    # timed out). Slicing Sonar coverage into 4 parallel slices cuts coverage time
-    # to ~10-15 min per runner. 40 minutes provides ample headroom.
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        slice: [1, 2, 3, 4]
-
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 11.13.0
-
-      - name: Use Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-          cache: "pnpm"
-
-      - name: Install dependencies without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Generate coverage for Sonar
-        run: |
-          set -euo pipefail
-          # SCRUM-752 telemetry: the runner's resources and one JSON line per
-          # Vitest process, uploaded beside (never inside) the blob directory.
-          echo "runner: nproc=$(nproc) mem=$(free -m | awk '/^Mem:/{print $2}')MiB cpu.max=$(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a)"
-          mkdir -p coverage-timings
-          AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/sonar node scripts/runVitestCoverageShards.mjs sonar
-        env:
-          NODE_ENV: test
-          AUTOFLOW_COVERAGE_PHASE: run
-          AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/4
-          AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
-          AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
-          # SCRUM-752: two batch processes at a time on the 4-core runner.
-          VITEST_COVERAGE_CONCURRENCY: "2"
-          # Keep the same bounded ceiling proven by PR coverage. This does not
-          # relax coverage or buy success with unbounded memory; it prevents the
-          # main-only Sonar path from reintroducing the V8 OOM already reproduced
-          # in the identical coverage runner.
-          NODE_OPTIONS: --max-old-space-size=5632
-
-      - name: Upload coverage blobs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-blobs-${{ matrix.slice }}
-          path: coverage-blobs/
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload coverage timings
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-timings-${{ matrix.slice }}
-          path: coverage-timings/
-          if-no-files-found: warn
-          retention-days: 14
-
   scan:
-    needs: coverage-slice
-    # SCRUM-384 / SCRUM-763: Runs even when a slice failed or was cancelled.
-    # A job skipped by its condition satisfies a required status check in GitHub,
-    # so without always() a failed slice would let this check pass. The first
-    # step below turns any non-success slice result into a hard failure.
-    if: always() && github.ref == 'refs/heads/main'
+    name: scan
+    # SCRUM-764: Runs on main when Tests workflow completes, or on manual workflow_dispatch.
+    # Reuses the exact same-commit coverage report produced by Tests across 4 slices + mobile + shared.
+    # Fails closed on missing, failed, cancelled, stale, truncated, or unverified producer coverage.
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     env:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
     steps:
-      - name: Require every coverage slice to succeed
-        id: slices
+      - name: Verify producer run conclusion
+        if: github.event_name == 'workflow_run'
         env:
-          SLICES_RESULT: ${{ needs.coverage-slice.result }}
+          PRODUCER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          PRODUCER_WORKFLOW: ${{ github.event.workflow_run.name }}
+          PRODUCER_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          PRODUCER_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          EXPECTED_REPO: ${{ github.repository }}
         run: |
-          if [ "$SLICES_RESULT" != "success" ]; then
-            echo "::error::Coverage slices concluded '$SLICES_RESULT'; every slice must succeed."
+          set -euo pipefail
+          echo "Producer workflow: $PRODUCER_WORKFLOW (run id: ${{ github.event.workflow_run.id }})"
+          echo "Producer conclusion: $PRODUCER_CONCLUSION"
+          echo "Producer repository: $PRODUCER_REPO (expected: $EXPECTED_REPO)"
+          echo "Producer branch: $PRODUCER_BRANCH"
+
+          if [ "$PRODUCER_REPO" != "$EXPECTED_REPO" ]; then
+            echo "::error::Producer repository '$PRODUCER_REPO' does not match '$EXPECTED_REPO'."
             exit 1
           fi
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+          if [ "$PRODUCER_WORKFLOW" != "Tests" ]; then
+            echo "::error::Triggering workflow must be 'Tests', got '$PRODUCER_WORKFLOW'."
+            exit 1
+          fi
+
+          if [ "$PRODUCER_BRANCH" != "main" ]; then
+            echo "::error::Triggering branch must be 'main', got '$PRODUCER_BRANCH'."
+            exit 1
+          fi
+
+          if [ "$PRODUCER_CONCLUSION" != "success" ]; then
+            echo "::error::Producer Tests workflow did not succeed (conclusion: '$PRODUCER_CONCLUSION'); refusing Sonar scan."
+            exit 1
+          fi
+
+      - name: Checkout target commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 11.13.0
-
-      - name: Use Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-          cache: "pnpm"
-
-      - name: Install dependencies without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Download coverage blobs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: coverage-blobs-*
-          path: coverage-blobs
-          merge-multiple: true
-
-      - name: Merge coverage from every slice
+      - name: Resolve producer run ID
+        id: producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          AUTOFLOW_COVERAGE_BLOB_DIR=coverage-blobs/sonar node scripts/runVitestCoverageShards.mjs sonar
-        env:
-          NODE_ENV: test
-          AUTOFLOW_COVERAGE_PHASE: merge
-          NODE_OPTIONS: --max-old-space-size=5632
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+          else
+            TARGET_SHA="${{ github.sha }}"
+            echo "Searching for successful Tests run for commit $TARGET_SHA on main..."
+            RUN_ID="$(gh run list --workflow=test.yml --commit="$TARGET_SHA" --status=success --limit=1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -z "$RUN_ID" ]; then
+              echo "::error::No successful Tests workflow run found for commit $TARGET_SHA on main."
+              exit 1
+            fi
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
 
-      # SCRUM-293: append mobile jest coverage to the report Sonar reads.
-      - name: Mobile coverage for Sonar
-        run: |
-          pnpm mobile:coverage:sonar
-          node scripts/appendMobileLcov.mjs
-        env:
-          NODE_ENV: test
+      - name: Download coverage report from Tests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report
+          path: coverage
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.producer.outputs.run_id }}
 
-      # SCRUM-552: append packages/shared vitest coverage the same way.
-      - name: Shared coverage for Sonar
-        run: |
-          pnpm shared:coverage:sonar
-          node scripts/appendSharedLcov.mjs
+      - name: Validate coverage artifact provenance and census
         env:
-          NODE_ENV: test
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          node scripts/validateSonarMainCoverage.mjs coverage . "$EXPECTED_SHA"
 
       - name: SonarCloud scan
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
