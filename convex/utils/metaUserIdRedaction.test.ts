@@ -45,6 +45,7 @@ describe("maskMetaUserIdsForAdmin", () => {
   test("masks a bare nine-digit-or-longer id in the callback sources only", () => {
     expect(maskMetaUserIdsForAdmin("facebook-oauth", `seen ${ID} here`)).toBe(`seen ${REDACTED_META_USER} here`);
     expect(maskMetaUserIdsForAdmin("facebook-oauth", "seen 12345678 here")).toBe("seen 12345678 here");
+    expect(maskMetaUserIdsForAdmin("facebook-oauth", "seen 123456789 here")).toBe(`seen ${REDACTED_META_USER} here`);
     expect(maskMetaUserIdsForAdmin("facebook", `Facebook Page ${ID} is connected to more than one org`)).toBe(
       `Facebook Page ${ID} is connected to more than one org`,
     );
