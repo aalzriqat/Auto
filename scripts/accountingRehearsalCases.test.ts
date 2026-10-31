@@ -178,6 +178,56 @@ describe("vehicle fixture rate-limit retry", () => {
     expect(attempts).toBe(1);
     expect(sleeps).toEqual([]);
   });
+
+  describe("SCRUM-762: vehicle fixture supplier identity requirements", () => {
+    const baseVehicle = {
+      orgId: "org-1",
+      make: "Toyota",
+      model: "Camry",
+      year: 2022,
+      mileage: 800,
+      color: "Blue",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      sellingPrice: 22000,
+      status: "AVAILABLE",
+    };
+
+    test.each([
+      ["SOURCED with missing supplier", { sourceType: "SOURCED", sourceCost: 15000 }, /A supplier is required/],
+      ["SOURCED with purchaseSupplierId conflict", { sourceType: "SOURCED", sourceCost: 15000, sourcedSupplierId: "sup-1", purchaseSupplierId: "sup-2" }, /sourced vehicle cannot have a purchase supplier/],
+      ["ON_ACCOUNT with missing supplier", { sourceType: "STOCK", purchasePrice: 8000, purchasePaymentMethod: "ON_ACCOUNT" }, /A supplier is required/],
+      ["ON_ACCOUNT with sourcedSupplierId conflict", { sourceType: "STOCK", purchasePrice: 8000, purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId: "sup-1", sourcedSupplierId: "sup-2" }, /on-account stock vehicle cannot have a sourced supplier/],
+    ] as const)("boundary contract: %s is refused by vehicle intake rules", async (_desc, extraArgs, expectedError) => {
+      const backend = makeBackend();
+      const result = await backend.authedCall("mutation", "vehicles:create", {
+        ...baseVehicle,
+        vin: "VIN-BOUNDARY-TEST",
+        idempotencyKey: `test-${_desc}`,
+        ...extraArgs,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(expectedError);
+    });
+
+    test("createVehicleForRehearsal preserves and forwards canonical supplier ids to mutation", async () => {
+      const calls: Array<{ type: string; name: string; args: Record<string, unknown> }> = [];
+      const ownerMust = async (type: string, name: string, args: Record<string, unknown>) => {
+        calls.push({ type, name, args });
+        return "vehicle-id-123";
+      };
+      const res = await createVehicleForRehearsal(ownerMust, {
+        orgId: "org-1",
+        vin: "VIN-PRESERVE-01",
+        sourceType: "SOURCED",
+        sourceCost: 15000,
+        sourcedSupplierId: "sup-canonical-1",
+      });
+      expect(res).toBe("vehicle-id-123");
+      expect(calls).toHaveLength(1);
+      expect(calls[0].args.sourcedSupplierId).toBe("sup-canonical-1");
+    });
+  });
 });
 
 type Deposit = {
@@ -1640,8 +1690,24 @@ function makeBackend(defects: Defects = {}) {
         // to the type checker instead of widening every caller's result.
         // The product refuses a SOURCED vehicle without `sourceCost` — and
         // ignores `purchasePrice` for it. Modelled so the wrong field fails here.
-        if (args.sourceType === "SOURCED" && (args.sourceCost === undefined || args.sourceCost === null)) {
-          return { ok: false as const, error: "Sourced vehicles require a supplier cost (sourceCost)." };
+        if (args.sourceType === "SOURCED") {
+          if (args.sourceCost === undefined || args.sourceCost === null) {
+            return { ok: false as const, error: "Sourced vehicles require a supplier cost (sourceCost)." };
+          }
+          if (args.purchaseSupplierId) {
+            return { ok: false as const, error: "A sourced vehicle cannot have a purchase supplier." };
+          }
+          if (!args.sourcedSupplierId) {
+            return { ok: false as const, error: "A supplier is required." };
+          }
+        }
+        if (args.purchasePaymentMethod === "ON_ACCOUNT") {
+          if (args.sourcedSupplierId) {
+            return { ok: false as const, error: "An on-account stock vehicle cannot have a sourced supplier." };
+          }
+          if (!args.purchaseSupplierId) {
+            return { ok: false as const, error: "A supplier is required." };
+          }
         }
         const madeVehicle = replayableCreate("veh", args)!;
         if (madeVehicle.ok) {
@@ -3145,6 +3211,7 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
       expect(statusOf(results, other), `${other} must stay green when only ${defect} is injected`).toBe("PASS");
     }
   });
+
   test("M486C1 rejects a balanced owned cash sale credited to the wrong revenue account", async () => {
     const results = await runAgainst({ cashSaleWrongRevenueAccount: true });
     expect(statusOf(results, "M486C1")).toBe("FAIL");

@@ -43,17 +43,75 @@ async function refuses(operation, expectedMessage) {
   if (!refused) throw new Error("Opening containment did not refuse");
 }
 const key = () => globalThis.crypto.randomUUID();
+export const JOURNAL_PAGE_SIZE = 100;
+export const MAX_JOURNAL_PAGES = 50;
+export const MAX_JOURNAL_ENTRIES = 5000;
 const paginationOpts = { numItems: 100, cursor: null };
-/** @param {Must} must @param {string} orgId */
-async function journals(must, orgId) {
-  const response = row(
-    await must("query", "accountingLedger:listJournalEntries", {
-      orgId,
-      paginationOpts,
-    }),
-  );
-  equal(response.isDone, true, "bounded journal inventory complete");
-  return rows(response.page);
+
+/**
+ * Reads all journal entries for an organization through bounded Convex pagination.
+ *
+ * @param {Must} must
+ * @param {string} orgId
+ * @param {{ pageSize?: number, maxPages?: number, maxEntries?: number }} [bounds]
+ * @returns {Promise<Row[]>}
+ */
+export async function journals(must, orgId, bounds = {}) {
+  const pageSize = bounds.pageSize ?? JOURNAL_PAGE_SIZE;
+  const maxPages = bounds.maxPages ?? MAX_JOURNAL_PAGES;
+  const maxEntries = bounds.maxEntries ?? MAX_JOURNAL_ENTRIES;
+
+  const allEntries = [];
+  let cursor = null;
+  const seenCursors = new Set();
+
+  for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    if (cursor !== null) {
+      if (typeof cursor !== "string" || !cursor) {
+        throw new Error("Opening assertion refused: malformed pagination cursor");
+      }
+      if (seenCursors.has(cursor)) {
+        throw new Error("Opening assertion refused: repeated cursor in journal pagination");
+      }
+      seenCursors.add(cursor);
+    }
+
+    const response = row(
+      await must("query", "accountingLedger:listJournalEntries", {
+        orgId,
+        paginationOpts: { numItems: pageSize, cursor },
+      }),
+    );
+
+    if (!Array.isArray(response.page)) {
+      throw new Error("Opening public row set unavailable");
+    }
+    if (typeof response.isDone !== "boolean") {
+      throw new Error("Opening assertion refused: malformed pagination completion status");
+    }
+
+    const pageRows = rows(response.page);
+    allEntries.push(...pageRows);
+
+    if (allEntries.length > maxEntries) {
+      throw new Error("Opening assertion refused: journal inventory exceeded row budget");
+    }
+
+    if (response.isDone) {
+      return allEntries;
+    }
+
+    if (pageRows.length === 0) {
+      throw new Error("Opening assertion refused: non-progress in journal pagination");
+    }
+
+    cursor = response.continueCursor;
+    if (typeof cursor !== "string" || !cursor) {
+      throw new Error("Opening assertion refused: missing continuation cursor");
+    }
+  }
+
+  throw new Error("Opening assertion refused: bounded journal inventory complete");
 }
 /** @param {Must} must @param {string} orgId */
 async function balances(must, orgId) {
