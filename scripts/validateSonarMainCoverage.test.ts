@@ -1291,6 +1291,35 @@ describe("validateSonarMainCoverage command line", () => {
     }
   });
 
+  it("verify-producer logs an API-derived refusal on one line when the workflow name carries a CR/LF (Sonar S5145)", async () => {
+    const { log, error } = silence();
+
+    const code = await main(
+      verifyArgs(),
+      createMockFetch({ workflow: { name: "Tests\r\nInjected: forged log line" } }),
+    );
+
+    expect(code).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      "Workflow definition name 'Tests__Injected: forged log line' does not match expected 'Tests'.",
+    );
+    expect(String(error.mock.calls[0][0])).not.toMatch(/[\r\n]/);
+  });
+
+  it("validate-artifact logs a missing producerContext path on one line when it carries a CR/LF (Sonar S5145)", async () => {
+    const { error } = silence();
+
+    const code = await main(["validate-artifact", "cov", "root", VALID_SHA, "ctx\r\nInjected.json"]);
+
+    expect(code).toBe(1);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(
+      "Refusing coverage validation: producerContext file 'ctx__Injected.json' does not exist.",
+    );
+  });
+
   it("safeLogValue neutralises CR and LF so a value cannot forge a log line or GITHUB_OUTPUT key (Sonar S5145)", () => {
     expect(safeLogValue(`${VALID_SHA}\r\nrun_id=999\ntarget_sha=${OTHER_SHA}`)).toBe(
       `${VALID_SHA}__run_id=999_target_sha=${OTHER_SHA}`,
@@ -1445,7 +1474,9 @@ describe("validateSonarMainCoverage entrypoint", () => {
         throw boom;
       }),
     ).toBe(1);
-    expect(error).toHaveBeenCalledWith(boom);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(safeLogValue(boom.stack));
+    expect(String(error.mock.calls[0][0])).not.toMatch(/[\r\n]/);
   });
 
   it("the script run directly exits 1 with usage when given no arguments", () => {

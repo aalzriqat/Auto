@@ -585,6 +585,11 @@ export function safeLogValue(value) {
   return String(value).replace(/[\r\n]/g, "_");
 }
 
+/** Writes one error line to stderr with CR/LF neutralised (OWASP log injection; Sonar S5145). */
+function logError(err) {
+  console.error(safeLogValue(errorText(err)));
+}
+
 function appendGithubOutput(outputFile, verified) {
   const runId = safeLogValue(verified.runId);
   const runAttempt = safeLogValue(verified.runAttempt);
@@ -611,7 +616,7 @@ async function runVerifyProducer(args, fetchImpl) {
     }
     return 0;
   } catch (err) {
-    console.error(errorText(err));
+    logError(err);
     return 1;
   }
 }
@@ -619,15 +624,13 @@ async function runVerifyProducer(args, fetchImpl) {
 /** Returns the parsed producer context, or null after reporting why it cannot be read. */
 function readProducerContextFile(contextFile) {
   if (!fs.existsSync(contextFile)) {
-    console.error(`Refusing coverage validation: producerContext file '${contextFile}' does not exist.`);
+    logError(`Refusing coverage validation: producerContext file '${contextFile}' does not exist.`);
     return null;
   }
   try {
     return JSON.parse(fs.readFileSync(contextFile, "utf8"));
   } catch (err) {
-    console.error(
-      `Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: ${errorText(err)}`
-    );
+    logError(`Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: ${errorText(err)}`);
     return null;
   }
 }
@@ -647,11 +650,11 @@ function runValidateArtifact(args) {
   try {
     const res = validateSonarMainCoverage({ coverageDir, checkoutRoot, expectedSha, producerContext });
     console.log(
-      `Validated coverage artifact for SHA ${res.sha}: ${res.sfCount} source records, ${res.daCount} DA lines, ${res.bytes} bytes, hash ${res.sha256.slice(0, 12)}...`
+      `Validated coverage artifact for SHA ${safeLogValue(res.sha)}: ${safeLogValue(res.sfCount)} source records, ${safeLogValue(res.daCount)} DA lines, ${safeLogValue(res.bytes)} bytes, hash ${safeLogValue(res.sha256.slice(0, 12))}...`
     );
     return 0;
   } catch (err) {
-    console.error(err instanceof Error ? err.message : err);
+    logError(err);
     return 1;
   }
 }
@@ -678,7 +681,7 @@ export async function runAsScript(run = main) {
   try {
     return await run();
   } catch (err) {
-    console.error(err);
+    logError(err instanceof Error && err.stack ? err.stack : err);
     return 1;
   }
 }
