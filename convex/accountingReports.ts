@@ -1315,8 +1315,9 @@ async function openingAccountAllocationsSupported(ctx: QueryCtx, {
 }: OpeningControlAllocationContext): Promise<boolean> {
   const policy = openingPolicyForAccount(account, true);
   for (const row of allocations) {
+    const purpose = "purpose" in row ? row.purpose : undefined;
     const allowed = isRemainingOpeningKind(row.kind)
-      ? await openingAccountAllowsFamily(ctx, orgId, account, currency, row.kind, "purpose" in row ? row.purpose : undefined)
+      ? await openingAccountAllowsFamily(ctx, orgId, account, currency, row.kind, purpose)
       : row.kind === policy;
     if (!allowed) return false;
     const matches = results.filter(result => result.rowKey === row.rowKey);
