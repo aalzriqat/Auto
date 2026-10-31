@@ -3764,13 +3764,28 @@ export async function runRehearsalCases(ctx) {
     fuelType: "Gasoline", transmission: "Automatic", status: "AVAILABLE",
     idempotencyKey: `rehearsal-${tag.toLowerCase()}-vehicle-${stamp}`, ...extra,
   });
-  const supSourcedCar = (tag, stamp) => supCar(tag, stamp, {
-    sellingPrice: 22_000, sourceType: "SOURCED", sourcedFromName: `Rehearsal Supplier ${stamp}`, sourceCost: 15_000,
-  });
-  const supOnAccountCar = (tag, stamp, price) => supCar(tag, stamp, {
-    sellingPrice: price + 4_000, sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT",
-    purchaseSupplierName: `Rehearsal Supplier ${stamp}`,
-  });
+  const supSupplier = async (tag, stamp) => {
+    const res = await ownerMust("mutation", "suppliers:create", {
+      orgId,
+      idempotencyKey: `rehearsal-${tag.toLowerCase()}-supplier-${stamp}`,
+      displayName: `Rehearsal Supplier ${tag}-${stamp}`,
+    });
+    return res.supplierId;
+  };
+  const supSourcedCar = async (tag, stamp) => {
+    const sourcedSupplierId = await supSupplier(tag, stamp);
+    return supCar(tag, stamp, {
+      sellingPrice: 22_000, sourceType: "SOURCED", sourcedSupplierId,
+      sourcedFromName: `Rehearsal Supplier ${tag}-${stamp}`, sourceCost: 15_000,
+    });
+  };
+  const supOnAccountCar = async (tag, stamp, price) => {
+    const purchaseSupplierId = await supSupplier(tag, stamp);
+    return supCar(tag, stamp, {
+      sellingPrice: price + 4_000, sourceType: "STOCK", purchasePrice: price, purchasePaymentMethod: "ON_ACCOUNT",
+      purchaseSupplierId, purchaseSupplierName: `Rehearsal Supplier ${tag}-${stamp}`,
+    });
+  };
   const supPayableOf = async (vehicleId) => {
     const rows = await ownerMust("query", "sourcingPayables:list", { orgId });
     const mine = (rows ?? []).filter((r) => String(r.vehicleId) === String(vehicleId));
