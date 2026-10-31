@@ -108,16 +108,24 @@ describe("pull-request workflow secret boundary", () => {
       });
     }
 
-    // workflow_run always carries github.ref = main, so a ref key would merge PRs.
+    // workflow_run always carries github.ref = main, so a ref key would merge
+    // PRs. Only a run that passes the job `if` may join the per-PR group: a
+    // skipped run in that group could cancel the live run of a newer head.
     const jev = parseYaml(
       readFileSync(path.join(workflowsDir, "jev-shadow-impact.yml"), "utf8"),
-    ) as { concurrency?: unknown };
-    expect(jev.concurrency).toEqual({
-      group:
-        "jev-shadow-impact-${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number || github.run_id }}",
-      "cancel-in-progress":
-        "${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' }}",
-    });
+    ) as { concurrency?: { group?: string; "cancel-in-progress"?: unknown } };
+    const group = (jev.concurrency?.group ?? "").replace(/\s+/g, " ");
+    for (const condition of [
+      "github.event.workflow_run.event == 'pull_request' &&",
+      "github.event.workflow_run.conclusion == 'success' &&",
+      "github.event.workflow_run.head_repository.full_name == github.repository &&",
+      "format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||",
+      "format('run-{0}', github.run_id)",
+    ]) {
+      expect(group).toContain(condition);
+    }
+    expect(group).not.toContain("github.ref");
+    expect(jev.concurrency?.["cancel-in-progress"]).toBe(true);
   });
 
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {

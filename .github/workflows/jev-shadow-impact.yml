@@ -24,14 +24,24 @@ permissions:
   pull-requests: read
 
 # workflow_run always runs with github.ref = main, so a ref-keyed group would
-# put every PR in one group. Key PR-triggered runs on the PR number instead and
-# cancel only those; push and workflow_dispatch get their own group per run.
-# Invariant Governance cancels a superseded PR run, which then concludes
-# `cancelled` and never triggers this workflow, so an older head cannot start
-# here after a newer one.
+# put every PR in one group. Workflow-level concurrency is evaluated before the
+# job `if`, so a run the job will skip (Invariant Governance cancelled or
+# failed) must not join the PR group, or it could cancel the live run of a
+# newer head (the SCRUM-777 browser-attack-swarm lesson). Only a run that
+# passes the same conditions as the job `if` joins the per-PR group, where a
+# newer analysis replaces an older one. Push, workflow_dispatch and every
+# skipped run are alone in a group of their own, so they are never cancelled.
 concurrency:
-  group: jev-shadow-impact-${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' }}
+  group: >-
+    jev-shadow-impact-${{
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number &&
+      format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+      format('run-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
 
 jobs:
   shadow-impact:
