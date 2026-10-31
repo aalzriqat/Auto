@@ -49,6 +49,7 @@ import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { simplePayloadHash } from "./accounting/postingRules";
 import { hasNonCanonicalVinCharacters, isPlaceholderVin } from "./utils/vin";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { assertSupplierSettlementDoorAllowed, isSupplierSettlementDoorDisabled } from "./utils/supplierSettlementContainment";
 import { SYSTEM_KEYS, type SystemKey } from "./utils/defaultChart";
 import { disbursementAccountKey } from "./accounting/postingRules";
 import { isSystemAccountMapped } from "./chartOfAccounts";
@@ -2185,7 +2186,7 @@ export const correctAcquisitionCost = mutation({
     if (vehicle.sourceType === "SOURCED") {
       throwAppError(
         AppErrorCode.COST_CORRECTION_SOURCED,
-        "Sourced vehicles are not capitalized into inventory. Adjust the supplier payable instead."
+        "Sourced vehicles are not capitalized into inventory, so their cost cannot be corrected here. Nothing has been changed."
       );
     }
     if (vehicle.status === "SOLD") {
@@ -2245,6 +2246,8 @@ export const correctAcquisitionCost = mutation({
     const rewritesPayable = originalMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(args.correctionType);
     const payableAdjustable = isPayableAdjustable(row, currency, previousCost);
     if (rewritesPayable) {
+      // SCRUM-869#c23881: rewriting a supplier obligation is a correction door the pilot refuses, before any write.
+      assertSupplierSettlementDoorAllowed("SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED");
       if (newMinor === 0) {
         throwAppError(
           AppErrorCode.COST_CORRECTION_INVALID_AMOUNT,
@@ -2465,11 +2468,16 @@ export const getAcquisitionCostCorrectionContext = query({
       payable: payableRow
         ? { status: payableRow.status, amountDue: payableRow.amountDue, amountPaid: settlementView(payableRow).amountPaid }
         : null,
+      // SCRUM-869#c23881: while the pilot refuses the supplier-payable rewrite, do not offer it.
       allowedTypes: allowedAcquisitionCorrectionTypes(
         originalPaymentMethod,
         payableRow,
         isPayableAdjustable(payableRow, currency, currentCost),
         await isAcquisitionPeriodClosed(ctx, args.orgId, event.accountingDate)
+      ).filter(
+        (type) =>
+          !(originalPaymentMethod === "ON_ACCOUNT" && AP_CORRECTION_TYPES.includes(type) &&
+            isSupplierSettlementDoorDisabled("SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"))
       ),
       // SCRUM-725: restatement is offered only for a closed-period acquisition.
       corrections,

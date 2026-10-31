@@ -1,0 +1,59 @@
+{
+  "id": "supplier-receivables-list-reports-completeness",
+  "fingerprint": "e3383b3df98130907c64ab05a8a202b55511bdea7b081aba3a8ee546f4a60f14",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "rows": 500
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {
+        "rows": 501
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.complete",
+      "value": true
+    },
+    {
+      "observable": "step2.complete",
+      "value": false
+    },
+    {
+      "observable": "step2.items",
+      "value": 500
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "supplierReceivables.list says whether it returned every row"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

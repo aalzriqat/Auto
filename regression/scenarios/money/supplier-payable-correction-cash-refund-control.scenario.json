@@ -1,0 +1,46 @@
+{
+  "id": "supplier-payable-correction-cash-refund-control",
+  "fingerprint": "138d37989923c46a7914055fb0535b4a41bf0bb6edd0e3735b36007101ad6738",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "type": "CASH_REFUND",
+        "paid": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.costCorrected",
+      "value": true
+    },
+    {
+      "observable": "payable.amountChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierObligationCorrections.test.ts",
+    "testName": "control: a CASH_REFUND on a PAID ON_ACCOUNT car still corrects the cost and leaves the payable alone"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

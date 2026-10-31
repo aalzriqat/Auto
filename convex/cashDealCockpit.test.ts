@@ -668,7 +668,7 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
     );
     // Through the product's own door, not a status patch: the same transition
     // an operator makes while the cockpit is open.
-    await s.asUser.mutation(api.supplierReceivables.setDisputed, {
+    await s.asUser.mutation(api.supplierReceivables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId,
       receivableId,
       disputed: true,

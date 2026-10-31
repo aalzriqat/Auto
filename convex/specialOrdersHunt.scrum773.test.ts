@@ -81,7 +81,7 @@ describe("SCRUM-773 special orders: supplier payable settlement", () => {
     const t = newTest();
     const { orgId, userId, as } = await seedOrg(t, "disp");
     const { payableId } = await seedSourcedPayable(t, orgId, userId);
-    await as.mutation(api.sourcingPayables.setDisputed, { orgId, payableId, disputed: true, reason: "Supplier invoice is 500 too high" });
+    await as.mutation(api.sourcingPayables.setDisputed, { orgId, payableId, disputed: true, reason: "Supplier invoice is 500 too high", idempotencyKey: crypto.randomUUID() });
 
     await expect(
       as.mutation(api.sourcingPayables.markPaid, { idempotencyKey: crypto.randomUUID(), orgId, payableId, paymentMethod: "CASH" })

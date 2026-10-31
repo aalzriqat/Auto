@@ -142,9 +142,9 @@ describe("exact release cloud accounting evidence", () => {
 test("opening cutover is a required named cloud gate and an old29-only result cannot certify it", () => {
   expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-OPENING");
   expect(REQUIRED_REHEARSAL_CASE_IDS).toContain("S858-CONTAINMENT");
-  expect(REQUIRED_REHEARSAL_CASE_IDS).toHaveLength(35);
+  expect(REQUIRED_REHEARSAL_CASE_IDS).toHaveLength(39);
   const old = REQUIRED_REHEARSAL_CASE_IDS.filter(
-    (id) => !id.startsWith("S858-") && id !== "U-RET" && id !== "CC-CASH",
+    (id) => !id.startsWith("S858-") && !id.startsWith("SUP-") && id !== "U-RET" && id !== "CC-CASH",
   );
   expect(old).toHaveLength(29);
   const cases = old.map((id) => ({ id, status: "PASS" }));
