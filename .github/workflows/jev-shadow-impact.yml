@@ -23,6 +23,16 @@ permissions:
   contents: read
   pull-requests: read
 
+# workflow_run always runs with github.ref = main, so a ref-keyed group would
+# put every PR in one group. Key PR-triggered runs on the PR number instead and
+# cancel only those; push and workflow_dispatch get their own group per run.
+# Invariant Governance cancels a superseded PR run, which then concludes
+# `cancelled` and never triggers this workflow, so an older head cannot start
+# here after a newer one.
+concurrency:
+  group: jev-shadow-impact-${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' }}
+
 jobs:
   shadow-impact:
     name: advisory-impact

@@ -13,6 +13,14 @@ permissions:
   contents: read
   pull-requests: read
 
+# Only pull_request_target triggers this, so the group is per PR. A newer push
+# or body edit supersedes an older run: each run judges the PR body and file
+# list at the moment it runs, and its check lands on the head it was triggered
+# for. The run_id fallback and event test mirror the other PR workflows.
+concurrency:
+  group: skill-evidence-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
+
 jobs:
   skill-evidence:
     name: skill-evidence

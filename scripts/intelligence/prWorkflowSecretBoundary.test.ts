@@ -89,6 +89,37 @@ describe("pull-request workflow secret boundary", () => {
     expect(tests).toContain("cancel-in-progress: true");
   });
 
+  it("cancels superseded runs for pull requests only, never for push or dispatch", () => {
+    // A shared group still replaces a pending run even with cancel-in-progress
+    // false, so every non-PR run must fall back to its own run_id group.
+    const prOnly =
+      "${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}";
+    for (const [name, prefix] of [
+      ["invariant-governance.yml", "invariant-governance"],
+      ["security.yml", "security"],
+      ["skill-evidence.yml", "skill-evidence"],
+    ]) {
+      const parsed = parseYaml(readFileSync(path.join(workflowsDir, name), "utf8")) as {
+        concurrency?: unknown;
+      };
+      expect(parsed.concurrency, name).toEqual({
+        group: prefix + "-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": prOnly,
+      });
+    }
+
+    // workflow_run always carries github.ref = main, so a ref key would merge PRs.
+    const jev = parseYaml(
+      readFileSync(path.join(workflowsDir, "jev-shadow-impact.yml"), "utf8"),
+    ) as { concurrency?: unknown };
+    expect(jev.concurrency).toEqual({
+      group:
+        "jev-shadow-impact-${{ github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number || github.run_id }}",
+      "cancel-in-progress":
+        "${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' }}",
+    });
+  });
+
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {
     const security = readFileSync(path.join(workflowsDir, "security.yml"), "utf8");
     expect(security).toContain("ci-security-placeholder.convex.cloud");
