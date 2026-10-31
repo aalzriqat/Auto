@@ -1144,17 +1144,82 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     const tmp = mkdtempSync(path.join(tmpdir(), "waivers-"));
     const filePath = path.join(tmp, "skill-waivers.json");
     try {
-      writeFileSync(filePath, JSON.stringify({ waivers: [{ pr: 123, head: "abc", ruling: "c1", expires: "2030" }] }));
+      writeFileSync(filePath, JSON.stringify({
+        waivers: [{
+          pr: 123,
+          head: sha,
+          seat: "Seat 1",
+          ruling: "SCRUM-760 c24127",
+          expires: "2030-01-01T00:00:00Z",
+        }],
+      }));
       expect(loadSkillWaivers(filePath)).toHaveLength(1);
 
       writeFileSync(filePath, JSON.stringify({ notWaivers: [] }));
-      expect(() => loadSkillWaivers(filePath)).toThrow("Invalid skill-waivers schema");
+      expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
 
       writeFileSync(filePath, JSON.stringify({ waivers: [{ pr: "not-a-number" }] }));
-      expect(() => loadSkillWaivers(filePath)).toThrow("Invalid skill-waivers entry");
+      expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
+
+      writeFileSync(filePath, JSON.stringify({
+        waivers: [{ pr: 7, head: sha, seat: "Seat 1", ruling: "r1", expires: "not-a-date" }],
+      }));
+      expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
+
+      writeFileSync(filePath, JSON.stringify({
+        waivers: [{ pr: 7, head: "not-40-chars", seat: "Seat 1", ruling: "r1", expires: "2030-01-01T00:00:00Z" }],
+      }));
+      expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
+
+      writeFileSync(filePath, JSON.stringify({
+        waivers: [{ pr: -5, head: sha, seat: "Seat 1", ruling: "r1", expires: "2030-01-01T00:00:00Z" }],
+      }));
+      expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+
+  test("evaluate fails closed when registry waiver has mismatched ruling or invalid expiry", async () => {
+    const body = fill({
+      "Seat 1 model": "WAIVED",
+    }) + `- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const r1 = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      prNumber: 7,
+      headSha: sha,
+      waivers: [{
+        pr: 7,
+        head: sha,
+        seat: "Seat 1",
+        ruling: "unrelated ruling",
+        expires: "2030-01-01T00:00:00Z",
+      }],
+      codexReview: async () => [],
+    });
+    expect(r1.ok).toBe(false);
+    expect(r1.problems.join("\n")).toContain('Seat 1 waiver in skill-waivers.json specifies ruling "unrelated ruling", which does not match declared ruling "SCRUM-760 c24127".');
+
+    const r2 = await evaluate({
+      body,
+      files: money,
+      isPrCommit: async () => true,
+      prNumber: 7,
+      headSha: sha,
+      waivers: [{
+        pr: 7,
+        head: sha,
+        seat: "Seat 1",
+        ruling: "SCRUM-760 c24127",
+        expires: "not-a-date",
+      }],
+      codexReview: async () => [],
+    });
+    expect(r2.ok).toBe(false);
+    expect(r2.problems.join("\n")).toContain("Seat 1 waiver for PR 7 expired on not-a-date.");
   });
 
   test("verifyOwnerWaiver checks author, expiration, ruling, and verdict", async () => {
@@ -1184,9 +1249,29 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     const wrongSha = "b".repeat(40);
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ sha: wrongSha }) }) }))
       .toEqual([`Seat 1 waiver comment certifies ${wrongSha}, which does not match PR head ${sha}.`]);
+
+    const commentMissingRuling = "Owner waiver: Seat 1\nHead SHA: " + sha + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentMissingRuling }) }))
+      .toEqual(["Seat 1 waiver comment must declare an authorized Ruling."]);
+
+    const commentMissingSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentMissingSha }) }))
+      .toEqual(["Seat 1 waiver comment must declare the full 40-character Head SHA."]);
+
+    const commentPrefixSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha.slice(0, 7) + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentPrefixSha }) }))
+      .toEqual(["Seat 1 waiver comment must declare the full 40-character Head SHA."]);
+
+    const commentSubstringRuling = "Owner waiver: Seat 1\nRuling: c24127\nHead SHA: " + sha + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentSubstringRuling }) }))
+      .toEqual(['Seat 1 waiver ruling "c24127" does not match declared ruling "SCRUM-760 c24127".']);
+
+    const commentInvalidExpires = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha + "\nExpires: not-a-date\nVerdict: WAIVED\n";
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentInvalidExpires }) }))
+      .toEqual(["Seat 1 waiver has an invalid expiration date."]);
   });
 
-  test("verifyCodexReview accepts CERTIFY and rejects review-evidence corrections", async () => {
+  test("verifyCodexReview accepts CERTIFY and rejects review-evidence corrections and negated phrases", async () => {
     const context = { repo: "o/r", pr: "7", head: sha, token: "test" };
     const makeFetch = (commentData: Record<string, unknown>) => (async () => ({
       ok: true, status: 200, json: async () => commentData,
@@ -1208,19 +1293,47 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(correctionComment) }))
       .toEqual(["Seat 2 review comment is a review correction/rejection, not a certification."]);
 
+    const negatedComment = {
+      ...validComment,
+      body: `[Codex Review] Do not CERTIFY. Historical prefix ${sha.slice(0, 7)} only.`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(negatedComment) }))
+      .toEqual(["Seat 2 review comment is a review correction/rejection, not a certification."]);
+
+    const requestChangesComment = {
+      ...validComment,
+      body: `[Codex Review] REQUEST CHANGES at ${sha}. Missing fail-closed controls.`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(requestChangesComment) }))
+      .toEqual(["Seat 2 review comment is a review correction/rejection, not a certification."]);
+
     const missingCertify = {
       ...validComment,
       body: "[Codex Review] In progress, looks promising so far.",
     };
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(missingCertify) }))
-      .toEqual(["Seat 2 signed review must contain [Codex Review] and CERTIFY verdict."]);
+      .toEqual(["Seat 2 review comment must declare Verdict: CERTIFY."]);
+
+    const prefixOnlyComment = {
+      ...validComment,
+      body: `[Codex Review] VERDICT: CERTIFY at ${sha.slice(0, 7)}. Looks good.`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(prefixOnlyComment) }))
+      .toEqual([`Seat 2 review comment must certify full current PR head SHA ${sha}.`]);
 
     const wrongHeadComment = {
       ...validComment,
       body: `[Codex Review] VERDICT: CERTIFY at ${"b".repeat(40)}.`,
     };
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(wrongHeadComment) }))
-      .toEqual([`Seat 2 review comment does not certify current PR head ${sha}.`]);
+      .toEqual([`Seat 2 review comment must certify full current PR head SHA ${sha}.`]);
+
+    const missingReviewerComment = {
+      ...validComment,
+      body: `VERDICT: CERTIFY at ${sha}.`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(missingReviewerComment) }))
+      .toEqual(["Seat 2 review comment must have explicit reviewer attribution (e.g. [Codex Review])."]);
   });
 
   test("referencedCommentUrls collects review and waiver URLs", () => {

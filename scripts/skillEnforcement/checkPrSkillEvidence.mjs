@@ -17,23 +17,39 @@ const reportLine = (body, label) => {
   return matches.length === 1 ? matches[0][1].trim() : undefined;
 };
 
+const HEX_SHA40 = /^[0-9a-f]{40}$/i;
+
 export function loadSkillWaivers(filePath = ".github/skill-waivers.json") {
   try {
     if (!fs.existsSync(filePath)) return [];
     const content = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(content);
-    if (!Array.isArray(parsed.waivers)) {
-      throw new Error("Invalid skill-waivers schema: 'waivers' array required");
+    if (!Array.isArray(parsed?.waivers)) {
+      throw new TypeError("Invalid skill-waivers schema: 'waivers' array required");
     }
     for (const w of parsed.waivers) {
-      if (typeof w.pr !== "number" || typeof w.head !== "string" || !w.expires || !w.ruling) {
-        throw new Error("Invalid skill-waivers entry: pr, head, ruling, and expires are required");
+      if (
+        typeof w !== "object" ||
+        w === null ||
+        typeof w.pr !== "number" ||
+        !Number.isInteger(w.pr) ||
+        w.pr <= 0 ||
+        typeof w.head !== "string" ||
+        !HEX_SHA40.test(w.head.trim()) ||
+        typeof w.seat !== "string" ||
+        !w.seat.trim() ||
+        typeof w.ruling !== "string" ||
+        !w.ruling.trim() ||
+        typeof w.expires !== "string" ||
+        Number.isNaN(Date.parse(w.expires))
+      ) {
+        throw new TypeError("Invalid skill-waivers entry: pr, full 40-character head SHA, seat, ruling, and valid ISO expires are required");
       }
     }
     return parsed.waivers;
   } catch (err) {
     if (err.code === "ENOENT") return [];
-    throw new Error(`Failed to load skill-waivers: ${err.message}`);
+    throw err;
   }
 }
 
@@ -45,13 +61,13 @@ async function verifyLocalReview({ url, session, sha }, { repo, pr, head, fetchI
   if (!/^[1-9]\d*$/.test(id)) return ["Seat 1 review must link to an issue comment on this PR."];
   if (sha !== head.toLowerCase()) return ["Local review must certify the full current PR head SHA."];
   const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
-  if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+  if (comment?.html_url !== url || comment?.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
     return ["Seat 1 review comment does not belong to this PR."];
   }
-  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment?.author_association)) {
     return ["Local review must be published by a repository owner, member or collaborator."];
   }
-  const body = comment.body;
+  const body = comment?.body;
   if (typeof body !== "string" || body.includes("<!--")) {
     return ["Local Claude report fields must be visible, not inside HTML comments."];
   }
@@ -68,17 +84,17 @@ export async function verifyOwnerWaiver({ url, ruling, sha, seat }, { repo, pr, 
   const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
   if (!/^[1-9]\d*$/.test(id)) return [`${seat} waiver must link to an issue comment on this PR.`];
-  if (sha && head && sha.toLowerCase() !== head.toLowerCase()) {
+  if (!sha || !HEX_SHA40.test(sha.trim()) || (head && sha.trim().toLowerCase() !== head.toLowerCase())) {
     return [`${seat} waiver must address the full current PR head SHA.`];
   }
   const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
-  if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+  if (comment?.html_url !== url || comment?.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
     return [`${seat} waiver comment does not belong to this PR.`];
   }
-  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment?.author_association)) {
     return [`${seat} waiver must be published by a repository owner, member or collaborator.`];
   }
-  const body = comment.body;
+  const body = comment?.body;
   if (typeof body !== "string" || body.includes("<!--")) {
     return [`${seat} waiver fields must be visible, not inside HTML comments.`];
   }
@@ -88,22 +104,32 @@ export async function verifyOwnerWaiver({ url, ruling, sha, seat }, { repo, pr, 
   const expires = reportLine(body, "Expires");
   const verdict = reportLine(body, "Verdict");
 
-  if (!waiverSeat || !waiverSeat.toLowerCase().includes(seat.toLowerCase())) {
-    return [`${seat} waiver comment must state "${seat}" as the waived seat.`];
+  if (!waiverSeat || waiverSeat.trim().toLowerCase() !== seat?.trim().toLowerCase()) {
+    return [`${seat} waiver comment must declare "${seat}" as the waived seat.`];
   }
-  if (ruling && commentRuling && !commentRuling.toLowerCase().includes(ruling.toLowerCase()) && !ruling.toLowerCase().includes(commentRuling.toLowerCase())) {
+  if (!commentRuling) {
+    return [`${seat} waiver comment must declare an authorized Ruling.`];
+  }
+  if (ruling && commentRuling.trim() !== ruling.trim()) {
     return [`${seat} waiver ruling "${commentRuling}" does not match declared ruling "${ruling}".`];
   }
-  if (commentSha && head && commentSha.toLowerCase() !== head.toLowerCase()) {
+  if (!commentSha || !HEX_SHA40.test(commentSha.trim())) {
+    return [`${seat} waiver comment must declare the full 40-character Head SHA.`];
+  }
+  if (head && commentSha.trim().toLowerCase() !== head.trim().toLowerCase()) {
     return [`${seat} waiver comment certifies ${commentSha}, which does not match PR head ${head}.`];
   }
-  if (!verdict || verdict.toUpperCase() !== "WAIVED") {
+  if (!verdict || verdict.trim().toUpperCase() !== "WAIVED") {
     return [`${seat} waiver verdict must be WAIVED.`];
   }
-  if (!expires || isNaN(Date.parse(expires))) {
-    return [`${seat} waiver must have an explicit ISO expiration date.`];
+  if (!expires) {
+    return [`${seat} waiver must declare an explicit ISO expiration date.`];
   }
-  if (new Date(expires).getTime() <= Date.now()) {
+  const expiryMs = Date.parse(expires);
+  if (Number.isNaN(expiryMs)) {
+    return [`${seat} waiver has an invalid expiration date.`];
+  }
+  if (expiryMs <= Date.now()) {
     return [`${seat} waiver expired on ${expires}.`];
   }
   return [];
@@ -113,29 +139,36 @@ export async function verifyCodexReview({ url, sha }, { repo, pr, head, fetchImp
   const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
   if (!/^[1-9]\d*$/.test(id)) return ["Seat 2 review must link to an issue comment on this PR."];
-  if (sha && head && sha.toLowerCase() !== head.toLowerCase()) {
+  if (!sha || !HEX_SHA40.test(sha.trim()) || (head && sha.trim().toLowerCase() !== head.toLowerCase())) {
     return ["Seat 2 review must certify the full current PR head SHA."];
   }
   const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
-  if (comment.html_url !== url || comment.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+  if (comment?.html_url !== url || comment?.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
     return ["Seat 2 review comment does not belong to this PR."];
   }
-  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment.author_association)) {
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment?.author_association)) {
     return ["Seat 2 review must be published by a repository owner, member or collaborator."];
   }
-  const body = comment.body;
+  const body = comment?.body;
   if (typeof body !== "string" || body.includes("<!--")) {
     return ["Seat 2 review fields must be visible, not inside HTML comments."];
   }
-  if (/Review-evidence correction|REVIEW-INTEGRITY HOLD|NOT certified|NOT a certification/i.test(body)) {
+  if (
+    /Review-evidence correction|REVIEW-INTEGRITY HOLD|NOT certified|NOT a certification|Do not CERTIFY|REQUEST CHANGES|CHANGES REQUESTED/i.test(body)
+  ) {
     return ["Seat 2 review comment is a review correction/rejection, not a certification."];
   }
-  const hasCertify = /\[Codex Review\]/i.test(body) && /\b(?:VERDICT:\s*)?CERTIFY\b/i.test(body);
-  if (!hasCertify) {
-    return ["Seat 2 signed review must contain [Codex Review] and CERTIFY verdict."];
+  const verdict = (reportLine(body, "Verdict")?.match(/^[A-Za-z]+/)?.[0]) ?? (/\bVERDICT:\s*([A-Za-z]+)\b/i.exec(body)?.[1]);
+  if (!verdict || !/^CERTIF(?:Y|IED)$/i.test(verdict.trim())) {
+    return ["Seat 2 review comment must declare Verdict: CERTIFY."];
   }
-  if (head && !body.toLowerCase().includes(head.toLowerCase()) && !body.toLowerCase().includes(head.slice(0, 7).toLowerCase())) {
-    return [`Seat 2 review comment does not certify current PR head ${head}.`];
+  const commentSha = reportLine(body, "Head SHA") ?? reportLine(body, "SHA") ?? (/\b(?:at|for|HEAD)\s+([0-9a-f]{40})\b/i.exec(body)?.[1]);
+  if (!commentSha || !HEX_SHA40.test(commentSha.trim()) || commentSha.trim().toLowerCase() !== head.toLowerCase()) {
+    return [`Seat 2 review comment must certify full current PR head SHA ${head}.`];
+  }
+  const reviewer = reportLine(body, "Reviewer") ?? (/\[Codex Review\]|\[Codex Update\]/i.test(body) ? "Codex" : undefined);
+  if (!reviewer) {
+    return ["Seat 2 review comment must have explicit reviewer attribution (e.g. [Codex Review])."];
   }
   return [];
 }
@@ -223,10 +256,16 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
     const { exitCode, lines } = await check(process.env);
-    (exitCode ? console.error : console.log)(lines.join("\n"));
+    for (const raw of lines) {
+      for (const line of String(raw).split(/\r?\n/)) {
+        const sanitized = line.replace(/[\r\n\x00-\x1f]/g, " ");
+        (exitCode ? console.error : console.log)(sanitized);
+      }
+    }
     process.exitCode = exitCode;
   } catch (e) {
-    console.error(e.message);
+    const sanitizedError = String(e?.message ?? e).replace(/[\r\n\x00-\x1f]/g, " ");
+    console.error(sanitizedError);
     process.exitCode = 1;
   }
 }

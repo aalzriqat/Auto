@@ -40,6 +40,9 @@ export function isPlaceholder(block) {
   return t.startsWith("<") && t.endsWith(">") && !t.slice(1, -1).includes("<") && !t.includes("\n");
 }
 
+const CLAUDE_SESSION_RE = /https:\/\/claude\.ai\/code\/session_([a-z0-9]+)/i;
+const LOCAL_SESSION_RE = /local:([0-9a-f-]{36})/i;
+
 /**
  * Validates that a session ID or URL does not use trivial placeholder / mock patterns
  * (e.g. repeating characters like session_1111111111111111 or local:00000000-0000-0000-0000-000000000000).
@@ -49,12 +52,11 @@ export function isPlaceholderSession(session) {
   const s = String(session).trim();
   if (isPlaceholder(s)) return true;
   if (/(?:mock|dummy|placeholder|fake|example)/i.test(s)) return true;
-  const match = s.match(/https:\/\/claude\.ai\/code\/session_([A-Za-z0-9]+)/i) || s.match(/local:([0-9a-f-]{36})/i);
+  const match = CLAUDE_SESSION_RE.exec(s) ?? LOCAL_SESSION_RE.exec(s);
   if (!match) return false;
-  const rawId = match[1].replace(/-/g, "").toLowerCase();
+  const rawId = match[1].replaceAll("-", "").toLowerCase();
   const distinct = new Set(rawId);
-  if (distinct.size <= 2) return true;
-  return false;
+  return distinct.size <= 2;
 }
 
 function section(body) {
@@ -175,64 +177,67 @@ async function checkLocalSeat(t, otherSessionText, local, localReview) {
   return problems;
 }
 
-async function checkSeats(t, otherSessionText, options) {
-  const { localReview, ownerWaiver, codexReview, waivers = [], prNumber, headSha } =
-    typeof options === "function" ? { localReview: options } : (options ?? {});
+async function checkWaivedSeat1(t, options) {
+  const { ownerWaiver, waivers = [], prNumber, headSha } = options;
   const problems = [];
-  const waivedSeats = new Set();
-
-  const seat1Model = line(t, "Seat 1 model") ?? "";
-  const isSeat1Waived = SEAT1_WAIVED.test(seat1Model) || line(t, "Seat 1") === "WAIVED" || line(t, "Seat 1 status") === "WAIVED";
-
-  if (isSeat1Waived) {
-    waivedSeats.add("Seat 1");
-    const ruling = line(t, "Seat 1 waiver ruling") ?? line(t, "Seat 1 ruling") ?? line(t, "Waiver ruling");
-    if (!ruling || isPlaceholder(ruling)) {
-      problems.push('Waived Seat 1 requires an explicit "Seat 1 waiver ruling" (e.g. SCRUM-760 c24127).');
-    }
-    const waiverUrl = line(t, "Seat 1 waiver") ?? line(t, "Seat 1 waiver review");
-    if (waiverUrl) {
-      if (ownerWaiver) {
-        problems.push(...await ownerWaiver({ url: waiverUrl, ruling, seat: "Seat 1", sha: headSha }));
-      } else {
-        problems.push('Seat 1 waiver could not be verified against its signed PR comment.');
-      }
+  const ruling = line(t, "Seat 1 waiver ruling") ?? line(t, "Seat 1 ruling") ?? line(t, "Waiver ruling");
+  if (!ruling || isPlaceholder(ruling)) {
+    problems.push('Waived Seat 1 requires an explicit "Seat 1 waiver ruling" (e.g. SCRUM-760 c24127).');
+  }
+  const waiverUrl = line(t, "Seat 1 waiver") ?? line(t, "Seat 1 waiver review");
+  if (waiverUrl) {
+    if (ownerWaiver) {
+      problems.push(...await ownerWaiver({ url: waiverUrl, ruling, seat: "Seat 1", sha: headSha }));
     } else {
-      const matching = (waivers ?? []).find(
-        (w) => Number(w.pr) === Number(prNumber) &&
-               String(w.seat ?? "").toLowerCase() === "seat 1" &&
-               (!headSha || !w.head || String(w.head).toLowerCase() === String(headSha).toLowerCase())
-      );
-      if (matching) {
-        if (matching.expires && new Date(matching.expires).getTime() <= Date.now()) {
-          problems.push(`Seat 1 waiver for PR ${matching.pr} expired on ${matching.expires}.`);
-        }
-      } else {
-        problems.push('Waived Seat 1 must link to an owner-proxy waiver comment or be registered in skill-waivers.json.');
-      }
+      problems.push("Seat 1 waiver could not be verified against its signed PR comment.");
     }
   } else {
-    const sessionText = line(t, "Seat 1 session") ?? "";
-    if (isPlaceholderSession(sessionText)) {
-      problems.push('"Seat 1 session" is an unverified placeholder session pattern.');
-    } else {
-      const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
-      if (local) {
-        problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
-      } else {
-        const urls = sessionText.match(SESSION_URL) ?? [];
-        if (urls.length !== 1) {
-          problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');
-        } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
-          problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
-        }
+    const matching = (waivers ?? []).find(
+      (w) => Number(w.pr) === Number(prNumber) &&
+             String(w.seat ?? "").trim().toLowerCase() === "seat 1" &&
+             (!headSha || String(w.head ?? "").trim().toLowerCase() === String(headSha).trim().toLowerCase())
+    );
+    if (matching) {
+      if (ruling && matching.ruling && matching.ruling.trim() !== ruling.trim()) {
+        problems.push(`Seat 1 waiver in skill-waivers.json specifies ruling "${matching.ruling}", which does not match declared ruling "${ruling}".`);
       }
-    }
-    if (!SEAT1_MODEL.test(seat1Model)) {
-      problems.push('"Seat 1 model" must be Opus 5.5.');
+      const expiryMs = Date.parse(matching.expires);
+      if (Number.isNaN(expiryMs) || expiryMs <= Date.now()) {
+        problems.push(`Seat 1 waiver for PR ${matching.pr} expired on ${matching.expires}.`);
+      }
+    } else {
+      problems.push("Waived Seat 1 must link to an owner-proxy waiver comment or be registered in skill-waivers.json.");
     }
   }
+  return problems;
+}
 
+async function checkStandardSeat1(t, otherSessionText, seat1Model, localReview) {
+  const problems = [];
+  const sessionText = line(t, "Seat 1 session") ?? "";
+  if (isPlaceholderSession(sessionText)) {
+    problems.push('"Seat 1 session" is an unverified placeholder session pattern.');
+  } else {
+    const local = sessionText.match(LOCAL_SESSION)?.[1].toLowerCase();
+    if (local) {
+      problems.push(...await checkLocalSeat(t, otherSessionText, local, localReview));
+    } else {
+      const urls = sessionText.match(SESSION_URL) ?? [];
+      if (urls.length !== 1) {
+        problems.push('"Seat 1 session" must be one https://claude.ai/code/session_… link or local:<UUID>.');
+      } else if ((otherSessionText.match(SESSION_URL) ?? []).includes(urls[0])) {
+        problems.push("Seat 1 session is the implementing session. Seat 1 must be a separate session.");
+      }
+    }
+  }
+  if (!SEAT1_MODEL.test(seat1Model)) {
+    problems.push('"Seat 1 model" must be Opus 5.5.');
+  }
+  return problems;
+}
+
+async function checkSeat2(t, isWaived, codexReview) {
+  const problems = [];
   const seat2Model = line(t, "Seat 2 model") ?? "";
   if (!SEAT2_MODEL.test(seat2Model)) {
     problems.push('"Seat 2 model" must be gpt-6-sol or gpt-6.1-sol (Codex).');
@@ -243,7 +248,7 @@ async function checkSeats(t, otherSessionText, options) {
   }
 
   const seat2Review = line(t, "Seat 2 review");
-  if (waivedSeats.has("Seat 1")) {
+  if (isWaived) {
     if (!seat2Review || isPlaceholder(seat2Review)) {
       problems.push('When Seat 1 is waived, "Seat 2 review" must link to an independent Codex review comment on this PR.');
     } else if (codexReview) {
@@ -254,7 +259,25 @@ async function checkSeats(t, otherSessionText, options) {
     const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
     problems.push(...await codexReview({ url: seat2Review, sha }));
   }
+  return problems;
+}
 
+async function checkSeats(t, otherSessionText, options) {
+  const opts = typeof options === "function" ? { localReview: options } : (options ?? {});
+  const problems = [];
+  const waivedSeats = new Set();
+
+  const seat1Model = line(t, "Seat 1 model") ?? "";
+  const isSeat1Waived = SEAT1_WAIVED.test(seat1Model) || line(t, "Seat 1") === "WAIVED" || line(t, "Seat 1 status") === "WAIVED";
+
+  if (isSeat1Waived) {
+    waivedSeats.add("Seat 1");
+    problems.push(...await checkWaivedSeat1(t, opts));
+  } else {
+    problems.push(...await checkStandardSeat1(t, otherSessionText, seat1Model, opts.localReview));
+  }
+
+  problems.push(...await checkSeat2(t, waivedSeats.has("Seat 1"), opts.codexReview));
   return { problems, waivedSeats };
 }
 
