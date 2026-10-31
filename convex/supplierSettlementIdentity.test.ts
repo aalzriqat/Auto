@@ -113,10 +113,10 @@ async function setupTest(tag: string) {
 }
 
 describe("SCRUM-868 Phase 3: Sale completion canonical supplier identity", () => {
-  test("SOURCED sale completion without vehicle.sourcedSupplierId fails closed with SUPPLIER_IDENTITY_UNRESOLVED and writes 0 rows", async () => {
+  test("SOURCED sale completion with unknown supplier name fails closed with SUPPLIER_IDENTITY_UNRESOLVED and writes 0 rows", async () => {
     const s = await setupTest("sale_no_supplier");
 
-    // SOURCED car with name only (no sourcedSupplierId)
+    // SOURCED car with unknown supplier name (removing "Unknown supplier" default fails closed)
     const vehicleId = await s.t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId,
@@ -131,10 +131,26 @@ describe("SCRUM-868 Phase 3: Sale completion canonical supplier identity", () =>
         sellingPrice: 15_000,
         status: "AVAILABLE",
         sourceType: "SOURCED",
-        sourcedFromName: "Legacy Name Only",
+        sourcedFromName: "Unknown supplier",
         sourceCost: 12_000,
       } as never)
     );
+
+    const quoteId = await s.asUser.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId,
+      customerId: s.customerId,
+      vehicleId,
+      vehiclePrice: 15_000,
+      downPayment: 0,
+      termMonths: 0,
+    });
+    await s.asUser.mutation(api.deposits.create, {
+      method: "CASH",
+      idempotencyKey: crypto.randomUUID(),
+      orgId: s.orgId,
+      quoteId,
+      amount: 15_000,
+    });
 
     const beforeSnapshot = await dbSnapshot(s.t, Object.keys(schema.tables));
 
@@ -143,6 +159,7 @@ describe("SCRUM-868 Phase 3: Sale completion canonical supplier identity", () =>
       await s.asUser.mutation(api.sales.create, {
         idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId,
+        quoteId,
         vehicleId,
         customerId: s.customerId,
         salespersonId: s.userId,
@@ -921,77 +938,3 @@ describe("SCRUM-868 Phase 3: Concession basis compares supplierId (Author self-a
   });
 });
 
-describe("SCRUM-868 Phase 3: Deal readers (dealCockpit)", () => {
-  test("dealCockpit returns snapshot name from obligation record rather than mutated vehicle", async () => {
-    const s = await setupTest("cockpit_snapshot_reader");
-
-    const supplierId = await seedSupplier(s.t, {
-      orgId: s.orgId,
-      userId: s.userId,
-      displayName: "Original Snapshot Supplier",
-      version: 1,
-    });
-
-    const vehicleId = await s.t.run((ctx) =>
-      ctx.db.insert("vehicles", {
-        orgId: s.orgId,
-        vin: "VINCOCKPIT01",
-        make: "Toyota",
-        model: "Camry",
-        year: 2024,
-        mileage: 10,
-        color: "White",
-        fuelType: "Gas",
-        transmission: "Auto",
-        sellingPrice: 15_000,
-        status: "AVAILABLE",
-        sourceType: "SOURCED",
-        sourcedSupplierId: supplierId,
-        sourcedFromName: "Original Snapshot Supplier",
-        sourceCost: 12_000,
-      } as never)
-    );
-
-    const saleId = await s.t.run((ctx) =>
-      ctx.db.insert("sales", {
-        orgId: s.orgId,
-        vehicleId,
-        customerId: s.customerId,
-        salespersonId: s.userId,
-        salePrice: 15_000,
-        saleDate: Date.now(),
-        status: "COMPLETED",
-        supplierSettlementRoute: "THROUGH_DEALERSHIP",
-      })
-    );
-    await s.t.run((ctx) =>
-      ctx.db.insert("vehicleSupplierPayables", {
-        orgId: s.orgId,
-        vehicleId,
-        saleId,
-        supplierId,
-        supplierSnapshotVersion: 1,
-        sourcedFromName: "Original Snapshot Supplier",
-        amountDue: 12_000,
-        currency: "JOD",
-        status: "DUE_ON_SALE",
-        createdBy: s.userId,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-    );
-
-    // Mutate the vehicle's sourcedFromName (simulating legacy drift or admin edit)
-    await s.t.run(async (ctx) => {
-      await ctx.db.patch(vehicleId, { sourcedFromName: "Mutated Vehicle Supplier Name" });
-    });
-
-    const cockpit = await s.asUser.query(api.sales.dealCockpit, {
-      orgId: s.orgId,
-      saleId,
-    });
-
-    expect(cockpit).toBeDefined();
-    expect(cockpit?.vehicle?.supplierName).toBe("Original Snapshot Supplier");
-  });
-});

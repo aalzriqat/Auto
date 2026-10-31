@@ -349,6 +349,24 @@ export async function requireResolvedSupplierId(
   }
   return row.supplierId;
 }
+/**
+ * Resolves the supplier master snapshot version for a vehicle's stored supplier ID at sale completion.
+ * Returns empty if no supplierId is provided or if the row belongs to another organization (corruption guard).
+ * Does not refuse inactive suppliers (author self-attack #4 / N10: deactivation does not block completion or settlement).
+ */
+export async function getSupplierSnapshotForCompletion(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | undefined,
+): Promise<{ supplierId?: Id<"suppliers">; supplierSnapshotVersion?: number }> {
+  if (!supplierId) return {};
+  const supplier = await ctx.db.get("suppliers", supplierId);
+  if (!supplier || supplier.orgId !== orgId) {
+    return {};
+  }
+  return { supplierId: supplier._id, supplierSnapshotVersion: supplier.version };
+}
+
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,

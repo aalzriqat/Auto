@@ -226,7 +226,7 @@ export const outstandingSummary = query({
       totalOutstanding += view.remainingAmount;
       if (row.status === "DISPUTED") disputedAmount += view.remainingAmount;
       if (view.remainingAmount > 0) {
-        const key = row.supplierId ? (row.supplierId as string) : "unresolved:" + row.sourcedFromName;
+        const key = row.supplierId ? String(row.supplierId) : "unresolved:" + row.sourcedFromName;
         const entry = bySupplier.get(key) ?? {
           supplierId: row.supplierId,
           sourcedFromName: row.sourcedFromName,
@@ -267,7 +267,7 @@ export const outstandingSummary = query({
       totalOutstanding += remaining;
       costRecoveryOutstanding += remaining;
       if (remaining > 0) {
-        const key = recovery.supplierId ? (recovery.supplierId as string) : "unresolved:" + recovery.sourcedFromName;
+        const key = recovery.supplierId ? String(recovery.supplierId) : "unresolved:" + recovery.sourcedFromName;
         const entry = bySupplier.get(key) ?? {
           supplierId: recovery.supplierId,
           sourcedFromName: recovery.sourcedFromName,
