@@ -1,0 +1,74 @@
+{
+  "id": "opening-lost-allocation-recoverables",
+  "fingerprint": "fad4fdb2efba8dfa2ec14432debfff4e54dc454ee3f991bcf750e276904ca1d9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-population-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "family": "recoverables",
+        "customMinor": 20000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.deleteAllocationAndMaterializedRow",
+      "input": {
+        "family": "recoverables"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readClosureFamily",
+      "input": {
+        "family": "recoverables"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "lost allocation metadata cannot hide retained recoverables GL"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

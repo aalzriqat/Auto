@@ -1,0 +1,59 @@
+{
+  "id": "opening-payable-source-warning",
+  "fingerprint": "f90103ac9dd8000ef0ffe0ef456b5c8fbc267374f3508e64dee9321e9b8cbfda",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.deleteHeader",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.warning",
+      "value": "OPENING_SOURCE_UNVERIFIABLE"
+    },
+    {
+      "observable": "reconciliation.tooManyRecordsWarning",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "missing payable provenance has a truthful close warning"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

@@ -19,8 +19,14 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
 import {
+  SUPPLIER_PAYABLES_RECON_DATE_WARNING,
+  SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "@/convex/utils/closeWarnings";
 import type { PeriodSummary, Translate } from "./types";
@@ -33,8 +39,20 @@ import { periodLabel } from "./types";
  * as sent.
  */
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
+  [SUPPLIER_PAYABLES_RECON_DATE_WARNING]: "ClosePeriodWarnSupplierPayablesReconDate",
+  [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING]: "ClosePeriodWarnSupplierRecoverablesReconFamily",
+  [EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING]: "ClosePeriodWarnEmployeeAdvancesReconFamily",
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
+  // SCRUM-858: opening-balance reconciliation. A difference is reported, never posted away.
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES]: "ClosePeriodWarnOpeningDiffSupplierPayables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningDiffEmployeeAdvances",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningDiffSupplierRecoverables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningDiffPartnerCapital",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningReconUnavailablePartnerCapital",
   [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
 };
 

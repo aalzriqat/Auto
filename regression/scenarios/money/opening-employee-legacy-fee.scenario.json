@@ -1,0 +1,76 @@
+{
+  "id": "opening-employee-legacy-fee",
+  "fingerprint": "eae8d04f96c7cd6e5aed25c5c20606072d4d62d57b5000c22f0426add91cb01c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-writer-family-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "synthetic": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.replayLegacyFeeAndLifecycle",
+      "input": {
+        "feeState": "LEGITIMATE",
+        "feeMinor": 700,
+        "advanceMinor": 100000,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readClosureFamily",
+      "input": {
+        "family": "EMPLOYEE_ADVANCES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "SOURCE_FAMILY_UNSUPPORTED"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "employee fee provenance refuses legitimate legacy fees without posting"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

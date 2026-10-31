@@ -1,17 +1,22 @@
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Id, Doc } from "./_generated/dataModel";
-import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  SUPPLIER_PAYABLES_RECON_DATE_WARNING,
+  SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
 } from "./utils/closeWarnings";
 import {
@@ -23,10 +28,21 @@ import {
   computeCommissionPayableReconciliation,
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
+  computeEmployeeAdvancesReconciliation,
+  computeSupplierRecoverablesReconciliation,
+  computePartnerCapitalReconciliation,
+  orgHasOpeningHistory,
   CustomerDepositsReconciliationResult,
   GlVsSubledgerResult,
+  OpeningFamilyReconciliationResult,
   SupplierPayablesReconciliationResult,
 } from "./accountingReports";
+
+const OPENING_SOURCE_FAMILY_WARNINGS = {
+  EMPLOYEE_ADVANCES: EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  SUPPLIER_RECOVERABLES: SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  PARTNER_CAPITAL: OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL,
+} as const;
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -392,6 +408,10 @@ export type CloseChecklistResult = {
   supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
   customerDepositsReconciliation: CustomerDepositsReconciliationResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
+  // SCRUM-858: opening-balance families. Differences are reported, never posted away.
+  employeeAdvancesReconciliation: OpeningFamilyReconciliationResult;
+  supplierRecoverablesReconciliation: OpeningFamilyReconciliationResult;
+  partnerCapitalReconciliation: OpeningFamilyReconciliationResult;
 };
 
 /**
@@ -402,7 +422,7 @@ export type CloseChecklistResult = {
  * statement line from within the period that's never been matched, all block
  * the close outright rather than silently landing in a later period.
  */
-async function computeCloseChecklist(
+export async function computeCloseChecklist(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   period: Doc<"accountingPeriods">
@@ -465,7 +485,7 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence, employeeAdvancesRecon, supplierRecoverablesRecon, partnerCapitalRecon] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
@@ -479,6 +499,9 @@ async function computeCloseChecklist(
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
         sales: allSales,
       }),
+      computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate),
+      computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate),
+      computePartnerCapitalReconciliation(ctx, orgId, period.endDate),
     ]);
 
   const blockers: string[] = [];
@@ -525,18 +548,41 @@ async function computeCloseChecklist(
     // Could not see everything (too many rows to read, or AP-affecting postings
     // still in flight): never report that as reconciled, and never as a
     // difference in an empty list of currencies either.
-    warnings.push(
-      supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
-        ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
-        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
-    );
+    const warningByReason = {
+      PENDING_POSTINGS: SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+      OPENING_SOURCE_UNAVAILABLE: SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+      AS_OF_DATE_UNSUPPORTED: SUPPLIER_PAYABLES_RECON_DATE_WARNING,
+      OVER_LIMIT: SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+    };
+    warnings.push(warningByReason[supplierPayablesRecon.unavailableReason ?? "OVER_LIMIT"]);
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
+  // SCRUM-858 (owner ruling 2026-10-28): a labelled opening-balance difference is reported here and
+  // never corrected by a posting. The label text is a fixed constant because close matches it verbatim.
+  if (supplierPayablesRecon.unexplainedOpeningDifference) {
+    warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
+  }
   const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
+  const openingFamilies = [
+    ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
+    ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
+    ["PARTNER_CAPITAL", partnerCapitalRecon],
+  ] as const;
+  // An "unavailable" reading is only worth a warning where an opening balance exists to reconcile;
+  // elsewhere these families are ordinary current-state subledgers with no new close obligation.
+  const hasOpeningHistory = openingFamilies.some(([, recon]) => recon.status === "UNAVAILABLE")
+    ? await orgHasOpeningHistory(ctx, orgId)
+    : false;
+  for (const [family, recon] of openingFamilies) {
+    if (recon.status === "UNAVAILABLE") {
+      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") warnings.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
+      else if (hasOpeningHistory) warnings.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+    } else if (recon.unexplainedOpeningDifference) warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  }
   if (customerDepositsRecon.status === "UNAVAILABLE") {
     // Could not compare as of the period end: never reported as reconciled, and never as a difference
     // in an empty list of currencies. An unavailable opening liability basis already has its own warning
@@ -617,6 +663,9 @@ async function computeCloseChecklist(
     supplierPayablesReconciliation: supplierPayablesRecon,
     customerDepositsReconciliation: customerDepositsRecon,
     commissionPayableReconciliation: commissionPayableRecon,
+    employeeAdvancesReconciliation: employeeAdvancesRecon,
+    supplierRecoverablesReconciliation: supplierRecoverablesRecon,
+    partnerCapitalReconciliation: partnerCapitalRecon,
   };
 }
 

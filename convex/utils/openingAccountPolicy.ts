@@ -113,6 +113,19 @@ export function isRemainingOpeningKind(
   ].includes(kind);
 }
 
+/** A declared control cannot combine operational families or unidentified pools. Shared by
+ * posting validation and reconciliation so stored declarations cannot invent a writer state. */
+export function openingDeclaredFamilyRefusal(
+  rows: readonly NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number][],
+): string | null {
+  if (rows.length === 0 || new Set(rows.map(row => row.kind)).size !== 1)
+    return "Every opening control needs one explicitly declared allocation family.";
+  if (rows[0].kind === "UNALLOCATED_LIABILITY" &&
+    new Set(rows.map(row => "purpose" in row ? row.purpose : undefined)).size !== 1)
+    return "Unidentified opening pools need separate declared controls.";
+  return null;
+}
+
 export async function openingAccountAllowsFamily(
   ctx: QueryCtx | MutationCtx,
   orgId: Doc<"organizations">["_id"],

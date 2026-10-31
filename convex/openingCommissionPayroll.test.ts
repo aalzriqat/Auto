@@ -7,6 +7,7 @@ import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { postAccountingEvent, type PostCommand } from "./accounting/postingEngine";
 import { getPostedLines } from "./accountingReports";
+import { OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY, SUPPLIER_PAYABLES_RECON_DATE_WARNING } from "./utils/closeWarnings";
 
 const postOpening = api.accountingCutover.postOpeningBalanceDirect;
 afterEach(() => { vi.useRealTimers(); });
@@ -343,7 +344,13 @@ test("queued native payroll keeps book debt until real posting and refuses a dam
   const runId = await seed.owner.mutation(api.payroll.createRun, { orgId: seed.orgId, periodYear: 2026, periodMonth: 1 });
   await seed.owner.mutation(api.payroll.approveRun, { orgId: seed.orgId, runId });
   vi.setSystemTime(Date.UTC(2026, 1, 1));
-  await seed.owner.mutation(api.accountingPeriods.close, { orgId: seed.orgId, periodId: seed.period._id });
+  const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.period._id });
+    expect(checklist.warnings).toEqual([SUPPLIER_PAYABLES_RECON_DATE_WARNING, ...Object.values(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY)]);
+  for (const reconciliation of [checklist.employeeAdvancesReconciliation, checklist.supplierRecoverablesReconciliation, checklist.partnerCapitalReconciliation]) {
+    expect(reconciliation).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
+  }
+  await expect(seed.owner.mutation(api.accountingPeriods.close, { orgId: seed.orgId, periodId: seed.period._id })).rejects.toThrow("Review and acknowledge every warning before closing");
+  await seed.owner.mutation(api.accountingPeriods.close, { orgId: seed.orgId, periodId: seed.period._id, acknowledgedWarnings: checklist.warnings });
   await seed.owner.mutation(api.payroll.payRun, { orgId: seed.orgId, runId, method: "CASH" });
   const queued = await seed.t.run(ctx => ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", q => q.eq("orgId", seed.orgId)).collect());
   expect(queued.filter(row => row.eventType === "PAYROLL_PAID")).toHaveLength(1);

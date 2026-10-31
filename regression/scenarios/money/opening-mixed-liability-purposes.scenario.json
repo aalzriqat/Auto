@@ -1,0 +1,78 @@
+{
+  "id": "opening-mixed-liability-purposes",
+  "fingerprint": "7c6860668323d88c1dbf458c055d40eeec056b8e92a858bc1e03404c3e616c99",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-writer-family-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "synthetic": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.retagOpeningClassification",
+      "input": {
+        "family": "UNALLOCATED_LIABILITY",
+        "purposes": [
+          "CUSTOMER_DEPOSIT",
+          "UNIDENTIFIED_RECEIPT"
+        ],
+        "eachMinor": 15000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readClosureFamily",
+      "input": {
+        "family": "UNALLOCATED_LIABILITY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "mixed declared liability purposes cannot certify an opening control"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

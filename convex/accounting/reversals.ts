@@ -131,6 +131,18 @@ export async function reverseAccountingEvent(
     }
     if (source.kind === "UNAVAILABLE") throw new ConvexError("The prepaid source cannot be verified for a generic reversal.");
   }
+  // ⚠️ SCRUM-858 — THE OPENING-BALANCE JOURNAL IS NOT REVERSIBLE THROUGH THIS ENGINE.
+  // The cutover journal is written with no accounting event, so no legitimate caller holds an event
+  // that points at it. If one ever does (a mis-linked or legacy row), swapping its debits and credits
+  // here would mark the opening journal REVERSED without touching the subledger rows it materialised
+  // (advances, recoverables, payables, prepaid schedules, partner capital). Only the governed opening
+  // reset may undo it. Before any write, so the refusal is atomic even for a caller that catches.
+  if (original.journalEntryId) {
+    const originalJournal = await ctx.db.get(original.journalEntryId);
+    if (originalJournal?.category === "OPENING_BALANCE") {
+      throw new ConvexError("The opening balance journal cannot be reversed through the generic ledger reversal.");
+    }
+  }
 
   // ⚠️ SCRUM-515 (S515-R1) — the key-holder lookups run BEFORE every success
   // path, including the REVERSED early return below: an idempotency key held by

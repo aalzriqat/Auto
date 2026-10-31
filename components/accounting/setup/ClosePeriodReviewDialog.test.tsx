@@ -8,10 +8,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
+import { SUPPLIER_PAYABLES_RECON_DATE_WARNING, SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING, EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING } from "@/convex/utils/closeWarnings";
 import {
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  UNEXPLAINED_OPENING_DIFFERENCE_LABEL,
 } from "@/convex/utils/closeWarnings";
 
 const UNKNOWN_WARNING = "Some future warning the dialog has never heard of.";
@@ -131,6 +136,63 @@ describe("ClosePeriodReviewDialog supplier payables warnings", () => {
   });
 });
 
+/**
+ * SCRUM-858 - the opening-balance reconciliation warnings. The owner-ruled label must reach the
+ * screen in both languages, and each warning is acknowledged by its raw English server text.
+ */
+const OPENING_WARNINGS: ReadonlyArray<readonly [string, string]> = [
+  [SUPPLIER_PAYABLES_RECON_DATE_WARNING, "ClosePeriodWarnSupplierPayablesReconDate"],
+  [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING, "ClosePeriodWarnSupplierRecoverablesReconFamily"],
+  [EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING, "ClosePeriodWarnEmployeeAdvancesReconFamily"],
+  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING, "ClosePeriodWarnSupplierPayablesReconOpeningSource"],
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES, "ClosePeriodWarnOpeningDiffSupplierPayables"],
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES, "ClosePeriodWarnOpeningDiffEmployeeAdvances"],
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES, "ClosePeriodWarnOpeningDiffSupplierRecoverables"],
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.PARTNER_CAPITAL, "ClosePeriodWarnOpeningDiffPartnerCapital"],
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES, "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances"],
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES, "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables"],
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL, "ClosePeriodWarnOpeningReconUnavailablePartnerCapital"],
+];
+
+describe("ClosePeriodReviewDialog opening-balance reconciliation warnings", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.close.mockResolvedValue(undefined);
+    mocks.checklist = { canClose: true, blockers: [], warnings: OPENING_WARNINGS.map(([text]) => text) };
+  });
+  afterEach(cleanup);
+
+  test.each(OPENING_WARNINGS)("the English dictionary entry equals the server text exactly: %s", (text, key) => {
+    expect((dictionaries.en as Record<string, string>)[key]).toBe(text);
+  });
+
+  test("every opening warning renders its Arabic text, and no raw English remains", () => {
+    renderDialog("ar");
+    const ar = dictionaries.ar as Record<string, string>;
+    for (const [text, key] of OPENING_WARNINGS) {
+      expect(ar[key]).toBeTruthy();
+      expect(screen.getByText(ar[key])).toBeTruthy();
+      expect(screen.queryByText(text)).toBeNull();
+    }
+  });
+
+  test("the difference warnings carry the owner-ruled label in both languages", () => {
+    const en = dictionaries.en as Record<string, string>;
+    const ar = dictionaries.ar as Record<string, string>;
+    for (const [, key] of OPENING_WARNINGS.filter(([, k]) => k.startsWith("ClosePeriodWarnOpeningDiff"))) {
+      expect(en[key].startsWith(UNEXPLAINED_OPENING_DIFFERENCE_LABEL.en)).toBe(true);
+      expect(ar[key].startsWith(UNEXPLAINED_OPENING_DIFFERENCE_LABEL.ar)).toBe(true);
+    }
+  });
+
+  test("closing in Arabic acknowledges the raw English server strings", async () => {
+    renderDialog("ar");
+    for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box);
+    fireEvent.click(screen.getByRole("button", { name: (dictionaries.ar as Record<string, string>).ClosePeriod }));
+    await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
+    expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual(OPENING_WARNINGS.map(([text]) => text));
+  });
+});
 describe("ClosePeriodReviewDialog customer deposits warning (SCRUM-858 F2)", () => {
   beforeEach(() => {
     mocks.close.mockReset();

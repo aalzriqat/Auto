@@ -1,0 +1,67 @@
+{
+  "id": "opening-recovery-receipt-supported-family",
+  "fingerprint": "c1af8a3762a86fbf592d5e6c5e7c602d6d24308c8ee40a66d6170961381ff7f9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-population-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "recoverableMinor": 70000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 1000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierRecoverablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 0
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "an opening supplier recovery receipt stays in the supported family"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

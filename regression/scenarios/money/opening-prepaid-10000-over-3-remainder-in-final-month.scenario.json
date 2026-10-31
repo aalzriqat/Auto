@@ -1,0 +1,98 @@
+{
+  "id": "opening-prepaid-10000-over-3-remainder-in-final-month",
+  "fingerprint": "fa99f61e29cd684a56318cd698ce25cd14079abada030ae1931ea274c59c841e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-closure",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "family": "PREPAID_EXPENSE",
+        "amountMinor": 10000,
+        "termMonths": 3,
+        "unexpiredBenefitAttested": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "prepaidExpenses.amortizePrepaidExpenseForMonth",
+      "input": {
+        "month": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "prepaidExpenses.amortizePrepaidExpenseForMonth",
+      "input": {
+        "month": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "prepaidExpenses.amortizePrepaidExpenseForMonth",
+      "input": {
+        "month": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "amortization.month1.amountMinor",
+      "value": 3333
+    },
+    {
+      "observable": "amortization.month2.amountMinor",
+      "value": 3333
+    },
+    {
+      "observable": "amortization.month3.amountMinor",
+      "value": 3334
+    },
+    {
+      "observable": "amortization.sumMinor",
+      "value": 10000
+    },
+    {
+      "observable": "prepaidSchedule.status",
+      "value": "FULLY_AMORTIZED"
+    },
+    {
+      "observable": "prepaidAccount.netMinor",
+      "value": 0
+    },
+    {
+      "observable": "expenseAccount.netMinor",
+      "value": 10000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingPrepaidRounding.scrum858.test.ts",
+    "testName": "opening prepaid 10.000 JOD over 3 months recognises exactly the allocated amount, remainder in the final month"
+  },
+  "matrixRow": "SCRUM-858-opening-prepaid-rounding"
+}

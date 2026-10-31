@@ -1,5 +1,9 @@
 # Regression library (SCRUM-761 / SCRUM-760 R1-R4)
 
+PR #710 population remediation adds twelve backend records for lost opening allocations, future openings, unsupported payable dates, later-payable offsets, shared supplier control families and the supported opening-recovery receipt control. They bind literal test titles, preserve ledger immutability, and cite the existing SCRUM-858 owner ruling. The DIRECT-sale fixtures reuse the pre-existing legacy-cash opt-out in `supplierReceivables.test.ts`; no pilot switch or opt-out census changes. Local execution does not prove current pilot availability, platform behavior or OCC.
+
+A thirteenth record pins the Phase 1 historical-close fixture integration: the new date warning must be shown and acknowledged before close, then the original close/lock behavior remains. Both the date guard and acknowledgement requirement have killed mutation controls.
+
 `scenarios/**/*.scenario.json` hold one record per scenario; `rulings.json` is a
 public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
@@ -101,3 +105,7 @@ Their `SCRUM-760#description` digest now covers the entire approved October 25 M
 ## Supplier concession records (SCRUM-766 PR-C)
 
 Fourteen backend records bind exact titles in `convex/supplierConcession.scrum766c.test.ts` (ten money, four permission). They cite SCRUM-407#c21031 (consigned financed economics), SCRUM-760#description (pilot scope) and, for the permission records, SCRUM-760#c22465 (R-PERMISSION). The rulings that govern them are SCRUM-760 c23812 (ruling 3: the concession is in the pilot, for SOURCED vehicles only, split against the server-computed total net shortfall) and SCRUM-766 c23841 (the owner approved the commission basis M = K - E_eff - contra, 77.5 in the worked example, and accepted Q2-Q8 as implemented). All fourteen records cite c23812, and the commission record also cites c23841; both are in `rulings.json` with a whole-comment digest (the convention above), refreshed 2026-10-28 with `refreshRulings.mjs`. The digest covers all eleven rulings in c23812, so a change to any of them changes it.  A ruling change updates these records in the same change.  Harness evidence only.
+
+## Opening closure records (SCRUM-858)
+
+Fifteen backend money records (`opening-recon-*`, `opening-journal-*`, `opening-prepaid-*-remainder-in-final-month`) bind literal titles in `convex/openingClosureReaders.scrum858.test.ts`, `convex/openingReversalDoors.scrum858.test.ts` and `convex/openingPrepaidRounding.scrum858.test.ts`. They record that an opening-balance reconciliation difference is reported under the fixed EN/AR label and never posted, that no door reverses the opening journal, and that opening prepaid rounding puts the remainder in the final month. They cite SCRUM-858#c23884 (owner ruling 2026-10-29: no invented balancing entry, a reported difference stays unresolved until supported). The untampered-reconciliation record also cites SCRUM-760#c22465 (R-CONSISTENCY) because it checks that the four readers agree with the ledger. Steps named `harness.*` stand for direct test seeding, not a public API. The 14-case tamper table and the PENDING/FAILED and close-checklist cases run in the same files but are parameterized, so they are not bound; four named rows (one per family) are. Local serial `convex-test` evidence only.

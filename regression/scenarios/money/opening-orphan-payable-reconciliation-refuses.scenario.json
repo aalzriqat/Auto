@@ -1,0 +1,65 @@
+{
+  "id": "opening-orphan-payable-reconciliation-refuses",
+  "fingerprint": "e712f9f5ab695ca77db423f1921ac35f6b0da0b893f9645c1c1b5803ba9a0670",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "customPayableMinor": 30000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.deletePayableAndHeader",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "an orphan opening journal cannot hide a deleted custom payable"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

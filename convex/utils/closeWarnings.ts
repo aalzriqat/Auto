@@ -13,6 +13,14 @@ export const SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING =
 export const SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING =
   "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.";
 
+export const SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING =
+  "Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.";
+export const SUPPLIER_PAYABLES_RECON_DATE_WARNING =
+  "Supplier payables reconciliation could not be completed as of the requested date: the current subledger cannot be compared with the ledger at that date. Review supplier payables manually.";
+export const SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING =
+  "Supplier recoverables reconciliation could not be completed: the control account includes source families outside supplier cost recoveries. Reconcile the whole control account manually.";
+export const EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING =
+  "Employee advances reconciliation could not be completed: the control account includes source families outside payroll advances. Reconcile the whole control account manually.";
 /**
  * SCRUM-858 (round-1 review F2): emitted when the customer-deposits comparison cannot be made as of
  * the period end because deposit activity is dated after it. Server text is the acknowledgement key,
@@ -30,4 +38,18 @@ export const CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING =
 export const UNEXPLAINED_OPENING_DIFFERENCE_LABEL = {
   en: "Unexplained opening-balance reconciliation difference",
   ar: "فرق أرصدة افتتاحية غير مفسر قيد المطابقة",
+} as const;
+
+/** Fixed text per family (the close mutation matches acknowledged warnings by exact string). */
+export const OPENING_DIFFERENCE_WARNING_BY_FAMILY = {
+  SUPPLIER_PAYABLES: `${UNEXPLAINED_OPENING_DIFFERENCE_LABEL.en}: supplier payables (current-state check). Nothing was posted to correct it; review the opening source.`,
+  EMPLOYEE_ADVANCES: `${UNEXPLAINED_OPENING_DIFFERENCE_LABEL.en}: employee advances (current-state check). Nothing was posted to correct it; review the opening source.`,
+  SUPPLIER_RECOVERABLES: `${UNEXPLAINED_OPENING_DIFFERENCE_LABEL.en}: supplier recoverables (current-state check). Nothing was posted to correct it; review the opening source.`,
+  PARTNER_CAPITAL: `${UNEXPLAINED_OPENING_DIFFERENCE_LABEL.en}: partner capital (current-state check). Nothing was posted to correct it; review the opening source.`,
+} as const;
+
+export const OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY = {
+  EMPLOYEE_ADVANCES: "Employee advances reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
+  SUPPLIER_RECOVERABLES: "Supplier recoverables reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
+  PARTNER_CAPITAL: "Partner capital reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
 } as const;
