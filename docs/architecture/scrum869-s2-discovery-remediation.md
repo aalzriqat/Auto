@@ -1,6 +1,48 @@
 # SCRUM-869 S2 discovery remediation
 
-## Round 4: current implementation and evidence
+## Round 5: current implementation and evidence
+
+Round 4 history discovery (the inventory of every org journal line) and its read-budget figures below are superseded by this section.
+
+Invariant: every GL account that the product can classify as a supplier-recoverable asset and that holds GL evidence (a journal line or a closed-period snapshot) is either compared or the report refuses; the evidence that decides this is independent of the posted opening journal and its retained header, and its cost follows the chart of accounts, never the age of the organization's journal.
+
+Both round-4 seat reports were read; each finding was reproduced before coding (proposed fixes were advisory).
+- H2 (Seat 2, HIGH), validated by reproduction at baa40b01f: (i) delete the supplier journal leg and remove it from the retained header; (ii) swap the supplier account to cash in both the leg and the header. Both returned AVAILABLE and reconciled while the omitted account's 100,000 snapshot survived. A header that agrees with the live legs only shows that two altered records agree. Severity note: Seat 1 rated the same repro LOW because it needs two records altered consistently; the fix was built anyway because the report's whole purpose is to catch a ledger that no longer agrees with itself.
+- M1 (both seats, MEDIUM, blocking), validated: at 27,000 unrelated lines the report returned UNAVAILABLE (OVER_LIMIT); with 2,000 lines carrying 9,000-character descriptions the harness (transaction limits on) logged "Read too much data in a single function execution (limit: 16777216 bytes)" and the public query returned the generic error.
+
+Impact map (changes only the discovery of compared accounts): writers of journalLines and snapshots are unchanged and untouched; the only reader changed is `discoverSupplierReceivableGlAccounts`, whose single caller is `computeSupplierReceivablesReconciliation`; no schema, index, writer, UI, permission or return-validator change; no backfill; historical rows are read as they are; reversal, retry and idempotency are not applicable (read-only report); tenant isolation holds (every read is `orgId`-scoped and an account of another org refuses).
+
+Design. `openingPolicyForAccount` is the one authority the opening writer uses, and it classifies every custom (no systemKey) ASSET account, as well as canonical 1240, as SUPPLIER_RECOVERABLE. Discovery now reads the chart's ASSET accounts through `by_org_type` (at most 100, else OVER_LIMIT) and, for each such account not already compared, makes two one-row probes (journal line, balance snapshot; at most 30 accounts, else OVER_LIMIT). Any evidence on an uncompared account refuses with OPENING_SOURCE_UNAVAILABLE. The opening journal's lines must also balance (debits equal credits as safe integers), which refuses a journal that lost a leg even when no snapshot survives. The two recovery-family inventories and the `journalLines.by_org` scan are removed; both orphan-family tests still pass because their custom asset account is now caught by class.
+
+Options weighed (Convex indexes: https://docs.convex.dev/database/reading-data/indexes/ , limits: https://docs.convex.dev/production/state/limits):
+- (a) Stamp a family tag on each journal line with an index. Selective and exact, but a schema change with a deploy-time index backfill, a write per posting on the hottest table, and fail-closed handling of untagged legacy lines. A one-way door; deferred.
+- (b) A maintained count or a posting-time rule. Not independent evidence, and a refusal in a posting rule is not enforcement. Rejected.
+- (c) Paginate across calls. Changes the public contract. Rejected.
+- (d) Chosen: independent chart-class coverage. No schema change.
+
+Production evidence (read-only counts, no row content): 5 organizations, each at most 4 journal lines, one recovery-receipt journal in total, zero custom ASSET accounts, 14 to 15 asset accounts per organization. Nothing in production is refused or limited by the new rules.
+
+Trade-offs, stated rather than hidden:
+1. An undeclared custom ASSET account that carries GL evidence refuses the report permanently (OPENING_SOURCE_UNAVAILABLE), even if it is, for example, petty cash and unrelated to suppliers. Bloom Cars has none. A narrower rule needs an explicit chart marker, a schema decision for the owner.
+2. More than 30 uncompared custom asset accounts, or more than 100 asset accounts, give OVER_LIMIT.
+3. The recovery-family account-set and family debit-equals-credit checks are gone. A family leg moved onto a non-ASSET custom account is not caught by class; a misposting still shows as a displayed difference whenever the subledger disagrees, but a coordinated offsetting forgery of both records remains a ledger-integrity concern outside this report.
+4. The pilot-history assertion changed on purpose from "more than 18,000 documents read" (a measure of the old scan) to "fewer than 2,000", and the 3,000-receipt test also asserts ranges and documents stay under the Convex limits.
+
+Five predicted failures and their status: a non-supplier custom asset account causes a false refusal (accepted, trade-off 1); the idle-account cap gives OVER_LIMIT (tested at 30 and 31); a family leg on a non-ASSET custom account is missed (accepted, trade-off 3); raising the discovery ranges to 160 breaks the worst-case bound (it is 3,895 + 160 = 4,055 ranges, below 4,096, asserted by the existing budget test); the balance proof wrongly refuses a legitimate multi-currency journal (opening lines are already forced to the journal currency, so the sums are of one currency).
+
+Read budget: discovery allowance is a constant 1,000 documents and 160 ranges (it was 10,661 documents borrowed). Non-discovery reserves are unchanged at 21,239 documents and 3,895 ranges at the default caps. Static whole-report bound including the refusal sentinel: 31,901 documents (floor of the budget) and 4,055 ranges.
+
+Measured in the convex-test harness (documents, ranges, JSON bytes of every document read by the computation):
+- 27,000 unrelated lines: 23 documents, 21 ranges, 9,692 bytes (reviewed head: OVER_LIMIT from about 26,658 lines, 26,665 documents at 26,656 lines).
+- 2,000 unrelated lines with 9,000-character descriptions: 23 documents, 21 ranges, 9,702 bytes (reviewed head: 18,769,196 bytes over 2,013 documents, Seat 2).
+- Pilot fixture, 3,000 receipts and 3,000 reversals: 46 documents, 37 ranges (round 4: 18,039 documents, 41 ranges).
+The byte test runs with `convexTestWithComponents(..., { transactionLimits: true })`, which enforces Convex's document, range and byte limits in the harness. This is harness I/O only: the real runtime, OCC and production data parity are not established.
+
+Failing-first (red at baa40b01f with the new tests only): r5 H2(i), H2(ii), M1(a), M1(b) failed; the idle-account control passed. Green after the fix. Two source mutants each killed tests: removing the balance proof is killed by H2(iii); disabling the class-coverage refusal is killed by both orphan-family tests and H2(ii). Seven permanent scenarios and the oracle rows were added.
+
+Shared primitive for the sibling PR #710 (not edited here): an indexed family tag on journalLines (an optional source type with an index on org, source type and journal entry), added with a bounded, resumable, idempotent backfill and a fail-closed path for untagged lines. It would serve #710's per-journal range finding and let both reports read recovery-family lines selectively. It is a one-way door (write amplification and an index backfill), so it needs an owner decision.
+
+## Round 4: implementation and evidence (history discovery superseded by round 5)
 
 Invariant: every supplier-recovery GL account, including surviving snapshots, participates in the independent comparison or the report refuses; ordinary pilot receipt/reversal history fits the bounded read strategy. No snapshot reconstruction or correction posting.
 
