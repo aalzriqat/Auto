@@ -445,6 +445,7 @@ const fill = (over: Record<string, string> = {}) => {
     "Seat 2 SHA": "abc1234",
     ...over,
   };
+  const modeLine = base["Seat 2 mode"] ? `- Seat 2 mode: ${base["Seat 2 mode"]}\n` : "";
   return `intro\nhttps://claude.ai/code/session_IMPL999\n\n## Skill evidence
 - Skills run: ${base["Skills run"]}
 - Red run:
@@ -460,7 +461,7 @@ Reviewed abc1234 for reuse, simplification and efficiency: no changes needed
 - Seat 1 model: ${base["Seat 1 model"]}
 - Seat 1 SHA: ${base["Seat 1 SHA"]}
 - Seat 2 model: ${base["Seat 2 model"]}
-- Seat 2 effort: ${base["Seat 2 effort"]}
+${modeLine}- Seat 2 effort: ${base["Seat 2 effort"]}
 - Seat 2 SHA: ${base["Seat 2 SHA"]}
 `;
 };
@@ -626,14 +627,37 @@ describe("evaluate (PR check)", () => {
     expect(r.ok).toBe(false);
     expect(r.problems.join("\n")).toContain(frag);
   });
-  test("evaluate accepts Seat 2 effort unasserted or unasserted (chat review)", async () => {
-    const r1 = await evaluate({ body: fill({ "Seat 2 effort": "unasserted" }), files: money });
-    expect(r1.ok).toBe(true);
-    expect(r1.problems).toEqual([]);
+  test("evaluate refuses unasserted Seat 2 effort for ordinary CLI models", async () => {
+    const r = await evaluate({ body: fill({ "Seat 2 effort": "unasserted" }), files: money });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain(
+      '"Seat 2 effort" must be low or medium for CLI execution; unasserted effort is only permitted for authorized primary-chat execution with explicit "Seat 2 mode: chat".',
+    );
+  });
 
-    const r2 = await evaluate({ body: fill({ "Seat 2 effort": "unasserted (chat review)" }), files: money });
-    expect(r2.ok).toBe(true);
-    expect(r2.problems).toEqual([]);
+  test("evaluate refuses unasserted Seat 2 effort in chat mode when review comment is missing", async () => {
+    const r = await evaluate({
+      body: fill({ "Seat 2 mode": "chat", "Seat 2 effort": "unasserted (chat review)" }),
+      files: money,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain(
+      "Seat 2 primary-chat execution with unasserted effort requires an independent current-head review comment on this PR.",
+    );
+  });
+
+  test("evaluate refuses unasserted Seat 2 effort in chat mode when review certificate callback is missing", async () => {
+    const body =
+      fill({ "Seat 2 mode": "chat", "Seat 2 effort": "unasserted (chat review)" }) +
+      "- Seat 2 review: https://github.com/o/r/pull/7#issuecomment-222\n";
+    const r = await evaluate({
+      body,
+      files: money,
+    });
+    expect(r.ok).toBe(false);
+    expect(r.problems.join("\n")).toContain(
+      "Seat 2 primary-chat execution with unasserted effort requires an independent current-head review certificate.",
+    );
   });
   test("red run that shows no failure is rejected", async () => {
     const body = fill().replace(/FAIL convex[\s\S]*?to be 0/, "all good");
@@ -1008,6 +1032,7 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
   const codexComment = (over: Record<string, string> = {}) =>
     `[Codex Review]\n` +
     `Reviewer: ${over.reviewer ?? "Codex Seat 2"}\n` +
+    (over.mode !== undefined ? (over.mode ? `Mode: ${over.mode}\n` : "") : "Mode: chat\n") +
     `Session: ${over.session ?? "01a18fe9-b92b-7ae0-aa13-faea3189ac57"}\n` +
     `Head SHA: ${over.sha ?? sha}\n` +
     `Verdict: ${over.verdict ?? "CERTIFY"}\n` +
@@ -1347,6 +1372,39 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     expect(await verifyCodexReview({ url: codexReviewUrl, sha, implementerSession: defaultImplementerSession }, { ...context, fetchImpl: makeFetch(shortSessionComment) }))
       .toEqual(["Seat 2 review comment must declare an actual reviewer Session."]);
 
+    const inconsistentModeComment = {
+      ...validComment,
+      body: codexComment({ mode: "cli" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(inconsistentModeComment) },
+      ),
+    ).toEqual(['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").']);
+
+    const missingModeComment = {
+      ...validComment,
+      body: codexComment({ mode: "" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(missingModeComment) },
+      ),
+    ).toEqual(['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").']);
+
+    const validChatModeComment = {
+      ...validComment,
+      body: codexComment({ mode: "chat" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(validChatModeComment) },
+      ),
+    ).toEqual([]);
+
     const correctionComment = {
       ...validComment,
       body: "[Codex Review] Review-evidence correction, not a certification. The prior body supplied placeholder session... NOT certified.",
@@ -1461,6 +1519,35 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     const comments: Record<string, Record<string, unknown>> = {
       "111": { html_url: waiverUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: waiverComment() },
       "222": { html_url: codexReviewUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: codexComment() },
+    };
+
+    const fetchImpl = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/issues/comments/111")) return { ok: true, status: 200, json: async () => comments["111"] } as Response;
+      if (u.includes("/issues/comments/222")) return { ok: true, status: 200, json: async () => comments["222"] } as Response;
+      if (u.includes("/files")) return { ok: true, status: 200, json: async () => money.map((filename) => ({ filename })) } as Response;
+      if (u.includes("/commits")) return { ok: true, status: 200, json: async () => [{ sha }] } as Response;
+      return { ok: true, status: 200, json: async () => ({ state: "open", body: bodyText, head: { sha } }) } as Response;
+    }) as typeof fetch;
+
+    const result = await check({ REPO: "o/r", PR_NUMBER: "7", GH_TOKEN: "test" }, fetchImpl);
+    expect(result.exitCode).toBe(0);
+    expect(result.lines[0]).toBe("skill-evidence: section present and consistent. Seat 1: WAIVED (owner-proxy ruling SCRUM-760 c24127). Seat 2: CERTIFIED.");
+  });
+
+  test("check reports Seat 1: WAIVED and Seat 2: CERTIFIED with chat mode and unasserted effort", async () => {
+    const bodyText =
+      fill({
+        "Seat 1 model": "WAIVED",
+        "Seat 2 mode": "chat",
+        "Seat 2 effort": "unasserted (chat review)",
+        "Seat 2 SHA": sha,
+      }) +
+      `- Implementer session: ${defaultImplementerSession}\n- Seat 1 waiver ruling: SCRUM-760 c24127\n- Seat 1 waiver: ${waiverUrl}\n- Seat 2 review: ${codexReviewUrl}\n`;
+
+    const comments: Record<string, Record<string, unknown>> = {
+      "111": { html_url: waiverUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: waiverComment() },
+      "222": { html_url: codexReviewUrl, issue_url: "https://api.github.com/repos/o/r/issues/7", author_association: "OWNER", body: codexComment({ mode: "chat" }) },
     };
 
     const fetchImpl = (async (url: string) => {

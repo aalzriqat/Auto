@@ -230,6 +230,16 @@ function validateCodexHead(body, head) {
   return [];
 }
 
+function validateCodexMode(body, mode) {
+  if (mode === "chat" || mode === "primary-chat") {
+    const commentMode = reportLine(body, "Mode") ?? reportLine(body, "Execution");
+    if (!commentMode || !/(?:chat|primary-chat)/i.test(commentMode)) {
+      return ['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").'];
+    }
+  }
+  return [];
+}
+
 function validateCodexReviewerAndSession(body, implementerSession) {
   const reviewer = reportLine(body, "Reviewer") ?? reportLine(body, "Signed");
   if (!reviewer || isPlaceholder(reviewer)) {
@@ -258,10 +268,10 @@ function validateCodexReviewerAndSession(body, implementerSession) {
 }
 
 /**
- * @param {{ url?: string, sha?: string, implementerSession?: string }} evidence
+ * @param {{ url?: string, sha?: string, implementerSession?: string, mode?: string }} evidence
  * @param {{ repo: string, pr: string|number, head: string, fetchImpl: typeof fetch, token: string }} context
  */
-export async function verifyCodexReview({ url, sha, implementerSession }, { repo, pr, head, fetchImpl, token }) {
+export async function verifyCodexReview({ url, sha, implementerSession, mode }, { repo, pr, head, fetchImpl, token }) {
   const prefix = `https://github.com/${repo}/pull/${pr}#issuecomment-`;
   const id = url?.startsWith(prefix) ? url.slice(prefix.length) : "";
   if (!/^[1-9]\d*$/.test(id)) return ["Seat 2 review must link to an issue comment on this PR."];
@@ -279,6 +289,9 @@ export async function verifyCodexReview({ url, sha, implementerSession }, { repo
 
   const headProblems = validateCodexHead(body, head);
   if (headProblems.length > 0) return headProblems;
+
+  const modeProblems = validateCodexMode(body, mode);
+  if (modeProblems.length > 0) return modeProblems;
 
   return validateCodexReviewerAndSession(body, implementerSession);
 }
