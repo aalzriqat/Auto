@@ -6575,6 +6575,17 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_facebook_user_id", ["facebookUserId"])
     .index("by_revoked_at", ["revokedAt"]),
 
+  // SCRUM-842: the receipt behind the confirmation code returned to Meta's
+  // data-deletion callback. It holds only what the public status page needs:
+  // an opaque random code, which platform's request it was, and when the
+  // deletion ran. It never holds the Meta user id (or anything from the signed
+  // request), so it is not itself user data that outlives the deletion.
+  metaDataDeletionRequests: defineTable({
+    code: v.string(),
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    completedAt: v.number(),
+  }).index("by_code", ["code"]),
+
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
     externalId: v.string(),

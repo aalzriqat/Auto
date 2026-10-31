@@ -368,6 +368,49 @@ export const disconnectByInstagramUserId = internalMutation({
   },
 });
 
+/** An opaque confirmation code is 16 random bytes in lowercase hex (convex/http.ts). */
+const META_DELETION_CODE_PATTERN = /^[0-9a-f]{32}$/;
+
+/**
+ * Records that a Meta data-deletion request was processed, under the opaque
+ * confirmation code the callback hands back to Meta (SCRUM-842). Takes no user
+ * id on purpose: the receipt must not link the code to a person.
+ */
+export const recordMetaDataDeletion = internalMutation({
+  args: {
+    code: v.string(),
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+  },
+  handler: async (ctx, args) => {
+    if (!META_DELETION_CODE_PATTERN.test(args.code)) {
+      throw new ConvexError("Invalid confirmation code.");
+    }
+    await ctx.db.insert("metaDataDeletionRequests", {
+      code: args.code,
+      platform: args.platform,
+      completedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Answers the public /data-deletion-status page. Unauthenticated by design: the
+ * visitor is the end user Meta sent here and has no AutoFlow session. The
+ * 128-bit random code is the only key, and the reply carries just the platform
+ * and the time, so a wrong code learns nothing and a right one reveals no user.
+ */
+export const getMetaDataDeletionStatus = query({
+  args: { code: v.string() },
+  handler: async (ctx, args) => {
+    if (!META_DELETION_CODE_PATTERN.test(args.code)) return null;
+    const row = await ctx.db
+      .query("metaDataDeletionRequests")
+      .withIndex("by_code", (q) => q.eq("code", args.code))
+      .first();
+    return row ? { platform: row.platform, completedAt: row.completedAt } : null;
+  },
+});
+
 /** Disconnects Instagram for the org. Owner-only.
  *  Intentionally NOT gated behind requireFeature, matching Facebook's
  *  disconnect: a downgraded org must still be able to revoke its credentials

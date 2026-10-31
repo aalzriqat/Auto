@@ -86,6 +86,16 @@ describe("proxy.ts wrapped Clerk handler", () => {
     expect(auth.protect).not.toHaveBeenCalled();
   });
 
+  // SCRUM-842: Meta's data-deletion callback returns this page's URL to the end
+  // user, who has no AutoFlow session; behind auth.protect() they would be sent to sign-in.
+  it("lets the Meta data-deletion status page through without protecting it", async () => {
+    const { result, auth } = await handle(
+      request("http://localhost:3000/data-deletion-status?id=0123456789abcdef0123456789abcdef", "localhost:3000"),
+    );
+    expect(result).toBeUndefined();
+    expect(auth.protect).not.toHaveBeenCalled();
+  });
+
   it("protects every non-public route", async () => {
     const { result, auth } = await handle(request("http://localhost:3000/dashboard", "localhost:3000"));
     expect(result).toBeUndefined();

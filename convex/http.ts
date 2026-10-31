@@ -323,6 +323,25 @@ async function verifyMetaSignedRequest(
   return JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
 }
 
+// SCRUM-842: the confirmation code Meta's data-deletion callback returns. It is
+// 16 random bytes in hex, so it is opaque and unguessable and carries nothing
+// from the signed request (no user id, no timestamp).
+function newMetaDeletionConfirmationCode(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function metaDeletionReply(appUrlSetting: string | undefined, confirmationCode: string): Response {
+  const appUrl = (appUrlSetting ?? "").replace(/\/$/, "");
+  return new Response(
+    JSON.stringify({
+      url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
+      confirmation_code: confirmationCode,
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 // Verifies Meta's `X-Hub-Signature-256` header — a hex-encoded HMAC-SHA256 of
 // the raw request body, keyed with the Meta App Secret — sent on every
 // WhatsApp Cloud API webhook POST. This is the only thing that proves a
@@ -1034,7 +1053,8 @@ http.route({
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "instagram-oauth",
       status: "success",
-      summary: `Deauthorized by Instagram user ${payload.user_id}`,
+      // Fixed text: the Meta user id is never logged (SCRUM-842).
+      summary: "Instagram deauthorization callback processed",
     });
 
     return new Response(null, { status: 200 });
@@ -1060,9 +1080,9 @@ http.route({
     if (!payload?.user_id)
       return new Response("Invalid signature", { status: 400 });
 
-    // We only ever stored the dealer's own IG business account ID, access
-    // token, and display name on orgSettings — clearing those is a complete
-    // erasure, no async job needed.
+    // Clearing the dealer's IG business account ID, access token and display
+    // name from orgSettings removes the connection synchronously, no async job
+    // needed. That is what the status page claims, and no more (SCRUM-842).
     await ctx.runMutation(
       internal.socialIntegrations.disconnectByInstagramUserId,
       {
@@ -1070,21 +1090,19 @@ http.route({
       },
     );
 
-    const confirmationCode = `${payload.user_id}-${Date.now()}`;
+    const confirmationCode = newMetaDeletionConfirmationCode();
+    await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
+      code: confirmationCode,
+      platform: "instagram",
+    });
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "instagram-oauth",
       status: "success",
-      summary: `Data deletion requested by Instagram user ${payload.user_id}`,
+      // Fixed text: the Meta user id is never logged (SCRUM-842).
+      summary: "Instagram data deletion callback processed",
     });
 
-    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-    return new Response(
-      JSON.stringify({
-        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
-        confirmation_code: confirmationCode,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
+    return metaDeletionReply(env.NEXT_PUBLIC_APP_URL, confirmationCode);
   }),
 });
 
@@ -1496,7 +1514,8 @@ http.route({
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "facebook-oauth",
       status: "success",
-      summary: `Deauthorized by Facebook user ${payload.user_id}`,
+      // Fixed text: the Meta user id is never logged (SCRUM-842).
+      summary: "Facebook deauthorization callback processed",
     });
 
     return new Response(null, { status: 200 });
@@ -1522,9 +1541,10 @@ http.route({
     if (!payload?.user_id)
       return new Response("Invalid signature", { status: 400 });
 
-    // We only ever stored the dealer's own Page ID, access token, and
-    // display name on orgSettings — clearing those is a complete erasure,
-    // no async job needed.
+    // Clearing the dealer's Page ID, access token, display name and connecting
+    // user id from orgSettings removes the connection synchronously, no async
+    // job needed. The revocation fence (`facebookRevocations`) is separate and
+    // retained (SCRUM-807); the status page claims only the connection (SCRUM-842).
     await ctx.runMutation(
       internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
       {
@@ -1532,21 +1552,19 @@ http.route({
       },
     );
 
-    const confirmationCode = `${payload.user_id}-${Date.now()}`;
+    const confirmationCode = newMetaDeletionConfirmationCode();
+    await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
+      code: confirmationCode,
+      platform: "facebook",
+    });
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "facebook-oauth",
       status: "success",
-      summary: `Data deletion requested by Facebook user ${payload.user_id}`,
+      // Fixed text: the Meta user id is never logged (SCRUM-842).
+      summary: "Facebook data deletion callback processed",
     });
 
-    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-    return new Response(
-      JSON.stringify({
-        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
-        confirmation_code: confirmationCode,
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } },
-    );
+    return metaDeletionReply(env.NEXT_PUBLIC_APP_URL, confirmationCode);
   }),
 });
 

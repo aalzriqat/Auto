@@ -21,6 +21,8 @@ const isPublicRoute = createRouteMatcher([
   "/privacy",
   "/terms",
   "/contact",
+  // SCRUM-842: the status URL Meta's data-deletion callback hands to the end user.
+  "/data-deletion-status",
   "/manifest.webmanifest",
   "/api/health",
   "/clerk-webhook",
