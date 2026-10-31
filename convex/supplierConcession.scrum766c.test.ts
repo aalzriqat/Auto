@@ -302,7 +302,7 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     expect(app?.supplierGapShareMinor).toBe(jod(400));
     expect(app?.dealerGapShareMinor).toBe(jod(450));
     expect(app?.customerGapShareMinor).toBe(0);
-    expect(app?.supplierGapBasis).toEqual({ contractEntitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER });
+    expect(app?.supplierGapBasis).toEqual({ contractEntitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER, supplierId: s.supplierId });
   });
 
   test("the supplier alone covering the whole 850 is SUPPLIER_ABSORBS, and a second resolution is refused", async () => {

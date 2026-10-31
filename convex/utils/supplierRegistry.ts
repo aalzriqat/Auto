@@ -66,6 +66,7 @@ export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ER
 /** Same message for a missing and a foreign id: no existence oracle (TEN-1, invariant I2). */
 export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
+export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE = "Supplier identity is unresolved.";
 const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 export function throwSupplierError(
@@ -328,6 +329,48 @@ async function readSupplierSnapshot(
  * copied into a new record; the name snapshot already on the source record still carries the history.
  * Read-only. It lives here because only the supplier modules read the supplier tables.
  */
+
+/**
+ * Asserts that a row has a resolved supplierId in the given orgId (N5, N6, N10).
+ * Throws SUPPLIER_ERROR.IDENTITY_UNRESOLVED with SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE if absent or foreign.
+ * Note: Does NOT refuse if supplier is inactive (author self-attack #4: deactivation allows settlement).
+ */
+export async function requireResolvedSupplierId(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  row: { supplierId?: Id<"suppliers">; origin?: string },
+): Promise<Id<"suppliers"> | undefined> {
+  if (row.origin === "OPENING") {
+    return undefined;
+  }
+  if (!row.supplierId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  const supplier = await ctx.db.get("suppliers", row.supplierId);
+  if (!supplier || supplier.orgId !== orgId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  return row.supplierId;
+}
+/**
+ * Resolves the supplier a SOURCED sale will owe (or be owed by) and its snapshot version, before any write.
+ * Fails closed with SUPPLIER_IDENTITY_UNRESOLVED when the vehicle carries no supplier id, when the id
+ * does not exist, or when it belongs to another organization (N5, N6). One message for all three, so
+ * the refusal is not an existence oracle (TEN-1). A completed sale must never write a payable or a
+ * receivable that the settlement doors would then refuse for the rest of its life.
+ * Does not refuse an inactive supplier: deactivation never strands an obligation (N10).
+ */
+export async function requireSupplierSnapshotForCompletion(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | undefined,
+): Promise<{ supplierId: Id<"suppliers">; supplierSnapshotVersion: number }> {
+  const supplier = supplierId ? await ctx.db.get("suppliers", supplierId) : null;
+  if (!supplier || supplier.orgId !== orgId) {
+    return throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  return { supplierId: supplier._id, supplierSnapshotVersion: supplier.version };
+}
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,

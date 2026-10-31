@@ -308,6 +308,14 @@ The questions as originally stated, kept for the record:
 - **OQ-11.** Branch suppliers sharing a legal identity (`sharedLegalIdentityOf`): statements in SCRUM-869 must not net across branches; confirm whether a legal-entity rollup view is wanted at all.
 - **OQ-12.** A ruling record id for the 2026-10-29 "no migration" decision, so `regression/rulings.json` and the new scenarios can cite it (S1 cites `SCRUM-868#c23794`).
 
+### P3 implementation record (2026-10-31, after review of PR #732)
+
+- **Completion fails closed.** The P3 row's phrase "removes the Unknown supplier default" means sale completion refuses a SOURCED car whose supplier does not resolve to a row of the caller's organization: no `sourcedSupplierId`, an id of another organization and an id that no longer exists all return `SUPPLIER_IDENTITY_UNRESOLVED` with one identical message (N6), before any write, on both routes. An inactive supplier still completes (N10). Without this the settlement doors would refuse the very rows completion had just written.
+- **"P3 never adds an id check to a door that does not already refuse"** applies to the reversal, unwind and correction doors. It does not apply to completion, which is the writer of the obligation.
+- **Deviation: OPENING rows are exempt from the supplier-id requirement at the settlement doors.** Prediction 5 said a new receipt against an opening row is refused as unresolved. The doors instead exempt rows with `origin === "OPENING"`, because those rows are validated against the approved opening draft (`openingPayableBasis`, `openingRecoveryBasis`) and refusing them would strand every opening supplier balance until opening rows carry ids. The exemption is not reachable by an operational row: the schema requires `openingBalanceDraftId` and `openingRowKey` on an OPENING row, only the opening writers create one, and the basis check compares the row with the approved draft. This is tracked as a P5 follow-up: carry the id on opening rows and remove the exemption.
+- **Readers.** `outstandingSummary` groups identified rows by supplier id and keeps every unresolved row as its own entry keyed by the row id. It never groups by name (N2). Totals are computed separately and are unchanged.
+- **Known gap, P4 scope.** `costBearer.ts` (`supplierBearerRefusal`) accepts a supplier name without an id when `expenses.create` opens a supplier cost recovery, so a recovery without an id can still be created. The recovery-receipt door refuses it, so it cannot be collected. P4 closes the writer (section 5).
+
 ## 10. Sources
 
 Official documentation (fetched 2026-10-29):

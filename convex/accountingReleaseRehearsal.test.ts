@@ -35,6 +35,7 @@
  */
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-795: manual journals are OFF in the shipped pilot build. This suite proves
 // the ENABLED behaviour (the switch is reversible), so it runs with the leaf off.
@@ -654,11 +655,11 @@ describe("R8 — sourced (consigned) vehicle economics", () => {
   test("selling a SOURCED car owes the supplier its cost and recognises only the margin", async () => {
     const { t, asAdmin, orgId, userId, customerId } = await rehearseFreshDealership("r8");
 
-    const vehicleId = await t.run((ctx) =>
+    const vehicleId = await t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId, vin: "VIN_REHEARSAL_SOURCED", make: "Nissan", model: "Patrol", year: 2023,
         mileage: 0, color: "White", fuelType: "Petrol", transmission: "Automatic",
-        sellingPrice: 24_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer",
+        sellingPrice: 24_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Partner Dealer"),
         sourceCost: 19_000, status: "AVAILABLE",
       })
     );

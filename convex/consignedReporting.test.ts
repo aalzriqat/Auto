@@ -21,6 +21,7 @@ import { api, internal } from "./_generated/api";
 import { saleEconomics } from "./utils/vehicleOwnership";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import type { Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -109,12 +110,12 @@ async function seedDealer(tag: string, opts: { withAccounting?: boolean } = {}) 
 }
 
 async function sellConsigned(s: Awaited<ReturnType<typeof seedDealer>>, vin: string) {
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
     })
   );
   return await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -142,12 +143,12 @@ async function sellConsignedAsLegacyPrincipal(
   s: Awaited<ReturnType<typeof seedDealer>>,
   vin: string
 ) {
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "SOLD", sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
     })
   );
   return await s.t.run((ctx) =>
@@ -726,12 +727,12 @@ describe("ranking a salesperson whose earnings are not fully known", () => {
     vin: string,
     salespersonId: string
   ) {
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
         color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "SOLD", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     // Inserted rather than written through `sales.create`, which now refuses
@@ -1184,20 +1185,20 @@ describe("the consigned preview on a multi-vehicle quote", () => {
 
   async function twoCarQuote(tag: string) {
     const s = await seedDealer(tag);
-    const first = await s.t.run((ctx) =>
+    const first = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINPREV${tag}A`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
-    const second = await s.t.run((ctx) =>
+    const second = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINPREV${tag}B`, make: "Lexus", model: "ES", year: 2024,
         mileage: 12, color: "Black", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SECOND_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: SECOND_ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: SECOND_ENTITLEMENT,
       })
     );
     const quoteId = await s.t.run((ctx) =>
@@ -1242,12 +1243,12 @@ describe("the consigned preview on a multi-vehicle quote", () => {
 
   test("refuses a vehicle that is not a line on the quote", async () => {
     const { s, quoteId } = await twoCarQuote("prevOther");
-    const stranger = await s.t.run((ctx) =>
+    const stranger = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINPREVSTRANGE", make: "Kia", model: "Rio", year: 2023,
         mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
         sellingPrice: OWNED_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: 1_000,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: 1_000,
       })
     );
 
@@ -1293,12 +1294,12 @@ describe("tax on an agency sale, with no open accounting period", () => {
     opts: { withAccounting: boolean; taxAmount?: number; salePrice?: number }
   ) {
     const s = await seedDealer(tag, { withAccounting: opts.withAccounting });
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINTAX${tag}`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     return {
@@ -1334,12 +1335,12 @@ describe("tax on an agency sale, with no open accounting period", () => {
    */
   test("recognizes the margin the journal posted, without float drift", async () => {
     const s = await seedDealer("marginScale", { withAccounting: false });
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINSCALE1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: 12_500.7, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: 9_500.5,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: 9_500.5,
       })
     );
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -1463,12 +1464,12 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     overrides: { financingType?: "CASH" | "FINANCED" | "LEASE"; route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER" } = {}
   ) {
     const s = await seedDealer(tag);
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINFIN${tag}`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     return {
@@ -1534,12 +1535,12 @@ describe("a financed consigned sale settled directly with the supplier", () => {
     // Both carry sub-fils precision, so round(a-b) and round(a)-round(b) split.
     const SALE = 12_500.7005;
     const COST = 9_500.5002;
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINCLAIM1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -1568,12 +1569,12 @@ describe("a financed consigned sale settled directly with the supplier", () => {
   test("the supplier payable is stored at the currency's scale", async () => {
     const s = await seedDealer("payScale");
     const COST = 9_500.5002;
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINPAY1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: 12_500, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -1693,7 +1694,7 @@ describe("turnover past the dashboard's costing cap", () => {
           sellingPrice: price, status: "SOLD", sourceType,
           ...(sourceType === "STOCK"
             ? { purchasePrice: OWNED_COST }
-            : { sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT }),
+            : { sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT }),
         });
         await ctx.db.insert("sales", {
           orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,

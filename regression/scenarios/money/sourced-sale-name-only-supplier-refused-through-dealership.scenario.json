@@ -1,0 +1,66 @@
+{
+  "id": "sourced-sale-name-only-supplier-refused-through-dealership",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "route": "THROUGH_DEALERSHIP",
+        "sourcedFromName": "TYPED_NAME",
+        "salePrice": 15000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "sameIdempotencyKey": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-settlement",
+  "impl": {
+    "file": "convex/supplierSettlementIdentity.test.ts",
+    "testName": "THROUGH_DEALERSHIP: a real supplier name with no sourcedSupplierId refuses and writes nothing, replay included"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-settlement",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "52cb5ae4e1f8d6da06b0eaff1cedbe71ca44bcbdddd5519ba6fc2364123585db"
+}

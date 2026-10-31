@@ -71,10 +71,26 @@ async function seedDealerWithPayable(amountDue = 5000) {
   const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Sister Dealer Co",
+      displayNameKey: "sister dealer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    })
+  );
+
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: "SOURCEDVIN000001", make: "Kia", model: "Sportage", year: 2023, mileage: 0,
       color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000, status: "SOLD",
+      sourcedSupplierId: supplierId,
     })
   );
   const customerId = await t.run((ctx) =>
@@ -92,7 +108,7 @@ async function seedDealerWithPayable(amountDue = 5000) {
   );
   const payableId = await t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", amountDue, currency: "JOD",
+      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", supplierId, amountDue, currency: "JOD",
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );

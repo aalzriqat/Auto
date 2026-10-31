@@ -1,0 +1,52 @@
+{
+  "id": "sourced-sale-unknown-supplier-name-refused",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "sourceType": "SOURCED",
+        "route": "THROUGH_DEALERSHIP",
+        "sourcedFromName": "Unknown.supplier",
+        "salePrice": 15000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-settlement",
+  "impl": {
+    "file": "convex/supplierSettlementIdentity.test.ts",
+    "testName": "SOURCED sale completion with unknown supplier name fails closed with SUPPLIER_IDENTITY_UNRESOLVED and writes 0 rows"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-settlement",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "f37605d3a1053d42cd69481d3048edf0c84aee4c0460f059ed8d6ef0e2088865"
+}
