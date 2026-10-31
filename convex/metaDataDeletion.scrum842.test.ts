@@ -17,6 +17,18 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+// A thin wrapper over the real redaction: the one row whose summary is exactly
+// "POISON-ROW-842" makes it throw, to fail a later page of a multi-page run.
+vi.mock("./utils/metaUserIdRedaction", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/metaUserIdRedaction")>();
+  return {
+    ...actual,
+    redactMetaUserIdInText: (text: string, metaUserId: string) => {
+      if (text === "POISON-ROW-842") throw new Error("injected page failure");
+      return actual.redactMetaUserIdInText(text, metaUserId);
+    },
+  };
+});
 const FACEBOOK_SECRET = "test_fb_app_secret_842";
 const INSTAGRAM_SECRET = "test_ig_app_secret_842";
 
@@ -76,6 +88,7 @@ const PLATFORMS: Array<{
   deauthorize: string;
   deletion: string;
   logSource: string;
+  otherLogSource: string;
 }> = [
   {
     platform: "facebook",
@@ -86,6 +99,7 @@ const PLATFORMS: Array<{
     deauthorize: "/facebook-deauthorize",
     deletion: "/facebook-data-deletion",
     logSource: "facebook-oauth",
+    otherLogSource: "instagram-oauth",
   },
   {
     platform: "instagram",
@@ -96,6 +110,7 @@ const PLATFORMS: Array<{
     deauthorize: "/instagram-deauthorize",
     deletion: "/instagram-data-deletion",
     logSource: "instagram-oauth",
+    otherLogSource: "facebook-oauth",
   },
 ];
 
@@ -360,6 +375,75 @@ const legacyLine = (label: string, id: string, kind: "deauth" | "deletion") =>
 
 const logById = (t: T, id: Id<"webhookLogs">) => t.run((ctx) => ctx.db.get(id));
 
+// ─── Scheduler inspection ─────────────────────────────────────────────────────
+//
+// Convex keeps a finished scheduled function, with its arguments, for 7 days and
+// exposes it through the `_scheduled_functions` system table
+// (https://docs.convex.dev/scheduling/scheduled-functions). A continuation that
+// carried the Meta user id (or the receipt code that links the request to it) in
+// its arguments would therefore keep the identifier the deletion exists to erase.
+
+// The injected page failure: any row with exactly this summary makes the (mocked)
+// redaction throw, so a later page fails after earlier pages have committed.
+const POISON_SUMMARY = "POISON-ROW-842";
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The secret as it could be recovered from a stored copy: plain, escaped, encoded, reversed or hashed. */
+async function recoverableForms(secret: string): Promise<string[]> {
+  const bytes = Buffer.from(secret);
+  const hex = bytes.toString("hex");
+  return [
+    secret,
+    secret.toUpperCase(),
+    [...secret].reverse().join(""),
+    encodeURIComponent(secret),
+    JSON.stringify(secret).slice(1, -1),
+    bytes.toString("base64"),
+    bytes.toString("base64url"),
+    hex,
+    hex.toUpperCase(),
+    await sha256Hex(secret),
+  ];
+}
+
+const scheduledRecords = (t: T) => t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+
+async function expectSchedulerHoldsNone(t: T, secrets: string[]): Promise<void> {
+  const dump = JSON.stringify(await scheduledRecords(t));
+  for (const secret of secrets) {
+    for (const form of await recoverableForms(secret)) {
+      expect(dump, `scheduler record holds a recoverable form of an identifier (${form.length} chars)`).not.toContain(form);
+    }
+  }
+}
+
+async function seedFillerLogs(t: T, source: string, count: number): Promise<void> {
+  await t.run(async (ctx) => {
+    for (let i = 0; i < count; i += 1) {
+      await ctx.db.insert("webhookLogs", {
+        source: source as never,
+        status: "success",
+        summary: `Connected for org filler-${i}`,
+        createdAt: Date.now(),
+      });
+    }
+  });
+}
+
+function captureConsole(): string[] {
+  const output: string[] = [];
+  for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+    vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+      output.push(args.map(String).join(" "));
+    });
+  }
+  return output;
+}
+
 describe("SCRUM-842 retained webhookLogs redaction", () => {
   beforeEach(() => {
     for (const method of ["log", "info", "warn", "error", "debug"] as const) {
@@ -426,68 +510,130 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       }
     });
 
-    test("a request whose redaction needs more than one page is not complete until the follow-up has finished", async () => {
+    test("a request whose redaction needs more than one page completes, and no scheduler record ever holds the user id or the receipt code", async () => {
       const t = newTest();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      // Older, unrelated rows fill the first pages; the user's own rows sit on the last page.
-      await t.run(async (ctx) => {
-        for (let i = 0; i < META_LOG_REDACTION_PAGE_SIZE * 2 + 5; i += 1) {
-          await ctx.db.insert("webhookLogs", {
-            source: p.logSource as never,
-            status: "success",
-            summary: `Connected for org filler-${i}`,
-            createdAt: Date.now(),
-          });
-        }
-      });
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE * 2 + 5);
       const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
       const lastPageRow2 = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deauth"));
+      // The same id in the OTHER platform's source, on a page of its own: it must not be touched.
+      const otherPlatformRow = await seedLegacyLog(
+        t,
+        p.otherLogSource,
+        legacyLine(p.otherLabel, LEGACY_ID, "deletion"),
+      );
 
       const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
       const reply = (await res.json()) as { confirmation_code: string };
 
-      // Meta still gets its answer, and the page says the work is not finished.
       expect(res.status).toBe(200);
       expect(reply.confirmation_code).toMatch(/^[0-9a-f]{32}$/);
-      const pending = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-      expect(pending?.platform).toBe(p.platform);
-      expect(pending?.completedAt).toBeNull();
-      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+      // Whatever is scheduled right now (nothing, once the work runs inside the request).
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
 
       await t.finishAllScheduledFunctions(vi.runAllTimers);
 
       expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
       expect((await logById(t, lastPageRow2))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deauth"));
-      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+      expect((await logById(t, otherPlatformRow))?.summary).toBe(legacyLine(p.otherLabel, LEGACY_ID, "deletion"));
       const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(done?.platform).toBe(p.platform);
       expect(typeof done?.completedAt).toBe("number");
+      // Completed scheduled records are kept for 7 days with their arguments (Convex docs).
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
     });
 
-    test("deauthorize with more than one page of rows is also finished by the follow-up", async () => {
+    test("deauthorize with more than one page of rows is finished too, and no scheduler record holds the user id", async () => {
       const t = newTest();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      await t.run(async (ctx) => {
-        for (let i = 0; i < META_LOG_REDACTION_PAGE_SIZE + 3; i += 1) {
-          await ctx.db.insert("webhookLogs", {
-            source: p.logSource as never,
-            status: "success",
-            summary: `Connected for org filler-${i}`,
-            createdAt: Date.now(),
-          });
-        }
-      });
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE + 3);
       const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deauth"));
 
       const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
       expect(res.status).toBe(200);
-      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
 
       await t.finishAllScheduledFunctions(vi.runAllTimers);
 
       expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deauth"));
+      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
+    });
+
+    test("a data-deletion run that fails on a later page leaves the receipt pending, answers a generic 500, and still leaves no user id in any scheduler record, row, response or console line", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      const consoleOutput = captureConsole();
+      // Page 1 is clean; the injected failure sits on page 2; the user's own row on page 3.
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
+      await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const body = await res.text();
+      await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
+
+      const [receipt] = await allDeletionRequests(t);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, receipt?.code ?? "no-receipt"]);
+      expect(receipt?.completedAt).toBeUndefined();
+      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+      expect(res.status).toBe(500);
+      expect(body).toBe("An unexpected error occurred. Please try again later.");
+      for (const text of [body, JSON.stringify([...res.headers]), JSON.stringify(await allDeletionRequests(t))]) {
+        expect(text).not.toContain(LEGACY_ID);
+      }
+      expect(consoleOutput.join("\n")).not.toContain(LEGACY_ID);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: receipt?.code ?? "" });
+      expect(status?.completedAt).toBeNull();
+    });
+
+    test("a deauthorize run that fails on a later page answers a generic 500 and leaves no user id in any scheduler record", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      const consoleOutput = captureConsole();
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
+      await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
+
+      const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
+
+      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
+      expect(res.status).toBe(500);
+      expect(await res.text()).not.toContain(LEGACY_ID);
+      expect(consoleOutput.join("\n")).not.toContain(LEGACY_ID);
+    });
+
+    test("replaying the callback after a failed multi-page run completes the redaction under a new receipt", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      captureConsole();
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
+      const poisoned = await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+      const signed = await signedRequest({ user_id: LEGACY_ID }, p.secret);
+
+      const failed = await post(t, p.deletion, signed);
+      await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
+      expect(failed.status).toBe(500);
+      // The fault is gone (the poisoned row now reads like any other row).
+      await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
+      const replay = await post(t, p.deletion, signed);
+      const reply = (await replay.json()) as { confirmation_code: string };
+
+      expect(replay.status).toBe(200);
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof status?.completedAt).toBe("number");
+      // The failed attempt's receipt stays pending: it never claims work that did not finish.
+      const receipts = await allDeletionRequests(t);
+      expect(receipts).toHaveLength(2);
+      expect(receipts.filter((r) => r.completedAt === undefined)).toHaveLength(1);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code, ...receipts.map((r) => r.code)]);
     });
   });
-
   describe("admin reader", () => {
     const adminReader = async (t: T) => {
       await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin_clerk", email: ADMIN_EMAIL }));

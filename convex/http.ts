@@ -11,6 +11,7 @@ import { rateLimiter } from "./rateLimit";
 import { normalizedWebsiteHost } from "./websiteConfig";
 import { isLikelyBot } from "./utils/userAgent";
 import { INSTAGRAM_ACCOUNT_IN_USE_MESSAGE } from "./socialIntegrations";
+import type { MetaLogRedactionPageResult } from "./metaLogRedaction";
 
 const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
@@ -356,6 +357,43 @@ interface MetaCallbackPlatform {
   disconnect: (ctx: ActionCtx, metaUserId: string) => Promise<unknown>;
 }
 
+/**
+ * Runs the retained-log redaction for one Meta user to the end, one bounded page
+ * per mutation, starting after `after` (null = from the first page, a result =
+ * from the page that result points to). The pages are driven from the request
+ * that already holds the id, not scheduled: the scheduler would keep the id, and
+ * the receipt code that links it to the request, in `_scheduled_functions` for 7
+ * days (https://docs.convex.dev/scheduling/scheduled-functions).
+ */
+async function redactMetaLogPages(
+  ctx: ActionCtx,
+  platform: MetaCallbackPlatform["platform"],
+  metaUserId: string,
+  receiptCode: string | undefined,
+  after: MetaLogRedactionPageResult | null,
+): Promise<void> {
+  let page: MetaLogRedactionPageResult = after ?? { isDone: false, continueCursor: null };
+  while (!page.isDone) {
+    page = await ctx.runMutation(internal.metaLogRedaction.redactMetaUserFromLogsPage, {
+      platform,
+      metaUserId,
+      receiptCode,
+      cursor: page.continueCursor,
+    });
+  }
+}
+
+/**
+ * A failed redaction page leaves the receipt pending and the work unfinished, so
+ * Meta is told it failed rather than that it succeeded. Only the error class is
+ * logged: a Convex error message can quote the arguments of the failed call, and
+ * those hold the Meta user id (SCRUM-842).
+ */
+function metaCallbackFailure(error: unknown): Response {
+  console.error("[meta-callback] retained-log redaction failed", error instanceof Error ? error.name : typeof error);
+  return new Response("An unexpected error occurred. Please try again later.", { status: 500 });
+}
+
 // Shared handler for Meta's deauthorize and data-deletion callbacks on every
 // platform. Meta POSTs a form-encoded `signed_request`
 // (https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback);
@@ -384,11 +422,11 @@ async function handleMetaCallback(
 
   if (kind === "deauthorize") {
     // Rows written before SCRUM-842 still name this user: redact them in place.
-    await ctx.runMutation(internal.metaLogRedaction.redactMetaUserFromLogsPage, {
-      platform: config.platform,
-      metaUserId,
-      cursor: null,
-    });
+    try {
+      await redactMetaLogPages(ctx, config.platform, metaUserId, undefined, null);
+    } catch (error) {
+      return metaCallbackFailure(error);
+    }
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: `${config.platform}-oauth`,
       status: "success",
@@ -398,11 +436,16 @@ async function handleMetaCallback(
   }
 
   const confirmationCode = newMetaDeletionConfirmationCode();
-  await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
-    code: confirmationCode,
-    platform: config.platform,
-    metaUserId,
-  });
+  try {
+    // The first page commits with the receipt; any further page is run here.
+    const firstPage: MetaLogRedactionPageResult = await ctx.runMutation(
+      internal.socialIntegrations.recordMetaDataDeletion,
+      { code: confirmationCode, platform: config.platform, metaUserId },
+    );
+    await redactMetaLogPages(ctx, config.platform, metaUserId, confirmationCode, firstPage);
+  } catch (error) {
+    return metaCallbackFailure(error);
+  }
   await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
     source: `${config.platform}-oauth`,
     status: "success",
