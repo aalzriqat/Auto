@@ -300,8 +300,49 @@ test("every expense door refuses a foreign, missing and soft-deleted reference a
     failures.push("snapshot discrimination: a paid expense did not change dashboardExpenseMonths (summary not READY)");
   if (after.dashboardExpenseMonths.length === 0) failures.push("snapshot discrimination: no expense month row after a paid expense");
 
+  // History is not re-validated: the scenario claims `paidExpenseHistory.replayEditReversalUnblocked`, so the bound
+  // test itself executes it. A reference check hoisted ahead of the idempotency claim or the PAID boundary fails here.
+  failures.push(...(await paidHistoryFailures()));
+
   expect(failures).toEqual([]);
 }, 240_000);
+
+/**
+ * An already-PAID expense whose car is later deleted keeps its idempotent replay, a non-accounting edit and its
+ * reversal. Returns the failed expectations instead of asserting, so the bound scenario test and the standalone test
+ * below run the very same checks.
+ */
+async function paidHistoryFailures(): Promise<string[]> {
+  const failures: string[] = [];
+  const f = await fixture();
+  const vehicleId = await f.refs.vehicle("live");
+  const args = {
+    ...f.base(), category: "REPAIR" as const, vehicleId, paymentMethod: "CASH" as const, idempotencyKey: crypto.randomUUID(),
+  };
+  const expenseId = await f.owner.mutation(api.expenses.create, args);
+  // The car is deleted AFTER the payment was accepted: the payment is history.
+  await f.t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true }));
+  const attempt = async (label: string, run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (error) {
+      failures.push(`paid history / ${label}: ${message(error)}`);
+    }
+  };
+  // An idempotent replay of the accepted create returns the original result, not a new refusal.
+  await attempt("replay", async () => {
+    if ((await f.owner.mutation(api.expenses.create, args)) !== expenseId) failures.push("paid history / replay: returned a different expense");
+  });
+  await attempt("notes edit", async () => {
+    await f.owner.mutation(api.expenses.update, { orgId: f.orgId, expenseId, notes: "late note" });
+    if ((await f.snapshot()).expenses.find((row) => row._id === expenseId)?.notes !== "late note") failures.push("paid history / notes edit: not stored");
+  });
+  await attempt("reversal", async () => {
+    await f.owner.mutation(api.expenses.reverseExpense, { orgId: f.orgId, expenseId, reason: "QA reversal after car deleted" });
+    if ((await f.snapshot()).expenses.find((row) => row._id === expenseId)?.isDeleted !== true) failures.push("paid history / reversal: expense not reversed");
+  });
+  return failures;
+}
 
 describe("SCRUM-811 expense doors own every foreign reference before writing", () => {
   test("expenses.update/remove/reverseExpense on a live same-org expense is not refused as not-found (positive control)", async () => {
@@ -323,21 +364,8 @@ describe("SCRUM-811 expense doors own every foreign reference before writing", (
   });
 
   test("an already-PAID expense whose vehicle is later deleted keeps its replay, non-accounting edit and reversal", async () => {
-    const f = await fixture();
-    const vehicleId = await f.refs.vehicle("live");
-    const args = {
-      ...f.base(), category: "REPAIR" as const, vehicleId, paymentMethod: "CASH" as const, idempotencyKey: crypto.randomUUID(),
-    };
-    const expenseId = await f.owner.mutation(api.expenses.create, args);
-    // The car is deleted AFTER the payment was accepted: the payment is history.
-    await f.t.run((ctx) => ctx.db.patch(vehicleId, { isDeleted: true }));
-    // An idempotent replay of the accepted create returns the original result, not a new refusal.
-    expect(await f.owner.mutation(api.expenses.create, args)).toBe(expenseId);
-    await f.owner.mutation(api.expenses.update, { orgId: f.orgId, expenseId, notes: "late note" });
-    expect((await f.snapshot()).expenses.find((row) => row._id === expenseId)?.notes).toBe("late note");
-    await f.owner.mutation(api.expenses.reverseExpense, { orgId: f.orgId, expenseId, reason: "QA reversal after car deleted" });
-    expect((await f.snapshot()).expenses.find((row) => row._id === expenseId)?.isDeleted).toBe(true);
-  });
+    expect(await paidHistoryFailures()).toEqual([]);
+  }, 120_000);
 
   test("a stale stored vehicle can be repaired in the same call that pays: cleared or replaced by a live car", async () => {
     const f = await fixture();

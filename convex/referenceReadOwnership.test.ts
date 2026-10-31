@@ -154,10 +154,18 @@ test("an org A reader never receives an org B document through a stored cross-or
   if (!ownExpense?.vehicleSummary?.includes("ORGA-VIN-A1") || ownExpense.payerName !== "OrgA Member") failures.push("control: own expense joins missing");
   if (own.customers.page.find((row) => row.lastName === "Own creator")?.createdByName !== "OrgA Member") failures.push("control: own customer creator missing");
 
+  // The scenario claims `attribution.offboardingMemberKeptAndNonMemberHidden`, so this bound test executes it too.
+  failures.push(...(await attributionFailures()));
+
   expect(failures).toEqual([]);
 }, 120_000);
 
-test("user attribution policy: an offboarding member keeps their name; a user with no membership in the org does not", async () => {
+/**
+ * The attribution policy in the header: an offboarding member keeps their name; a user with no membership of any
+ * status (a removed member) reads as unknown. Returns the failed expectations so the bound scenario test and the
+ * standalone test below run the very same checks.
+ */
+async function attributionFailures(): Promise<string[]> {
   const f = await fixture();
   const offboarding = await f.t.run(async (ctx) => {
     const id = await ctx.db.insert("users", { clerkId: "off-1", name: "Leaving Member", email: "leaving@example.test" });
@@ -170,6 +178,85 @@ test("user attribution policy: an offboarding member keeps their name; a user wi
     await ctx.db.insert("tasks", { orgId: f.orgId, customerId: f.customerId, assignedTo: removed, title: "Removed", dueDate: 2, status: "PENDING" });
   });
   const tasks = (await relations(f)).tasks;
-  expect(tasks.find((task) => task.title === "Offboarding")?.assignedUserName).toBe("Leaving Member");
-  expect(tasks.find((task) => task.title === "Removed")?.assignedUserName).toBe("Unknown");
+  const failures: string[] = [];
+  const nameOf = (title: string) => tasks.find((task) => task.title === title)?.assignedUserName;
+  if (nameOf("Offboarding") !== "Leaving Member") failures.push(`attribution: offboarding member read as ${nameOf("Offboarding")}`);
+  if (nameOf("Removed") !== "Unknown") failures.push(`attribution: removed member read as ${nameOf("Removed")}`);
+  return failures;
+}
+
+// Bound by SCRUM-761 scenario `customer-relations-withhold-vehicle-cost-from-roles-without-cost-permission`.
+// OWASP API3:2023 (Broken Object Property Level Authorization): the quote's joined vehicle belongs to the caller's
+// org, so object-level ownership passes, but its cost fields stay behind `view:cost_price` exactly as
+// `vehicles.get` / `vehicles.list` withhold them. Top-level, controls inside (the runner anchors `^title$`).
+test("a customers-only reader never receives vehicle cost or finance fields through a quote relation", async () => {
+  const COST = { purchasePrice: 424_242, sourceCost: 313_131, landedCostTotal: 535_353, minimumProfit: 646_464 };
+  const COST_FIELDS = [...Object.keys(COST), "sourcedFromName", "sourcedSupplierId", "addedBy", "updatedBy", "imageIds", "soldBySaleId"];
+  const SUPPLIER = "ORGA-SUPPLIER-SECRET";
+  const failures: string[] = [];
+  const f = await fixture();
+  const costVehicle = await f.t.run((ctx) => ctx.db.insert("vehicles", {
+    orgId: f.orgId, vin: "ORGA-COST-VIN", make: "CostMake", model: "CostModel", year: 2023, trim: "GT", mileage: 55_000, color: "Grey",
+    fuelType: "Diesel", transmission: "Manual", sellingPrice: 18_000, status: "AVAILABLE", sourceType: "SOURCED", notes: "ORGA-PUBLIC-NOTE",
+    sourcedFromName: SUPPLIER, addedBy: f.aUser, ...COST,
+  } as never));
+  await f.t.run((ctx) => ctx.db.insert("quotes", {
+    orgId: f.orgId, customerId: f.customerId, vehicleId: costVehicle, vehiclePrice: 18_000, downPayment: 1_000, termMonths: 12,
+    status: "DRAFT", createdBy: f.aUser, createdAt: Date.now(),
+  } as never));
+  const roleWith = (name: string, permissions: string[], extra: Record<string, unknown> = {}) =>
+    f.t.run(async (ctx) => {
+      const role = await ctx.db.insert("roles", { orgId: f.orgId, name, permissions, ...extra } as never);
+      const clerkId = `read-owner-${name}`;
+      const userId = await ctx.db.insert("users", { clerkId, name, email: `${name.toLowerCase()}@example.test` });
+      await ctx.db.insert("memberships", { orgId: f.orgId, userId, roleId: role });
+      return clerkId;
+    });
+  const asIdentity = (subject: string) => f.t.withIdentity({ subject });
+  const customersOnly = asIdentity(await roleWith("CUSTOMERSONLY", ["view:customers"]));
+  const costReader = asIdentity(await roleWith("COSTREADER", ["view:customers", "view:cost_price"]));
+  const systemOwner = asIdentity(await roleWith("SYSOWNER", ["view:customers"], { isSystemOwnerRole: true }));
+  const vehicleOf = async (who: typeof customersOnly) => {
+    const result = await who.query(api.customers.getRelations, { orgId: f.orgId, customerId: f.customerId });
+    return { result, vehicle: result.quotes.find((quote) => quote.vehicleDesc.includes("CostMake"))?.vehicle as Record<string, unknown> | null | undefined };
+  };
+
+  const denied = await vehicleOf(customersOnly);
+  if (!denied.vehicle) failures.push("customers-only: the quote's vehicle is missing entirely");
+  for (const field of COST_FIELDS) if (denied.vehicle && field in denied.vehicle) failures.push(`customers-only received vehicle.${field}`);
+  for (const marker of [...Object.values(COST).map(String), SUPPLIER]) {
+    if (JSON.stringify(denied.result).includes(marker)) failures.push(`customers-only: cost marker ${marker} appears in the relations payload`);
+  }
+  // Control: the display fields the customer screen and the quote print template use are still served.
+  const shown = denied.vehicle ?? {};
+  const display = { make: "CostMake", model: "CostModel", year: 2023, trim: "GT", vin: "ORGA-COST-VIN", mileage: 55_000, fuelType: "Diesel", notes: "ORGA-PUBLIC-NOTE" };
+  for (const [field, value] of Object.entries(display)) if (shown[field] !== value) failures.push(`control: customers-only lost display field ${field}`);
+
+  // Positive control: the cost permission, and the system owner, still receive the cost figures.
+  for (const [label, who] of [["cost permission", costReader], ["system owner", systemOwner]] as const) {
+    const allowed = (await vehicleOf(who)).vehicle ?? {};
+    for (const [field, value] of Object.entries(COST)) if (allowed[field] !== value) failures.push(`control: ${label} did not receive vehicle.${field}`);
+    if (allowed.vin !== "ORGA-COST-VIN") failures.push(`control: ${label} lost vehicle.vin`);
+  }
+
+  // Sibling doors that name the same car: a view:expenses-only reader gets a one-line summary, never a cost figure.
+  const expensesOnly = asIdentity(await roleWith("EXPENSESONLY", ["view:expenses"]));
+  await f.t.run((ctx) => ctx.db.insert("expenses", {
+    orgId: f.orgId, title: "Cost-car expense", amount: 10, date: Date.now(), category: "OFFICE", status: "PAID", vehicleId: costVehicle,
+  }));
+  const expenses = await expensesOnly.query(api.expenses.list, { orgId: f.orgId, paginationOpts: { numItems: 50, cursor: null } });
+  if (!expenses.page.some((row) => row.title === "Cost-car expense" && row.vehicleSummary?.includes("ORGA-COST-VIN"))) failures.push("control: expenses.list lost the vehicle summary");
+  for (const marker of [...Object.values(COST).map(String), SUPPLIER]) {
+    if (JSON.stringify(expenses).includes(marker)) failures.push(`expenses.list: cost marker ${marker} appears`);
+  }
+  const customers = await customersOnly.query(api.customers.list, { orgId: f.orgId, paginationOpts: { numItems: 50, cursor: null } });
+  for (const marker of [...Object.values(COST).map(String), SUPPLIER]) {
+    if (JSON.stringify(customers).includes(marker)) failures.push(`customers.list: cost marker ${marker} appears`);
+  }
+
+  expect(failures).toEqual([]);
+}, 120_000);
+
+test("user attribution policy: an offboarding member keeps their name; a user with no membership in the org does not", async () => {
+  expect(await attributionFailures()).toEqual([]);
 });

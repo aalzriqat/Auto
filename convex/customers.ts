@@ -4,6 +4,7 @@ import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
+import { projectVehicleForJoin } from "./utils/vehicleRowProjection";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -737,12 +738,14 @@ export const getRelations = query({
         const vehicle = sameOrgOrNull(await ctx.db.get(quote.vehicleId), args.orgId);
         const company = quote.companyId ? sameOrgOrNull(await ctx.db.get(quote.companyId), args.orgId) : null;
         const createdByUser = await readOrgUser(quote.createdBy);
+        // A quote with no company is a cash deal; one that names a company which is not this org's reads as unknown.
+        const companyName = quote.companyId ? (company?.name ?? "Unknown") : "Cash Deal";
         return {
           ...quote,
-          vehicle,
+          // Same-org is not enough: the car's cost stays behind `view:cost_price` (OWASP API3:2023).
+          vehicle: vehicle ? projectVehicleForJoin(vehicle, role) : null,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
-          // A quote that names a company which is not this org's is not a cash deal: it reads as unknown.
-          companyName: company ? company.name : quote.companyId ? "Unknown" : "Cash Deal",
+          companyName,
           createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",
         };
       })
