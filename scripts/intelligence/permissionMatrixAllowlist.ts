@@ -92,6 +92,7 @@ export const NO_GUARD_ALLOWLIST: AllowEntry[] = [
   { id: "convex/sales.ts:listCommissionsPaginated", reason: "delegates to commissionPage(), which calls requireTenantAuth with VIEW_COMMISSIONS (convex/sales.ts:1308, read)" },
   { id: "convex/dealWorkspace.ts:financedDealCockpit", reason: "authorization delegated to api.applications.dealCockpit through ctx.runQuery (documented at dealWorkspace.ts:124), plus its own requireOwnedRow (read)" },
   { id: "convex/subscriptions.ts:getShowPricing", reason: "no guard at all; returns a global display flag (reviewer-read). Harmless today, listed so it cannot grow silently" },
+  { id: "convex/socialIntegrations.ts:getMetaDataDeletionStatus", reason: "SCRUM-842 public status page behind the URL Meta's data-deletion callback returns; the end user has no AutoFlow session. Keyed only by a 32-hex (128-bit random) confirmation code, regex-checked before any read, one by_code index lookup; a malformed or unknown code returns null, so existence cannot be told apart. Returns only { platform, completedAt }: no orgId, document id, Meta user id or credentials. Pinned by convex/metaDataDeletion.scrum842.test.ts (read)" },
   ...entries("UNRULED: unauthenticated mutation gated by a public id (allowContact and acceptOffer also by the buyer's phone); those two create a lead in a dealer's pipeline (reviewer-read, marketplaceBuyerActions.ts:126-179)", [
     "convex/marketplaceBuyerActions.ts:shortlistOffer",
     "convex/marketplaceBuyerActions.ts:declineOffer",
