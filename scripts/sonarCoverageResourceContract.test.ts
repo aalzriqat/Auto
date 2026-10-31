@@ -172,6 +172,7 @@ describe("Sonar coverage resource contract", () => {
     const download = scan.steps.find((s) => s.name === "Download coverage report from Tests");
     expect(download?.uses).toBe("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
     expect(download?.with?.["artifact-ids"]).toBe("${{ steps.admission.outputs.artifact_id }}");
+    expect(download?.with?.["merge-multiple"]).toBe(true);
     expect(download?.with?.name).toBeUndefined();
 
     // Step 5: Validate coverage artifact provenance and census

@@ -105,6 +105,7 @@ jobs:
         with:
           artifact-ids: ${{ steps.admission.outputs.artifact_id }}
           path: ${{ runner.temp }}/sonar-coverage
+          merge-multiple: true
           github-token: ${{ github.token }}
           run-id: ${{ steps.admission.outputs.run_id }}
 
