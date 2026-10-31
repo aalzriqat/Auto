@@ -96,6 +96,20 @@ describe("proxy.ts wrapped Clerk handler", () => {
     expect(auth.protect).not.toHaveBeenCalled();
   });
 
+  // SCRUM-842 (LOW follow-up from review): the public entry is the exact page, not a
+  // prefix. Widening it to `/data-deletion-status(.*)` would publish whatever is later
+  // added beside it, so adjacent paths must stay behind auth.protect().
+  it.each([
+    "/data-deletion-status-admin",
+    "/data-deletion-statusx",
+    "/data-deletion-status/admin",
+    "/data-deletion-status/export?id=0123456789abcdef0123456789abcdef",
+  ])("keeps %s, a path beside the Meta data-deletion status page, protected", async (path) => {
+    const { result, auth } = await handle(request(`http://localhost:3000${path}`, "localhost:3000"));
+    expect(result).toBeUndefined();
+    expect(auth.protect).toHaveBeenCalledTimes(1);
+  });
+
   it("protects every non-public route", async () => {
     const { result, auth } = await handle(request("http://localhost:3000/dashboard", "localhost:3000"));
     expect(result).toBeUndefined();

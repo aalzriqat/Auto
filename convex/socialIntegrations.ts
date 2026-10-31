@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { requireFeature } from "./subscriptions";
+import { redactMetaUserFromWebhookLogs } from "./metaLogRedaction";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
@@ -372,24 +373,35 @@ export const disconnectByInstagramUserId = internalMutation({
 const META_DELETION_CODE_PATTERN = /^[0-9a-f]{32}$/;
 
 /**
- * Records that a Meta data-deletion request was processed, under the opaque
- * confirmation code the callback hands back to Meta (SCRUM-842). Takes no user
- * id on purpose: the receipt must not link the code to a person.
+ * Records a Meta data-deletion request under the opaque confirmation code the
+ * callback hands back to Meta (SCRUM-842), and redacts that user's id out of the
+ * retained webhook logs in the same transaction. The receipt is marked complete
+ * only when the last page of logs is redacted: at once for a normal log size, by
+ * a scheduled follow-up otherwise. The user id is used for the redaction and is
+ * never stored on the receipt, so the receipt does not link the code to a person.
  */
 export const recordMetaDataDeletion = internalMutation({
   args: {
     code: v.string(),
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    metaUserId: v.string(),
   },
-  handler: async (ctx, args) => {
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
     if (!META_DELETION_CODE_PATTERN.test(args.code)) {
       throw new ConvexError("Invalid confirmation code.");
     }
     await ctx.db.insert("metaDataDeletionRequests", {
       code: args.code,
       platform: args.platform,
-      completedAt: Date.now(),
     });
+    await redactMetaUserFromWebhookLogs(ctx, {
+      platform: args.platform,
+      metaUserId: args.metaUserId,
+      receiptCode: args.code,
+      cursor: null,
+    });
+    return null;
   },
 });
 
@@ -407,7 +419,9 @@ export const getMetaDataDeletionStatus = query({
       .query("metaDataDeletionRequests")
       .withIndex("by_code", (q) => q.eq("code", args.code))
       .first();
-    return row ? { platform: row.platform, completedAt: row.completedAt } : null;
+    // `completedAt: null` means the request is recorded but its retained-log
+    // redaction has not finished, so the page must not say it is done.
+    return row ? { platform: row.platform, completedAt: row.completedAt ?? null } : null;
   },
 });
 

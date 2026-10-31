@@ -6578,12 +6578,15 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // SCRUM-842: the receipt behind the confirmation code returned to Meta's
   // data-deletion callback. It holds only what the public status page needs:
   // an opaque random code, which platform's request it was, and when the
-  // deletion ran. It never holds the Meta user id (or anything from the signed
-  // request), so it is not itself user data that outlives the deletion.
+  // deletion finished. It never holds the Meta user id (or anything from the
+  // signed request), so it is not itself user data that outlives the deletion.
+  // `completedAt` is absent while the retained-log redaction is still running
+  // (metaLogRedaction.ts) and is set by its last page, so the status page never
+  // reports a deletion as done before it is.
   metaDataDeletionRequests: defineTable({
     code: v.string(),
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
-    completedAt: v.number(),
+    completedAt: v.optional(v.number()),
   }).index("by_code", ["code"]),
 
   instagramEvents: defineTable({

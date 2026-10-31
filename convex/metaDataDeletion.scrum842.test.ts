@@ -4,6 +4,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
+import { META_LOG_REDACTION_PAGE_SIZE, REDACTED_META_USER } from "./utils/metaUserIdRedaction";
 
 // SCRUM-842: Meta's deauthorize and data-deletion callbacks must not copy the
 // Meta user id into anything that outlives the request (webhookLogs, the
@@ -26,6 +27,7 @@ vi.mock("./utils/env", () => ({
     INSTAGRAM_APP_SECRET: "test_ig_app_secret_842",
     CONVEX_SITE_URL: "https://example.convex.site",
     NEXT_PUBLIC_APP_URL: "https://app.test",
+    SUPER_ADMIN_EMAILS: "admin@autoflow.dev",
   })),
 }));
 
@@ -321,6 +323,218 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
       for (const code of ["0".repeat(32), "", "not-a-code", "A".repeat(500), META_USER_ID]) {
         expect(await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code })).toBeNull();
       }
+    });
+  });
+});
+
+
+// ─── Retained webhook logs: redaction of rows written before SCRUM-842 ────────
+//
+// Before this change the deauthorize and data-deletion callbacks wrote
+// "... by <Platform> user <id>" into webhookLogs, and SCRUM-807 forbids deleting
+// operational history. A signed callback for a user therefore redacts that one
+// identifier out of the retained rows (the row stays), in bounded pages, and the
+// receipt is not marked complete until the last page is done.
+
+// Synthetic, numeric like a real Meta id, and deliberately not any real one.
+const LEGACY_ID = "990000000000842";
+const OTHER_ID = "990000000000999";
+// Contains LEGACY_ID as a substring but is a different user.
+const LONGER_ID = `${LEGACY_ID}7`;
+
+const ADMIN_EMAIL = "admin@autoflow.dev";
+
+async function seedLegacyLog(t: T, source: string, summary: string, status = "success"): Promise<Id<"webhookLogs">> {
+  return t.run((ctx) =>
+    ctx.db.insert("webhookLogs", {
+      source: source as never,
+      status: status as never,
+      summary,
+      createdAt: Date.now(),
+    }),
+  );
+}
+
+const legacyLine = (label: string, id: string, kind: "deauth" | "deletion") =>
+  kind === "deauth" ? `Deauthorized by ${label} user ${id}` : `Data deletion requested by ${label} user ${id}`;
+
+const logById = (t: T, id: Id<"webhookLogs">) => t.run((ctx) => ctx.db.get(id));
+
+describe("SCRUM-842 retained webhookLogs redaction", () => {
+  beforeEach(() => {
+    for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, method).mockImplementation(() => undefined);
+    }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  describe.each(PLATFORMS)("$label", (p) => {
+    test.each([
+      ["deauthorize", p.deauthorize, "deauth" as const],
+      ["data-deletion", p.deletion, "deletion" as const],
+    ])("%s: a historical row naming the user is redacted in place and keeps its audit fields", async (_name, path, kind) => {
+      const t = newTest();
+      const rowId = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, kind));
+      const before = await logById(t, rowId);
+
+      const res = await post(t, path, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      expect(res.status).toBe(200);
+
+      const after = await logById(t, rowId);
+      expect(after?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, kind));
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+      // Only the identifier moved: the row, its time, status and source are the audit value.
+      expect({ ...after, summary: "" }).toEqual({ ...before, summary: "" });
+    });
+
+    test("only the signed user's identifier is touched: another user, a longer id, another source and another platform stay as written", async () => {
+      const t = newTest();
+      const other = await seedLegacyLog(t, p.logSource, legacyLine(p.label, OTHER_ID, "deletion"));
+      const longer = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LONGER_ID, "deauth"));
+      const wrongSource = await seedLegacyLog(t, p.platform, `Facebook note ${LEGACY_ID}`);
+      const otherPlatform = await seedLegacyLog(
+        t,
+        p.platform === "facebook" ? "instagram-oauth" : "facebook-oauth",
+        legacyLine(p.otherLabel, LEGACY_ID, "deletion"),
+      );
+
+      await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+
+      expect((await logById(t, other))?.summary).toBe(legacyLine(p.label, OTHER_ID, "deletion"));
+      expect((await logById(t, longer))?.summary).toBe(legacyLine(p.label, LONGER_ID, "deauth"));
+      expect((await logById(t, wrongSource))?.summary).toBe(`Facebook note ${LEGACY_ID}`);
+      expect((await logById(t, otherPlatform))?.summary).toBe(legacyLine(p.otherLabel, LEGACY_ID, "deletion"));
+    });
+
+    test("it is idempotent: a second callback for the same user changes nothing more and both receipts complete", async () => {
+      const t = newTest();
+      const rowId = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+      const signed = await signedRequest({ user_id: LEGACY_ID }, p.secret);
+
+      const first = (await (await post(t, p.deletion, signed)).json()) as { confirmation_code: string };
+      const afterFirst = await logById(t, rowId);
+      const second = (await (await post(t, p.deletion, signed)).json()) as { confirmation_code: string };
+
+      expect(await logById(t, rowId)).toEqual(afterFirst);
+      for (const reply of [first, second]) {
+        const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+        expect(typeof status?.completedAt).toBe("number");
+      }
+    });
+
+    test("a request whose redaction needs more than one page is not complete until the follow-up has finished", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      // Older, unrelated rows fill the first pages; the user's own rows sit on the last page.
+      await t.run(async (ctx) => {
+        for (let i = 0; i < META_LOG_REDACTION_PAGE_SIZE * 2 + 5; i += 1) {
+          await ctx.db.insert("webhookLogs", {
+            source: p.logSource as never,
+            status: "success",
+            summary: `Connected for org filler-${i}`,
+            createdAt: Date.now(),
+          });
+        }
+      });
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+      const lastPageRow2 = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deauth"));
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+
+      // Meta still gets its answer, and the page says the work is not finished.
+      expect(res.status).toBe(200);
+      expect(reply.confirmation_code).toMatch(/^[0-9a-f]{32}$/);
+      const pending = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(pending?.platform).toBe(p.platform);
+      expect(pending?.completedAt).toBeNull();
+      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
+      expect((await logById(t, lastPageRow2))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deauth"));
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+      const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof done?.completedAt).toBe("number");
+    });
+
+    test("deauthorize with more than one page of rows is also finished by the follow-up", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      await t.run(async (ctx) => {
+        for (let i = 0; i < META_LOG_REDACTION_PAGE_SIZE + 3; i += 1) {
+          await ctx.db.insert("webhookLogs", {
+            source: p.logSource as never,
+            status: "success",
+            summary: `Connected for org filler-${i}`,
+            createdAt: Date.now(),
+          });
+        }
+      });
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deauth"));
+
+      const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      expect(res.status).toBe(200);
+      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deauth"));
+    });
+  });
+
+  describe("admin reader", () => {
+    const adminReader = async (t: T) => {
+      await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin_clerk", email: ADMIN_EMAIL }));
+      return t.withIdentity({ subject: "admin_clerk" });
+    };
+    const summaries = async (t: T) => {
+      const admin = await adminReader(t);
+      const result = await admin.query(api.adminSystem.listWebhookLogs, { paginationOpts: { numItems: 50, cursor: null } });
+      return result.page.map((row) => ({ source: row.source, summary: row.summary }));
+    };
+
+    test("a row the redaction has not reached never leaves the backend with a Meta user id", async () => {
+      const t = newTest();
+      await seedLegacyLog(t, "facebook-oauth", legacyLine("Facebook", LEGACY_ID, "deletion"));
+      await seedLegacyLog(t, "instagram-oauth", legacyLine("Instagram", LEGACY_ID, "deauth"));
+      await seedLegacyLog(t, "facebook", `Deauthorized by Facebook user ${LEGACY_ID}`);
+      await seedLegacyLog(t, "instagram", `Data deletion requested by Instagram user ${LEGACY_ID}`);
+
+      const rows = await summaries(t);
+
+      expect(rows).toHaveLength(4);
+      expect(JSON.stringify(rows)).not.toContain(LEGACY_ID);
+      expect(rows.every((row) => row.summary.includes(REDACTED_META_USER))).toBe(true);
+    });
+
+    test("the mask changes only the reply: the stored row is untouched, other text stays, other sources stay", async () => {
+      const t = newTest();
+      const stored = legacyLine("Facebook", LEGACY_ID, "deletion");
+      const rowId = await seedLegacyLog(t, "facebook-oauth", stored);
+      await seedLegacyLog(t, "clerk", `user.created ${LEGACY_ID}`);
+      await seedLegacyLog(t, "facebook-oauth", "Connected for org jd7abc123def456ghi789jkl012mno3");
+      await seedLegacyLog(t, "instagram-oauth", "Instagram token refresh cron: refreshed 3/10 token(s) in this page.");
+
+      const rows = await summaries(t);
+
+      expect(rows.find((row) => row.source === "clerk")?.summary).toBe(`user.created ${LEGACY_ID}`);
+      expect(rows.map((row) => row.summary)).toContain("Connected for org jd7abc123def456ghi789jkl012mno3");
+      expect(rows.map((row) => row.summary)).toContain("Instagram token refresh cron: refreshed 3/10 token(s) in this page.");
+      expect(rows.map((row) => row.summary)).toContain(legacyLine("Facebook", REDACTED_META_USER, "deletion"));
+      expect((await logById(t, rowId))?.summary).toBe(stored);
+    });
+
+    test("a row that is already redacted is returned as it is", async () => {
+      const t = newTest();
+      await seedLegacyLog(t, "facebook-oauth", legacyLine("Facebook", REDACTED_META_USER, "deletion"));
+
+      expect((await summaries(t))[0].summary).toBe(legacyLine("Facebook", REDACTED_META_USER, "deletion"));
     });
   });
 });

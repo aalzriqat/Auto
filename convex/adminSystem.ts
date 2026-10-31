@@ -17,6 +17,7 @@ import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 import { describeOrgMaterialization } from "./utils/materialization";
+import { maskMetaUserIdsForAdmin } from "./utils/metaUserIdRedaction";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -204,7 +205,13 @@ export const listWebhookLogs = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    return await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
+    const result = await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
+    // SCRUM-842: a Meta user id in a summary written before that fix is masked on
+    // the way out, so a row the stored redaction has not reached never leaves the backend.
+    return {
+      ...result,
+      page: result.page.map((row) => ({ ...row, summary: maskMetaUserIdsForAdmin(row.source, row.summary) })),
+    };
   },
 });
 

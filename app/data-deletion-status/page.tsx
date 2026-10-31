@@ -58,6 +58,30 @@ function DataDeletionStatusContent() {
 
   const platform = PLATFORM_NAME[isAr ? "ar" : "en"][status.platform];
 
+  // The request is recorded, but removing the identifier from retained logs runs
+  // in pages and has not finished. Say so; claim nothing was removed yet (SCRUM-842).
+  if (status.completedAt === null) {
+    return (
+      <section className="container mx-auto px-6 py-20 max-w-xl text-center" aria-busy="true">
+        <Clock className="h-12 w-12 text-white/40 mx-auto mb-6" />
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-white mb-3">
+          {isAr ? "طلب الحذف الخاص بك قيد التنفيذ" : "Your deletion request is in progress"}
+        </h1>
+        <p className="text-sm text-white/65 leading-relaxed mb-6">
+          {isAr
+            ? `ما زلنا ننفذ طلب الحذف المتعلق بحسابك على ${platform}. أعد فتح هذه الصفحة بعد بضع دقائق لمعرفة اكتمال الطلب.`
+            : `We are still carrying out the ${platform} deletion request for your account. Open this page again in a few minutes to see when it is complete.`}
+        </p>
+        <p className="text-xs text-white/40 tracking-wider">
+          {isAr ? "رمز التأكيد:" : "Confirmation code:"}{" "}
+          <bdi dir="ltr" className="font-mono">
+            {confirmationCode}
+          </bdi>
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="container mx-auto px-6 py-20 max-w-xl text-center">
       <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-6" />

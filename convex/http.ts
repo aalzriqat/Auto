@@ -379,9 +379,16 @@ async function handleMetaCallback(
   if (!payload?.user_id)
     return new Response("Invalid signature", { status: 400 });
 
-  await config.disconnect(ctx, String(payload.user_id));
+  const metaUserId = String(payload.user_id);
+  await config.disconnect(ctx, metaUserId);
 
   if (kind === "deauthorize") {
+    // Rows written before SCRUM-842 still name this user: redact them in place.
+    await ctx.runMutation(internal.metaLogRedaction.redactMetaUserFromLogsPage, {
+      platform: config.platform,
+      metaUserId,
+      cursor: null,
+    });
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: `${config.platform}-oauth`,
       status: "success",
@@ -394,6 +401,7 @@ async function handleMetaCallback(
   await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
     code: confirmationCode,
     platform: config.platform,
+    metaUserId,
   });
   await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
     source: `${config.platform}-oauth`,

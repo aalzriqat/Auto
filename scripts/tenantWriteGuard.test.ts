@@ -789,12 +789,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // nor Meta user: it inserts one `metaDataDeletionRequests` receipt (opaque 32-hex code, platform, time) after a
   // regex check on the code, takes no caller-supplied row id and reads or patches no tenant data. The unguarded-write
   // audit stays empty.
+  // SCRUM-842 (retained-log redaction): + metaLogRedaction.redactMetaUserFromLogsPage (+1) - 567 -> 568 total,
+  // 170 -> 171 skippedNoOrgId, `analysed` unchanged at 382 (re-measured FROM THE ANALYSER). An internalMutation
+  // with no public entry point and no `orgId` arg, called only by the signed Meta deauthorize callback and by
+  // its own scheduled follow-up. It patches only the `summary` of `webhookLogs` rows of one source
+  // (`<platform>-oauth`, read through `by_source_and_eventId`), which are not tenant data, and takes no
+  // caller-supplied row id. The unguarded-write audit stays empty.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 567,
+      totalMutations: 568,
       analysed: 382,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 170,
+      skippedNoOrgId: 171,
     });
   });
 });

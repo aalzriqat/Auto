@@ -77,6 +77,24 @@ describe("data-deletion status page", () => {
     expect(pageText()).not.toMatch(/fully|completely|all your data/i);
   });
 
+  test("a recorded request whose retained-log redaction is unfinished says in progress, names the platform and claims nothing removed", () => {
+    stubs.result = { platform: "facebook", completedAt: null };
+    render(<DataDeletionStatusPage />);
+    expect(screen.getByRole("heading").textContent).toMatch(/in progress/i);
+    expect(pageText()).toContain("Facebook");
+    expect(pageText()).toContain("a1b2c3d4e5f60718293a4b5c6d7e8f90");
+    expect(pageText()).not.toMatch(/removed|deleted|no further action|instagram/i);
+    cleanup();
+
+    stubs.locale = "ar";
+    render(<DataDeletionStatusPage />);
+    expect(screen.getByRole("heading").textContent).toContain("قيد التنفيذ");
+    expect(pageText()).toContain("فيسبوك");
+    expect(pageText()).not.toContain("إنستغرام");
+    expect(pageText()).not.toContain("أزلنا");
+    expect(pageText()).not.toContain("لا يلزم اتخاذ أي إجراء");
+  });
+
   test("while the lookup is loading it asserts nothing about deletion", () => {
     stubs.result = undefined;
     render(<DataDeletionStatusPage />);
