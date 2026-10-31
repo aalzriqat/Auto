@@ -6,11 +6,12 @@
  * 2. Contains `tested-merge-sha.txt` naming the EXACT expected commit SHA.
  * 3. Contains mandatory, complete `coverage-provenance.json` matching the
  *    producer run, attempt, repository, event, workflow, SHA-256 hash, and census.
- * 4. Contains non-empty `lcov.info` within bounded size limits (<= 50 MiB).
- * 5. Passes all source allowlist and regular-file checks via `validateLcovSources.cjs`.
- * 6. Contains a full SF record census (>= minRecords) and execution DA lines.
- * 7. Live API admission verifies producer run ID, attempt, workflow path/ID, status,
- *    event, branch, and unique non-expired artifact binding.
+ * 4. Cross-verifies all manifest fields against mandatory, verified trusted producerContext.
+ * 5. Contains non-empty `lcov.info` within bounded size limits (<= 50 MiB).
+ * 6. Passes all source allowlist and regular-file checks via `validateLcovSources.cjs`.
+ * 7. Contains a full SF record census (>= minRecords) and execution DA lines.
+ * 8. Live API admission verifies producer run ID, attempt, workflow path/ID, status,
+ *    event, branch, complete pagination, and unique non-expired artifact binding.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -103,11 +104,13 @@ export async function verifyProducerRun({
   }
   const run = await runRes.json();
 
-  if (run.id !== Number(runId)) {
-    throw new Error(`Refusing producer run: run id '${run.id}' does not match requested '${runId}'.`);
+  const numericRunId = Number(run.id);
+  if (!Number.isInteger(numericRunId) || numericRunId !== Number(runId) || numericRunId <= 0) {
+    throw new Error(`Refusing producer run: invalid run id '${run.id}', expected '${runId}'.`);
   }
-  if (run.run_attempt == null || Number(run.run_attempt) < 1) {
-    throw new Error(`Refusing producer run: run_attempt must be present, got '${run.run_attempt}'.`);
+  const numericRunAttempt = Number(run.run_attempt);
+  if (!Number.isInteger(numericRunAttempt) || numericRunAttempt < 1) {
+    throw new Error(`Refusing producer run: run_attempt must be a positive integer, got '${run.run_attempt}'.`);
   }
   if (run.name !== expectedWorkflowName) {
     throw new Error(`Refusing producer run: workflow name must be '${expectedWorkflowName}', got '${run.name}'.`);
@@ -145,14 +148,49 @@ export async function verifyProducerRun({
     );
   }
 
-  // 3. Fetch and verify unique non-expired coverage-report artifact
-  const artifactsUrl = `https://api.github.com/repos/${repositoryPath}/actions/runs/${runId}/artifacts`;
-  const artifactsRes = await fetchImpl(artifactsUrl, { headers });
-  if (!artifactsRes.ok) {
-    throw new Error(`Could not fetch artifacts for producer run ${runId} (HTTP ${artifactsRes.status}).`);
+  // 3. Fetch and verify unique non-expired coverage-report artifact with complete pagination
+  const allArtifacts = [];
+  let page = 1;
+  const perPage = 100;
+  let totalCount = null;
+
+  while (true) {
+    const artifactsUrl = `https://api.github.com/repos/${repositoryPath}/actions/runs/${runId}/artifacts?per_page=${perPage}&page=${page}`;
+    const artifactsRes = await fetchImpl(artifactsUrl, { headers });
+    if (!artifactsRes.ok) {
+      throw new Error(`Could not fetch artifacts for producer run ${runId} (HTTP ${artifactsRes.status}).`);
+    }
+    const artifactsData = await artifactsRes.json();
+    if (typeof artifactsData.total_count !== "number") {
+      throw new Error(`Refusing producer run: invalid artifacts API response, total_count is not a number.`);
+    }
+    if (totalCount === null) {
+      totalCount = artifactsData.total_count;
+    }
+    const currentArtifacts = artifactsData.artifacts;
+    if (!Array.isArray(currentArtifacts)) {
+      throw new Error(`Refusing producer run: invalid artifacts API response, artifacts array missing.`);
+    }
+    allArtifacts.push(...currentArtifacts);
+
+    if (allArtifacts.length >= totalCount || currentArtifacts.length < perPage) {
+      break;
+    }
+    page++;
+    if (page > 10) {
+      throw new Error(
+        `Refusing producer run: artifact pagination exceeded 10 pages (${allArtifacts.length}/${totalCount} fetched).`
+      );
+    }
   }
-  const artifactsData = await artifactsRes.json();
-  const matchingArtifacts = (artifactsData.artifacts || []).filter(
+
+  if (allArtifacts.length < totalCount) {
+    throw new Error(
+      `Refusing producer run: incomplete artifact inventory (${allArtifacts.length} of ${totalCount} fetched).`
+    );
+  }
+
+  const matchingArtifacts = allArtifacts.filter(
     (a) => a.name === "coverage-report" && !a.expired
   );
   if (matchingArtifacts.length === 0) {
@@ -165,10 +203,20 @@ export async function verifyProducerRun({
   }
   const verifiedArtifact = matchingArtifacts[0];
 
+  const numericArtifactId = Number(verifiedArtifact.id);
+  const numericArtifactSize = Number(verifiedArtifact.size_in_bytes);
+
+  if (!Number.isInteger(numericArtifactId) || numericArtifactId <= 0) {
+    throw new Error(`Refusing producer run: invalid artifact ID '${verifiedArtifact.id}'.`);
+  }
+  if (!Number.isInteger(numericArtifactSize) || numericArtifactSize <= 0) {
+    throw new Error(`Refusing producer run: invalid or empty artifact size '${verifiedArtifact.size_in_bytes}'.`);
+  }
+
   return {
     verified: true,
-    runId: run.id,
-    runAttempt: run.run_attempt,
+    runId: numericRunId,
+    runAttempt: numericRunAttempt,
     headSha: normalizedRunSha,
     workflowId: run.workflow_id,
     workflowPath: run.path,
@@ -176,8 +224,8 @@ export async function verifyProducerRun({
     repository: run.head_repository.full_name,
     event: run.event,
     ref: "refs/heads/main",
-    artifactId: verifiedArtifact.id,
-    artifactSizeBytes: verifiedArtifact.size_in_bytes,
+    artifactId: numericArtifactId,
+    artifactSizeBytes: numericArtifactSize,
   };
 }
 
@@ -187,7 +235,7 @@ export async function verifyProducerRun({
  * @param {string} options.coverageDir
  * @param {string} options.checkoutRoot
  * @param {string} options.expectedSha
- * @param {object} [options.producerContext]
+ * @param {object} options.producerContext
  * @param {number} [options.minRecords]
  * @param {number} [options.minDaRecords]
  * @param {string} [options.expectedRepo]
@@ -206,6 +254,50 @@ export function validateSonarMainCoverage({
   }
 
   const normalizedExpectedSha = expectedSha.trim().toLowerCase();
+
+  // Producer context is strictly mandatory
+  if (!producerContext || typeof producerContext !== "object") {
+    throw new Error("Refusing coverage validation: valid, complete trusted producerContext is mandatory.");
+  }
+
+  // Validate producerContext structure
+  const ctxRunId = Number(producerContext.runId);
+  if (!Number.isInteger(ctxRunId) || ctxRunId <= 0) {
+    throw new Error(`Refusing coverage validation: producerContext runId must be a positive integer, got '${producerContext.runId}'.`);
+  }
+  const ctxRunAttempt = Number(producerContext.runAttempt);
+  if (!Number.isInteger(ctxRunAttempt) || ctxRunAttempt <= 0) {
+    throw new Error(
+      `Refusing coverage validation: producerContext runAttempt must be a positive integer, got '${producerContext.runAttempt}'.`
+    );
+  }
+  if (String(producerContext.headSha ?? "").trim().toLowerCase() !== normalizedExpectedSha) {
+    throw new Error(
+      `Refusing coverage validation: producerContext headSha '${producerContext.headSha}' does not match expected SHA '${normalizedExpectedSha}'.`
+    );
+  }
+  if (producerContext.workflowName !== "Tests") {
+    throw new Error(
+      `Refusing coverage validation: producerContext workflowName must be 'Tests', got '${producerContext.workflowName}'.`
+    );
+  }
+  if (producerContext.repository !== expectedRepo) {
+    throw new Error(
+      `Refusing coverage validation: producerContext repository '${producerContext.repository}' does not match expected '${expectedRepo}'.`
+    );
+  }
+  if (producerContext.event !== "push") {
+    throw new Error(`Refusing coverage validation: producerContext event must be 'push', got '${producerContext.event}'.`);
+  }
+  if (producerContext.ref !== "refs/heads/main") {
+    throw new Error(`Refusing coverage validation: producerContext ref must be 'refs/heads/main', got '${producerContext.ref}'.`);
+  }
+  const ctxArtifactId = Number(producerContext.artifactId);
+  if (!Number.isInteger(ctxArtifactId) || ctxArtifactId <= 0) {
+    throw new Error(
+      `Refusing coverage validation: producerContext artifactId must be a positive integer, got '${producerContext.artifactId}'.`
+    );
+  }
 
   if (!fs.existsSync(coverageDir) || !fs.statSync(coverageDir).isDirectory()) {
     throw new Error(`Refusing coverage validation: coverage directory '${coverageDir}' does not exist.`);
@@ -228,11 +320,6 @@ export function validateSonarMainCoverage({
       `Refusing coverage validation: coverage was produced for SHA '${recordedSha}', expected '${normalizedExpectedSha}'.`
     );
   }
-  if (producerContext?.headSha && recordedSha !== producerContext.headSha.toLowerCase()) {
-    throw new Error(
-      `Refusing coverage validation: tested-merge-sha.txt '${recordedSha}' does not match producer context head SHA '${producerContext.headSha}'.`
-    );
-  }
 
   // 2. Validate mandatory coverage-provenance.json
   const provenanceFile = path.join(coverageDir, "coverage-provenance.json");
@@ -250,8 +337,37 @@ export function validateSonarMainCoverage({
     );
   }
 
+  // Strict validation of every required manifest field
+  if (prov.run_id === undefined || prov.run_id === null) {
+    throw new Error("Refusing coverage validation: provenance manifest missing mandatory 'run_id'.");
+  }
+  const manifestRunId = Number(prov.run_id);
+  if (!Number.isInteger(manifestRunId) || manifestRunId <= 0) {
+    throw new Error(`Refusing coverage validation: manifest run_id must be a positive integer, got '${prov.run_id}'.`);
+  }
+  if (manifestRunId !== ctxRunId) {
+    throw new Error(
+      `Refusing coverage validation: manifest run_id '${prov.run_id}' does not match trusted producer run_id '${ctxRunId}'.`
+    );
+  }
+
+  if (prov.run_attempt === undefined || prov.run_attempt === null) {
+    throw new Error("Refusing coverage validation: provenance manifest missing mandatory 'run_attempt'.");
+  }
+  const manifestRunAttempt = Number(prov.run_attempt);
+  if (!Number.isInteger(manifestRunAttempt) || manifestRunAttempt <= 0) {
+    throw new Error(
+      `Refusing coverage validation: manifest run_attempt must be a positive integer, got '${prov.run_attempt}'.`
+    );
+  }
+  if (manifestRunAttempt !== ctxRunAttempt) {
+    throw new Error(
+      `Refusing coverage validation: manifest run_attempt '${prov.run_attempt}' does not match trusted producer run_attempt '${ctxRunAttempt}'.`
+    );
+  }
+
   const manifestSha = String(prov.sha ?? "").trim().toLowerCase();
-  if (manifestSha !== normalizedExpectedSha) {
+  if (!manifestSha || manifestSha !== normalizedExpectedSha) {
     throw new Error(
       `Refusing coverage validation: provenance manifest names SHA '${prov.sha}', expected '${normalizedExpectedSha}'.`
     );
@@ -277,45 +393,6 @@ export function validateSonarMainCoverage({
     );
   }
 
-  // Strict cross-comparison against trusted producerContext if provided
-  if (producerContext) {
-    if (String(prov.run_id) !== String(producerContext.runId)) {
-      throw new Error(
-        `Refusing coverage validation: manifest run_id '${prov.run_id}' does not match trusted producer run_id '${producerContext.runId}'.`
-      );
-    }
-    if (String(prov.run_attempt) !== String(producerContext.runAttempt)) {
-      throw new Error(
-        `Refusing coverage validation: manifest run_attempt '${prov.run_attempt}' does not match trusted producer run_attempt '${producerContext.runAttempt}'.`
-      );
-    }
-    if (prov.repository !== producerContext.repository) {
-      throw new Error(
-        `Refusing coverage validation: manifest repository '${prov.repository}' does not match trusted producer repository '${producerContext.repository}'.`
-      );
-    }
-    if (prov.event_name !== producerContext.event) {
-      throw new Error(
-        `Refusing coverage validation: manifest event '${prov.event_name}' does not match trusted producer event '${producerContext.event}'.`
-      );
-    }
-    if (prov.ref !== producerContext.ref) {
-      throw new Error(
-        `Refusing coverage validation: manifest ref '${prov.ref}' does not match trusted producer ref '${producerContext.ref}'.`
-      );
-    }
-    if (prov.workflow !== producerContext.workflowName) {
-      throw new Error(
-        `Refusing coverage validation: manifest workflow '${prov.workflow}' does not match trusted producer workflow '${producerContext.workflowName}'.`
-      );
-    }
-    if (manifestSha !== producerContext.headSha.toLowerCase()) {
-      throw new Error(
-        `Refusing coverage validation: manifest sha '${manifestSha}' does not match trusted producer headSha '${producerContext.headSha}'.`
-      );
-    }
-  }
-
   // 3. Validate lcov.info existence, bounds, and content hash
   const lcovPath = path.join(coverageDir, "lcov.info");
   if (!fs.existsSync(lcovPath)) {
@@ -333,12 +410,12 @@ export function validateSonarMainCoverage({
 
   // Verify SHA-256 matches provenance manifest
   const computedSha256 = crypto.createHash("sha256").update(lcovContent).digest("hex");
-  if (!prov.lcovSha256 || prov.lcovSha256 !== computedSha256) {
+  if (!prov.lcovSha256 || typeof prov.lcovSha256 !== "string" || prov.lcovSha256 !== computedSha256) {
     throw new Error(
       `Refusing coverage validation: lcov.info SHA-256 '${computedSha256}' does not match manifest '${prov.lcovSha256}'.`
     );
   }
-  if (prov.lcovBytes === undefined || prov.lcovBytes !== stat.size) {
+  if (prov.lcovBytes === undefined || Number(prov.lcovBytes) !== stat.size) {
     throw new Error(
       `Refusing coverage validation: lcov.info byte length ${stat.size} does not match manifest ${prov.lcovBytes}.`
     );
@@ -351,7 +428,10 @@ export function validateSonarMainCoverage({
       `Refusing coverage validation: lcov.info contains ${actualDaRecords} DA records, expected at least ${minDaRecords}.`
     );
   }
-  if (prov.daRecords !== undefined && prov.daRecords !== actualDaRecords) {
+  if (prov.daRecords === undefined || prov.daRecords === null) {
+    throw new Error("Refusing coverage validation: provenance manifest missing mandatory 'daRecords'.");
+  }
+  if (Number(prov.daRecords) !== actualDaRecords) {
     throw new Error(
       `Refusing coverage validation: lcov.info DA record count ${actualDaRecords} does not match manifest ${prov.daRecords}.`
     );
@@ -365,7 +445,10 @@ export function validateSonarMainCoverage({
       `Refusing coverage validation: lcov.info contains ${recordCount} SF records, expected at least ${minRecords}.`
     );
   }
-  if (prov.sfRecords !== undefined && prov.sfRecords !== recordCount) {
+  if (prov.sfRecords === undefined || prov.sfRecords === null) {
+    throw new Error("Refusing coverage validation: provenance manifest missing mandatory 'sfRecords'.");
+  }
+  if (Number(prov.sfRecords) !== recordCount) {
     throw new Error(
       `Refusing coverage validation: lcov.info SF count ${recordCount} does not match manifest ${prov.sfRecords}.`
     );
@@ -378,16 +461,16 @@ export function validateSonarMainCoverage({
     bytes: stat.size,
     sha256: computedSha256,
     sha: normalizedExpectedSha,
-    runId: prov.run_id,
-    runAttempt: prov.run_attempt,
-    artifactId: producerContext?.artifactId,
+    runId: manifestRunId,
+    runAttempt: manifestRunAttempt,
+    artifactId: ctxArtifactId,
   };
 }
 
 export async function main(argv = process.argv.slice(2)) {
   if (argv.length === 0) {
     console.error(
-      "usage:\n  node validateSonarMainCoverage.mjs verify-producer --token <token> --repo <repo> --run-id <runId> --expected-sha <sha> [--context-file <path>]\n  node validateSonarMainCoverage.mjs <coverageDir> <checkoutRoot> <expectedSha> [producerContextFile]"
+      "usage:\n  node validateSonarMainCoverage.mjs verify-producer --token <token> --repo <repo> --run-id <runId> --expected-sha <sha> [--context-file <path>]\n  node validateSonarMainCoverage.mjs <coverageDir> <checkoutRoot> <expectedSha> <producerContextFile>"
     );
     return 1;
   }
@@ -438,25 +521,28 @@ export async function main(argv = process.argv.slice(2)) {
   const expectedSha = argv[0] === "validate-artifact" ? argv[3] : argv[2];
   const contextFile = argv[0] === "validate-artifact" ? argv[4] : argv[3];
 
-  if (!coverageDir || !checkoutRoot || !expectedSha) {
+  if (!coverageDir || !checkoutRoot || !expectedSha || !contextFile) {
     console.error(
-      "usage: node validateSonarMainCoverage.mjs <coverageDir> <checkoutRoot> <expectedSha> [producerContextFile]"
+      "usage: node validateSonarMainCoverage.mjs <coverageDir> <checkoutRoot> <expectedSha> <producerContextFile>"
     );
     return 1;
   }
 
+  if (!fs.existsSync(contextFile)) {
+    console.error(`Refusing coverage validation: producerContext file '${contextFile}' does not exist.`);
+    return 1;
+  }
+
   let producerContext;
-  if (contextFile && fs.existsSync(contextFile)) {
-    try {
-      producerContext = JSON.parse(fs.readFileSync(contextFile, "utf8"));
-    } catch (err) {
-      console.error(
-        `Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-      return 1;
-    }
+  try {
+    producerContext = JSON.parse(fs.readFileSync(contextFile, "utf8"));
+  } catch (err) {
+    console.error(
+      `Refusing coverage validation: producerContext file '${contextFile}' is invalid JSON: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return 1;
   }
 
   try {

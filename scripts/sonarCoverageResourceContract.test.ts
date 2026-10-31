@@ -36,6 +36,23 @@ describe("Sonar coverage resource contract", () => {
     expect(misleadingWorkflow).not.toMatch(/validateSonarMainCoverage\.mjs/);
   });
 
+  test("NEGATIVE CONTROL: an artifact download using mutable name instead of immutable artifact-ids violates contract", () => {
+    const mutableNameWorkflow = `
+      jobs:
+        scan:
+          steps:
+            - name: Download coverage report from Tests
+              uses: actions/download-artifact@v4
+              with:
+                name: coverage-report
+                run-id: 12345
+    `;
+    const parsed = parseYaml(mutableNameWorkflow) as { jobs: { scan: { steps: { with?: Record<string, unknown> }[] } } };
+    const downloadStep = parsed.jobs.scan.steps[0];
+    expect(downloadStep.with?.["artifact-ids"]).toBeUndefined();
+    expect(downloadStep.with?.name).toBe("coverage-report");
+  });
+
   test("NEGATIVE CONTROL: candidate checkout or dependency install before trusted admission violates contract", () => {
     const invertedOrderWorkflow = `
       jobs:
@@ -151,10 +168,11 @@ describe("Sonar coverage resource contract", () => {
     expect(candidateCheckout?.with?.path).toBe("candidate");
     expect(candidateCheckout?.with?.["fetch-depth"]).toBe(0);
 
-    // Step 4: Download coverage report from Tests
+    // Step 4: Download coverage report from Tests bound to verified immutable artifact ID
     const download = scan.steps.find((s) => s.name === "Download coverage report from Tests");
     expect(download?.uses).toBe("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
-    expect(download?.with?.name).toBe("coverage-report");
+    expect(download?.with?.["artifact-ids"]).toBe("${{ steps.admission.outputs.artifact_id }}");
+    expect(download?.with?.name).toBeUndefined();
 
     // Step 5: Validate coverage artifact provenance and census
     const validate = scan.steps.find((s) => s.name === "Validate coverage artifact provenance and census");

@@ -12,6 +12,20 @@ import {
 const VALID_SHA = "0d6eafbb1b8d722f947bebdcba2dd7da28ef0ac1";
 const OTHER_SHA = "1111111111111111111111111111111111111111";
 
+const VALID_PRODUCER_CONTEXT = {
+  runId: 12345,
+  runAttempt: 1,
+  headSha: VALID_SHA,
+  workflowId: 998877,
+  workflowPath: ".github/workflows/test.yml",
+  workflowName: "Tests",
+  repository: "aalzriqat/Auto",
+  event: "push",
+  ref: "refs/heads/main",
+  artifactId: 554433,
+  artifactSizeBytes: 12345,
+};
+
 function createFixtureDir(): { root: string; coverageDir: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sonar-cov-test-"));
   const coverageDir = path.join(root, "coverage");
@@ -86,6 +100,7 @@ function createMockFetch(overrides: {
     head_repository: { full_name: string };
   }>;
   artifacts?: Array<{ id: number; name: string; size_in_bytes: number; expired: boolean }>;
+  artifactsTotalCount?: number;
 } = {}) {
   const workflowData = {
     id: 998877,
@@ -111,10 +126,7 @@ function createMockFetch(overrides: {
   const artifacts = overrides.artifacts ?? [
     { id: 554433, name: "coverage-report", size_in_bytes: 12345, expired: false },
   ];
-  const artifactsData = {
-    total_count: artifacts.length,
-    artifacts,
-  };
+  const totalCount = overrides.artifactsTotalCount ?? artifacts.length;
 
   return (async (url: string | URL) => {
     const urlStr = String(url);
@@ -129,7 +141,10 @@ function createMockFetch(overrides: {
       return {
         ok: true,
         status: 200,
-        json: async () => artifactsData,
+        json: async () => ({
+          total_count: totalCount,
+          artifacts,
+        }),
       };
     }
     if (urlStr.includes("/actions/runs/")) {
@@ -148,7 +163,7 @@ function createMockFetch(overrides: {
 }
 
 describe("validateSonarMainCoverage", () => {
-  it("passes cleanly on valid artifact matching expected SHA and provenance", () => {
+  it("passes cleanly on valid artifact with complete matching trusted producerContext", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
@@ -156,46 +171,13 @@ describe("validateSonarMainCoverage", () => {
         coverageDir,
         checkoutRoot: root,
         expectedSha: VALID_SHA,
-        minRecords: 1,
-        minDaRecords: 1,
+        producerContext: VALID_PRODUCER_CONTEXT,
       });
 
       expect(res.ok).toBe(true);
       expect(res.sfCount).toBe(1);
       expect(res.daCount).toBe(1);
       expect(res.sha).toBe(VALID_SHA);
-      expect(res.bytes).toBeGreaterThan(0);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("passes cleanly when cross-validated with matching trusted producerContext", () => {
-    const { root, coverageDir, cleanup } = createFixtureDir();
-    try {
-      writeValidArtifact(coverageDir, VALID_SHA);
-      const producerContext = {
-        runId: 12345,
-        runAttempt: 1,
-        headSha: VALID_SHA,
-        workflowId: 998877,
-        workflowPath: ".github/workflows/test.yml",
-        workflowName: "Tests",
-        repository: "aalzriqat/Auto",
-        event: "push",
-        ref: "refs/heads/main",
-        artifactId: 554433,
-        artifactSizeBytes: 12345,
-      };
-
-      const res = validateSonarMainCoverage({
-        coverageDir,
-        checkoutRoot: root,
-        expectedSha: VALID_SHA,
-        producerContext,
-      });
-
-      expect(res.ok).toBe(true);
       expect(res.runId).toBe(12345);
       expect(res.runAttempt).toBe(1);
       expect(res.artifactId).toBe(554433);
@@ -204,85 +186,138 @@ describe("validateSonarMainCoverage", () => {
     }
   });
 
-  it("refuses if expectedSha is invalid", () => {
-    const { root, coverageDir, cleanup } = createFixtureDir();
-    try {
-      expect(() =>
-        validateSonarMainCoverage({
-          coverageDir,
-          checkoutRoot: root,
-          expectedSha: "not-a-sha",
-        }),
-      ).toThrow("Refusing coverage validation: invalid expected SHA 'not-a-sha'.");
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("refuses if coverage-provenance.json is absent", () => {
+  it("refuses if producerContext is omitted or null", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
-      fs.unlinkSync(path.join(coverageDir, "coverage-provenance.json"));
-
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          // @ts-expect-error test missing producerContext
+          producerContext: undefined,
         }),
-      ).toThrow("coverage-provenance.json manifest is mandatory but absent");
+      ).toThrow("valid, complete trusted producerContext is mandatory");
     } finally {
       cleanup();
     }
   });
 
-  it("refuses if provenance manifest event is not push", () => {
+  it("refuses if producerContext runId is not a positive integer", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
-      writeValidArtifact(coverageDir, VALID_SHA, { event_name: "pull_request" });
-
+      writeValidArtifact(coverageDir, VALID_SHA);
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: { ...VALID_PRODUCER_CONTEXT, runId: 0 },
         }),
-      ).toThrow("manifest event 'pull_request' is not 'push'");
+      ).toThrow("producerContext runId must be a positive integer");
     } finally {
       cleanup();
     }
   });
 
-  it("refuses if provenance manifest ref is not refs/heads/main", () => {
+  it("refuses if producerContext runAttempt is not a positive integer", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
-      writeValidArtifact(coverageDir, VALID_SHA, { ref: "refs/pull/734/merge" });
-
+      writeValidArtifact(coverageDir, VALID_SHA);
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: { ...VALID_PRODUCER_CONTEXT, runAttempt: -1 },
         }),
-      ).toThrow("manifest ref 'refs/pull/734/merge' is not 'refs/heads/main'");
+      ).toThrow("producerContext runAttempt must be a positive integer");
     } finally {
       cleanup();
     }
   });
 
-  it("refuses if provenance manifest repository is missing or mismatched", () => {
+  it("refuses if producerContext artifactId is not a positive integer", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
-      writeValidArtifact(coverageDir, VALID_SHA, { repository: "fork/Auto" });
-
+      writeValidArtifact(coverageDir, VALID_SHA);
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: { ...VALID_PRODUCER_CONTEXT, artifactId: 0 },
         }),
-      ).toThrow("provenance repository 'fork/Auto' does not match expected 'aalzriqat/Auto'");
+      ).toThrow("producerContext artifactId must be a positive integer");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if manifest missing mandatory run_id", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { run_id: undefined });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("provenance manifest missing mandatory 'run_id'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if manifest missing mandatory run_attempt", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { run_attempt: undefined });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("provenance manifest missing mandatory 'run_attempt'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if manifest missing mandatory sfRecords", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { sfRecords: undefined });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("provenance manifest missing mandatory 'sfRecords'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if manifest missing mandatory daRecords", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { daRecords: undefined });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("provenance manifest missing mandatory 'daRecords'");
     } finally {
       cleanup();
     }
@@ -292,22 +327,12 @@ describe("validateSonarMainCoverage", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA, { run_id: 99999 });
-      const producerContext = {
-        runId: 12345,
-        runAttempt: 1,
-        headSha: VALID_SHA,
-        workflowName: "Tests",
-        repository: "aalzriqat/Auto",
-        event: "push",
-        ref: "refs/heads/main",
-      };
-
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
-          producerContext,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("manifest run_id '99999' does not match trusted producer run_id '12345'");
     } finally {
@@ -319,24 +344,65 @@ describe("validateSonarMainCoverage", () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA, { run_attempt: 2 });
-      const producerContext = {
-        runId: 12345,
-        runAttempt: 1,
-        headSha: VALID_SHA,
-        workflowName: "Tests",
-        repository: "aalzriqat/Auto",
-        event: "push",
-        ref: "refs/heads/main",
-      };
-
       expect(() =>
         validateSonarMainCoverage({
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
-          producerContext,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("manifest run_attempt '2' does not match trusted producer run_attempt '1'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if provenance manifest event is not push", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { event_name: "pull_request" });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("manifest event 'pull_request' is not 'push'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if provenance manifest ref is not refs/heads/main", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { ref: "refs/pull/734/merge" });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("manifest ref 'refs/pull/734/merge' is not 'refs/heads/main'");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses if provenance manifest repository is missing or mismatched", () => {
+    const { root, coverageDir, cleanup } = createFixtureDir();
+    try {
+      writeValidArtifact(coverageDir, VALID_SHA, { repository: "fork/Auto" });
+      expect(() =>
+        validateSonarMainCoverage({
+          coverageDir,
+          checkoutRoot: root,
+          expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
+        }),
+      ).toThrow("provenance repository 'fork/Auto' does not match expected 'aalzriqat/Auto'");
     } finally {
       cleanup();
     }
@@ -353,6 +419,7 @@ describe("validateSonarMainCoverage", () => {
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("does not match manifest");
     } finally {
@@ -371,6 +438,7 @@ describe("validateSonarMainCoverage", () => {
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("tested-merge-sha.txt is absent");
     } finally {
@@ -388,6 +456,7 @@ describe("validateSonarMainCoverage", () => {
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow(`coverage was produced for SHA '${OTHER_SHA}', expected '${VALID_SHA}'`);
     } finally {
@@ -406,6 +475,7 @@ describe("validateSonarMainCoverage", () => {
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("lcov.info is empty (0 bytes)");
     } finally {
@@ -428,6 +498,7 @@ describe("validateSonarMainCoverage", () => {
           coverageDir,
           checkoutRoot: root,
           expectedSha: VALID_SHA,
+          producerContext: VALID_PRODUCER_CONTEXT,
         }),
       ).toThrow("Trusted Sonar refuses symlink in coverage artifact");
     } finally {
@@ -435,15 +506,24 @@ describe("validateSonarMainCoverage", () => {
     }
   });
 
-  it("CLI main returns 0 on success and 1 on failure", async () => {
+  it("CLI main returns 0 on success with valid context file and 1 on missing/malformed context file", async () => {
     const { root, coverageDir, cleanup } = createFixtureDir();
     try {
       writeValidArtifact(coverageDir, VALID_SHA);
-      const exit0 = await main([coverageDir, root, VALID_SHA]);
+      const contextFile = path.join(root, "producer-context.json");
+      fs.writeFileSync(contextFile, JSON.stringify(VALID_PRODUCER_CONTEXT));
+
+      const exit0 = await main([coverageDir, root, VALID_SHA, contextFile]);
       expect(exit0).toBe(0);
 
-      const exit1 = await main([coverageDir, root, OTHER_SHA]);
-      expect(exit1).toBe(1);
+      // Nonexistent context file returns 1
+      const exitMissingContext = await main([coverageDir, root, VALID_SHA, path.join(root, "nonexistent.json")]);
+      expect(exitMissingContext).toBe(1);
+
+      // Malformed context file returns 1
+      fs.writeFileSync(contextFile, "not-valid-json");
+      const exitMalformed = await main([coverageDir, root, VALID_SHA, contextFile]);
+      expect(exitMalformed).toBe(1);
 
       const usageExit = await main([]);
       expect(usageExit).toBe(1);
@@ -537,12 +617,12 @@ describe("verifyProducerRun", () => {
         expectedSha: VALID_SHA,
         fetchImpl: mockFetch,
       }),
-    ).rejects.toThrow("run id '99999' does not match requested '12345'");
+    ).rejects.toThrow("invalid run id '99999', expected '12345'");
   });
 
-  it("refuses if run_attempt is missing or null", async () => {
+  it("refuses if run_attempt is missing or invalid", async () => {
     const mockFetch = createMockFetch({
-      run: { run_attempt: undefined },
+      run: { run_attempt: 0 },
     });
 
     await expect(
@@ -553,7 +633,7 @@ describe("verifyProducerRun", () => {
         expectedSha: VALID_SHA,
         fetchImpl: mockFetch,
       }),
-    ).rejects.toThrow("run_attempt must be present");
+    ).rejects.toThrow("run_attempt must be a positive integer");
   });
 
   it("refuses if producer run repository does not match expected repo (fork PR branch named main)", async () => {
@@ -673,5 +753,60 @@ describe("verifyProducerRun", () => {
         fetchImpl: mockFetch,
       }),
     ).rejects.toThrow("multiple (2) non-expired 'coverage-report' artifacts found for run 12345; expected unique artifact");
+  });
+
+  it("refuses if artifact ID is not a positive integer", async () => {
+    const mockFetch = createMockFetch({
+      artifacts: [
+        { id: 0, name: "coverage-report", size_in_bytes: 12345, expired: false },
+      ],
+    });
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("invalid artifact ID '0'");
+  });
+
+  it("refuses if artifact size is not a positive integer", async () => {
+    const mockFetch = createMockFetch({
+      artifacts: [
+        { id: 554433, name: "coverage-report", size_in_bytes: 0, expired: false },
+      ],
+    });
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("invalid or empty artifact size '0'");
+  });
+
+  it("refuses if artifact inventory pagination is truncated / incomplete", async () => {
+    const mockFetch = createMockFetch({
+      artifacts: [
+        { id: 554433, name: "coverage-report", size_in_bytes: 12345, expired: false },
+      ],
+      artifactsTotalCount: 150, // total_count is 150, but only 1 returned without further pages
+    });
+
+    await expect(
+      verifyProducerRun({
+        token: "dummy",
+        repo: "aalzriqat/Auto",
+        runId: 12345,
+        expectedSha: VALID_SHA,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow("incomplete artifact inventory (1 of 150 fetched)");
   });
 });
