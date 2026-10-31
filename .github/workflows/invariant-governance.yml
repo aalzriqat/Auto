@@ -10,9 +10,10 @@ permissions:
   contents: read
 
 # A new commit makes an older PR run stale, so cancel it for pull requests
-# only. Every other event (push to main, workflow_dispatch) gets its own group
-# keyed on the run id: a shared group would still replace a PENDING run, even
-# with cancel-in-progress false, and a main commit would lose its result.
+# only. A push to main gets its own group keyed on the run id: a shared group
+# would still replace a PENDING run, even with cancel-in-progress false, and a
+# main commit would lose its result. Re-running an older head's run cancels the
+# newer head's run; this check is not required, but re-run the newest instead.
 concurrency:
   group: invariant-governance-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}

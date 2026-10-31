@@ -28,9 +28,11 @@ permissions:
 # job `if`, so a run the job will skip (Invariant Governance cancelled or
 # failed) must not join the PR group, or it could cancel the live run of a
 # newer head (the SCRUM-777 browser-attack-swarm lesson). Only a run that
-# passes the same conditions as the job `if` joins the per-PR group, where a
-# newer analysis replaces an older one. Push, workflow_dispatch and every
-# skipped run are alone in a group of their own, so they are never cancelled.
+# passes the same conditions as the job `if` joins a group for its PR and head,
+# so a re-run of the same head replaces the older analysis. The head SHA is in
+# the key because a late or re-run event for an older head would otherwise
+# cancel the newer head's analysis and then refuse itself as stale. Push,
+# workflow_dispatch and every skipped run are alone in a group of their own.
 concurrency:
   group: >-
     jev-shadow-impact-${{
@@ -38,7 +40,7 @@ concurrency:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.pull_requests[0].number &&
-      format('pr-{0}', github.event.workflow_run.pull_requests[0].number) ||
+      format('pr-{0}-{1}', github.event.workflow_run.pull_requests[0].number, github.event.workflow_run.head_sha) ||
       format('run-{0}', github.run_id)
     }}
   cancel-in-progress: true
