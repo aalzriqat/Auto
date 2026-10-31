@@ -36,6 +36,26 @@ describe("Sonar coverage resource contract", () => {
     expect(misleadingWorkflow).not.toMatch(/validateSonarMainCoverage\.mjs/);
   });
 
+  test("NEGATIVE CONTROL: candidate checkout or dependency install before trusted admission violates contract", () => {
+    const invertedOrderWorkflow = `
+      jobs:
+        scan:
+          steps:
+            - name: Checkout admitted target commit as data only
+              uses: actions/checkout@v4
+            - name: Install dependencies without lifecycle scripts
+              run: pnpm install --frozen-lockfile --ignore-scripts
+            - name: Verify producer run and admission provenance
+              id: admission
+              run: node trusted/scripts/validateSonarMainCoverage.mjs verify-producer
+    `;
+    const parsed = parseYaml(invertedOrderWorkflow) as { jobs: { scan: { steps: { name: string }[] } } };
+    const stepNames = parsed.jobs.scan.steps.map((s) => s.name);
+    const checkoutIndex = stepNames.indexOf("Checkout admitted target commit as data only");
+    const admissionIndex = stepNames.indexOf("Verify producer run and admission provenance");
+    expect(checkoutIndex).toBeLessThan(admissionIndex); // Demonstrates the violation
+  });
+
   test("producer Tests workflow generates coverage with bounded heap ceiling", () => {
     const testWf = source(TEST_WORKFLOW);
 
@@ -56,7 +76,7 @@ describe("Sonar coverage resource contract", () => {
     expect(step).toMatch(/coverage-provenance\.json/);
   });
 
-  test("SCRUM-764: Sonar Main reuses Tests coverage artifact with producer binding and fail-closed validation", () => {
+  test("SCRUM-764: Sonar Main enforces trusted-controller admission order and artifact reuse", () => {
     type Step = {
       name?: string;
       id?: string;
@@ -65,6 +85,7 @@ describe("Sonar coverage resource contract", () => {
       uses?: string;
       env?: Record<string, string>;
       with?: Record<string, unknown>;
+      "working-directory"?: string;
     };
     type Job = {
       name?: string;
@@ -101,38 +122,75 @@ describe("Sonar coverage resource contract", () => {
     const scan = workflow.jobs.scan;
     expect(scan).toBeDefined();
     expect(scan["timeout-minutes"]).toBeGreaterThanOrEqual(MIN_SCAN_BUDGET_MINUTES);
+
+    // Job condition must require same repository and event push to prevent fork main workflow_run triggers
+    expect(scan.if).toContain("head_repository.full_name == github.repository");
+    expect(scan.if).toContain("event == 'push'");
+
     // Job-level env must NOT expose SONAR_TOKEN
     expect((scan as { env?: Record<string, string> }).env?.SONAR_TOKEN).toBeUndefined();
 
-    // Step 1: Checkout target commit
-    const checkout = scan.steps.find((s) => s.name === "Checkout target commit");
-    expect(checkout?.uses).toBe("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5");
-    expect(checkout?.with?.["fetch-depth"]).toBe(0);
+    const stepNames = scan.steps.map((s) => s.name);
 
-    // Step 2: Install dependencies to preserve full AST / TSConfig compiler resolution
-    const install = scan.steps.find((s) => s.name === "Install dependencies without lifecycle scripts");
-    expect(install).toBeDefined();
-    expect(install?.run).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+    // Step 1: Checkout immutable trusted controller
+    const trustedCheckout = scan.steps.find((s) => s.name === "Checkout immutable trusted controller");
+    expect(trustedCheckout?.uses).toBe("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5");
+    expect(trustedCheckout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(trustedCheckout?.with?.path).toBe("trusted");
 
-    // Step 3: Resolve and verify producer run
-    const resolveProducer = scan.steps.find((s) => s.name === "Resolve and verify producer run");
-    expect(resolveProducer?.id).toBe("producer");
-    expect(resolveProducer?.run).toContain("verifyProducerRun");
+    // Step 2: Verify producer run and admission provenance (must run BEFORE candidate checkout)
+    const admission = scan.steps.find((s) => s.name === "Verify producer run and admission provenance");
+    expect(admission?.id).toBe("admission");
+    expect(admission?.run).toContain("verify-producer");
+    expect(admission?.run).toContain("trusted/scripts/validateSonarMainCoverage.mjs");
+    expect(admission?.run).toContain("CURRENT_MAIN=");
 
-    // Step 4: Download coverage report
+    // Step 3: Checkout admitted target commit as data only
+    const candidateCheckout = scan.steps.find((s) => s.name === "Checkout admitted target commit as data only");
+    expect(candidateCheckout?.uses).toBe("actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5");
+    expect(candidateCheckout?.with?.path).toBe("candidate");
+    expect(candidateCheckout?.with?.["fetch-depth"]).toBe(0);
+
+    // Step 4: Download coverage report from Tests
     const download = scan.steps.find((s) => s.name === "Download coverage report from Tests");
     expect(download?.uses).toBe("actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093");
     expect(download?.with?.name).toBe("coverage-report");
 
     // Step 5: Validate coverage artifact provenance and census
     const validate = scan.steps.find((s) => s.name === "Validate coverage artifact provenance and census");
-    expect(validate?.run).toContain("node scripts/validateSonarMainCoverage.mjs coverage . \"$EXPECTED_SHA\"");
+    expect(validate?.run).toContain("trusted/scripts/validateSonarMainCoverage.mjs");
+    expect(validate?.run).toContain("trusted/sonar-project.properties candidate/sonar-project.properties");
 
-    // Step 6: SonarCloud scan scoped with SONAR_TOKEN and explicit revision binding
+    // Step 6: Install dependencies without lifecycle scripts (in candidate directory)
+    const install = scan.steps.find((s) => s.name === "Install dependencies without lifecycle scripts");
+    expect(install).toBeDefined();
+    expect(install?.["working-directory"]).toBe("candidate");
+    expect(install?.run).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+
+    // Step 7: SonarCloud scan scoped with SONAR_TOKEN and explicit revision binding
     const scanStep = scan.steps.find((s) => s.name === "SonarCloud scan");
     expect(scanStep?.uses).toBe("SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f");
     expect(scanStep?.env?.SONAR_TOKEN).toBe("${{ secrets.SONAR_TOKEN }}");
+    expect(scanStep?.with?.projectBaseDir).toBe("candidate");
     expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.scm.revision=");
     expect(String(scanStep?.with?.args ?? "")).toContain("-Dsonar.branch.name=main");
+
+    // Strict trust-order verification:
+    // Trusted controller checkout (1) -> Admission verification (2) -> Candidate checkout (3) -> Install (6) -> Scan (7)
+    const idxTrusted = stepNames.indexOf("Checkout immutable trusted controller");
+    const idxAdmission = stepNames.indexOf("Verify producer run and admission provenance");
+    const idxCandidate = stepNames.indexOf("Checkout admitted target commit as data only");
+    const idxDownload = stepNames.indexOf("Download coverage report from Tests");
+    const idxValidate = stepNames.indexOf("Validate coverage artifact provenance and census");
+    const idxInstall = stepNames.indexOf("Install dependencies without lifecycle scripts");
+    const idxScan = stepNames.indexOf("SonarCloud scan");
+
+    expect(idxTrusted).toBe(0);
+    expect(idxTrusted).toBeLessThan(idxAdmission);
+    expect(idxAdmission).toBeLessThan(idxCandidate);
+    expect(idxCandidate).toBeLessThan(idxDownload);
+    expect(idxDownload).toBeLessThan(idxValidate);
+    expect(idxValidate).toBeLessThan(idxInstall);
+    expect(idxInstall).toBeLessThan(idxScan);
   });
 });
