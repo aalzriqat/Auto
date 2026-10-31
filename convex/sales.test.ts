@@ -481,7 +481,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_sourced");
     await setAutoMemberMode(t, orgId, userId, 10);
     // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
-    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000 }));
+    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000, sourcedFromName: "Amman Importer Co" }));
 
     const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,
