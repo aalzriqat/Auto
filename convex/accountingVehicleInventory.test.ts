@@ -20,6 +20,8 @@ import { drainEntries } from "./accountingOutbox";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
 import { seedBank } from "../test-utils/bankFixture";
 import { supplierIdFor } from "../test-utils/supplierFixture";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { commonAr, commonEn } from "../lib/i18n/domains/common";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -362,6 +364,57 @@ describe("A cancelled sale's receivable stops counting as AR — but only from i
 });
 
 describe("Trade-in vehicles net against the sale's AR", () => {
+  async function assertFractionalTradeIn(door: "create" | "draft") {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer(`ti_precision_${door}`);
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle, vin: "TRD3N9AN0000880AX", status: "AVAILABLE",
+    });
+    const terms = { orgId, vehicleId, customerId, salespersonId: userId, salePrice: 15000,
+      tradeInVehicleId, tradeInValue: 128.0005, saleDate: Date.UTC(2025, 3, 1), financingType: "CASH" as const };
+    const draftId = door === "draft" ? await asOwner.mutation(api.sales.createDraft, terms) : undefined;
+    const before = await dbSnapshot(t, Object.keys(schema.tables));
+    const completion = draftId
+      ? asOwner.mutation(api.sales.completeDraft, { orgId, saleId: draftId, idempotencyKey: "ti-precision" })
+      : asOwner.mutation(api.sales.create, { ...terms, status: "COMPLETED", idempotencyKey: "ti-precision" });
+    await expect(completion).rejects.toMatchObject({ data: {
+      code: "TRADE_IN_VALUE_PRECISION",
+      message: "The trade-in value must match the currency's decimal places. Correct the trade-in value before completing the sale.",
+    } });
+    expect(await dbSnapshot(t, Object.keys(schema.tables))).toEqual(before);
+    // Exercise the actual client localization path, including the Arabic field name.
+    const { getLocalizedErrorMessage } = await import("../lib/errors");
+    const { ConvexError } = await import("convex/values");
+    for (const [messages, expectedField] of [[commonEn, "trade-in value"], [commonAr, "قيمة الاستبدال"]] as const) {
+      const message = getLocalizedErrorMessage(new ConvexError({ code: "TRADE_IN_VALUE_PRECISION", message: "fallback" }), key => messages[key as keyof typeof messages] ?? key);
+      expect(message).toContain(expectedField);
+      expect(message).not.toBe("fallback");
+    }
+    // Corrected value, same completion key: refusal left no cached command.
+    if (draftId) await t.run(ctx => ctx.db.patch(draftId, { tradeInValue: 128.001 }));
+    const saleId = draftId
+      ? await asOwner.mutation(api.sales.completeDraft, { orgId, saleId: draftId, idempotencyKey: "ti-precision" })
+      : await asOwner.mutation(api.sales.create, { ...terms, tradeInValue: 128.001, status: "COMPLETED", idempotencyKey: "ti-precision" });
+    expect(saleId).toBeTruthy();
+    expect((await t.run(ctx => ctx.db.get(tradeInVehicleId)))?.purchasePrice).toBe(128.001);
+    const { lines } = await linesForEvent(t, orgId, "vehicles", tradeInVehicleId, "TRADE_IN_ACCEPTED");
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ar = await accountBySystemKey(t, orgId, "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+    expect(lines.find(line => line.accountId === inventory._id)?.debitMinor).toBe(128001);
+    expect(lines.find(line => line.accountId === ar._id)?.creditMinor).toBe(128001);
+  }
+
+  // Separate literal titles keep each public completion door executable by its
+  // permanent regression-library record.
+  test("SCRUM-880: create refuses fractional trade-in value atomically with field-specific EN/AR text", async () => {
+    await assertFractionalTradeIn("create");
+  });
+  test("SCRUM-880: draft refuses fractional trade-in value atomically with field-specific EN/AR text", async () => {
+    await assertFractionalTradeIn("draft");
+  });
+
   test("a trade-in vehicle capitalizes into inventory and reduces AR by its value", async () => {
     const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_a");
     const vehicleId = await asOwner.mutation(api.vehicles.create, {
@@ -3237,6 +3290,14 @@ describe("SCRUM-59 — a CSV import must not create inventory the GL never saw",
       ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
     );
     expect(vehicles).toHaveLength(0);
+    expect(await glBalanceMinor(t, orgId, "VEHICLE_INVENTORY")).toBe(0);
+    const effects = await t.run(async (ctx) => ({
+      payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(),
+      companies: await ctx.db.query("financeCompanies").collect(),
+    }));
+    expect(effects).toEqual({ payables: [], events: [], commands: [], companies: [] });
   });
 
   test("a REVERSED acquisition does not count as proof the car is capitalized", async () => {

@@ -89,6 +89,48 @@ describe("pull-request workflow secret boundary", () => {
     expect(tests).toContain("cancel-in-progress: true");
   });
 
+  it("cancels superseded runs for pull requests only, never for push or dispatch", () => {
+    // A shared group still replaces a pending run even with cancel-in-progress
+    // false, so every non-PR run must fall back to its own run_id group.
+    const prOnly =
+      "${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}";
+    const concurrencyOf = (name: string) =>
+      (parseYaml(readFileSync(path.join(workflowsDir, name), "utf8")) as { concurrency?: unknown })
+        .concurrency;
+    for (const prefix of ["invariant-governance", "security"]) {
+      expect(concurrencyOf(prefix + ".yml"), prefix).toEqual({
+        group: prefix + "-${{ github.event.pull_request.number || github.run_id }}",
+        "cancel-in-progress": prOnly,
+      });
+    }
+
+    // skill-evidence is required, so a run for an older head (a re-run or a
+    // late event) must never share a group with the newest head's run.
+    expect(concurrencyOf("skill-evidence.yml")).toEqual({
+      group:
+        "skill-evidence-${{ github.event.pull_request.number && format('{0}-{1}', github.event.pull_request.number, github.event.pull_request.head.sha) || github.run_id }}",
+      "cancel-in-progress": prOnly,
+    });
+
+    // workflow_run always carries github.ref = main, so a ref key would merge
+    // PRs. Only a run that passes the job `if` may join a PR group (a skipped
+    // run there could cancel a live one), and the head SHA keeps an older
+    // head's event from cancelling the newer head's analysis.
+    expect(concurrencyOf("jev-shadow-impact.yml")).toEqual({
+      group: [
+        "jev-shadow-impact-${{",
+        "  github.event.workflow_run.event == 'pull_request' &&",
+        "  github.event.workflow_run.conclusion == 'success' &&",
+        "  github.event.workflow_run.head_repository.full_name == github.repository &&",
+        "  github.event.workflow_run.pull_requests[0].number &&",
+        "  format('pr-{0}-{1}', github.event.workflow_run.pull_requests[0].number, github.event.workflow_run.head_sha) ||",
+        "  format('run-{0}', github.run_id)",
+        "}}",
+      ].join("\n"),
+      "cancel-in-progress": true,
+    });
+  });
+
   it("keeps direct PR security and accounting lanes free of privileged runtime credentials", () => {
     const security = readFileSync(path.join(workflowsDir, "security.yml"), "utf8");
     expect(security).toContain("ci-security-placeholder.convex.cloud");

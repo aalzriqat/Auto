@@ -14,8 +14,50 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { dbSnapshot } from "../test-utils/dbSnapshot";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
+
+test("SCRUM-880: cumulative supplier payments refuse a lost fils before posting", async () => {
+  const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(9007199254740.990);
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 9007199254740.988, paymentMethod: "CASH", idempotencyKey: "large-first",
+  });
+  const before = await dbSnapshot(t, Object.keys(schema.tables));
+  await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 0.001, paymentMethod: "CASH", idempotencyKey: "large-final",
+  })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+  expect(await dbSnapshot(t, Object.keys(schema.tables))).toEqual(before);
+  const offered = (await asOwner.query(api.sourcingPayables.list, { orgId })).find(p => p._id === payableId);
+  expect(offered?.settlementAmountMinor).toBe(2);
+  // Same command key remains usable after the atomic refusal. A representable
+  // final total settles without crediting more cash than the entitlement.
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 0.002, paymentMethod: "CASH", idempotencyKey: "large-final",
+  });
+  expect((await t.run(ctx => ctx.db.get(payableId)))?.amountPaid).toBe(9007199254740.990);
+  const cash = await accountBySystemKey("CASH_ON_HAND");
+  const credits = await t.run(async ctx => (await ctx.db.query("journalLines").collect())
+    .filter(line => line.accountId === cash?._id).map(line => line.creditMinor));
+  expect(credits.map(BigInt).reduce((sum, credit) => sum + credit, 0n)).toBe(9007199254740990n);
+});
+
+test("SCRUM-880: markPaid preserves the exact accumulated total at the safe integer boundary", async () => {
+  const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(9007199254740.990);
+  await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+    orgId, payableId, amount: 9007199254740.988, paymentMethod: "CASH", idempotencyKey: "large-first",
+  });
+  await asOwner.mutation(api.sourcingPayables.markPaid, {
+    orgId, payableId, expectedSettlementAmountMinor: 2, paymentMethod: "CASH", idempotencyKey: "large-mark",
+  });
+  const row = await t.run(ctx => ctx.db.get(payableId));
+  expect(row?.amountPaid).toBe(9007199254740.990);
+  expect(row?.status).toBe("PAID");
+  const cash = await accountBySystemKey("CASH_ON_HAND");
+  const credits = await t.run(async ctx => (await ctx.db.query("journalLines").collect())
+    .filter(line => line.accountId === cash?._id).map(line => line.creditMinor));
+  expect(credits.map(BigInt).reduce((sum, credit) => sum + credit, 0n)).toBe(9007199254740990n);
+});
 
 test("a non-finance manager cannot read sourcing financial queues", async () => {
   const { t, orgId, asOwner } = await seedDealerWithPayable();
@@ -113,6 +155,214 @@ async function seedDealerWithPayable(amountDue = 5000) {
 
   return { t, orgId, asOwner, payableId, bankAccountId, vehicleId, accountBySystemKey };
 }
+
+describe("SCRUM-880 authoritative supplier payment", () => {
+  test("list covers exactly the ordered native and opening payable schema variants", () => {
+    const members = schema.tables.vehicleSupplierPayables.validator.members;
+    expect(members.map(member => member.fields.origin.value)).toEqual(["NATIVE", "OPENING"]);
+    expect(members.map(member => member.fields.origin.isOptional)).toEqual(["optional", "required"]);
+  });
+
+  test("unchanged legacy costs allow unrelated direct and requested vehicle edits", async () => {
+    const { t, orgId, asOwner, vehicleId } = await seedDealerWithPayable();
+    const { registerRateLimiter } = await import("../test-utils/convexTest");
+    registerRateLimiter(t);
+    await t.run(ctx => ctx.db.patch(vehicleId, {
+      status: "AVAILABLE", sourceType: "STOCK", purchasePrice: 100.0000000001,
+    }));
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, color: "Blue", purchasePrice: 100.0000000001,
+    });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({
+      color: "Blue", purchasePrice: 100.0000000001,
+    });
+    await t.run(ctx => ctx.db.patch(vehicleId, {
+      sourceType: "SOURCED", sourcedFromName: "Legacy supplier", sourceCost: 100.0000000001,
+    }));
+    await asOwner.mutation(api.vehicles.update, { orgId, vehicleId, color: "Yellow", sourceCost: 100.0000000001 });
+    const requestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Red", purchasePrice: 100.0000000001, sourceCost: 100.0000000001 },
+    });
+    // Requests written before filtering was introduced may still echo unchanged costs.
+    await t.run(ctx => ctx.db.patch(requestId, { payload: { color: "Red", purchasePrice: 100.0000000001, sourceCost: 100.0000000001 } }));
+    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({
+      color: "Red", purchasePrice: 100.0000000001,
+    });
+    await expect(asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, color: "Green", purchasePrice: 101.0000000001,
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    await expect(asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Green", purchasePrice: 101.0000000001 },
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    const staleRequestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId, payload: { color: "Green", purchasePrice: 100.0000000001 },
+    });
+    await t.run(ctx => ctx.db.patch(staleRequestId, { payload: { color: "Green", purchasePrice: 100.0000000001 } }));
+    await t.run(ctx => ctx.db.patch(vehicleId, { purchasePrice: 100 }));
+    await expect(asOwner.mutation(api.vehicleEdits.resolve, {
+      orgId, requestId: staleRequestId, status: "APPROVED",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect((await t.run(ctx => ctx.db.get(staleRequestId)))?.status).toBe("PENDING");
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ color: "Red", purchasePrice: 100 });
+  });
+
+  test("SCRUM-880: purchase cost writers refuse excess precision", async () => {
+    const { t, orgId, asOwner, vehicleId } = await seedDealerWithPayable();
+    const { registerRateLimiter } = await import("../test-utils/convexTest");
+    registerRateLimiter(t);
+    const { supplierIdFor } = await import("../test-utils/supplierFixture");
+    const supplierId = await supplierIdFor(t, orgId, "Precision Supplier");
+    const payload = {
+      vin: "1HGCM82633A000881", make: "Toyota", model: "Camry", year: 2024,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 200, sourceType: "STOCK" as const, purchasePrice: 128.0005,
+      purchasePaymentMethod: "ON_ACCOUNT" as const, purchaseSupplierId: supplierId,
+    };
+    await t.run(ctx => ctx.db.patch(vehicleId, { status: "AVAILABLE", sourceType: "STOCK" }));
+    const requests = await t.run(async ctx => {
+      const vehicle = await ctx.db.get(vehicleId);
+      if (!vehicle) throw new Error("Missing test vehicle");
+      const user = await ctx.db.query("users").withIndex("by_clerkId", q => q.eq("clerkId", "p41s_owner")).unique();
+      if (!user) throw new Error("Missing owner");
+      const ids = [];
+      for (const type of ["CREATE", "UPDATE"] as const) {
+        ids.push(await ctx.db.insert("vehicleEdits", { orgId, vehicleId, requestedBy: user._id,
+          type, payload, status: "PENDING", createdAt: Date.now() }));
+      }
+      return ids;
+    });
+    const attempts = [
+      () => asOwner.mutation(api.vehicles.update, { orgId, vehicleId, purchasePrice: 128.0005 }),
+      () => asOwner.mutation(api.vehicleEdits.requestCreate, { orgId, payload }),
+      () => asOwner.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { purchasePrice: 128.0005 } }),
+      () => asOwner.mutation(api.vehicles.createSourced, { orgId, make: "Toyota", model: "Camry", year: 2024,
+        mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        sellingPrice: 200, sourceCost: 128.0005, sourcedSupplierId: supplierId }),
+      () => asOwner.mutation(api.vehicles.importBulk, { orgId, acquisitionPosting: "OPENING_STOCK", vehicles: [{
+        vin: payload.vin, make: payload.make, model: payload.model, year: payload.year,
+        color: payload.color, fuelType: payload.fuelType, transmission: payload.transmission,
+        sellingPrice: payload.sellingPrice, sourceType: "STOCK", purchasePrice: 128.0005,
+      }] }),
+      ...requests.map(requestId => () => asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" })),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    }
+    for (const requestId of requests) {
+      expect((await t.run(ctx => ctx.db.get(requestId)))?.status).toBe("PENDING");
+    }
+    expect(await t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
+  });
+
+  test("new fractional instalments stay canonical before the final payment", async () => {
+    const { t, orgId, asOwner, payableId } = await seedDealerWithPayable(5);
+    for (let index = 0; index < 3; index += 1) {
+      await asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+        orgId, payableId, amount: 1.48, idempotencyKey: `880-instalment-${index}`,
+      });
+    }
+    expect((await t.run(ctx => ctx.db.get(payableId)))?.amountPaid).toBe(4.44);
+    expect((await asOwner.query(api.sourcingPayables.list, { orgId }))[0].settlementAmountMinor).toBe(560);
+    await asOwner.mutation(api.sourcingPayables.markPaid, { orgId, payableId, expectedSettlementAmountMinor: 560, idempotencyKey: "880-final" });
+    expect((await t.run(ctx => ctx.db.get(payableId)))?.status).toBe("PAID");
+  });
+
+  test("SCRUM-880: display and cash posting agree for JOD USD and partial balances", async () => {
+    for (const { currency, due, paid, expected } of [
+    { currency: "JOD", due: 128.001, paid: 0, expected: 128001 },
+    { currency: "USD", due: 128.01, paid: 0, expected: 12801 },
+    { currency: "JOD", due: 128.001, paid: 28.001, expected: 100000 },
+    { currency: "JOD", due: 9007199254740.99, paid: 0.001, expected: 9007199254740989 },
+    ]) {
+    const { t, orgId, asOwner, payableId, accountBySystemKey } = await seedDealerWithPayable(due);
+    await t.run(ctx => ctx.db.patch(payableId, {
+      currency, amountPaid: paid, status: paid > 0 ? "PARTIALLY_PAID" : "PENDING",
+    }));
+    const offered = (await asOwner.query(api.sourcingPayables.list, { orgId })).find(p => p._id === payableId);
+    expect(offered?.settlementAmountMinor).toBe(expected);
+    await asOwner.mutation(api.sourcingPayables.markPaid, {
+      orgId, payableId, paymentMethod: "CASH", idempotencyKey: "880-payment",
+    });
+    const cash = await accountBySystemKey("CASH_ON_HAND");
+    const credit = await t.run(async ctx => {
+      const event = await ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierPayables").eq("sourceId", payableId))
+        .unique();
+      if (!event?.journalEntryId) throw new Error("Payment did not post a journal");
+      const lines = await ctx.db.query("journalLines")
+        .withIndex("by_journal_entry", q => q.eq("journalEntryId", event.journalEntryId!)).collect();
+      return lines.find(line => line.accountId === cash?._id)?.creditMinor;
+    });
+    expect(credit).toBe(expected);
+    expect(credit).toBe(offered?.settlementAmountMinor);
+    }
+  });
+
+  test("stale displayed settlement is refused before money moves", async () => {
+    const { t, orgId, asOwner, payableId } = await seedDealerWithPayable(128.001);
+    await t.run(ctx => ctx.db.patch(payableId, { amountPaid: 28.001, status: "PARTIALLY_PAID" }));
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      orgId, payableId, expectedSettlementAmountMinor: 128001, idempotencyKey: "880-stale",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_PAYMENT_CHANGED" } });
+    expect(await t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
+  });
+
+  test("legacy excess precision in amountPaid is refused, including accumulated residue", async () => {
+    const { t, orgId, asOwner, payableId } = await seedDealerWithPayable(5);
+    await t.run(ctx => ctx.db.patch(payableId, { amountPaid: 1.48 + 1.48 + 1.48, status: "PARTIALLY_PAID" }));
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      orgId, payableId, idempotencyKey: "880-legacy-paid",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+  });
+
+  test("SCRUM-880: legacy JOD and USD excess precision refuses payment atomically", async () => {
+    for (const { currency, amount } of [
+    { currency: "JOD", amount: 128.0005 },
+    { currency: "USD", amount: 128.001 },
+    ]) {
+    const { t, orgId, asOwner, payableId } = await seedDealerWithPayable(amount);
+    await t.run(ctx => ctx.db.patch(payableId, { currency }));
+    const before = await t.run(ctx => ctx.db.get(payableId));
+    const offered = (await asOwner.query(api.sourcingPayables.list, { orgId })).find(p => p._id === payableId);
+    expect(offered?.settlementAmountMinor).toBeNull();
+    await expect(asOwner.mutation(api.sourcingPayables.markPaid, {
+      orgId, payableId, paymentMethod: "CASH", idempotencyKey: "880-refusal",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    await expect(asOwner.mutation(api.sourcingPayables.recordPartialPayment, {
+      orgId, payableId, amount: 1, paymentMethod: "CASH", idempotencyKey: "880-partial-refusal",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await t.run(ctx => ctx.db.get(payableId))).toEqual(before);
+    expect(await t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
+    }
+  });
+
+  test("SCRUM-880: new JOD and USD purchases refuse excess precision before acquisition", async () => {
+    for (const { currency, amount } of [
+    { currency: "JOD", amount: 128.0005 },
+    { currency: "USD", amount: 128.001 },
+    ]) {
+    const { t, orgId, asOwner } = await seedDealerWithPayable();
+    const { registerRateLimiter } = await import("../test-utils/convexTest");
+    registerRateLimiter(t);
+    await t.run(async ctx => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", q => q.eq("orgId", orgId)).unique();
+      if (!settings) throw new Error("Missing settings");
+      await ctx.db.patch(settings._id, { currency });
+    });
+    const { supplierIdFor } = await import("../test-utils/supplierFixture");
+    const purchaseSupplierId = await supplierIdFor(t, orgId, "Precision Supplier");
+    await expect(asOwner.mutation(api.vehicles.create, {
+      orgId, vin: "1HGCM82633A000880", make: "Toyota", model: "Camry", year: 2024,
+      mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+      sellingPrice: 20000, status: "AVAILABLE", sourceType: "STOCK", purchasePrice: amount,
+      purchasePaymentMethod: "ON_ACCOUNT", purchaseSupplierId, idempotencyKey: "880-create",
+    })).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await t.run(ctx => ctx.db.query("vehicles").withIndex("by_org_vin", q => q.eq("orgId", orgId).eq("vin", "1HGCM82633A000880")).unique())).toBeNull();
+    expect(await t.run(ctx => ctx.db.query("accountingEvents").collect())).toEqual([]);
+    }
+  });
+});
 
 describe("sourcingPayables.markPaid VAT reclassification", () => {
   test("payment bank options expose only eligible banks in the payable currency", async () => {

@@ -155,6 +155,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "VAT cannot be reclassified on this payable.",
     "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
   ],
+  ServerError_SUPPLIER_AMOUNT_PRECISION: [
+    "Purchase and supplier payment amounts must match the currency's decimal places. Correct the amount before paying.",
+    "يجب أن تتوافق مبالغ الشراء ودفعات المورّد مع عدد المنازل العشرية للعملة. صحّح المبلغ قبل الدفع.",
+  ],
+  ServerError_TRADE_IN_VALUE_PRECISION: [
+    "The trade-in value must match the currency's decimal places. Correct the trade-in value before completing the sale.",
+    "يجب أن تتوافق قيمة الاستبدال مع عدد المنازل العشرية للعملة. صحّح قيمة الاستبدال قبل إتمام البيع.",
+  ],
+  ServerError_SUPPLIER_PAYMENT_CHANGED: [
+    "The amount outstanding has changed. Close and reopen the payment dialog before confirming.",
+    "تغيّر المبلغ المستحق. أغلق نافذة الدفع وافتحها مجدداً قبل التأكيد.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
