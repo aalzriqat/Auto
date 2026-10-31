@@ -11,6 +11,7 @@ import {
   isEntrypoint,
   main,
   runAsScript,
+  safeLogValue,
   validateSonarMainCoverage,
   verifyProducerRun,
 } from "./validateSonarMainCoverage.mjs";
@@ -1262,39 +1263,43 @@ describe("validateSonarMainCoverage command line", () => {
     }
   });
 
-  it("verify-producer cannot let a line break in the SHA forge a log line or a GITHUB_OUTPUT key (SCRUM-764, Sonar S5145)", async () => {
-    // The producer run is only compared with the caller's SHA, so a SHA that carries an
-    // internal CR/LF is equal on both sides and reaches the two sinks.
-    const forgedSha = `${VALID_SHA}\r\nrun_id=999\ntarget_sha=${OTHER_SHA}`;
+  it.each([
+    ["a CR/LF-bearing SHA", `${VALID_SHA}\r\nrun_id=999\ntarget_sha=${OTHER_SHA}`],
+    ["a short SHA", "0d6eafb"],
+    ["a non-hex SHA", "z".repeat(40)],
+    ["a 41-character SHA", `${VALID_SHA}0`],
+  ])("verify-producer refuses a producer run whose head SHA is %s (SCRUM-764)", async (_label, badSha) => {
     const { log, error } = silence();
     const { root, cleanup } = createFixtureDir();
     const outputFile = path.join(root, "github-output.txt");
     vi.stubEnv("GITHUB_OUTPUT", outputFile);
     try {
       const args = verifyArgs();
-      args[args.indexOf("--expected-sha") + 1] = forgedSha;
-      const code = await main(args, createMockFetch({ run: { head_sha: forgedSha } }));
+      args[args.indexOf("--expected-sha") + 1] = badSha;
+      const code = await main(args, createMockFetch({ run: { head_sha: badSha } }));
 
-      expect(code).toBe(0);
-      expect(error).not.toHaveBeenCalled();
-      const logged = log.mock.calls.map((call) => call.join(" ")).join("\n");
-      expect(logged).not.toMatch(/[\r\n]/);
-      const outputLines = fs.readFileSync(outputFile, "utf8").split("\n");
-      expect(outputLines.pop()).toBe("");
-      expect(outputLines.map((line) => line.split("=")[0])).toEqual([
-        "run_id",
-        "run_attempt",
-        "artifact_id",
-        "target_sha",
-      ]);
-      expect(outputLines.filter((line) => line.startsWith("run_id="))).toEqual(["run_id=12345"]);
-      expect(fs.readFileSync(outputFile, "utf8")).not.toContain("\r");
+      expect(code).toBe(1);
+      expect(log).not.toHaveBeenCalled();
+      expect(fs.existsSync(outputFile)).toBe(false);
+      expect(error).toHaveBeenCalledTimes(1);
+      const refusal = String(error.mock.calls[0][0]);
+      expect(refusal).toContain("head SHA must be exactly 40 lowercase hex characters");
+      expect(refusal).not.toMatch(/[\r\n]/);
     } finally {
       vi.unstubAllEnvs();
       cleanup();
     }
   });
 
+  it("safeLogValue neutralises CR and LF so a value cannot forge a log line or GITHUB_OUTPUT key (Sonar S5145)", () => {
+    expect(safeLogValue(`${VALID_SHA}\r\nrun_id=999\ntarget_sha=${OTHER_SHA}`)).toBe(
+      `${VALID_SHA}__run_id=999_target_sha=${OTHER_SHA}`,
+    );
+    expect(safeLogValue("a\nb\rc")).not.toMatch(/[\r\n]/);
+    // Valid values pass through byte-identical.
+    expect(safeLogValue(VALID_SHA)).toBe(VALID_SHA);
+    expect(safeLogValue(12345)).toBe("12345");
+  });
   it("verify-producer writes neither file when no context file or GITHUB_OUTPUT is given", async () => {
     silence();
     vi.stubEnv("GITHUB_OUTPUT", "");

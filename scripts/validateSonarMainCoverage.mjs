@@ -156,6 +156,10 @@ function assertRunOutcome(run, expectedSha) {
   failIf(run.status !== "completed", `Refusing producer run: status must be 'completed', got '${run.status}'.`);
   failIf(run.conclusion !== "success", `Refusing producer run: conclusion must be 'success', got '${run.conclusion}'.`);
   const normalizedRunSha = normalizeSha(run.head_sha);
+  failIf(
+    !SHA40.test(normalizedRunSha),
+    `Refusing producer run: head SHA must be exactly 40 lowercase hex characters, got '${safeLogValue(normalizedRunSha)}'.`
+  );
   const normalizedExpectedSha = expectedSha.trim().toLowerCase();
   failIf(
     normalizedRunSha !== normalizedExpectedSha,
@@ -577,7 +581,7 @@ function writeProducerContext(contextFile, verified) {
  * start a new log line or a new GITHUB_OUTPUT key (OWASP log injection; Sonar
  * S5145 compliant form). Text without a line break comes back unchanged.
  */
-function safeLogValue(value) {
+export function safeLogValue(value) {
   return String(value).replace(/[\r\n]/g, "_");
 }
 
