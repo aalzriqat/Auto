@@ -1,0 +1,67 @@
+{
+  "id": "supplier-payable-correction-refuses-in-pilot",
+  "fingerprint": "6a0bd1a6351649e634c8ff521365f74ba241a93202adb4b97e6d0f94f666c384",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "type": "SUPPLIER_INVOICE_ERROR"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "type": "VENDOR_CREDIT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "payable.amount",
+      "value": 12500
+    },
+    {
+      "observable": "ap2400.netMinor",
+      "value": -12500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierObligationCorrections.test.ts",
+    "testName": "refuses to rewrite the supplier payable, coded EN/AR, and changes nothing"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}
