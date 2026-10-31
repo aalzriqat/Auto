@@ -338,8 +338,11 @@ async function readSupplierSnapshot(
 export async function requireResolvedSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  row: { supplierId?: Id<"suppliers"> },
-): Promise<Id<"suppliers">> {
+  row: { supplierId?: Id<"suppliers">; origin?: string },
+): Promise<Id<"suppliers"> | undefined> {
+  if (row.origin === "OPENING") {
+    return undefined;
+  }
   if (!row.supplierId) {
     throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
   }
