@@ -230,10 +230,12 @@ function validateCodexHead(body, head) {
   return [];
 }
 
+const ALLOWED_CHAT_MODES = new Set(["chat", "primary-chat"]);
+
 function validateCodexMode(body, mode) {
   if (mode === "chat" || mode === "primary-chat") {
-    const commentMode = reportLine(body, "Mode") ?? reportLine(body, "Execution");
-    if (!commentMode || !/(?:chat|primary-chat)/i.test(commentMode)) {
+    const commentMode = (reportLine(body, "Mode") ?? reportLine(body, "Execution") ?? "").trim().toLowerCase();
+    if (!ALLOWED_CHAT_MODES.has(commentMode)) {
       return ['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").'];
     }
   }

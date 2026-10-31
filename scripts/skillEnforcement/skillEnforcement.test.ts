@@ -1383,6 +1383,28 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
       ),
     ).toEqual(['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").']);
 
+    const cliNotChatComment = {
+      ...validComment,
+      body: codexComment({ mode: "CLI-not-chat" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(cliNotChatComment) },
+      ),
+    ).toEqual(['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").']);
+
+    const negatedModeComment = {
+      ...validComment,
+      body: codexComment({ mode: "not-chat" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(negatedModeComment) },
+      ),
+    ).toEqual(['Seat 2 review comment must certify primary-chat execution (e.g. "Mode: chat").']);
+
     const missingModeComment = {
       ...validComment,
       body: codexComment({ mode: "" }),
@@ -1402,6 +1424,17 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
       await verifyCodexReview(
         { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
         { ...context, fetchImpl: makeFetch(validChatModeComment) },
+      ),
+    ).toEqual([]);
+
+    const validPrimaryChatComment = {
+      ...validComment,
+      body: codexComment({ mode: "primary-chat" }),
+    };
+    expect(
+      await verifyCodexReview(
+        { url: codexReviewUrl, sha, implementerSession: defaultImplementerSession, mode: "chat" },
+        { ...context, fetchImpl: makeFetch(validPrimaryChatComment) },
       ),
     ).toEqual([]);
 
