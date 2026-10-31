@@ -268,7 +268,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
-    "61789e5b96d2a5e5e9b41be44fcf2afccf9bd372865e3c39a1154cb3788edde2",
+    "5e92cc88ee3702e17afd5b892140f622d4d4576c954d6f30a9ded1d9ff794bdb",
   // SCRUM-883: PR-only trusted Git path gate before provisioning, neutral
   // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
   // staged deployment and exact-SHA release verdict remain unchanged.
