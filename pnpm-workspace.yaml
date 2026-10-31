@@ -287,6 +287,15 @@ overrides:
   #
   # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
   vite: 8.1.6
+  # SCRUM-885: five HIGH advisories against node-forge <=1.4.0 (GHSA-5x38-2vff-x55p,
+  # GHSA-hqq3-7jhf-c5jx, GHSA-8hrf-8g6f-7xwp, GHSA-jc66-7q78-782g and
+  # GHSA-7wch-p9px-956x), all with patched floor 1.4.1. Reached only through
+  # apps/mobile > expo > @expo/cli (directly and via @expo/code-signing-certificates).
+  # 1.4.1 was published on npm on 2026-10-27 and clears the minimumReleaseAge (<24h)
+  # supply-chain gate. Pinned exact.
+  #
+  # NOT added to auditConfig.ignoreGhsas: a patched, compatible release exists.
+  node-forge: 1.4.1
 # GHSA-mh99 (brace-expansion unbounded-expansion DoS) is patched by the pins
 # above. Separate per-major overrides remain necessary because minimatch@3's
 # old-API CommonJS consumers are incompatible with the 5.x export shape.
@@ -316,10 +325,10 @@ auditConfig:
     # is native expo-updates.
     #
     # Ignored individually rather than by lowering --audit-level, so every other
-    # high advisory still fails the required dependency-audit check. Remove once
-    # node-forge > 1.4.0 ships and pnpm audit no longer reports
-    # GHSA-86w9-cpqp-85rv (both @expo/cli and @expo/code-signing-certificates
-    # must resolve to the patched version).
+    # high advisory still fails the required dependency-audit check. node-forge
+    # 1.4.1 is now resolved via the override above, but GitHub still lists no
+    # patched version for GHSA-86w9-cpqp-85rv, so this ignore stays until the
+    # advisory names a patched version.
     - GHSA-86w9-cpqp-85rv
     # GHSA-vfj7-8cjw-p6xm: braces <=3.0.3 can exhaust the Node stack on a
     # deeply nested, attacker-controlled brace pattern. No patched npm release
