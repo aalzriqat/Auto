@@ -1,0 +1,55 @@
+{
+  "id": "supplier-payable-correction-not-offered-in-dialog",
+  "fingerprint": "fb1ab4a3204e387c0a504204e863c88be5b80de16e59fc832c685dd78c9dcdf3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.getAcquisitionCostCorrectionContext",
+      "input": {
+        "paid": false
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.getAcquisitionCostCorrectionContext",
+      "input": {
+        "paid": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.allowedTypes.count",
+      "value": 0
+    },
+    {
+      "observable": "step2.allowedTypes.hasCashRefund",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierObligationCorrections.test.ts",
+    "testName": "the correction dialog is not offered the refused types for an unpaid ON_ACCOUNT car"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

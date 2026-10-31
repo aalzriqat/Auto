@@ -102,7 +102,7 @@ test("the same public setup posts a supported cash opening once without fabricat
   });
   expect(result.journalId).toBeTruthy();
   expect((await effects()).journals).toBe(1);
-  expect(await owner.query(api.supplierReceivables.list, { orgId })).toEqual([]);
+  expect(await owner.query(api.supplierReceivables.list, { orgId })).toEqual({ complete: true, items: [] });
   expect((await owner.query(api.supplierCostRecoveries.list, { orgId })).items).toEqual([]);
   expect(await owner.query(api.sourcingPayables.list, { orgId })).toEqual([]);
   expect(await owner.query(api.sales.listCommissions, { orgId, paidStatus: "unpaid" })).toEqual([]);

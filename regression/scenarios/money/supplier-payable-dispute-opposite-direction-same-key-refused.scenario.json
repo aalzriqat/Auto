@@ -1,0 +1,57 @@
+{
+  "id": "supplier-payable-dispute-opposite-direction-same-key-refused",
+  "fingerprint": "36622f7dda12f40d1276365e56ae958e6dae07990704e498183d53674292b90f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.setDisputed",
+      "input": {
+        "disputed": true,
+        "key": "d-x"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.setDisputed",
+      "input": {
+        "disputed": false,
+        "key": "d-x"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refused",
+      "value": "key-reused"
+    },
+    {
+      "observable": "payable.status",
+      "value": "DISPUTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementAudit.test.ts",
+    "testName": "payable dispute: the same key with the opposite direction is refused, not replayed"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

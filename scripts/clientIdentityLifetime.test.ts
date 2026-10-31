@@ -207,12 +207,18 @@ describe("SCRUM-313 client identity lifetime", () => {
     // identity-guarded `dealUnwind` steps (SCRUM-693 PR A) shipped
     // backend-first and left this list when the deal page's unwind panel
     // landed (PR C, SCRUM-691); the panel's retained-key callers are measured
-    // above.
+    // above. `sourcingPayables.setDisputed` and `supplierReceivables.setDisputed`
+    // (SCRUM-869 S1) became identity-guarded (required `idempotencyKey`, audited,
+    // replay-safe) and no screen, component or mobile source calls either of
+    // them (checked by grep, 2026-10-29), so they join the list until a dispute
+    // action lands in the sourcing payables and receivables sections.
     expect(commandsWithNoClientCaller.sort((a, b) => a.localeCompare(b))).toEqual([
       "collections.applyRetainedCredit",
       "financeDealCosts.migrateLegacyCustodyToLedger",
       "sourcingPayables.recordPartialPayment",
+      "sourcingPayables.setDisputed",
       "supplierCostRecoveries.reverseReceipt",
+      "supplierReceivables.setDisputed",
     ]);
   });
 

@@ -1,0 +1,90 @@
+{
+  "id": "supplier-margin-receipt-bank-guard",
+  "fingerprint": "32745f2c1001c4e1f055019f6f3977a8733869549ad52dfbbfa40263d93a280d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 500,
+        "receiptMethod": "BANK_TRANSFER"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 500,
+        "receiptMethod": "BANK_TRANSFER",
+        "bank": "USD"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 500,
+        "receiptMethod": "BANK_TRANSFER",
+        "bank": "foreign-org"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amount": 500,
+        "receiptMethod": "BANK_TRANSFER",
+        "bank": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1to3.refused",
+      "value": true
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "bank.netMinor",
+      "value": 500000
+    },
+    {
+      "observable": "recv1240.netMinor",
+      "value": -500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementCertification.test.ts",
+    "testName": "margin receipt: a bank receipt needs an active JOD bank of this organization"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

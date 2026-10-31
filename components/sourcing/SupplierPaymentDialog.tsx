@@ -5,10 +5,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/components/payments/PaymentMethodSelect";
+import { PaymentMethodSelect, type Translate } from "@/components/payments/PaymentMethodSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import type { Id } from "@/convex/_generated/dataModel";
+import { SUPPLIER_SETTLEMENT_PILOT_METHODS, type SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 
 type SupplierPaymentDetails = {
   vehicleDesc: string;
@@ -39,7 +40,7 @@ export function SupplierPaymentDialog({
   open: boolean;
   isPaying: boolean;
   notes: string;
-  paymentMethod: PaymentMethod;
+  paymentMethod: SupplierSettlementPilotMethod;
   bankAccountId: Id<"bankAccounts"> | null;
   bankOptions: { banks: Array<{ _id: Id<"bankAccounts">; name: string; currency: string }>; truncated: boolean } | undefined;
   taxAmount: string;
@@ -48,13 +49,14 @@ export function SupplierPaymentDialog({
   t: Translate;
   onOpenChange: (open: boolean) => void;
   onNotesChange: (notes: string) => void;
-  onPaymentMethodChange: (method: PaymentMethod) => void;
+  onPaymentMethodChange: (method: SupplierSettlementPilotMethod) => void;
   onBankAccountChange: (bankAccountId: Id<"bankAccounts"> | null) => void;
   onTaxAmountChange: (taxAmount: string) => void;
   onConfirm: () => void;
 }>) {
   const { locale } = useLanguage();
-  const bankMethod = paymentMethod === "BANK_TRANSFER" || paymentMethod === "CARD" || paymentMethod === "CHEQUE";
+  // Cash or bank transfer only: a cheque or card payment has no issued-cheque / settlement lifecycle and the server refuses both.
+  const bankMethod = paymentMethod === "BANK_TRANSFER";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
@@ -74,7 +76,7 @@ export function SupplierPaymentDialog({
             <p className="text-sm text-muted-foreground">{t("MarkPaidWarning" as any)}</p>
             <div className="space-y-1.5">
               <Label>{t("PaymentMethodLabel" as any)}</Label>
-              <PaymentMethodSelect t={t} value={paymentMethod} onValueChange={onPaymentMethodChange} />
+              <PaymentMethodSelect t={t} methods={SUPPLIER_SETTLEMENT_PILOT_METHODS} value={paymentMethod} onValueChange={onPaymentMethodChange} />
             </div>
             {bankMethod ? (
               <div className="space-y-1.5">

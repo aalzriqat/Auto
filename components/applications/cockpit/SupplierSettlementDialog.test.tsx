@@ -187,3 +187,30 @@ describe("what happens when the outstanding balance changes while the dialog is 
     );
   });
 });
+
+describe("the receipt methods the dialog offers (SCRUM-869 F1)", () => {
+  // Radix Select needs these in jsdom, as in MoneyMethodVisualFixture.test.tsx.
+  beforeAll(() => {
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.scrollIntoView = () => {};
+  });
+
+  test("only cash and bank transfer are offered: a cheque or card receipt has no custody lifecycle", () => {
+    renderDialog();
+    fireEvent.keyDown(screen.getAllByRole("combobox")[0]!, { key: "Enter", code: "Enter" });
+    const offered = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(offered).toEqual(["PaymentMethod_CASH", "PaymentMethod_BANK_TRANSFER"]);
+  });
+
+  test("the reference label no longer invites a cheque number in either language", async () => {
+    const { dictionaries } = await import("@/lib/i18n/dictionaries");
+    const en = (dictionaries.en as Record<string, string>).SupplierReceiptReference;
+    const ar = (dictionaries.ar as Record<string, string>).SupplierReceiptReference;
+    expect(en).toBeTruthy();
+    expect(en).not.toMatch(/cheque|check/i);
+    expect(ar).toBeTruthy();
+    expect(ar).not.toMatch(/شيك/);
+  });
+});
