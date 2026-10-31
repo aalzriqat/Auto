@@ -181,4 +181,102 @@ describe("validatePolicyBootstrap (SCRUM-760)", () => {
     expect(checksRecorded[0].conclusion).toBe("success");
     expect(checksRecorded[0].head_sha).toBe(sha);
   });
+
+  it("refuses if policy check was not required for the PR (non-required bypass refusal)", async () => {
+    const mockFetch = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/files")) {
+        // Files touching only docs, outside money/gate paths
+        return { ok: true, status: 200, json: async () => [{ filename: "docs/readme.md" }] };
+      }
+      if (u.includes("/commits")) {
+        return { ok: true, status: 200, json: async () => [{ sha }] };
+      }
+      if (u.includes("/pulls/734")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            state: "open",
+            head: { sha },
+            body: "Just documentation changes",
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => [] };
+    }) as unknown as typeof fetch;
+
+    const mockGit = async () => sha;
+
+    await expect(validatePolicyBootstrap(baseEnv, mockFetch, mockGit))
+      .rejects.toThrow("policy check was not required for PR #734");
+  });
+
+  it("refuses if PR 734 head moved during evaluation (pre-publication race refusal)", async () => {
+    let callCount = 0;
+    const movedSha = "d".repeat(40);
+    const mockFetch = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/files")) {
+        return { ok: true, status: 200, json: async () => [{ filename: "convex/sales.ts" }] };
+      }
+      if (u.includes("/commits")) {
+        return { ok: true, status: 200, json: async () => [{ sha }] };
+      }
+      if (u.includes("/pulls/734")) {
+        callCount++;
+        // Initial check returns sha, pre-publication check returns movedSha
+        const currentSha = callCount > 2 ? movedSha : sha;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            state: "open",
+            head: { sha: currentSha },
+            body: "No skill evidence",
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => [] };
+    }) as unknown as typeof fetch;
+
+    const mockGit = async () => sha;
+
+    await expect(validatePolicyBootstrap(baseEnv, mockFetch, mockGit))
+      .rejects.toThrow("PR 734 head moved during evaluation");
+  });
+
+  it("refuses if pre-publication head re-verification returns non-200", async () => {
+    let callCount = 0;
+    const mockFetch = (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/files")) {
+        return { ok: true, status: 200, json: async () => [{ filename: "convex/sales.ts" }] };
+      }
+      if (u.includes("/commits")) {
+        return { ok: true, status: 200, json: async () => [{ sha }] };
+      }
+      if (u.includes("/pulls/734")) {
+        callCount++;
+        if (callCount > 2) {
+          return { ok: false, status: 503 };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            state: "open",
+            head: { sha },
+            body: "No skill evidence",
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => [] };
+    }) as unknown as typeof fetch;
+
+    const mockGit = async () => sha;
+
+    await expect(validatePolicyBootstrap(baseEnv, mockFetch, mockGit))
+      .rejects.toThrow("Could not re-verify PR 734 head before publication (HTTP 503).");
+  });
 });

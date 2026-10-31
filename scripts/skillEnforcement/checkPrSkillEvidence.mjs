@@ -355,18 +355,19 @@ export async function check({ REPO, PR_NUMBER, GH_TOKEN }, fetchImpl = fetch) {
     }),
   });
   if (!result.required) {
-    return { exitCode: 0, headSha: pr.head.sha, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
+    return { exitCode: 0, headSha: pr.head.sha, required: false, lines: ["skill-evidence: no money, permission or gate paths touched; not required."] };
   }
   if (result.ok) {
     const isWaived = result.waivedSeats?.has("Seat 1");
     const summary = isWaived
       ? "skill-evidence: section present and consistent. Seat 1: WAIVED (owner-proxy ruling SCRUM-760 c24127). Seat 2: CERTIFIED."
       : "skill-evidence: section present and consistent.";
-    return { exitCode: 0, headSha: pr.head.sha, lines: [summary, FORM_ONLY] };
+    return { exitCode: 0, headSha: pr.head.sha, required: true, lines: [summary, FORM_ONLY] };
   }
   return {
     exitCode: 1,
     headSha: pr.head.sha,
+    required: true,
     lines: [
       "skill-evidence: FAILED",
       ...result.problems.map((p) => `- ${p}`),

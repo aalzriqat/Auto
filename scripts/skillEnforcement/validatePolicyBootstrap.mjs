@@ -121,6 +121,38 @@ export async function validatePolicyBootstrap(env, fetchImpl = fetch, execGit = 
   // Execute the real computed policy judge
   const result = await check({ REPO, PR_NUMBER: "734", GH_TOKEN }, fetchImpl);
 
+  const evaluatedHead = String(result.headSha ?? "").toLowerCase();
+  if (evaluatedHead !== normalizedInputSha) {
+    throw new Error(
+      `Refusing policy validation: evaluated PR head '${evaluatedHead}' does not match expected input SHA '${normalizedInputSha}'.`
+    );
+  }
+
+  if (result.required !== true) {
+    throw new Error(
+      "Refusing policy validation: policy check was not required for PR #734; bootstrap requires positive computed policy evaluation."
+    );
+  }
+
+  // Pre-publication check: re-verify current PR head to detect races if head moved during evaluation
+  const recheckRes = await fetchImpl(`https://api.github.com/repos/${repositoryPath}/pulls/734`, {
+    headers: {
+      authorization: `Bearer ${GH_TOKEN}`,
+      accept: "application/vnd.github+json",
+      "user-agent": "autoflow-policy-bootstrap",
+    },
+  });
+  if (!recheckRes.ok) {
+    throw new Error(`Could not re-verify PR 734 head before publication (HTTP ${recheckRes.status}).`);
+  }
+  const currentPr = await recheckRes.json();
+  const currentHeadSha = String(currentPr.head?.sha ?? "").toLowerCase();
+  if (currentHeadSha !== normalizedInputSha) {
+    throw new Error(
+      `Refusing policy validation: PR 734 head moved during evaluation from '${normalizedInputSha}' to '${currentHeadSha}'.`
+    );
+  }
+
   const conclusion = result.exitCode === 0 ? "success" : "failure";
   await writeSkillEvidenceCheck(fetchImpl, GH_TOKEN, REPO, normalizedInputSha, conclusion, result.lines);
 
