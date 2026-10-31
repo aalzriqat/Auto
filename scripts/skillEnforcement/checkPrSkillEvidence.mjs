@@ -14,6 +14,7 @@ import {
   MAX_WAIVER_HORIZON_MS,
   isPlaceholder,
   isPlaceholderSession,
+  canonicalSessionId,
 } from "./prSkillEvidence.mjs";
 
 const API = "https://api.github.com";
@@ -22,7 +23,6 @@ const FORM_ONLY =
 
 export const AUTHORIZED_RULINGS = new Set([
   "SCRUM-760 c24127",
-  "SCRUM-760 c24128",
 ]);
 
 const reportLine = (body, label) => {
@@ -192,6 +192,71 @@ export async function verifyOwnerWaiver({ url, ruling, sha, seat }, { repo, pr, 
   return validateWaiverExpiry(reportLine(body, "Expires"), seat);
 }
 
+function validateCodexCommentAccess(comment, url, repo, pr) {
+  if (comment?.html_url !== url || comment?.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
+    return ["Seat 2 review comment does not belong to this PR."];
+  }
+  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment?.author_association)) {
+    return ["Seat 2 review must be published by a repository owner, member or collaborator."];
+  }
+  const body = comment?.body;
+  if (typeof body !== "string" || body.includes("<!--")) {
+    return ["Seat 2 review fields must be visible, not inside HTML comments."];
+  }
+  if (
+    /Review-evidence correction|REVIEW-INTEGRITY HOLD|NOT certified|NOT a certification|Do not CERTIFY|REQUEST CHANGES|CHANGES REQUESTED/i.test(body)
+  ) {
+    return ["Seat 2 review comment is a review correction/rejection, not a certification."];
+  }
+  return [];
+}
+
+function validateCodexVerdict(body) {
+  const verdict = reportLine(body, "Verdict");
+  if (verdict?.trim().toUpperCase() !== "CERTIFY" && verdict?.trim().toUpperCase() !== "CERTIFIED") {
+    return ["Seat 2 review comment must declare Verdict: CERTIFY."];
+  }
+  if (/\bpending\s+review\b/i.test(body) || /\bREVIEW\s+PENDING\b/i.test(body)) {
+    return ["Seat 2 review comment indicates review is pending, not completed."];
+  }
+  return [];
+}
+
+function validateCodexHead(body, head) {
+  const commentSha = reportLine(body, "Head SHA") ?? reportLine(body, "SHA");
+  if (!commentSha || !HEX_SHA40.test(commentSha.trim()) || commentSha.trim().toLowerCase() !== head.toLowerCase()) {
+    return [`Seat 2 review comment must certify full current PR head SHA ${head}.`];
+  }
+  return [];
+}
+
+function validateCodexReviewerAndSession(body, implementerSession) {
+  const reviewer = reportLine(body, "Reviewer") ?? reportLine(body, "Signed");
+  if (!reviewer || isPlaceholder(reviewer)) {
+    return ["Seat 2 review comment must declare explicit Reviewer or Signed attribution."];
+  }
+  if (/implementer/i.test(reviewer)) {
+    return ["Seat 2 review must be independent; implementer self-review is refused."];
+  }
+
+  const session = reportLine(body, "Session") ?? reportLine(body, "Codex session") ?? reportLine(body, "Reviewer session");
+  const canonicalReviewer = canonicalSessionId(session);
+  if (!canonicalReviewer || isPlaceholderSession(session)) {
+    return ["Seat 2 review comment must declare an actual reviewer Session."];
+  }
+
+  const canonicalImpl = canonicalSessionId(implementerSession);
+  if (!canonicalImpl || isPlaceholderSession(implementerSession)) {
+    return ["Seat 2 review independence cannot be verified: mandatory valid implementer session is absent or unparseable."];
+  }
+
+  if (canonicalReviewer === canonicalImpl) {
+    return ["Seat 2 reviewer session matches the implementer session; independent review is required."];
+  }
+
+  return [];
+}
+
 /**
  * @param {{ url?: string, sha?: string, implementerSession?: string }} evidence
  * @param {{ repo: string, pr: string|number, head: string, fetchImpl: typeof fetch, token: string }} context
@@ -205,53 +270,17 @@ export async function verifyCodexReview({ url, sha, implementerSession }, { repo
   }
 
   const comment = await getJson(fetchImpl, token, `/repos/${repo}/issues/comments/${id}`);
-  if (comment?.html_url !== url || comment?.issue_url !== `${API}/repos/${repo}/issues/${pr}`) {
-    return ["Seat 2 review comment does not belong to this PR."];
-  }
-  if (!["OWNER", "MEMBER", "COLLABORATOR"].includes(comment?.author_association)) {
-    return ["Seat 2 review must be published by a repository owner, member or collaborator."];
-  }
+  const accessProblems = validateCodexCommentAccess(comment, url, repo, pr);
+  if (accessProblems.length > 0) return accessProblems;
 
-  const body = comment?.body;
-  if (typeof body !== "string" || body.includes("<!--")) {
-    return ["Seat 2 review fields must be visible, not inside HTML comments."];
-  }
-  if (
-    /Review-evidence correction|REVIEW-INTEGRITY HOLD|NOT certified|NOT a certification|Do not CERTIFY|REQUEST CHANGES|CHANGES REQUESTED/i.test(body)
-  ) {
-    return ["Seat 2 review comment is a review correction/rejection, not a certification."];
-  }
+  const body = comment.body;
+  const verdictProblems = validateCodexVerdict(body);
+  if (verdictProblems.length > 0) return verdictProblems;
 
-  const verdict = reportLine(body, "Verdict");
-  if (verdict?.trim().toUpperCase() !== "CERTIFY" && verdict?.trim().toUpperCase() !== "CERTIFIED") {
-    return ["Seat 2 review comment must declare Verdict: CERTIFY."];
-  }
-  if (/\bpending\s+review\b/i.test(body) || /\bREVIEW\s+PENDING\b/i.test(body)) {
-    return ["Seat 2 review comment indicates review is pending, not completed."];
-  }
+  const headProblems = validateCodexHead(body, head);
+  if (headProblems.length > 0) return headProblems;
 
-  const commentSha = reportLine(body, "Head SHA") ?? reportLine(body, "SHA");
-  if (!commentSha || !HEX_SHA40.test(commentSha.trim()) || commentSha.trim().toLowerCase() !== head.toLowerCase()) {
-    return [`Seat 2 review comment must certify full current PR head SHA ${head}.`];
-  }
-
-  const reviewer = reportLine(body, "Reviewer") ?? reportLine(body, "Signed");
-  if (!reviewer || isPlaceholder(reviewer)) {
-    return ["Seat 2 review comment must declare explicit Reviewer or Signed attribution."];
-  }
-  if (/implementer/i.test(reviewer)) {
-    return ["Seat 2 review must be independent; implementer self-review is refused."];
-  }
-
-  const session = reportLine(body, "Session") ?? reportLine(body, "Codex session") ?? reportLine(body, "Reviewer session");
-  if (!session || isPlaceholderSession(session)) {
-    return ["Seat 2 review comment must declare an actual reviewer Session."];
-  }
-  if (implementerSession && session.trim().toLowerCase() === implementerSession.trim().toLowerCase()) {
-    return ["Seat 2 reviewer session cannot match the implementer session."];
-  }
-
-  return [];
+  return validateCodexReviewerAndSession(body, implementerSession);
 }
 
 export async function getJson(fetchImpl, token, path) {

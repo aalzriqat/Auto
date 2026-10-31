@@ -15,7 +15,7 @@
 import { classifyPaths, requiredSkills } from "./policy.mjs";
 
 export const SECTION = "## Skill evidence";
-export const CANONICAL_ISO_DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?Z)?$/;
+export const CANONICAL_ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)?$/;
 export const MAX_WAIVER_HORIZON_DAYS = 90;
 export const MAX_WAIVER_HORIZON_MS = MAX_WAIVER_HORIZON_DAYS * 24 * 60 * 60 * 1000;
 const SESSION_URL = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g;
@@ -43,21 +43,36 @@ export function isPlaceholder(block) {
   return t.startsWith("<") && t.endsWith(">") && !t.slice(1, -1).includes("<") && !t.includes("\n");
 }
 
-const CLAUDE_SESSION_RE = /https:\/\/claude\.ai\/code\/session_([a-z0-9]+)/i;
-const LOCAL_SESSION_RE = /local:([0-9a-f-]{36})/i;
+const CLAUDE_SESSION_RE = /^https:\/\/claude\.ai\/code\/session_([a-z0-9]+)$/i;
+const LOCAL_SESSION_RE = /^(?:local:)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * Normalizes a session identifier or URL to a canonical lowercase token.
+ * Returns null if the session is not in a recognized canonical format.
+ */
+export function canonicalSessionId(session) {
+  if (!session || typeof session !== "string") return null;
+  const s = session.trim();
+  const claudeMatch = CLAUDE_SESSION_RE.exec(s);
+  if (claudeMatch) return claudeMatch[1].toLowerCase();
+  const localMatch = LOCAL_SESSION_RE.exec(s);
+  if (localMatch) return localMatch[1].toLowerCase();
+  return null;
+}
 
 /**
  * Validates that a session ID or URL does not use trivial placeholder / mock patterns
- * (e.g. repeating characters like session_1111111111111111 or local:00000000-0000-0000-0000-000000000000).
+ * (e.g. repeating characters like session_1111111111111111 or local:00000000-0000-0000-0000-000000000000),
+ * and confirms that the session conforms to a supported canonical format.
  */
 export function isPlaceholderSession(session) {
   if (!session) return true;
   const s = String(session).trim();
   if (isPlaceholder(s)) return true;
   if (/(?:mock|dummy|placeholder|fake|example)/i.test(s)) return true;
-  const match = CLAUDE_SESSION_RE.exec(s) ?? LOCAL_SESSION_RE.exec(s);
-  if (!match) return false;
-  const rawId = match[1].replaceAll("-", "").toLowerCase();
+  const canonical = canonicalSessionId(s);
+  if (!canonical) return true;
+  const rawId = canonical.replaceAll("-", "").toLowerCase();
   const distinct = new Set(rawId);
   return distinct.size <= 2;
 }
@@ -268,8 +283,11 @@ async function checkSeat2(t, isWaived, codexReview) {
   }
 
   const seat2Review = line(t, "Seat 2 review");
-  const implementerSession = line(t, "Implementer session");
+  const implementerSession = line(t, "Implementer session") ?? line(t, "Implementer");
   if (isWaived) {
+    if (!implementerSession || isPlaceholder(implementerSession) || !canonicalSessionId(implementerSession)) {
+      problems.push('Waived Seat 1 requires a declared "Implementer session" UUID for reviewer independence verification.');
+    }
     if (!seat2Review || isPlaceholder(seat2Review)) {
       problems.push('When Seat 1 is waived, "Seat 2 review" must link to an independent Codex review comment on this PR.');
     } else if (codexReview) {
