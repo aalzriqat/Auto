@@ -17,6 +17,7 @@ import {
   supplierCostRecoveryReceiptReversalKey,
 } from "./accounting/supplierCostRecoveryPosting";
 import { auditLog } from "./financialAudit";
+import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 
 /**
@@ -120,7 +121,7 @@ export async function assertSupplierCostExpenseReversible(
     .first();
   if (!recovery || recovery.status === "REVERSED") return recovery;
   const refusal =
-    "The supplier has paid against this cost. Reverse every recovery receipt before reversing the expense.";
+    "The supplier has paid against this cost, so the expense cannot be reversed while those receipts stand.";
   if (recovery.amountRecoveredMinor !== 0) throw new ConvexError(refusal);
   const receipts = await ctx.db
     .query("supplierCostRecoveryReceipts")
@@ -497,6 +498,8 @@ export const reverseReceipt = mutation({
   }),
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-869#c23881: refused before any read-for-write or the idempotency claim.
+    assertSupplierSettlementDoorAllowed("SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED");
 
     const existingReceipt=await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveryReceipts",args.receiptId,"Supplier cost recovery receipt not found.");
     await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",existingReceipt.recoveryId,"Supplier cost recovery not found."));

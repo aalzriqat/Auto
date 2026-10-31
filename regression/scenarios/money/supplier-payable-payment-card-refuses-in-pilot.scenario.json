@@ -1,0 +1,85 @@
+{
+  "id": "supplier-payable-payment-card-refuses-in-pilot",
+  "fingerprint": "2ce1127d9bd0dfb1adc9369ca1756c84a2348e9e3b4227af27c1825ffad5743c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum869-pr712-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CARD",
+        "amount": 8000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "paymentMethod": "CARD",
+        "amount": 1000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "paymentMethod": "CARD",
+        "amount": 8000,
+        "replay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED"
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED"
+    },
+    {
+      "observable": "step1.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "step1.journalEntries",
+      "value": 0
+    },
+    {
+      "observable": "step1.payableStatus",
+      "value": "PENDING"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettlementContainment.test.ts",
+    "testName": "a CARD supplier payment is refused on both payment doors with a coded, truthful EN/AR error and nothing is written"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

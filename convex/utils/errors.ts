@@ -136,6 +136,21 @@ export const AppErrorCode = {
   // SCRUM-760 ruling 11: the legacy collection REFUND request/approval is blocked for the narrow
   // pilot (utils/legacyCollectionRefundContainment.ts). Translated under ServerError_<code>.
   LEGACY_COLLECTION_REFUND_PILOT_DISABLED: "LEGACY_COLLECTION_REFUND_PILOT_DISABLED",
+  // SCRUM-869#c23881: the supplier cost-recovery receipt reversal is blocked for the narrow pilot
+  // (utils/supplierSettlementContainment.ts). Translated under ServerError_<code>.
+  SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED",
+  SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED",
+  SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED",
+  // SCRUM-869 F1: a consignment margin receipt by CHEQUE or CARD has no custody lifecycle, so the pilot door takes
+  // CASH and BANK_TRANSFER only (utils/supplierSettlementContainment.ts). Translated under ServerError_<code>.
+  SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED",
+  // Same rule for paying a supplier payable (`sourcingPayables.markPaid` / `recordPartialPayment`): a cheque
+  // credits the bank at once with no issued-cheque record to clear or bounce. Translated under ServerError_<code>.
+  SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED: "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED",
+  // `sourcingPayables.recordPartialPayment` refuses a payment that would exceed the balance still owed. The
+  // payload carries `projected` and `due` (major units) for the `{placeholders}`; translated under ServerError_<code>.
+  // The only action it offers is the one available: reduce the amount (payable correction is pilot-disabled).
+  SUPPLIER_PAYMENT_EXCEEDS_BALANCE: "SUPPLIER_PAYMENT_EXCEEDS_BALANCE",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",
@@ -152,6 +167,10 @@ export const AppErrorCode = {
   // SCRUM-651. Sale / deal teardown refuses while any supplier payable on the sale carries a
   // recorded payment (whole or part). Translated under ServerError_<code>.
   SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED: "SUPPLIER_PAYABLE_PAID_CANCEL_REFUSED",
+  // SCRUM-869 (owner ruling c23881). The same refusal on the receivable side: sale / deal teardown refuses while a
+  // consignment margin claim carries a recorded supplier receipt. Message in convex/supplierReceivables.ts;
+  // translated under ServerError_<code>.
+  SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED: "SUPPLIER_RECEIVABLE_PAID_CANCEL_REFUSED",
   // SCRUM-563. Post-reset safety. A command identity recorded before an org financial reset
   // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
   // ServerError_<code>.

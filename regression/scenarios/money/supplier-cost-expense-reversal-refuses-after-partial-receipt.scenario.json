@@ -1,0 +1,59 @@
+{
+  "id": "supplier-cost-expense-reversal-refuses-after-partial-receipt",
+  "fingerprint": "88654547e7ac97047108ef59e0214c52314039595b181245eb9e34ff3267fe1a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s1b",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "expenses.reverseExpense",
+      "input": {
+        "recovery": 200
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED"
+    },
+    {
+      "observable": "refusal.rowsChanged",
+      "value": 0
+    },
+    {
+      "observable": "receipt.status",
+      "value": "LIVE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierObligationCorrections.test.ts",
+    "testName": "refuses with the same code once the supplier has paid part of it"
+  },
+  "matrixRow": "SCRUM-869-SUPPLIER-SETTLE"
+}

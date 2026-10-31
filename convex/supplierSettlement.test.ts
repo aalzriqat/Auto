@@ -154,7 +154,7 @@ describe("recording instalments against a supplier", () => {
 
   test("a disputed payable cannot be settled by quietly paying it", async () => {
     const s = await seed();
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, {
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, disputed: true,
       reason: "Supplier claims 9,800 against our agreed 9,500.",
     });
@@ -170,7 +170,7 @@ describe("recording instalments against a supplier", () => {
     const s = await seed();
     // It is the only record of why the supplier is not being paid.
     await expect(
-      s.asUser.mutation(api.sourcingPayables.setDisputed, {
+      s.asUser.mutation(api.sourcingPayables.setDisputed, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: s.payableId, disputed: true,
       })
     ).rejects.toThrow(/say what is disputed/i);
@@ -181,10 +181,10 @@ describe("recording instalments against a supplier", () => {
     await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, amount: 4_000,
     });
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, {
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, disputed: true, reason: "Balance queried.",
     });
-    await s.asUser.mutation(api.sourcingPayables.setDisputed, {
+    await s.asUser.mutation(api.sourcingPayables.setDisputed, { idempotencyKey: crypto.randomUUID(),
       orgId: s.orgId, payableId: s.payableId, disputed: false,
     });
 
@@ -221,7 +221,7 @@ describe("recording instalments against a supplier", () => {
       })
     ).rejects.toThrow(/not found/i);
     await expect(
-      s.asUser.mutation(api.sourcingPayables.setDisputed, {
+      s.asUser.mutation(api.sourcingPayables.setDisputed, { idempotencyKey: crypto.randomUUID(),
         orgId: s.orgId, payableId: foreignPayableId, disputed: true, reason: "x",
       })
     ).rejects.toThrow(/not found/i);
