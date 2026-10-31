@@ -15,6 +15,9 @@
 import { classifyPaths, requiredSkills } from "./policy.mjs";
 
 export const SECTION = "## Skill evidence";
+export const CANONICAL_ISO_DATE = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?Z)?$/;
+export const MAX_WAIVER_HORIZON_DAYS = 90;
+export const MAX_WAIVER_HORIZON_MS = MAX_WAIVER_HORIZON_DAYS * 24 * 60 * 60 * 1000;
 const SESSION_URL = /https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+/g;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const LOCAL_SESSION = new RegExp(`^local:(${UUID})$`, "i");
@@ -177,6 +180,42 @@ async function checkLocalSeat(t, otherSessionText, local, localReview) {
   return problems;
 }
 
+async function checkCommentWaiver(waiverUrl, ruling, headSha, ownerWaiver) {
+  if (!ownerWaiver) {
+    return ["Seat 1 waiver could not be verified against its signed PR comment."];
+  }
+  return await ownerWaiver({ url: waiverUrl, ruling, seat: "Seat 1", sha: headSha });
+}
+
+function checkRegistryWaiver(waivers, prNumber, headSha, ruling) {
+  const matching = (waivers ?? []).find(
+    (w) => Number(w.pr) === Number(prNumber) &&
+           String(w.seat ?? "").trim().toLowerCase() === "seat 1" &&
+           (!headSha || String(w.head ?? "").trim().toLowerCase() === String(headSha).trim().toLowerCase())
+  );
+  if (!matching) {
+    return ["Waived Seat 1 must link to an owner-proxy waiver comment or be registered in skill-waivers.json."];
+  }
+  const problems = [];
+  if (ruling && matching.ruling && matching.ruling.trim() !== ruling.trim()) {
+    problems.push(`Seat 1 waiver in skill-waivers.json specifies ruling "${matching.ruling}", which does not match declared ruling "${ruling}".`);
+  }
+  const expires = matching.expires;
+  const expiryMs = Date.parse(expires ?? "");
+  if (Number.isNaN(expiryMs) || expiryMs <= Date.now()) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} expired on ${expires}.`);
+    return problems;
+  }
+  if (!CANONICAL_ISO_DATE.test(String(expires).trim())) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} has an invalid expiration date in skill-waivers.json.`);
+    return problems;
+  }
+  if (expiryMs > Date.now() + MAX_WAIVER_HORIZON_MS) {
+    problems.push(`Seat 1 waiver for PR ${matching.pr} expiration date ${expires} exceeds maximum policy horizon of ${MAX_WAIVER_HORIZON_DAYS} days.`);
+  }
+  return problems;
+}
+
 async function checkWaivedSeat1(t, options) {
   const { ownerWaiver, waivers = [], prNumber, headSha } = options;
   const problems = [];
@@ -186,28 +225,9 @@ async function checkWaivedSeat1(t, options) {
   }
   const waiverUrl = line(t, "Seat 1 waiver") ?? line(t, "Seat 1 waiver review");
   if (waiverUrl) {
-    if (ownerWaiver) {
-      problems.push(...await ownerWaiver({ url: waiverUrl, ruling, seat: "Seat 1", sha: headSha }));
-    } else {
-      problems.push("Seat 1 waiver could not be verified against its signed PR comment.");
-    }
+    problems.push(...await checkCommentWaiver(waiverUrl, ruling, headSha, ownerWaiver));
   } else {
-    const matching = (waivers ?? []).find(
-      (w) => Number(w.pr) === Number(prNumber) &&
-             String(w.seat ?? "").trim().toLowerCase() === "seat 1" &&
-             (!headSha || String(w.head ?? "").trim().toLowerCase() === String(headSha).trim().toLowerCase())
-    );
-    if (matching) {
-      if (ruling && matching.ruling && matching.ruling.trim() !== ruling.trim()) {
-        problems.push(`Seat 1 waiver in skill-waivers.json specifies ruling "${matching.ruling}", which does not match declared ruling "${ruling}".`);
-      }
-      const expiryMs = Date.parse(matching.expires);
-      if (Number.isNaN(expiryMs) || expiryMs <= Date.now()) {
-        problems.push(`Seat 1 waiver for PR ${matching.pr} expired on ${matching.expires}.`);
-      }
-    } else {
-      problems.push("Waived Seat 1 must link to an owner-proxy waiver comment or be registered in skill-waivers.json.");
-    }
+    problems.push(...checkRegistryWaiver(waivers, prNumber, headSha, ruling));
   }
   return problems;
 }
@@ -248,16 +268,17 @@ async function checkSeat2(t, isWaived, codexReview) {
   }
 
   const seat2Review = line(t, "Seat 2 review");
+  const implementerSession = line(t, "Implementer session");
   if (isWaived) {
     if (!seat2Review || isPlaceholder(seat2Review)) {
       problems.push('When Seat 1 is waived, "Seat 2 review" must link to an independent Codex review comment on this PR.');
     } else if (codexReview) {
       const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
-      problems.push(...await codexReview({ url: seat2Review, sha }));
+      problems.push(...await codexReview({ url: seat2Review, sha, implementerSession }));
     }
   } else if (seat2Review && !isPlaceholder(seat2Review) && codexReview) {
     const sha = line(t, "Seat 2 SHA")?.match(/^[0-9a-f]{7,40}\b/i)?.[0];
-    problems.push(...await codexReview({ url: seat2Review, sha }));
+    problems.push(...await codexReview({ url: seat2Review, sha, implementerSession }));
   }
   return problems;
 }

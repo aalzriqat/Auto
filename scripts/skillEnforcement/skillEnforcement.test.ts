@@ -993,17 +993,23 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
   const codexReviewUrl = "https://github.com/o/r/pull/7#issuecomment-222";
   const waiverUrl = "https://github.com/o/r/pull/7#issuecomment-111";
 
+  const validExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+
   const codexComment = (over: Record<string, string> = {}) =>
-    `[Codex Review] VERDICT: CERTIFY at ${over.sha ?? sha}. Independent review passed.\n` +
-    `Session: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nSigned: Codex Seat 2\n`;
+    `[Codex Review]\n` +
+    `Reviewer: ${over.reviewer ?? "Codex Seat 2"}\n` +
+    `Session: ${over.session ?? "01a18fe9-b92b-7ae0-aa13-faea3189ac57"}\n` +
+    `Head SHA: ${over.sha ?? sha}\n` +
+    `Verdict: ${over.verdict ?? "CERTIFY"}\n` +
+    `Signed: ${over.signed ?? "Codex Seat 2"}\n`;
 
   const waiverComment = (over: Record<string, string> = {}) =>
     `Owner waiver: Seat 1\n` +
     `Ruling: ${over.ruling ?? "SCRUM-760 c24127"}\n` +
     `Head SHA: ${over.sha ?? sha}\n` +
-    `Expires: ${over.expires ?? "2030-01-01T00:00:00Z"}\n` +
+    `Expires: ${over.expires ?? validExpiry}\n` +
     `Verdict: ${over.verdict ?? "WAIVED"}\n` +
-    `Proxy: owner-proxy\n` +
+    `Proxy: ${over.proxy ?? "owner-proxy"}\n` +
     `Reason: Owner ruling 2026-10-31 temporarily waives Opus seat; independent Codex review is sufficient.\n`;
 
   test.each([
@@ -1093,7 +1099,7 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
       head: sha,
       seat: "Seat 1",
       ruling: "SCRUM-760 c24127",
-      expires: "2030-01-01T00:00:00Z",
+      expires: validExpiry,
       authority: "owner-proxy",
       reason: "Owner ruling 2026-10-31",
     }];
@@ -1150,7 +1156,7 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
           head: sha,
           seat: "Seat 1",
           ruling: "SCRUM-760 c24127",
-          expires: "2030-01-01T00:00:00Z",
+          expires: validExpiry,
         }],
       }));
       expect(loadSkillWaivers(filePath)).toHaveLength(1);
@@ -1167,12 +1173,12 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
       expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
 
       writeFileSync(filePath, JSON.stringify({
-        waivers: [{ pr: 7, head: "not-40-chars", seat: "Seat 1", ruling: "r1", expires: "2030-01-01T00:00:00Z" }],
+        waivers: [{ pr: 7, head: "not-40-chars", seat: "Seat 1", ruling: "r1", expires: validExpiry }],
       }));
       expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
 
       writeFileSync(filePath, JSON.stringify({
-        waivers: [{ pr: -5, head: sha, seat: "Seat 1", ruling: "r1", expires: "2030-01-01T00:00:00Z" }],
+        waivers: [{ pr: -5, head: sha, seat: "Seat 1", ruling: "r1", expires: validExpiry }],
       }));
       expect(() => loadSkillWaivers(filePath)).toThrow(TypeError);
     } finally {
@@ -1196,7 +1202,7 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
         head: sha,
         seat: "Seat 1",
         ruling: "unrelated ruling",
-        expires: "2030-01-01T00:00:00Z",
+        expires: validExpiry,
       }],
       codexReview: async () => [],
     });
@@ -1238,7 +1244,13 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch(baseComment) })).toEqual([]);
 
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, author_association: "NONE" }) }))
-      .toEqual(["Seat 1 waiver must be published by a repository owner, member or collaborator."]);
+      .toEqual(["Seat 1 waiver must be published by the repository owner (author association OWNER)."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, author_association: "COLLABORATOR" }) }))
+      .toEqual(["Seat 1 waiver must be published by the repository owner (author association OWNER)."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ proxy: "none" }) }) }))
+      .toEqual(["Seat 1 waiver comment must declare Proxy: owner-proxy."]);
 
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ verdict: "REJECT" }) }) }))
       .toEqual(["Seat 1 waiver verdict must be WAIVED."]);
@@ -1246,29 +1258,38 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ expires: "2020-01-01T00:00:00Z" }) }) }))
       .toEqual(["Seat 1 waiver expired on 2020-01-01T00:00:00Z."]);
 
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ expires: "9999" }) }) }))
+      .toEqual(["Seat 1 waiver has an invalid expiration date (must be canonical ISO-8601 UTC date or datetime)."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ expires: "9999-01-01T00:00:00Z" }) }) }))
+      .toEqual(["Seat 1 waiver expiration date 9999-01-01T00:00:00Z exceeds maximum policy horizon of 90 days."]);
+
+    expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "invented authority", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ ruling: "invented authority" }) }) }))
+      .toEqual(['Seat 1 waiver ruling "invented authority" is not an authorized ruling from the trusted base.']);
+
     const wrongSha = "b".repeat(40);
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: waiverComment({ sha: wrongSha }) }) }))
       .toEqual([`Seat 1 waiver comment certifies ${wrongSha}, which does not match PR head ${sha}.`]);
 
-    const commentMissingRuling = "Owner waiver: Seat 1\nHead SHA: " + sha + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    const commentMissingRuling = "Owner waiver: Seat 1\nHead SHA: " + sha + "\nExpires: " + validExpiry + "\nVerdict: WAIVED\nProxy: owner-proxy\n";
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentMissingRuling }) }))
       .toEqual(["Seat 1 waiver comment must declare an authorized Ruling."]);
 
-    const commentMissingSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    const commentMissingSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nExpires: " + validExpiry + "\nVerdict: WAIVED\nProxy: owner-proxy\n";
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentMissingSha }) }))
       .toEqual(["Seat 1 waiver comment must declare the full 40-character Head SHA."]);
 
-    const commentPrefixSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha.slice(0, 7) + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    const commentPrefixSha = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha.slice(0, 7) + "\nExpires: " + validExpiry + "\nVerdict: WAIVED\nProxy: owner-proxy\n";
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentPrefixSha }) }))
       .toEqual(["Seat 1 waiver comment must declare the full 40-character Head SHA."]);
 
-    const commentSubstringRuling = "Owner waiver: Seat 1\nRuling: c24127\nHead SHA: " + sha + "\nExpires: 2030-01-01T00:00:00Z\nVerdict: WAIVED\n";
+    const commentSubstringRuling = "Owner waiver: Seat 1\nRuling: c24127\nHead SHA: " + sha + "\nExpires: " + validExpiry + "\nVerdict: WAIVED\nProxy: owner-proxy\n";
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentSubstringRuling }) }))
-      .toEqual(['Seat 1 waiver ruling "c24127" does not match declared ruling "SCRUM-760 c24127".']);
+      .toEqual(['Seat 1 waiver ruling "c24127" is not an authorized ruling from the trusted base.']);
 
-    const commentInvalidExpires = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha + "\nExpires: not-a-date\nVerdict: WAIVED\n";
+    const commentInvalidExpires = "Owner waiver: Seat 1\nRuling: SCRUM-760 c24127\nHead SHA: " + sha + "\nExpires: not-a-date\nVerdict: WAIVED\nProxy: owner-proxy\n";
     expect(await verifyOwnerWaiver({ url: waiverUrl, ruling: "SCRUM-760 c24127", seat: "Seat 1", sha }, { ...context, fetchImpl: makeFetch({ ...baseComment, body: commentInvalidExpires }) }))
-      .toEqual(["Seat 1 waiver has an invalid expiration date."]);
+      .toEqual(["Seat 1 waiver has an invalid expiration date (must be canonical ISO-8601 UTC date or datetime)."]);
   });
 
   test("verifyCodexReview accepts CERTIFY and rejects review-evidence corrections and negated phrases", async () => {
@@ -1316,24 +1337,66 @@ describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => 
 
     const prefixOnlyComment = {
       ...validComment,
-      body: `[Codex Review] VERDICT: CERTIFY at ${sha.slice(0, 7)}. Looks good.`,
+      body: codexComment({ sha: sha.slice(0, 7) }),
     };
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(prefixOnlyComment) }))
       .toEqual([`Seat 2 review comment must certify full current PR head SHA ${sha}.`]);
 
     const wrongHeadComment = {
       ...validComment,
-      body: `[Codex Review] VERDICT: CERTIFY at ${"b".repeat(40)}.`,
+      body: codexComment({ sha: "b".repeat(40) }),
     };
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(wrongHeadComment) }))
       .toEqual([`Seat 2 review comment must certify full current PR head SHA ${sha}.`]);
 
     const missingReviewerComment = {
       ...validComment,
-      body: `VERDICT: CERTIFY at ${sha}.`,
+      body: `Verdict: CERTIFY\nSession: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nHead SHA: ${sha}`,
     };
     expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(missingReviewerComment) }))
-      .toEqual(["Seat 2 review comment must have explicit reviewer attribution (e.g. [Codex Review])."]);
+      .toEqual(["Seat 2 review comment must declare explicit Reviewer or Signed attribution."]);
+
+    const tagOnlyComment = {
+      ...validComment,
+      body: `[Codex Update]\nVerdict: CERTIFY\nHead SHA: ${sha}`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(tagOnlyComment) }))
+      .toEqual(["Seat 2 review comment must declare explicit Reviewer or Signed attribution."]);
+
+    const missingSessionComment = {
+      ...validComment,
+      body: `[Codex Review]\nReviewer: Codex Seat 2\nVerdict: CERTIFY\nHead SHA: ${sha}\nSigned: Codex Seat 2`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(missingSessionComment) }))
+      .toEqual(["Seat 2 review comment must declare an actual reviewer Session."]);
+
+    const implementerReviewerComment = {
+      ...validComment,
+      body: `[Codex Review]\nReviewer: implementer\nVerdict: CERTIFY\nSession: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nHead SHA: ${sha}`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(implementerReviewerComment) }))
+      .toEqual(["Seat 2 review must be independent; implementer self-review is refused."]);
+
+    const matchingSessionComment = {
+      ...validComment,
+      body: `[Codex Review]\nReviewer: Codex Seat 2\nVerdict: CERTIFY\nSession: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nHead SHA: ${sha}`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha, implementerSession: "01a18fe9-b92b-7ae0-aa13-faea3189ac57" }, { ...context, fetchImpl: makeFetch(matchingSessionComment) }))
+      .toEqual(["Seat 2 reviewer session cannot match the implementer session."]);
+
+    const certifyPendingComment = {
+      ...validComment,
+      body: `Reviewer: Codex Seat 2\nVerdict: CERTIFY pending review\nSession: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nHead SHA: ${sha}`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(certifyPendingComment) }))
+      .toEqual(["Seat 2 review comment must declare Verdict: CERTIFY."]);
+
+    const pendingReviewBodyComment = {
+      ...validComment,
+      body: `Reviewer: Codex Seat 2\nVerdict: CERTIFY\nSession: 01a18fe9-b92b-7ae0-aa13-faea3189ac57\nHead SHA: ${sha}\nStatus: pending review`,
+    };
+    expect(await verifyCodexReview({ url: codexReviewUrl, sha }, { ...context, fetchImpl: makeFetch(pendingReviewBodyComment) }))
+      .toEqual(["Seat 2 review comment indicates review is pending, not completed."]);
   });
 
   test("referencedCommentUrls collects review and waiver URLs", () => {
