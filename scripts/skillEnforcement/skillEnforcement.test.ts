@@ -487,7 +487,7 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
   });
   const sha = "a".repeat(40);
   const session = "df7e4a61-cb22-4774-9ed8-3c191d397ed2";
-  const implementer = "01a15fef-a4fe-79e2-a9a5-d91bff56cd10";
+  const implementer = "b79c7aa3-b8f7-4025-8d9f-87ce2e6abef6";
   const reviewUrl = "https://github.com/o/r/pull/7#issuecomment-123";
   const body = () => fill({ "Seat 1 session": `local:${session}`, "Seat 1 SHA": sha }) +
     `- Implementer session: ${implementer}\n- Seat 1 review: ${reviewUrl}\n`;
@@ -625,6 +625,15 @@ describe("evaluate (PR check)", () => {
     const r = await evaluate({ body: fill(over), files: money });
     expect(r.ok).toBe(false);
     expect(r.problems.join("\n")).toContain(frag);
+  });
+  test("evaluate accepts Seat 2 effort unasserted or unasserted (chat review)", async () => {
+    const r1 = await evaluate({ body: fill({ "Seat 2 effort": "unasserted" }), files: money });
+    expect(r1.ok).toBe(true);
+    expect(r1.problems).toEqual([]);
+
+    const r2 = await evaluate({ body: fill({ "Seat 2 effort": "unasserted (chat review)" }), files: money });
+    expect(r2.ok).toBe(true);
+    expect(r2.problems).toEqual([]);
   });
   test("red run that shows no failure is rejected", async () => {
     const body = fill().replace(/FAIL convex[\s\S]*?to be 0/, "all good");
@@ -990,7 +999,7 @@ describe("check (CI entry)", () => {
 
 describe("owner-proxy waiver registry and negative controls (SCRUM-760)", () => {
   const sha = "a".repeat(40);
-  const defaultImplementerSession = "01a15fef-a4fe-79e2-a9a5-d91bff56cd10";
+  const defaultImplementerSession = "b79c7aa3-b8f7-4025-8d9f-87ce2e6abef6";
   const codexReviewUrl = "https://github.com/o/r/pull/7#issuecomment-222";
   const waiverUrl = "https://github.com/o/r/pull/7#issuecomment-111";
 

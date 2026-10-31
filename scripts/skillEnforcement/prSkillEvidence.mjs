@@ -30,7 +30,7 @@ const SEAT1_MODEL = /^(?:claude-)?opus[\s-]5[.\s-]5(?:\s*\(.*\))?$/i;
 const SEAT1_WAIVED = /^WAIVED(?:\s*\(.*\))?$/i;
 // Exactly gpt-6-sol, gpt-6.1-sol or Codex; the dot is escaped so "gpt-6x1-sol" cannot match.
 const SEAT2_MODEL = /^(?:gpt-6(?:\.1)?-sol|codex)(?:\s*\(.*\))?$/i;
-const SEAT2_EFFORT = /^(?:low|medium)(?:\s*\(.*\))?$/i;
+const SEAT2_EFFORT = /^(?:low|medium|unasserted|chat)(?:\s*\(.*\))?$/i;
 
 /**
  * A block is a placeholder only when it is the whole content: empty, a single
@@ -279,7 +279,7 @@ async function checkSeat2(t, isWaived, codexReview) {
   }
   const seat2Effort = line(t, "Seat 2 effort") ?? "";
   if (!SEAT2_EFFORT.test(seat2Effort)) {
-    problems.push('"Seat 2 effort" must be low or medium.');
+    problems.push('"Seat 2 effort" must be low or medium (or unasserted for chat review).');
   }
 
   const seat2Review = line(t, "Seat 2 review");
