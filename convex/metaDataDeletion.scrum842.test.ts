@@ -1946,6 +1946,35 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
         { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID },
       ]);
     });
+
+    test("a kept link leads on to a pending job: a callback naming one id carries the linked id and the job's other id and erases all three", async () => {
+      const t = newTest();
+      const PENDING_ONLY_ID = "17841400000033842";
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      const late = await seedLateDelivery(t, PENDING_ONLY_ID);
+      // Link business-webhook, and a pending job that holds {webhook, pending-only}: the callback names the business id.
+      await t.run(async (ctx) => {
+        await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID });
+        await ctx.db.insert("metaLogRedactionJobs", {
+          platform: "instagram",
+          metaUserId: WEBHOOK_ID,
+          otherMetaUserIds: [PENDING_ONLY_ID],
+          sourceIndex: 1,
+          cursor: null,
+          updatedAt: Date.now(),
+        });
+      });
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const job = await jobOf(t, code!);
+      expect(job?.metaUserId).toBe(BUSINESS_ID);
+      expect([...(job?.otherMetaUserIds ?? [])].sort()).toEqual([WEBHOOK_ID, PENDING_ONLY_ID].sort());
+      await runOnce(t, job!._id);
+
+      await expectCompleteMeansErased(t, code!);
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(PENDING_ONLY_ID);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
   });
 });
 
