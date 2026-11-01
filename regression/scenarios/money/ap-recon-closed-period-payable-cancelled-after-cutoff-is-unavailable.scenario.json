@@ -1,0 +1,83 @@
+{
+  "id": "ap-recon-closed-period-payable-cancelled-after-cutoff-is-unavailable",
+  "fingerprint": "c5abd14c3b047dd60ea60576ef50c5126935aa1238b3d65f6d43b794d295353d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-2",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCreditAndMisposting",
+      "input": {
+        "creditMajor": 19000,
+        "misspostedDebitMajor": 19000,
+        "dated": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "period": "earlier",
+        "acknowledgeWarnings": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.cancel",
+      "input": {
+        "cancelledAt": "afterCutoff",
+        "reversalDated": "afterCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "a CLOSED January (read from snapshots) cannot be made to look reconciled by a February cancellation"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

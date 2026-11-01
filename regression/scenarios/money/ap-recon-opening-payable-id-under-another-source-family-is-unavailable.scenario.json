@@ -1,0 +1,74 @@
+{
+  "id": "ap-recon-opening-payable-id-under-another-source-family-is-unavailable",
+  "fingerprint": "97f36ef4ba7f8bbd0a683213350e94c8197ed3f1f3874c568207975507ad8e9f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "creditMinor": 100000,
+        "kind": "SUPPLIER_PAYABLE",
+        "asOf": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApDebit",
+      "input": {
+        "debitMinor": 5000,
+        "dated": "laterPeriod",
+        "category": "SYSTEM",
+        "source": "vehicles"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.opening.test.ts",
+    "testName": "a later line that merely carries a retained opening payable's id under another source family is refused, not excused"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

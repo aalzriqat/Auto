@@ -1,0 +1,76 @@
+{
+  "id": "ap-recon-cancelled-payables-are-read-inside-the-bounded-budget",
+  "fingerprint": "1c53604382790406a32a943c789992c8bfae0267493d10296e5aa20f3edb7efe",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-2",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.insertCancelledPayables",
+      "input": {
+        "count": 3,
+        "cancelledAt": "insideEarlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd",
+        "readLimit": 3
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd",
+        "readLimit": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "withinBudget.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "overBudget.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "overBudget.unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "cancelled payables are read inside the same bounded budget and an over-budget read is refused, not summed"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}
