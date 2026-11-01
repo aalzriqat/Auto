@@ -1623,7 +1623,7 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect(await jobs(t)).toEqual([]);
     });
 
-    // ─── The kept link: written once, read by the callback, deleted with the redaction job ───
+    // ─── The kept link: written once, read by every later callback, never deleted by one (round 9) ───
     const links = (t: T) => t.run((ctx) => ctx.db.query("instagramAccountIdLinks").collect());
     const saveAccount = (t: T, orgId: Id<"organizations">, businessId: string, webhookId: string) =>
       t.mutation(internal.socialIntegrations.saveInstagramCredentials, {
@@ -1633,7 +1633,7 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
         instagramAccessToken: "synthetic-ig-token-842-new",
       });
 
-    test("a disconnect keeps one link for the account, a second disconnect adds nothing, and the callback deletes the link with the job", async () => {
+    test("a disconnect keeps one link for the account, a second disconnect adds nothing, and the callback reads the link without deleting it", async () => {
       const t = newTest();
       const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
       await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
@@ -1648,8 +1648,8 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       ]);
 
       const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
-      // The pair is handed to the job and deleted in the same transaction, before any page after the first runs.
-      expect(await links(t)).toEqual([]);
+      // The pair is handed to the job and stays: a body that names the account can arrive after the job is gone.
+      expect(await links(t)).toHaveLength(1);
       expect((await jobOf(t, code!))?.otherMetaUserIds).toEqual([WEBHOOK_ID]);
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       await expectCompleteMeansErased(t, code!);
@@ -1659,7 +1659,7 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       await expectCompleteMeansErased(t, replay!);
     });
 
-    test("nothing is kept when only one id was stored, when the same account is saved again, or when the callback names another account", async () => {
+    test("nothing is kept when only one id was stored or when the same account is saved again, and a callback for another account leaves this account's pair alone", async () => {
       const t = newTest();
       const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
       // The same account saved again (a token refresh through reconnect) loses nothing.
@@ -1673,12 +1673,13 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
       expect(await links(t)).toEqual([]);
 
-      // A pair kept for one account is neither read nor deleted by a callback for another account.
+      // A pair kept for one account is neither read nor changed by a callback for another account.
       await t.run((ctx) => ctx.db.insert("instagramAccountIdLinks", { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID }));
       await seedAccount(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
       const code = await callback(t, "/instagram-data-deletion", UNRELATED_BUSINESS_ID);
       expect((await jobOf(t, code!))?.otherMetaUserIds).toEqual([UNRELATED_WEBHOOK_ID]);
-      expect(await links(t)).toHaveLength(1);
+      // The first pair is untouched; the other account's callback kept its own pair, as every disconnect does.
+      expect((await links(t)).map(({ businessAccountId }) => businessAccountId).sort()).toEqual([BUSINESS_ID, UNRELATED_BUSINESS_ID].sort());
     });
 
     test("a reconnect that keeps the business id and replaces the webhook id keeps the old webhook id for a callback that names the new one", async () => {
@@ -1697,7 +1698,8 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       await expectCompleteMeansErased(t, code!);
       expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(NEW_WEBHOOK_ID);
       expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
-      expect(await links(t)).toEqual([]);
+      // The old pair, and the new pair the callback's own disconnect kept: both stay.
+      expect((await links(t)).map(({ webhookAccountId }) => webhookAccountId).sort()).toEqual([WEBHOOK_ID, NEW_WEBHOOK_ID].sort());
     });
 
     test("an id learned from one kept link leads to the next: three webhook ids of one business account are all erased by a callback that names the first", async () => {
@@ -1718,7 +1720,7 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
 
       await expectCompleteMeansErased(t, code!);
       expect((await logById(t, second))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
-      expect(await links(t)).toEqual([]);
+      expect(await links(t)).toHaveLength(3);
     });
 
     test("ids that would not all fit in one job after a disconnect refuse the callback and leave the kept link in place", async () => {
@@ -1775,7 +1777,8 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
 
       await expectCompleteMeansErased(t, code!);
       expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
-      expect(await links(t)).toEqual([]);
+      // The organization deletion kept the pair; the callback found no connection and changed nothing.
+      expect(await links(t)).toHaveLength(1);
     });
 
     // ─── Round 9: the same question after the first job finished, and across links AND pending jobs ───
@@ -1860,6 +1863,59 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
 
       await expectCompleteMeansErased(t, code!);
       expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
+
+    test("kept links do not grow with repeated callbacks: one pair per account, however many callbacks and disconnects", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      for (let round = 0; round < 3; round += 1) {
+        await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+        await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+        await t.finishAllScheduledFunctions(vi.runAllTimers);
+        // The dealer reconnects the same account and lets go again between callbacks.
+        await saveAccount(t, orgId, BUSINESS_ID, WEBHOOK_ID);
+        await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      }
+
+      expect((await links(t)).map(({ businessAccountId, webhookAccountId }) => ({ businessAccountId, webhookAccountId }))).toEqual([
+        { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID },
+      ]);
+    });
+
+    test("nine kept links against one id refuse the callback: nothing is read partly, deleted or written", async () => {
+      const t = newTest();
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 9; i += 1) {
+          await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: BUSINESS_ID, webhookAccountId: `1784140000009${i}842` });
+        }
+      });
+
+      const res = await post(t, "/instagram-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("An unexpected error occurred. Please try again later.");
+      expect(await links(t)).toHaveLength(9);
+      expect(await allDeletionRequests(t)).toEqual([]);
+      expect(await jobs(t)).toEqual([]);
+      expect(consoleOutput.join("\n")).not.toContain(BUSINESS_ID);
+      expect(consoleOutput.join("\n")).not.toContain("1784140000009");
+    });
+
+    test("nine copies of one kept pair refuse the callback too: a read cut at the bound is never treated as complete", async () => {
+      const t = newTest();
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 9; i += 1) {
+          await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID });
+        }
+      });
+
+      const res = await post(t, "/instagram-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+
+      expect(res.status).toBe(500);
+      expect(await allDeletionRequests(t)).toEqual([]);
+      expect(await jobs(t)).toEqual([]);
     });
   });
 });

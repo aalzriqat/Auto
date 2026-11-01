@@ -6649,9 +6649,11 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // data-deletion receipt while retained webhook rows still carry it (the webhook id is what
   // `entry[].id` holds in every stored delivery, including deliveries that arrive after the
   // dealer disconnected). The row names no organisation, token or person. A callback that
-  // names either id reads the rows, hands both ids to the redaction job and deletes the rows
-  // in the same transaction, so the pair does not outlive the erasure it was kept for. An
-  // account whose Meta callback never arrives keeps its row (disclosed on the PR).
+  // names either id reads the rows and hands both ids to the redaction job. Round 9: the row
+  // is NOT deleted when it is read. The job that erases the ids finishes, a webhook body that
+  // names the account can arrive afterwards, and a later deletion request would find no
+  // connection, no link and no job. Rows are written by Disconnect, a credential overwrite,
+  // an organisation deletion and a callback's own disconnect, once per distinct pair.
   instagramAccountIdLinks: defineTable({
     businessAccountId: v.string(),
     webhookAccountId: v.string(),

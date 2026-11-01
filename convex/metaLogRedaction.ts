@@ -11,9 +11,10 @@
 // that the caller read before the disconnect cleared it (an Instagram account has
 // a business account id and a different webhook account id; see
 // `metaLogRedactionSources`). The job row stores them all, so the walk redacts all of them.
-// A dealer's own Disconnect or a reconnect to another account clears those ids from the
-// settings before any callback arrives; `instagramAccountIdLinks` keeps the pair for that
-// case and the callback hands it to the job (`takeLinkedInstagramIds`, socialIntegrations.ts).
+// A dealer's own Disconnect, a reconnect to another account, an organisation deletion or an
+// earlier callback clears those ids from the settings before the next callback arrives;
+// `instagramAccountIdLinks` keeps the pair, for good, because a webhook body that names the account
+// can still arrive after the job that erased it has finished (`idsKnownFor` reads it back).
 //
 // Overlapping callbacks for one user: once a first callback has disconnected the account,
 // a second one (Meta's retry, a deauthorize followed by a deletion request, a user asking
@@ -21,7 +22,7 @@
 // holding only the id it named and complete its receipt while the first job, still pending,
 // holds the other id and the stored webhook bodies still show it. So a starting job
 // inherits the ids of every pending job of its platform that shares an id with it
-// (`idsOfPendingJobsLinkedTo`), and walks from the start with the union: its receipt is true
+// (`idsKnownFor`, which follows pending jobs and kept links together), and walks from the start with the union: its receipt is true
 // on its own, whatever happens to the earlier job. Each job still completes only its own
 // receipt. An earlier job does not learn a later job's new ids: its receipt answers for the
 // ids captured by its own callback. If the union would exceed MAX_REDACTED_IDS, or more than
@@ -151,18 +152,43 @@ function distinctIds(primary: string, others: readonly string[] | undefined, lim
 }
 
 /**
- * The ids of every pending job of this platform that holds any of `ids`, and of every
- * pending job linked to those through a shared id (a fixpoint: a job reached through a
- * second job's id is still the same user). Reads one platform's index range, at most
- * META_LOG_REDACTION_MAX_PENDING_JOBS + 1 rows; a concurrent callback that inserts a job in
- * that range makes this transaction retry (https://docs.convex.dev/database/advanced/occ),
- * so two overlapping callbacks cannot both miss each other's job.
+ * The ids of an Instagram account that `instagramAccountIdLinks` keeps against `id`: both of the
+ * account's ids are kept as one row when the dealer lets go (Disconnect, a reconnect to another
+ * account, an organisation deletion) or a callback disconnects it, and the row stays, because a
+ * webhook body that names the account can still arrive after the job that erased it finished.
+ * More than MAX_REDACTED_IDS rows against one id cannot all be read, and could not all be carried by
+ * one job either, so the callback refuses instead of dropping one.
  */
-async function idsOfPendingJobsLinkedTo(
-  ctx: MutationCtx,
-  platform: MetaPlatform,
-  ids: readonly string[],
-): Promise<string[]> {
+async function idsLinkedTo(ctx: MutationCtx, id: string): Promise<string[]> {
+  const rows = [
+    ...(await ctx.db
+      .query("instagramAccountIdLinks")
+      .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", id))
+      .take(MAX_REDACTED_IDS + 1)),
+    ...(await ctx.db
+      .query("instagramAccountIdLinks")
+      .withIndex("by_webhook_account_id", (q) => q.eq("webhookAccountId", id))
+      .take(MAX_REDACTED_IDS + 1)),
+  ];
+  if (rows.length > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
+  return rows.flatMap((row) => [row.businessAccountId, row.webhookAccountId]);
+}
+
+/**
+ * Every id this user is known by, beyond `ids`: ONE fixpoint over the two places an id can be
+ * remembered, so an id learned in either leads on through the other.
+ *  - every pending job of this platform that holds a known id (a job reached through a second job's
+ *    id is still the same user), and
+ *  - for Instagram, every link kept against a known id (`instagramAccountIdLinks`).
+ * Two separate passes missed an id that is reachable only by going job -> link (SCRUM-842 round 9).
+ * Reads one platform's index range, at most META_LOG_REDACTION_MAX_PENDING_JOBS + 1 rows, and the
+ * link ranges of at most MAX_REDACTED_IDS ids; a concurrent callback that inserts a job, or a
+ * Disconnect that adds a link, in a range read here makes this transaction retry
+ * (https://docs.convex.dev/database/advanced/occ), so two overlapping callbacks cannot both miss
+ * each other. The set is checked against MAX_REDACTED_IDS as it grows, so a long chain never
+ * makes the callback read more than the bound.
+ */
+async function idsKnownFor(ctx: MutationCtx, platform: MetaPlatform, ids: readonly string[]): Promise<string[]> {
   const pending = await ctx.db
     .query("metaLogRedactionJobs")
     .withIndex("by_platform", (q) => q.eq("platform", platform))
@@ -170,6 +196,7 @@ async function idsOfPendingJobsLinkedTo(
   if (pending.length > META_LOG_REDACTION_MAX_PENDING_JOBS) throw new ConvexError(REDACTION_REFUSED);
   const known = new Set(ids);
   const unlinked = pending.map((job) => distinctIds(job.metaUserId, job.otherMetaUserIds, Number.POSITIVE_INFINITY));
+  const linksRead = new Set<string>();
   let grew = true;
   while (grew) {
     grew = false;
@@ -179,10 +206,21 @@ async function idsOfPendingJobsLinkedTo(
       unlinked.splice(i, 1);
       grew = true;
     }
+    if (known.size > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
+    if (platform !== "instagram") continue;
+    for (const id of [...known]) {
+      if (linksRead.has(id)) continue;
+      linksRead.add(id);
+      for (const linkedId of await idsLinkedTo(ctx, id)) {
+        if (known.has(linkedId)) continue;
+        known.add(linkedId);
+        grew = true;
+      }
+      if (known.size > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
+    }
   }
   return [...known].filter((id) => !ids.includes(id));
 }
-
 type RedactedFields = Partial<Pick<Doc<"webhookLogs">, (typeof META_LOG_REDACTED_FIELDS)[number]>>;
 
 function redactFields(row: Doc<"webhookLogs">, metaUserIds: readonly string[], replacement: string): RedactedFields {
@@ -303,7 +341,7 @@ export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionSta
   // does: this job inherits its ids, so its receipt is complete only when EVERY id this
   // user is known by is erased, not only the one this callback named.
   const captured = distinctIds(args.metaUserId, args.otherMetaUserIds, Number.POSITIVE_INFINITY);
-  const inherited = await idsOfPendingJobsLinkedTo(ctx, args.platform, captured);
+  const inherited = await idsKnownFor(ctx, args.platform, captured);
   const metaUserIds = distinctIds(args.metaUserId, [...captured.slice(1), ...inherited], Number.POSITIVE_INFINITY);
   // Dropping an id would let the receipt read "complete" with that id still stored.
   if (metaUserIds.length > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
