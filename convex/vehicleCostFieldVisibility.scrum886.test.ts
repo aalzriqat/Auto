@@ -51,14 +51,18 @@ const VEHICLE_COST_KEYS = ["purchasePrice", "landedCostTotal", "minimumProfit", 
 const SALE_COST_KEYS = ["consignedSupplierEntitlementMinor", "consignedMarginMinor"] as const;
 const VIN = "VIN886SENTINEL01";
 
-type RoleName = "SALES" | "RECEPTION" | "ACCOUNTANT" | "EDITOR" | "MANAGER" | "OWNER";
-const WITHOUT_COST: RoleName[] = ["SALES", "RECEPTION", "ACCOUNTANT", "EDITOR"];
+type RoleName = "SALES" | "RECEPTION" | "ACCOUNTANT" | "EDITOR" | "CUSTOM" | "MANAGER" | "OWNER";
+const WITHOUT_COST: RoleName[] = ["SALES", "RECEPTION", "ACCOUNTANT", "EDITOR", "CUSTOM"];
 const WITH_COST: RoleName[] = ["MANAGER", "OWNER"];
 
 function permissionsFor(role: RoleName): string[] {
   if (role === "OWNER") return [...ALL_PERMISSIONS];
   // Not a shipped template: the narrowest role that can open the approval queue without holding cost.
   if (role === "EDITOR") return ["view:vehicles", "edit:vehicles"];
+  // A custom role an owner could build: every reader a salesperson uses, no cost permission.
+  if (role === "CUSTOM") {
+    return ["view:vehicles", "view:sales", "view:customers", "view:leads", "view:commissions", "view:finance_applications"];
+  }
   const template = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === role);
   if (!template) throw new Error(`No default role template named ${role}`);
   return [...template.permissions];
@@ -454,5 +458,258 @@ describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost",
     expect(restricted).toEqual({ _id: "v1", make: "Toyota" });
     const allowed = projectVehicleForRole(stored, { permissions: ["view:cost_price"] } as Doc<"roles">);
     expect(allowed).toBe(stored);
+  });
+});
+
+// ─── Round 2 (R2-B1, R2-B2): a withheld cost must not be derivable from what is returned ───────────
+//
+// Invariant: a caller without view:cost_price (and not a system owner) cannot read, or compute from
+// returned fields, a vehicle's acquisition cost or a consigned supplier's entitlement.
+//
+// The sentinel sweep above proves a stored number is absent. It cannot prove that two returned numbers
+// do not subtract to a withheld one, because its fixture stored distinct unrelated sentinels. These
+// fixtures are CONSISTENT, the way sale completion writes them:
+//   consigned, THROUGH_DEALERSHIP, financed (plan v3):  K = 20,000 JOD, E = 15,432.100 JOD, contra 0
+//       financedNetRevenue = { minor: K - E - contra, considerationMinor: K }, payable.amountDue = E
+//   dealer-owned financed:  K = 14,000 JOD, cost D = 9,876.500 JOD, contra 0
+//       financedNetRevenue = { minor: K - contra, considerationMinor: K }, commissionBase = { G, C }
+// Amounts are minor units (fils, 1 JOD = 1000) in the sale row and JOD in the vehicle and payable rows.
+const REAL = {
+  consignedK: 20_000_000,
+  consignedE: 15_432_100,
+  ownedK: 14_000_000,
+  ownedD: 9_876_500,
+  ownedG: 14_000_000,
+  ownedC: 1_000_000,
+} as const;
+const CONSIGNED_VIN = "VIN886CONSIGNED01";
+const OWNED_VIN = "VIN886OWNEDCAR001";
+
+async function seedRealistic() {
+  const s = await seed();
+  const extra = await s.t.run(async (ctx) => {
+    const { orgId, customerId } = s;
+    const salespersonId = s.members.SALES.userId;
+    const now = Date.now();
+    const consignedVehicleId = await ctx.db.insert("vehicles", {
+      orgId, vin: CONSIGNED_VIN, make: "Kia", model: "Sportage", year: 2023, mileage: 5, color: "Grey",
+      fuelType: "Gas", transmission: "Auto", sellingPrice: 20_000, status: "SOLD",
+      sourceType: "SOURCED", sourcedFromName: "Zarqa Consignor", sourceCost: REAL.consignedE / 1000,
+    });
+    const ownedVehicleId = await ctx.db.insert("vehicles", {
+      orgId, vin: OWNED_VIN, make: "Honda", model: "Civic", year: 2022, mileage: 9, color: "Blue",
+      fuelType: "Gas", transmission: "Auto", sellingPrice: 14_000, status: "SOLD",
+      purchasePrice: REAL.ownedD / 1000,
+    });
+    const consignedLeadId = await ctx.db.insert("leads", {
+      orgId, customerId, vehicleId: consignedVehicleId, stage: "WON", source: "Website",
+    });
+    const ownedLeadId = await ctx.db.insert("leads", {
+      orgId, customerId, vehicleId: ownedVehicleId, stage: "WON", source: "Website",
+    });
+    const consignedSaleId = await ctx.db.insert("sales", {
+      orgId, vehicleId: consignedVehicleId, customerId, salespersonId, salePrice: REAL.consignedK / 1000,
+      saleDate: now, status: "COMPLETED", financingType: "FINANCED", leadId: consignedLeadId,
+      supplierSettlementRoute: "THROUGH_DEALERSHIP",
+      consignedSupplierEntitlementMinor: REAL.consignedE,
+      consignedMarginMinor: REAL.consignedK - REAL.consignedE,
+      consignedMarginCurrency: "JOD",
+      financedNetRevenue: { minor: REAL.consignedK - REAL.consignedE, currency: "JOD", considerationMinor: REAL.consignedK },
+      commissionAmount: 250,
+    });
+    await ctx.db.insert("vehicleSupplierPayables", {
+      orgId, vehicleId: consignedVehicleId, saleId: consignedSaleId, sourcedFromName: "Zarqa Consignor",
+      amountDue: REAL.consignedE / 1000, currency: "JOD", status: "PENDING",
+      createdBy: salespersonId, createdAt: now, updatedAt: now,
+    });
+    const ownedSaleId = await ctx.db.insert("sales", {
+      orgId, vehicleId: ownedVehicleId, customerId, salespersonId, salePrice: REAL.ownedK / 1000,
+      saleDate: now - 1000, status: "COMPLETED", financingType: "FINANCED", leadId: ownedLeadId,
+      financedNetRevenue: { minor: REAL.ownedK, currency: "JOD", considerationMinor: REAL.ownedK },
+      commissionBase: { approvedMinor: REAL.ownedG, contributionMinor: REAL.ownedC, currency: "JOD" },
+      commissionAmount: 250,
+    });
+    return { consignedVehicleId, ownedVehicleId, consignedLeadId, ownedLeadId, consignedSaleId, ownedSaleId };
+  });
+  return { ...s, ...extra };
+}
+type SeededRealistic = Awaited<ReturnType<typeof seedRealistic>>;
+
+interface RealisticReader {
+  name: string;
+  call: (s: SeededRealistic, as: Actor) => Promise<unknown>;
+}
+
+const REALISTIC_READERS: RealisticReader[] = [
+  { name: "sales.get (consigned)", call: (s, as) => as.query(api.sales.get, { orgId: s.orgId, saleId: s.consignedSaleId }) },
+  { name: "sales.get (owned)", call: (s, as) => as.query(api.sales.get, { orgId: s.orgId, saleId: s.ownedSaleId }) },
+  { name: "sales.getSaleTrail (consigned)", call: (s, as) => as.query(api.sales.getSaleTrail, { orgId: s.orgId, saleId: s.consignedSaleId }) },
+  { name: "sales.getSaleTrail (owned)", call: (s, as) => as.query(api.sales.getSaleTrail, { orgId: s.orgId, saleId: s.ownedSaleId }) },
+  { name: "sales.list", call: (s, as) => as.query(api.sales.list, { orgId: s.orgId, paginationOpts: { numItems: 20, cursor: null } }) },
+  { name: "sales.listCommissions", call: (s, as) => as.query(api.sales.listCommissions, { orgId: s.orgId }) },
+  {
+    name: "sales.listCommissionsPaginated",
+    call: (s, as) => as.query(api.sales.listCommissionsPaginated, { orgId: s.orgId, paginationOpts: { numItems: 20, cursor: null } }),
+  },
+  { name: "leads.getLinkedSale (consigned)", call: (s, as) => as.query(api.leads.getLinkedSale, { orgId: s.orgId, leadId: s.consignedLeadId }) },
+  { name: "leads.getLinkedSale (owned)", call: (s, as) => as.query(api.leads.getLinkedSale, { orgId: s.orgId, leadId: s.ownedLeadId }) },
+  { name: "customers.getRelations", call: (s, as) => as.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerId }) },
+  { name: "vehicles.getRelations (consigned)", call: (s, as) => as.query(api.vehicles.getRelations, { orgId: s.orgId, vehicleId: s.consignedVehicleId }) },
+  { name: "vehicles.getRelations (owned)", call: (s, as) => as.query(api.vehicles.getRelations, { orgId: s.orgId, vehicleId: s.ownedVehicleId }) },
+];
+
+/** Every amount-like number in a response. Ids, timestamps and date fields are not amounts. */
+function amountLeaves(value: unknown, key = "", out: number[] = []): number[] {
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && !/^_|(?:At|Date|Time)$/.test(key) && Math.abs(value) < 1e11) out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) amountLeaves(item, key, out);
+  } else if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) amountLeaves(v, k, out);
+  }
+  return out;
+}
+
+/**
+ * The ways a caller could recover `targetMinor` (a withheld amount) from a response: a returned number
+ * equal to it, or two returned numbers whose difference is it. Each number is read both as minor units
+ * and as JOD (x1000), because the sale row is in fils and the vehicle and payable rows are in JOD.
+ */
+function derivations(response: unknown, targetMinor: number): string[] {
+  const near = (a: number, b: number) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+  const leaves = [...new Set(amountLeaves(response))];
+  const readings = [...new Set(leaves.flatMap((n) => [n, n * 1000]))];
+  const found: string[] = [];
+  for (const a of readings) if (near(a, targetMinor)) found.push(`value ${a}`);
+  for (const a of readings) {
+    for (const b of readings) if (a !== b && near(a - b, targetMinor)) found.push(`${a} - ${b}`);
+  }
+  return found;
+}
+
+const COST_TARGETS = [
+  { label: "consigned supplier cost E", minor: REAL.consignedE },
+  { label: "dealer-owned acquisition cost D", minor: REAL.ownedD },
+] as const;
+
+const SALE_ROW_KEYS = (response: unknown): Array<Record<string, unknown>> => {
+  const rows: Array<Record<string, unknown>> = [];
+  const walk = (value: unknown, key: string) => {
+    if (Array.isArray(value)) value.forEach((item) => walk(item, key));
+    else if (value && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if ("salePrice" in record && "saleDate" in record) rows.push(record);
+      for (const [k, v] of Object.entries(record)) walk(v, k);
+    }
+  };
+  walk(response, "");
+  return rows;
+};
+
+test("derivation harness control: it finds E from considerationMinor - financedNetRevenue.minor, and from a raw payable", () => {
+  const leaky = { sale: { considerationMinor: 0, financedNetRevenue: { minor: REAL.consignedK - REAL.consignedE, considerationMinor: REAL.consignedK } } };
+  expect(derivations(leaky, REAL.consignedE).length).toBeGreaterThan(0);
+  expect(derivations({ supplierPayable: { amountDue: REAL.consignedE / 1000 } }, REAL.consignedE).length).toBeGreaterThan(0);
+  expect(derivations({ salePrice: 20_000, taxAmount: 3 }, REAL.consignedE)).toEqual([]);
+});
+
+test("scenario sale-readers-do-not-let-cost-be-derived: SALES, RECEPTION and a custom role cannot recover a consigned supplier's entitlement or a dealer-owned car's cost from any sale reader", async () => {
+  const s = await seedRealistic();
+  const reached: string[] = [];
+  for (const role of WITHOUT_COST) {
+    for (const reader of REALISTIC_READERS) {
+      let response: unknown;
+      try {
+        response = await reader.call(s, s.members[role].as);
+      } catch (error) {
+        if ((error as { data?: { code?: string } }).data?.code === "FORBIDDEN") continue;
+        throw error;
+      }
+      reached.push(`${role}:${reader.name}`);
+      for (const target of COST_TARGETS) {
+        expect(derivations(response, target.minor), `${role} via ${reader.name} recovers ${target.label}`).toEqual([]);
+      }
+      for (const row of SALE_ROW_KEYS(response)) {
+        expect(row, `${role} via ${reader.name}`).not.toHaveProperty("financedNetRevenue");
+        if (!permissionsFor(role).includes("view:finance")) expect(row, `${role} via ${reader.name}`).not.toHaveProperty("commissionBase");
+      }
+    }
+  }
+  // The sweep must have reached each reader as SALES, and the three RECEPTION doors, or it proved nothing.
+  expect(reached).toEqual(
+    expect.arrayContaining([
+      "SALES:sales.get (consigned)", "SALES:sales.getSaleTrail (consigned)", "SALES:sales.list",
+      "SALES:sales.listCommissions", "SALES:sales.listCommissionsPaginated", "SALES:leads.getLinkedSale (consigned)",
+      "SALES:customers.getRelations", "SALES:vehicles.getRelations (consigned)",
+      "RECEPTION:customers.getRelations", "RECEPTION:leads.getLinkedSale (consigned)", "RECEPTION:vehicles.getRelations (consigned)",
+      "CUSTOM:sales.getSaleTrail (consigned)", "CUSTOM:sales.listCommissionsPaginated",
+    ])
+  );
+});
+
+test("scenario sale-trail-supplier-payable-amount-is-cost-tier: sales.getSaleTrail serves the supplier payable amount only to a caller who may read vehicle cost", async () => {
+  const s = await seedRealistic();
+  const expectAmount: Array<[RoleName, boolean]> = [
+    ["SALES", false], ["RECEPTION", false], ["ACCOUNTANT", false], ["EDITOR", false], ["CUSTOM", false],
+    ["MANAGER", true], ["OWNER", true],
+  ];
+  for (const [role, mayRead] of expectAmount) {
+    let trail: { supplierPayable: Record<string, unknown> | null } | undefined;
+    try {
+      trail = (await s.members[role].as.query(api.sales.getSaleTrail, { orgId: s.orgId, saleId: s.consignedSaleId })) as typeof trail;
+    } catch (error) {
+      if ((error as { data?: { code?: string } }).data?.code === "FORBIDDEN") continue;
+      throw error;
+    }
+    // The payable itself (who is owed, its status) is not cost; only the amount is. Absent, never zero.
+    expect(trail?.supplierPayable, `${role} payable row`).toMatchObject({ sourcedFromName: "Zarqa Consignor", status: "PENDING", currency: "JOD" });
+    if (mayRead) expect(trail?.supplierPayable?.amountDue, role).toBe(REAL.consignedE / 1000);
+    else expect(trail?.supplierPayable, `${role} amount`).not.toHaveProperty("amountDue");
+  }
+});
+
+test("scenario sale-row-revenue-and-commission-base-tiers: financedNetRevenue needs view:cost_price and commissionBase needs view:finance; cost and finance roles still receive them", async () => {
+  const s = await seedRealistic();
+  // Expected from DEFAULT_ROLE_TEMPLATES (permissionsFor), not from the projection under test.
+  const expected: Array<[RoleName, { revenue: boolean; base: boolean }]> = [
+    ["SALES", { revenue: false, base: false }],
+    ["CUSTOM", { revenue: false, base: false }],
+    ["ACCOUNTANT", { revenue: false, base: true }],
+    ["MANAGER", { revenue: true, base: false }],
+    ["OWNER", { revenue: true, base: true }],
+  ];
+  for (const [role, may] of expected) {
+    expect(permissionsFor(role).includes("view:cost_price") || role === "OWNER", `${role} cost grant`).toBe(may.revenue);
+    expect(permissionsFor(role).includes("view:finance") || role === "OWNER", `${role} finance grant`).toBe(may.base);
+    const consigned = (await s.members[role].as.query(api.sales.get, { orgId: s.orgId, saleId: s.consignedSaleId })) as Record<string, unknown>;
+    const owned = (await s.members[role].as.query(api.sales.get, { orgId: s.orgId, saleId: s.ownedSaleId })) as Record<string, unknown>;
+    if (may.revenue) {
+      expect(consigned.financedNetRevenue, `${role} consigned revenue`).toEqual({
+        minor: REAL.consignedK - REAL.consignedE, currency: "JOD", considerationMinor: REAL.consignedK,
+      });
+      expect(owned.financedNetRevenue, `${role} owned revenue`).toEqual({ minor: REAL.ownedK, currency: "JOD", considerationMinor: REAL.ownedK });
+    } else {
+      expect(consigned).not.toHaveProperty("financedNetRevenue");
+      expect(owned).not.toHaveProperty("financedNetRevenue");
+    }
+    if (may.base) expect(owned.commissionBase, `${role} base`).toEqual({ approvedMinor: REAL.ownedG, contributionMinor: REAL.ownedC, currency: "JOD" });
+    else expect(owned).not.toHaveProperty("commissionBase");
+  }
+});
+
+test("the sale projection classifies financedNetRevenue as COST and commissionBase as FINANCE", () => {
+  const stored = {
+    _id: "s1",
+    salePrice: 1,
+    financedNetRevenue: { minor: 1, currency: "JOD", considerationMinor: 2 },
+    commissionBase: { approvedMinor: 1, contributionMinor: 1, currency: "JOD" },
+  } as unknown as Doc<"sales">;
+  const role = (permissions: string[]) => ({ permissions }) as Doc<"roles">;
+  expect(projectSaleRow(stored, role(["view:sales"]))).toEqual({ _id: "s1", salePrice: 1 });
+  expect(projectSaleRow(stored, role(["view:sales", "view:finance"]))).toEqual({
+    _id: "s1", salePrice: 1, commissionBase: stored.commissionBase,
+  });
+  expect(projectSaleRow(stored, role(["view:sales", "view:cost_price"]))).toEqual({
+    _id: "s1", salePrice: 1, financedNetRevenue: stored.financedNetRevenue,
   });
 });

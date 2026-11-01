@@ -6,7 +6,7 @@ import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
+import { canReadVehicleCost, projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -613,8 +613,16 @@ export const getSaleTrail = query({
       commissionJournalEntry: commissionJournalEntry
         ? { _id: commissionJournalEntry._id, journalNumber: commissionJournalEntry.journalNumber, postedAt: commissionJournalEntry.postedAt, status: commissionJournalEntry.status }
         : null,
+      // SCRUM-886: on a THROUGH_DEALERSHIP consigned sale `amountDue` IS the supplier entitlement (the
+      // vehicle's frozen cost), so the amount is COST tier like `consignedSupplierEntitlementMinor`: absent,
+      // never zeroed, for a caller without view:cost_price. Who is owed and the status are not cost.
       supplierPayable: supplierPayable
-        ? { amountDue: supplierPayable.amountDue, currency: supplierPayable.currency, status: supplierPayable.status, sourcedFromName: supplierPayable.sourcedFromName }
+        ? {
+            ...(canReadVehicleCost(role) ? { amountDue: supplierPayable.amountDue } : {}),
+            currency: supplierPayable.currency,
+            status: supplierPayable.status,
+            sourcedFromName: supplierPayable.sourcedFromName,
+          }
         : null,
       commissionPaidByName: commissionPaidByUser?.name ?? commissionPaidByUser?.email ?? null,
     };

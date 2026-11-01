@@ -19,7 +19,9 @@
  *    applies to `supplierGapShareMinor`.
  *  - COST: a figure that reveals the vehicle's cost (SCRUM-886). Served only to a caller who may
  *    read vehicle cost (`view:cost_price` or a system owner), the same rule the vehicle readers
- *    apply to `sourceCost` and `purchasePrice`. `view:finance` alone does not grant it: no client
+ *    apply to `sourceCost` and `purchasePrice`. A field belongs here also when a value DERIVED from
+ *    served fields would disclose the cost: `financedNetRevenue` is `K - E - contra` on a consigned
+ *    financed sale and K is public. `view:finance` alone does not grant it: no client
  *    screen reads these fields from a sale row, and the server-side finance readers read the stored
  *    row directly, so withholding them breaks no legitimate reader.
  */
@@ -66,8 +68,17 @@ export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibili
   // vehicle readers withhold. They reach only a caller who may read vehicle cost.
   consignedMarginMinor: "COST",
   consignedMarginCurrency: "PUBLIC_LEGACY",
-  commissionBase: "PUBLIC_LEGACY",
-  financedNetRevenue: "PUBLIC_LEGACY",
+  // SCRUM-886 round 2 (OWASP API3:2023). `commissionBase` is the finance company's approved amount and the
+  // showroom's contribution: the same two figures the application projection already classifies FINANCE
+  // (`contributionMinor`, financeApplicationProjection.ts). No client reads it.
+  commissionBase: "FINANCE",
+  // On a consigned financed sale completion freezes `minor = K - E - contra` beside `considerationMinor = K`
+  // (saleCompletion.ts, frozenNetRevenueMinor), so `considerationMinor - minor` is the supplier cost E plus
+  // the contra revenue, which is E exactly when there is no showroom contribution. K is public (`salePrice`
+  // and `considerationMinor`), so serving this to a caller without cost permission discloses E by
+  // subtraction. COST tier: the whole object is withheld, because `minor` and `considerationMinor` both
+  // take part in the subtraction. No client reads it; server finance readers read the stored row.
+  financedNetRevenue: "COST",
   consignedSupplierEntitlementMinor: "COST",
   // New in SCRUM-766 PR-C. Never served to a caller without finance view.
   consignedSupplierConcessionMinor: "FINANCE",

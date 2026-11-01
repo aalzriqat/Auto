@@ -1,0 +1,107 @@
+{
+  "id": "sale-trail-supplier-payable-amount-is-cost-tier",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "salesonly",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "receptiononly",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "customrole",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.getSaleTrail",
+      "input": {
+        "sale": "CONSIGNED_FINANCED_SALE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierPayable.amountDue.salesonly",
+      "value": "absent"
+    },
+    {
+      "observable": "supplierPayable.amountDue.accountant",
+      "value": "absent"
+    },
+    {
+      "observable": "supplierPayable.sourcedFromName.salesonly",
+      "value": "present"
+    },
+    {
+      "observable": "supplierPayable.amountDue.manager",
+      "value": "present"
+    },
+    {
+      "observable": "supplierPayable.amountDue.owner",
+      "value": "present"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost",
+  "impl": {
+    "file": "convex/vehicleCostFieldVisibility.scrum886.test.ts",
+    "testName": "scenario sale-trail-supplier-payable-amount-is-cost-tier: sales.getSaleTrail serves the supplier payable amount only to a caller who may read vehicle cost"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-vehicle-cost",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "93d21ccb64a221da5766d004af11d332a2eb5e4b312c1731700ef7e1857fb167"
+}
