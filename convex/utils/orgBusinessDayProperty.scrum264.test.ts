@@ -24,8 +24,9 @@ import {
 const ZONES = [
   "UTC", "Asia/Amman", "America/New_York", "Asia/Tokyo", "Pacific/Kiritimati", "Pacific/Pago_Pago",
   "Pacific/Chatham", "Australia/Lord_Howe", "America/Sao_Paulo", "America/Santiago", "Europe/London",
-  "Pacific/Apia", "Pacific/Tongatapu", "Asia/Kolkata", "Asia/Kathmandu", "America/St_Johns",
+  "Pacific/Tongatapu", "Asia/Kolkata", "Asia/Kathmandu", "America/St_Johns",
   "Africa/Casablanca", "America/Caracas", "Europe/Istanbul", "Pacific/Auckland",
+  "Pacific/Apia",
 ];
 
 const dateOf = (key: number): CalendarDate => {
