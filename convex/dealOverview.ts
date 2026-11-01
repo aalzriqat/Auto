@@ -394,6 +394,22 @@ export const financedDealOverview = query({
   },
   handler: async (ctx, args): Promise<FinancedDealOverview | null> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const owner = isSystemOwnerRole(role);
+    const mayReadMoney = owner || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+
+    // dealCockpit serves money only to the owner or view:finance. When this
+    // caller has neither that authority nor view:cost_price, every overview
+    // field is withheld. Prove the application is in this tenant and return
+    // the same null/withheld payload without reading its full cockpit graph.
+    if (!mayReadMoney && !mayReadCost) {
+      const application = await ctx.db.get(args.applicationId);
+      if (!application || application.orgId !== args.orgId) return null;
+      // The nullable check preserves the cockpit's missing/foreign null
+      // contract; TEN-1 still requires the local owned-row guard.
+      await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
+      return { financialSummary: null, vehicleCostBasis: null, dealerPreparation: null };
+    }
 
     // The one authorization boundary for the money. `dealCockpit` returns
     // null for a missing application or a foreign org, and `money: null` for a
@@ -407,8 +423,6 @@ export const financedDealOverview = query({
     // TEN-1: this handler takes an orgId and a caller-supplied id, so it proves
     // ownership of the row it reads LOCALLY, whatever the cockpit just proved.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
-    const owner = isSystemOwnerRole(role);
-    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
     // Neither branch of this response is visible to this role. Return after
     // the existing authorization and ownership checks, before reading costs.
     if (cockpit.money === null && !mayReadCost) {
