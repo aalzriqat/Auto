@@ -1,0 +1,69 @@
+{
+  "id": "collections-daily-list-keeps-a-form-entered-payment-on-its-date-west-of-utc",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-30",
+        "orgTimeZone": "America.New_York"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "step3.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayKeys.scrum264.test.ts",
+    "testName": "west of UTC: a payment keyed 31 Oct is on 31 Oct, not on 30 Oct"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-keys",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "c4f510a0ec7cb1542852bdc6d02e011550c29b82e6fdf496028ca6328683e8a8"
+}

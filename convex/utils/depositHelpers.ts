@@ -986,6 +986,7 @@ export async function payOutDepositSlice(
     method: "REFUND",
     amount: amountMajor,
     paymentDate: args.occurredAt,
+    paymentDateKind: "instant",
     status: "POSTED",
     idempotencyKey: args.idempotencyKey,
     reference: `Deposit slice refund ${args.holdId}`,
@@ -1255,6 +1256,9 @@ export async function releaseHeldDeposit(
       method: "REFUND",
       amount: amountMajor,
       paymentDate: now,
+      // deposits.ts passes no date (a real moment); sale completion passes the sale's date, which is a key
+      // from one screen and an instant from another.
+      paymentDateKind: args.occurredAt === undefined ? "instant" : "saleDate",
       status: "POSTED",
       idempotencyKey: args.idempotencyKey,
       reference: `Deposit refund ${args.depositId}`,
