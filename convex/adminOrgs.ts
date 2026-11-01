@@ -11,6 +11,7 @@ import { orgResetState } from "./utils/orgResetGeneration";
 import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
+import { ensureRegistryState } from "./utils/supplierRegistry";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -399,6 +400,16 @@ function assertNoFinancialResetInProgress(org: Doc<"organizations">) {
  * ⚠️ `suspended` is `v.optional(v.boolean())` and `requireTenantAuth` tests it
  * for TRUTHINESS, so clearing it to `undefined` reactivates exactly as `false`
  * does. Any write of this field other than `suspended: true` belongs here.
+ *
+ * ⚠️ SCRUM-888 — A LIVE ORGANIZATION ALWAYS HAS ITS SUPPLIER REGISTRY ROW. The release backfill and
+ * its coverage check skip an organization with a deletion request pending
+ * (`utils/supplierRegistry.ts`), so such an organization can reach this function without a row.
+ * Returning it to service must therefore create the row in this same mutation (one Convex
+ * transaction): checking again later would leave a window in which the organization is live and
+ * unregistered. It runs AFTER the patch on purpose, so `ensureRegistryState` reads the organization
+ * with its deletion pointers already cleared; where a pointer is still set it correctly creates
+ * nothing. It is idempotent, so an organization that already has a row keeps it and its version.
+ * Because every path back to service goes through here, a future caller inherits this.
  */
 async function reactivateOrganization(
   ctx: MutationCtx,
@@ -416,6 +427,7 @@ async function reactivateOrganization(
       ? { deletionRequestedAt: undefined, deletionRequestId: undefined }
       : {}),
   });
+  await ensureRegistryState(ctx, org._id);
 }
 
 function countDeletedRows(counts: DeletedCounts) {
