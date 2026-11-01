@@ -8,7 +8,7 @@ import { ensureFinanceCompany, openDealDetails } from "../fixtures/financedDeal"
 import {
   type FinancedScenario, scenarioCustomer, quoteFinancedDeal, startApplication,
   approveCreditDecision, recordApproved, recordQuotationAmount, prepareFinancedDealForClosing,
-  closeFinancedDeal, confirmDisbursement, ensureReceivingBank,
+  closeFinancedDeal, confirmDisbursement, ensureReceivingBank, ensureSupplier,
 } from "../fixtures/dealScenarios";
 import { drainOutbox, ensureLedgerMonthOpen, expectLedgerDelta, jod, ledgerDelta, snapshotLedger } from "../ledger";
 
@@ -18,10 +18,12 @@ test.use({ actionTimeout: 25_000 });
 async function sourcedVehicle(page: Parameters<typeof recordCashSale>[0], model: string) {
   const orgId = await resolveOrgId(page) as Id<"organizations">;
   const client = await authenticatedConvexClient(page);
+  // SCRUM-868 P2: the consignment supplier travels as a master id; the server writes the name.
+  const sourcedSupplierId = await ensureSupplier(client, orgId, "QA TEST G8 Supplier");
   await client.mutation(api.vehicles.create, {
     orgId, vin: testVin(), make: "Playwright", model, year: 2024, mileage: 100, color: "Black",
     fuelType: "Petrol", transmission: "Automatic", sellingPrice: 12_500, status: "AVAILABLE",
-    sourceType: "SOURCED", sourcedFromName: "QA TEST G8 Supplier", sourceCost: 10_000,
+    sourceType: "SOURCED", sourcedSupplierId, sourceCost: 10_000,
     idempotencyKey: model,
   });
   return { orgId, client };
