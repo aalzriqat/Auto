@@ -1,0 +1,60 @@
+{
+  "id": "meta-instagram-deletion-after-the-whole-organization-was-deleted-erases-both-ids",
+  "fingerprint": "750c5ae21ca653237bcb2da30ea6efe8d6c6ceb58864a0b897fb64f0775cf425",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "super-admin",
+        "org": "A"
+      },
+      "action": "adminOrgs.hardDeleteOrg",
+      "input": {
+        "runToCompletion": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "lateDelivery.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "links.afterCallback",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a data-deletion request that arrives after a super admin deleted the whole organization still erases the account's other id"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

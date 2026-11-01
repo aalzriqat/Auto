@@ -404,7 +404,7 @@ const isStoredId = (id: string | undefined): id is string => id !== undefined &&
  * Nothing is kept when only one id was ever stored (the callback names that id itself), when
  * the pair is unchanged (the settings still hold it), or when the pair is already linked.
  */
-async function rememberInstagramIdPair(
+export async function rememberInstagramIdPair(
   ctx: MutationCtx,
   before: InstagramAccountIds,
   after: InstagramAccountIds,

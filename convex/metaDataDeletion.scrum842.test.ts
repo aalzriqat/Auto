@@ -1748,6 +1748,35 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect(consoleOutput.join("\n")).not.toContain(WEBHOOK_ID);
       expect(consoleOutput.join("\n")).not.toContain(BUSINESS_ID);
     });
+
+    // The fourth way an account's ids leave `orgSettings`: a super admin deletes the whole organization.
+    // The deletion engine removes the org's own rows, but `webhookLogs` carries no `orgId` and is retained
+    // by design (SCRUM-807), so the delivery rows that name the account outlive the organization.
+    test("a data-deletion request that arrives after a super admin deleted the whole organization still erases the account's other id", async () => {
+      const t = newTest();
+      const { orgId } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+      await t.run((ctx) => ctx.db.insert("users", { clerkId: "admin_842", email: ADMIN_EMAIL }));
+
+      const { requestId } = await t
+        .withIdentity({ subject: "admin_842" })
+        .mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Synthetic Org" });
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const request = await t.run((ctx) => ctx.db.get(requestId));
+        if (request?.status !== "RUNNING") break;
+        await t.mutation(internal.adminOrgs.runDeletionRequestBatch, { requestId });
+      }
+      expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("COMPLETED");
+      expect(await settingsOf(t, orgId)).toBeNull();
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+      expect(await links(t)).toEqual([]);
+    });
   });
 });
 
