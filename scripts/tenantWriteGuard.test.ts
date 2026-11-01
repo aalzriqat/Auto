@@ -803,12 +803,22 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // job row's own id) and resumeStalledMetaLogRedactionJobs only by its cron. They write `webhookLogs` rows of the
   // `<platform>-oauth` sources (not tenant data) and the `metaLogRedactionJobs` / `metaDataDeletionRequests` rows
   // this feature owns, none keyed by org, and take no caller-supplied row id. The unguarded-write audit stays empty.
+  // SCRUM-842 (round 5, one transaction per callback): socialIntegrations.recordMetaDataDeletion and
+  // metaLogRedaction.startMetaLogRedactionForUser (-2) are replaced by socialIntegrations.processMetaCallback (+1) -
+  // 570 -> 569 total, 173 -> 172 skippedNoOrgId, `analysed` unchanged at 382 (re-measured FROM THE ANALYSER).
+  // processMetaCallback is an internalMutation with no public entry point and no `orgId` arg, called only by the
+  // signed Meta deauthorize and data-deletion HTTP callbacks (convex/http.ts), after the signature check. It does in
+  // one transaction what three calls did: it clears the stored connection of the Meta account that the signed
+  // `user_id` names (orgSettings rows found by the Instagram business or webhook account id, or the Facebook
+  // connecting user id, on every organisation that holds that account; this is the same write that
+  // disconnectByInstagramUserId and disconnectByFacebookConnectedUserId already made without an `orgId`), inserts
+  // the receipt and starts the log redaction. It takes no caller-supplied row id. The unguarded-write audit stays empty.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 570,
+      totalMutations: 569,
       analysed: 382,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 173,
+      skippedNoOrgId: 172,
     });
   });
 });
