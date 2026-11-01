@@ -1,8 +1,9 @@
-import { createOpeningSettlementReader } from "./utils/openingSettlementBasis";
+import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
+import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
-import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
  * Phase 5 — Ledger-backed financial reports
@@ -21,11 +22,11 @@ import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
-import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
-import { AP_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
+import { AP_AFFECTING_BY_EVENT_TYPE, SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE } from "./accounting/postingRules";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -978,9 +979,10 @@ type SupplierPayablesUnavailableReason =
 /**
  * How many supplier-payable rows (all open-balance statuses and CANCELLED together) and, separately, how many
  * outbox events / drafts one reconciliation reads before it declares itself UNAVAILABLE. The whole
- * figure is needed to be true, so a truncated read is refused rather than summed. 4,000 sits well
- * under the Convex ceiling of 32,000 documents scanned per transaction (16 MiB read, 4,096 index
- * ranges; https://docs.convex.dev/production/state/limits). The limit bounds only this function's own
+ * figure is needed to be true, so a truncated read is refused rather than summed. Convex allows 32,000
+ * documents scanned and 4,096 index ranges per function (https://docs.convex.dev/production/state/limits);
+ * this figure has not been re-derived against both (the A/R reader's budget has: see
+ * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds only this function's own
  * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
  * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
  * still count toward it.
@@ -1025,15 +1027,16 @@ const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
     .map(([eventType]) => eventType)
 );
 
-async function hasPendingApAffectingPosting(
+async function hasPendingAffectingPosting(
   ctx: QueryCtx,
-  events: Array<Doc<"pendingAccountingEvents">>
+  events: Array<Doc<"pendingAccountingEvents">>,
+  affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {
   // Postings need no reads, so settle them first.
   const reversals: Array<Doc<"pendingAccountingEvents">> = [];
   for (const event of events) {
     if (event.kind === "REVERSE") reversals.push(event);
-    else if (!event.eventType || AP_AFFECTING_EVENT_TYPES.has(event.eventType)) return true;
+    else if (!event.eventType || affectingEventTypes.has(event.eventType)) return true;
   }
   // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
   // resolved is treated as AP-affecting: unknown must not read as safe.
@@ -1043,22 +1046,24 @@ async function hasPendingApAffectingPosting(
     originalIds.add(event.originalEventId);
   }
   const originals = await Promise.all([...originalIds].map((id) => ctx.db.get(id)));
-  return originals.some((original) => !original || AP_AFFECTING_EVENT_TYPES.has(original.eventType));
+  return originals.some((original) => !original || affectingEventTypes.has(original.eventType));
 }
 
 /**
  * A manual journal or opening-balance draft still awaiting approval that touches the AP account
  * will move the GL when approved, so the comparison is not final. "over" = could not read them all.
  */
-async function pendingApDraftState(
+async function pendingControlAccountDraftState(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  readLimit: number
+  readLimit: number,
+  controlAccountKey: SystemKey,
+  additionalAccounts: ReadonlySet<Id<"chartOfAccounts">> = new Set(),
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
   const [apAccount, manual, opening] = await Promise.all([
     ctx.db
       .query("chartOfAccounts")
-      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS))
+      .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", controlAccountKey))
       .unique(),
     ctx.db
       .query("manualJournalDrafts")
@@ -1069,10 +1074,10 @@ async function pendingApDraftState(
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
   ]);
-  if (!apAccount) return "NONE";
+  if (!apAccount && additionalAccounts.size === 0) return "NONE";
   if (manual.length > readLimit || opening.length > readLimit) return "OVER_LIMIT";
 
-  const touchesAp = [...manual, ...opening].some((d) => d.lines.some((line) => line.accountId === apAccount._id));
+  const touchesAp = [...manual, ...opening].some((d) => d.lines.some((line) => line.accountId === apAccount?._id || additionalAccounts.has(line.accountId)));
   return touchesAp ? "PENDING" : "NONE";
 }
 
@@ -1230,10 +1235,10 @@ export async function computeSupplierPayablesReconciliation(
   };
   const [outboxEvents, drafts] = await Promise.all([
     opts.outboxEvents ?? readOutbox(),
-    pendingApDraftState(ctx, orgId, readLimit),
+    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
   ]);
   if (!outboxEvents) return unavailable("OVER_LIMIT");
-  if (await hasPendingApAffectingPosting(ctx, outboxEvents)) return unavailable("PENDING_POSTINGS");
+  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return unavailable("PENDING_POSTINGS");
   if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
 
@@ -1322,6 +1327,566 @@ export const supplierPayablesReconciliation = query({
   },
 });
 
+/**
+ * SCRUM-869 (S2, owner ruling SCRUM-869#c23881, design c23880). The supplier RECEIVABLES subledger
+ * reconciled to GL 1240 (Receivable from Suppliers), per currency.
+ *
+ * Subledger = the signed open balance of every non-CANCELLED margin receivable
+ * (`vehicleSupplierReceivables`) plus every non-REVERSED cost recovery (`supplierCostRecoveries`):
+ * both post to 1240 (recognition debits, receipt credits). The deposit retained against commission
+ * credits 1240 too; the receivable is seeded with it (`alreadyReceivedAmount`), so it is inside
+ * `amountReceived`.
+ *
+ * Established practice (ACCA FA1 examiner's report, September 2019-August 2020, example 1):
+ * https://www.accaglobal.com/content/dam/acca/global/PDF-students/fia/examreports/FA1/FA1%20examiners%20report%20spet-19-aug20.pdf
+ * The subledger and GL control account are independent sides. This report compares per currency, and the reconciling
+ * difference is reported and investigated, never silently adjusted or posted. Rows that cannot be
+ * attributed to a supplier stay in the total and are shown separately (the Unlinked bucket) so a
+ * per-supplier view can never add up to less than the control account without saying why.
+ *
+ * Report-only (OQ-10): a difference is displayed, never posted, and period close does not read this.
+ * Nothing is stored: every figure is derived from the rows on each call.
+ */
+export type SupplierReceivablesUnavailableReason =
+  | "OVER_LIMIT"
+  | "PENDING_POSTINGS"
+  | "OPENING_SOURCE_UNAVAILABLE"
+  /** `toDate` is earlier than now: the subledger cannot be read as of a past date (see below). */
+  | "AS_OF_DATE_UNSUPPORTED"
+  /** `toDate` is NaN or infinite (`v.number()` accepts both): it is not a date, so it is not read as a cutoff. */
+  | "INVALID_AS_OF_DATE"
+  /**
+   * A control account has a posting dated after the cutoff (a sale or expense may be dated up to ten days
+   * ahead). The subledger is the rows' current state, which already includes what that posting belongs to,
+   * so the GL as of the cutoff and the subledger are not the same moment: neither "reconciled" nor a
+   * difference would be true.
+   */
+  | "ACTIVITY_AFTER_CUTOFF";
+
+const SUPPLIER_RECEIVABLES_GL_LABEL = {
+  en: "GL 1240 and declared opening supplier recovery control accounts",
+  ar: "حساب الأستاذ العام 1240 وحسابات الرقابة المعلنة لمبالغ الموردين القابلة للاسترداد الافتتاحية",
+};
+
+export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, "byCurrency"> & {
+  glBalanceLabel: { en: string; ar: string };
+  byCurrency: Record<
+    string,
+    GlVsSubledgerResult["byCurrency"][string] & {
+      /** Open margin receivables (minor units, signed). */
+      marginMinor: number;
+      /** Open supplier-borne cost recoveries (minor units, signed). */
+      recoveryMinor: number;
+      /** The part of the subledger attributable to a named supplier. */
+      linkedMinor: number;
+      /** The part with no supplier identity (blank or the "Unknown supplier" default). */
+      unlinkedMinor: number;
+    }
+  >;
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: SupplierReceivablesUnavailableReason;
+  /** True only when every source was read in full; UNAVAILABLE is never complete. */
+  complete: boolean;
+  rowsRead?: { receivables: number; recoveries: number };
+};
+
+/**
+ * How much one supplier-receivables reconciliation may read before it says UNAVAILABLE (OVER_LIMIT).
+ * Convex allows one query or mutation function (https://docs.convex.dev/production/state/limits):
+ *   - 32,000 documents scanned (documents dropped by a filter still count), and
+ *   - 4,096 index ranges, counting every `db.get` and every `db.query`.
+ * (The A/P figure's comment cites a 16,384-document ceiling; that is not Convex's limit.)
+ *
+ * Each source has its own cap, so a truncated read is refused rather than summed:
+ *   rows              margin receivables and cost recoveries, each on its own, all statuses together.
+ *                     Plain indexed queries: they spend documents, not ranges.
+ *   inFlight          each of the PENDING outbox rows, the FAILED outbox rows and the two pending-draft
+ *                     lists. A queued reversal needs one `db.get` of the event it reverses, so this also
+ *                     bounds those reads (at most two lists of originals).
+ *   gl                every document the GL read touches: periods, snapshots, and on the journal-line path
+ *                     the lines and one `db.get` per parent entry.
+ *   openingRecoveries OPENING cost recoveries, each of which re-verifies its opening draft (a scan of up
+ *                     to 100 drafts, a journal probe, up to 200 lines and a few `db.get`s).
+ * Discovery has a constant allowance (SUPPLIER_GL_DISCOVERY_LIMITS) that must still fit after reserving
+ * actual subledger counts, actual opening proofs, and the full in-flight/GL caps. It reads identities,
+ * not history: cutover journals, retained opening headers, the opening journal's lines and the chart's
+ * ASSET accounts. It never scans the organization's journal lines, so its cost does not grow with age.
+ * `supplierReceivablesReconWorstCase` includes the refusal sentinel. Opening proof allowances
+ * come from openingRecoveryBasis / requireOpeningSettlementBasis, with headroom.
+ */
+export const SUPPLIER_RECEIVABLES_RECON_LIMITS = { rows: 4000, inFlight: 400, gl: 2400, openingRecoveries: 25 } as const;
+// Includes independent declared-account verification and row verification. The request-local
+// reader shares parent drafts and journal lines; the additional journal-provenance scan is bounded.
+// Per opening row: declaration basis <=105 documents, recovery basis <=105,
+// recovery parent-reference inventory <=101. Shared parent + 201 lines are reserved once.
+const OPENING_ROW_DOCUMENT_ALLOWANCE = 320;
+const OPENING_SHARED_DOCUMENT_ALLOWANCE = 202;
+const OPENING_ROW_RANGE_ALLOWANCE = 24;
+const SUPPLIER_GL_DISCOVERY_LIMITS = { documents: 1000, ranges: 160 } as const;
+// Chart-class coverage reads the ASSET accounts once (<= 100 documents) and probes each custom one that
+// is not already compared with two one-row ranges (<= 30 accounts = 60 ranges and 60 documents).
+const SUPPLIER_CLASS_COVERAGE_LIMITS = { assetAccounts: 100, probedAccounts: 30 } as const;
+const SUPPLIER_RECON_DOCUMENT_BUDGET = 31_900;
+export const CONVEX_DOCUMENTS_SCANNED_LIMIT = 32_000;
+export const CONVEX_INDEX_RANGES_LIMIT = 4_096;
+
+function supplierReceivablesReservedReads(limits: {
+  rows: number; inFlight: number; gl: number; openingRecoveries: number;
+}): { documents: number; ranges: number } {
+  const outbox = 2 * (limits.inFlight + 1);
+  const originals = 2 * limits.inFlight; // one db.get per reversed event
+  const drafts = 2 * (limits.inFlight + 1) + 1; // manual + opening drafts, and the control account
+  const rows = 2 * (limits.rows + 1);
+  const referenceDrafts = 101;
+  const opening = limits.openingRecoveries * OPENING_ROW_DOCUMENT_ALLOWANCE + OPENING_SHARED_DOCUMENT_ALLOWANCE;
+  const openingAccounts = 1 + limits.openingRecoveries;
+  const glDocuments = limits.gl + 1 + openingAccounts;
+  // Source identity adds a 101-journal probe to the existing 101-header inventory.
+  // All further discovery queries/gets share hard document and range budgets.
+  const documents = outbox + originals + drafts + rows + 1 + referenceDrafts + opening + glDocuments + 101;
+  const ranges =
+    2 /* outbox */ + originals + 3 /* drafts */ + 4 + 3 /* statuses of both subledgers */ + 1 /* control account */ +
+    1 /* opening references */ + limits.openingRecoveries * OPENING_ROW_RANGE_ALLOWANCE +
+    2 /* periods, future-entry probe */ + 3 * openingAccounts /* snapshots, later-line probe, lines */ + limits.gl /* parent entries */ +
+    1 /* source identity journals */;
+  return { documents, ranges };
+}
+
+export function supplierReceivablesReconWorstCase(limits: {
+  rows: number; inFlight: number; gl: number; openingRecoveries: number;
+}): { documents: number; ranges: number } {
+  const reserved = supplierReceivablesReservedReads(limits);
+  return {
+    documents: Math.max(SUPPLIER_RECON_DOCUMENT_BUDGET,
+      reserved.documents + SUPPLIER_GL_DISCOVERY_LIMITS.documents) + 1,
+    ranges: reserved.ranges + SUPPLIER_GL_DISCOVERY_LIMITS.ranges,
+  };
+}
+
+/** Exhaustive over each status union, so a new status fails typecheck until it is classified. */
+const SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE = {
+  OPEN: true,
+  PARTIALLY_PAID: true,
+  PAID: true,
+  DISPUTED: true,
+  CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
+const SUPPLIER_COST_RECOVERY_STATUS_CARRIES_BALANCE = {
+  OPEN: true,
+  PARTIALLY_RECOVERED: true,
+  RECOVERED: true,
+  REVERSED: false,
+} satisfies Record<Doc<"supplierCostRecoveries">["status"], boolean>;
+const statusesCarryingBalance = <S extends string>(map: Record<S, boolean>): S[] =>
+  (Object.keys(map) as S[]).filter((status) => map[status]);
+
+const SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
+  Object.entries(SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE)
+    .filter(([, affects1240]) => affects1240)
+    .map(([eventType]) => eventType)
+);
+
+/** There is no supplier master data yet: a row is "linked" only when it carries a real supplier name. */
+export function isUnlinkedSupplierName(name: string | undefined): boolean {
+  const normalized = (name ?? "").trim().toLowerCase();
+  return normalized === "" || normalized === "unknown supplier";
+}
+
+class SupplierGlDiscoveryRefusal extends Error {
+  constructor(readonly reason: "OVER_LIMIT" | "OPENING_SOURCE_UNAVAILABLE") {
+    super(reason);
+  }
+}
+
+/** Discover the comparison from durable GL sources, never from surviving subledger/allocation rows.
+ * Coverage is independent of the opening journal and its header: the chart's custom ASSET accounts are
+ * probed for GL evidence, so an account omitted from both cannot hide a surviving balance. The read
+ * follows the chart, not the organization's journal history. Balances still come from the
+ * snapshot-aware GL reader; these reads establish account identity, not a second balance. */
+async function discoverSupplierReceivableGlAccounts(
+  ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, maxAccounts: number,
+  reservation: Parameters<typeof supplierReceivablesReservedReads>[0],
+) {
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  const refuse = () => { throw new SupplierGlDiscoveryRefusal("OPENING_SOURCE_UNAVAILABLE"); };
+  if (source.status === "UNAVAILABLE") refuse();
+  const openingProofs = Math.max(reservation.openingRecoveries,
+    source.parent?.allocations?.filter(row => row.kind === "SUPPLIER_RECOVERABLE").length ?? 0);
+  if (openingProofs >= maxAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  const reserved = supplierReceivablesReservedReads({ ...reservation, openingRecoveries: openingProofs });
+  // Missing allocations can leave more discovered controls than surviving proofs.
+  // Reserve the maximum compared-account allowance even on that corruption path.
+  const available = SUPPLIER_RECON_DOCUMENT_BUDGET - reserved.documents - (maxAccounts - 1 - openingProofs);
+  if (available < SUPPLIER_GL_DISCOVERY_LIMITS.documents) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  // Discovery reads identities (cutover journals, retained headers, the opening journal's lines, the
+  // chart's asset accounts and one-row probes), never history, so its allowance is a constant and the
+  // worst-case arithmetic below is true rather than an upper bound that borrowed ~10k more documents.
+  const documentLimit = SUPPLIER_GL_DISCOVERY_LIMITS.documents;
+  let documents = 0;
+  let ranges = 0;
+  const chargeRange = () => {
+    if (++ranges > SUPPLIER_GL_DISCOVERY_LIMITS.ranges) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  };
+  const chargeDocuments = (count: number) => {
+    documents += count;
+    if (documents > documentLimit) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  };
+  const readRows = async <T>(query: { take: (count: number) => Promise<T[]> }, maxRows?: number): Promise<T[]> => {
+    chargeRange();
+    const remaining = documentLimit - documents + 1;
+    const rows = await query.take(maxRows === undefined ? remaining : Math.min(maxRows, remaining));
+    chargeDocuments(rows.length);
+    return rows;
+  };
+  const accounts = new Map<Id<"chartOfAccounts">, Doc<"chartOfAccounts"> | null>();
+  const readAccount = async (id: Id<"chartOfAccounts">) => {
+    if (!accounts.has(id)) {
+      chargeRange();
+      const account = await ctx.db.get(id);
+      chargeDocuments(1);
+      accounts.set(id, account);
+    }
+    return accounts.get(id) ?? null;
+  };
+  const controlAccounts = new Set<Id<"chartOfAccounts">>();
+  const subledgerAccounts = new Set<Id<"chartOfAccounts">>();
+  const addControl = (id: Id<"chartOfAccounts">, effectiveDate: number) => {
+    controlAccounts.add(id);
+    if (controlAccounts.size > maxAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+    if (effectiveDate <= cutoff) subledgerAccounts.add(id);
+  };
+  const canonical = await ctx.db.query("chartOfAccounts")
+    .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).unique();
+  if (canonical) addControl(canonical._id, Number.NEGATIVE_INFINITY);
+
+  // Reversed or malformed cutover journals cannot disappear behind ABSENT, even if their rows were lost.
+  const cutovers = await readRows(ctx.db.query("journalEntries")
+    .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover")));
+  if (cutovers.some(journal => (journal.status === "POSTED" || journal.status === "REVERSED") &&
+    journal._id !== source.journal?._id)) refuse();
+
+  // Reset retains headers but deletes chart and journal authority. Prove retirement from those
+  // identities; ABSENT alone would also accept a current journal that was accidentally deleted.
+  for (const header of source.headers) {
+    if (header._id === source.parent?._id) continue;
+    if (header.journalEntryId) {
+      chargeRange();
+      const journal = await ctx.db.get(header.journalEntryId);
+      chargeDocuments(1);
+      if (journal) refuse();
+    }
+    const references = new Set([...header.lines.map(line => line.accountId),
+      ...(header.allocations ?? []).map(allocation => allocation.accountId)]);
+    // Reference-only legacy headers still participate in the recovery-id contradiction check
+    // below. They declare no journal/account authority to retire. A formerly linked header with
+    // erased account evidence cannot establish retirement.
+    if (references.size === 0 && header.journalEntryId) refuse();
+    for (const id of references) {
+      if (await readAccount(id)) refuse();
+      // Account/journal metadata loss is not proof that reset removed the GL. Probe both
+      // consumers' evidence, including closed-period snapshots and zero-net orphan rows.
+      const lines = await readRows(ctx.db.query("journalLines")
+        .withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", id)), 1);
+      const snapshots = await readRows(ctx.db.query("accountBalanceSnapshots")
+        .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", orgId).eq("accountId", id)), 1);
+      if (lines.length > 0 || snapshots.length > 0) refuse();
+    }
+  }
+
+  if (source.status === "AVAILABLE") {
+    const lines = await readRows(ctx.db.query("journalLines")
+      .withIndex("by_journal_entry", q => q.eq("journalEntryId", source.journal._id)));
+    if (lines.length === 0 || lines.length !== source.parent.lines.length) refuse();
+    // A surviving counterpart is not proof of a complete journal. Prove the
+    // retained header's exact account/amount multiset before discovering controls.
+    // Amounts still come exclusively from the snapshot-aware balance consumer.
+    const remainingLines = [...source.parent.lines];
+    let journalDebit = 0;
+    let journalCredit = 0;
+    for (const line of lines) {
+      journalDebit += line.debitMinor;
+      journalCredit += line.creditMinor;
+      const match = remainingLines.findIndex(expected => expected.accountId === line.accountId &&
+        expected.debitMinor === line.debitMinor && expected.creditMinor === line.creditMinor);
+      if (match < 0 || line.currency !== source.journal.currency ||
+        line.accountingDate !== source.journal.accountingDate) refuse();
+      remainingLines.splice(match, 1);
+      const account = await readAccount(line.accountId);
+      if (line.orgId !== orgId || !account || account.orgId !== orgId) refuse();
+      // This classifies posted identities, not permission to post: recognize custom partner
+      // equity as outside A/R even if its allocation metadata is lost. Supplier controls still
+      // come from the actual asset-account lines, independently of all allocations.
+      const policy = account ? openingPolicyForAccount(account, true) : undefined;
+      if (!policy || policy === "UNSUPPORTED") refuse();
+      if (account && policy === "SUPPLIER_RECOVERABLE") {
+        addControl(account._id, source.journal.accountingDate);
+      }
+    }
+    // A posted journal balances by construction. A retained set that does not has lost a leg,
+    // whatever the header says; no snapshot is needed to see it.
+    if (!Number.isSafeInteger(journalDebit) || !Number.isSafeInteger(journalCredit) || journalDebit !== journalCredit) refuse();
+  }
+
+  // Independent account-class coverage (SCRUM-869 r5 H2, M1). Everything above starts from records an
+  // actor can alter together: the posted opening journal and its retained header can be edited to agree
+  // with each other, and the recovery-family journals only name accounts through their own lines.
+  // What cannot be edited away with them is the chart itself: the product classifies every custom
+  // ASSET account as a supplier-recoverable account (`openingPolicyForAccount`, the one authority the
+  // opening writer uses) and the GL consumer still holds that account's lines and closed-period
+  // snapshots. So read the chart's ASSET accounts through `by_org_type`, and refuse when a
+  // supplier-recoverable-class account carries any GL evidence yet is not among the compared accounts.
+  // The cost follows the chart (a bounded handful of accounts, two one-row probes per custom asset
+  // account), never the organization's journal history: it replaces a scan of every journal line that
+  // went OVER_LIMIT permanently at ~26.7k lines and could pass 16 MiB of descriptions first.
+  // Stated limit: this class check does not read the recovery-family journals themselves, so a family
+  // leg moved onto a non-ASSET custom account is not caught here (it still shows as a displayed
+  // difference when the subledger disagrees). Reading the families again would need an indexed family
+  // tag on journalLines, a schema decision recorded in docs/architecture/scrum869-s2-discovery-remediation.md.
+  const assets = await readRows(ctx.db.query("chartOfAccounts")
+    .withIndex("by_org_type", q => q.eq("orgId", orgId).eq("type", "ASSET")), SUPPLIER_CLASS_COVERAGE_LIMITS.assetAccounts + 1);
+  if (assets.length > SUPPLIER_CLASS_COVERAGE_LIMITS.assetAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+  let probed = 0;
+  for (const account of assets) {
+    accounts.set(account._id, account);
+    if (account.orgId !== orgId) refuse();
+    if (controlAccounts.has(account._id)) continue;
+    if (openingPolicyForAccount(account, false) !== "SUPPLIER_RECOVERABLE") continue;
+    if (++probed > SUPPLIER_CLASS_COVERAGE_LIMITS.probedAccounts) throw new SupplierGlDiscoveryRefusal("OVER_LIMIT");
+    // Existence of either GL storage path, not a net total: zero-net residue is evidence too.
+    const lines = await readRows(ctx.db.query("journalLines")
+      .withIndex("by_org_account", q => q.eq("orgId", orgId).eq("accountId", account._id)), 1);
+    const snapshots = await readRows(ctx.db.query("accountBalanceSnapshots")
+      .withIndex("by_org_account_currency_period_shard", q => q.eq("orgId", orgId).eq("accountId", account._id)), 1);
+    if (lines.length > 0 || snapshots.length > 0) refuse();
+  }
+  return { controlAccounts, subledgerAccounts, source };
+}
+
+export async function computeSupplierReceivablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  opts: { readLimit?: number } = {}
+): Promise<SupplierReceivablesReconciliationResult> {
+  // `opts.readLimit` (tests) applies one figure to every source; the default is the derived budget.
+  const limits = opts.readLimit === undefined
+    ? SUPPLIER_RECEIVABLES_RECON_LIMITS
+    : { ...SUPPLIER_RECEIVABLES_RECON_LIMITS, rows: opts.readLimit, inFlight: opts.readLimit, gl: opts.readLimit };
+  const unavailable = (unavailableReason: SupplierReceivablesUnavailableReason): SupplierReceivablesReconciliationResult => ({
+    glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    status: "UNAVAILABLE",
+    unavailableReason,
+    complete: false,
+  });
+
+  // 0. One cutoff for both sides (SCRUM-858 F1). The GL can be read as of any date, but the subledger
+  // only as it is now: a margin receivable keeps a running `amountReceived` with no receipt dates, and
+  // the dates of the other facts are not the GL's accounting dates. Rebuilding it at a past date would
+  // be a guess, and comparing a past GL with today's rows can hide a real error behind a row created
+  // after the cutoff, or invent a difference from one. So a past `toDate` is refused, not approximated.
+  // `v.number()` accepts NaN and the infinities, and `NaN < now` is false: without this check NaN would
+  // pass the guard below and be used as a cutoff. A non-finite value is not a date, so it is refused.
+  if (toDate !== undefined && !Number.isFinite(toDate)) return unavailable("INVALID_AS_OF_DATE");
+  const now = Date.now();
+  if (toDate !== undefined && toDate < now) return unavailable("AS_OF_DATE_UNSUPPORTED");
+
+  // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
+  const outbox = await Promise.all(
+      (["PENDING", "FAILED"] as const).map((status) =>
+        ctx.db
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+          .take(limits.inFlight + 1)
+      )
+  );
+  const [queued, failed] = outbox;
+  if (queued.length > limits.inFlight || failed.length > limits.inFlight) return unavailable("OVER_LIMIT");
+  if (await hasPendingAffectingPosting(ctx, [...queued, ...failed], SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES)) {
+    return unavailable("PENDING_POSTINGS");
+  }
+
+  // 2. Both subledgers under one shared bound. Status is a label, not the balance.
+  const receivables: Array<Doc<"vehicleSupplierReceivables">> = [];
+  for (const status of statusesCarryingBalance(SUPPLIER_RECEIVABLE_STATUS_CARRIES_BALANCE)) {
+    const budget = limits.rows - receivables.length;
+    const batch = await ctx.db
+      .query("vehicleSupplierReceivables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailable("OVER_LIMIT");
+    receivables.push(...batch);
+  }
+  const recoveries: Array<Doc<"supplierCostRecoveries">> = [];
+  for (const status of statusesCarryingBalance(SUPPLIER_COST_RECOVERY_STATUS_CARRIES_BALANCE)) {
+    const budget = limits.rows - recoveries.length;
+    const batch = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) return unavailable("OVER_LIMIT");
+    recoveries.push(...batch);
+  }
+  // Each OPENING recovery re-verifies its opening draft with reads of its own (see the limits above), so
+  // their number is capped before the first one is verified, not discovered by running into Convex's limit.
+  if (recoveries.filter((row) => row.origin === "OPENING").length > limits.openingRecoveries) return unavailable("OVER_LIMIT");
+
+  // Signed open balance in minor units, NOT clamped: an over-received row is a real negative that
+  // the GL carries. The subledger side is the current state of the rows and `toDate` is not in the
+  // past (step 0), so both sides are read at the same moment.
+  const margin = new Map<string, number>();
+  const recovery = new Map<string, number>();
+  const linked = new Map<string, number>();
+  const unlinked = new Map<string, number>();
+  const add = (map: Map<string, number>, currency: string, minor: number) =>
+    map.set(currency, (map.get(currency) ?? 0) + minor);
+  // The accounts whose later-dated postings would make the comparison mixed: 1240 and declared opening
+  // accounts in force by the cutoff, including those whose recovery row was lost. An opening dated after the cutoff is on
+  // neither side, so its own account may hold lines dated after the cutoff without any mismatch.
+  const cutoff = toDate ?? now;
+  let discovered;
+  try {
+    discovered = await discoverSupplierReceivableGlAccounts(ctx, orgId, cutoff, 1 + limits.openingRecoveries, {
+      ...limits, rows: Math.max(receivables.length, recoveries.length),
+      openingRecoveries: recoveries.filter(row => row.origin === "OPENING").length,
+    });
+  } catch (error) {
+    if (error instanceof SupplierGlDiscoveryRefusal) return unavailable(error.reason);
+    throw error;
+  }
+  const { controlAccounts, subledgerAccounts, source } = discovered;
+  const declarations = (source.parent?.allocations ?? [])
+    .filter(allocation => allocation.kind === "SUPPLIER_RECOVERABLE")
+    .map(allocation => ({ draftId: source.parent!._id, rowKey: allocation.rowKey }));
+  if (declarations.length > limits.openingRecoveries) return unavailable("OVER_LIMIT");
+  const openingReader = createOpeningSettlementReader(ctx, orgId);
+  const openingReferences = new Set(source.headers.flatMap((draft) =>
+    (draft.allocationResults ?? []).flatMap((result) => "recoveryId" in result ? [result.recoveryId] : []),
+  ));
+  for (const ref of declarations) {
+    try {
+      const basis = await requireOpeningSettlementBasis(ctx, orgId, ref, "SUPPLIER_RECOVERABLE", openingReader);
+      if (!controlAccounts.has(basis.accountId)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+    } catch {
+      return unavailable("OPENING_SOURCE_UNAVAILABLE");
+    }
+  }
+  const drafts = await pendingControlAccountDraftState(ctx, orgId, limits.inFlight, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, controlAccounts);
+  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+
+  for (const row of receivables) {
+    const openMinor = toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency);
+    add(margin, row.currency, openMinor);
+    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+  }
+  for (const row of recoveries) {
+    if (row.origin !== "OPENING") {
+      // A native row is recognised by the same transaction as its expense posting, so it needs no basis.
+      // It must still not be claimed by a POSTED opening draft (the integrity check A/P applies to every
+      // payable): one read of the drafts serves all native rows.
+      if (openingReferences.has(row._id)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+    }
+    if (row.origin === "OPENING") {
+      // An opening recovery needs its basis verified (a bounded draft scan each).
+      let basis;
+      try {
+        basis = await openingRecoveryBasis(ctx, orgId, row, openingReader);
+      } catch {
+        return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      }
+      if (!basis) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      if (!controlAccounts.has(basis.accountId)) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+      if (basis.asOfDate > cutoff) continue;
+      subledgerAccounts.add(basis.accountId);
+    }
+    const openMinor = row.amountDueMinor - row.amountRecoveredMinor;
+    add(recovery, row.currency, openMinor);
+    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+  }
+
+  const subByCurrency = new Map<string, number>();
+  for (const map of [margin, recovery]) {
+    for (const [currency, minor] of map) subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+  }
+  for (const [currency, minor] of subByCurrency) {
+    if (minor === 0) subByCurrency.delete(currency);
+  }
+
+  // 1240 is debit-normal: its balance is debits minus credits.
+  const glByCurrency = new Map<string, number>();
+  // Only the control accounts are read, through account-first indexes, and every document read is
+  // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
+  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
+  if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
+  // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
+  // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
+  // error, or a difference that is only timing. The subledger cannot be rebuilt at the cutoff (a receipt
+  // carries no date), so this is refused rather than approximated.
+  if (gl.accountsWithLaterLines.some((accountId) => subledgerAccounts.has(accountId))) {
+    return unavailable("ACTIVITY_AFTER_CUTOFF");
+  }
+  for (const balance of gl.balances) {
+    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.debitMinor - balance.creditMinor);
+  }
+
+  const combined = combineGlAndSubledger(glByCurrency, subByCurrency);
+  return {
+    ...combined,
+    glBalanceLabel: SUPPLIER_RECEIVABLES_GL_LABEL,
+    byCurrency: Object.fromEntries(
+      combined.currencies.map((currency) => [
+        currency,
+        {
+          ...combined.byCurrency[currency],
+          marginMinor: margin.get(currency) ?? 0,
+          recoveryMinor: recovery.get(currency) ?? 0,
+          linkedMinor: linked.get(currency) ?? 0,
+          unlinkedMinor: unlinked.get(currency) ?? 0,
+        },
+      ])
+    ),
+    status: "AVAILABLE",
+    complete: true,
+    rowsRead: { receivables: receivables.length, recoveries: recoveries.length },
+  };
+}
+
+export const supplierReceivablesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: v.object({
+    glBalanceLabel: v.object({ en: v.string(), ar: v.string() }),
+    currencies: v.array(v.string()),
+    byCurrency: v.record(v.string(), v.object({
+      glBalanceMinor: v.number(), subledgerBalanceMinor: v.number(), discrepancyMinor: v.number(), isReconciled: v.boolean(),
+      marginMinor: v.number(), recoveryMinor: v.number(), linkedMinor: v.number(), unlinkedMinor: v.number(),
+    })),
+    isReconciled: v.boolean(),
+    status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+    unavailableReason: v.optional(v.union(
+      v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"),
+      v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("INVALID_AS_OF_DATE"), v.literal("ACTIVITY_AFTER_CUTOFF"),
+    )),
+    complete: v.boolean(),
+    rowsRead: v.optional(v.object({ receivables: v.number(), recoveries: v.number() })),
+  }),
+  handler: async (ctx, args) => {
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      // Deliberate application refusals have structured codes. Conversion errors can also be
+      // ConvexErrors, but their free-text payloads contain internal data and must not escape.
+      if (error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data) throw error;
+      console.error("Supplier receivables reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
 /**
  * What the dealership still owes on a reservation deposit, row by row.
  *
