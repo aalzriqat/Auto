@@ -161,6 +161,102 @@ describe("SCRUM-889 - a journal line's parent entry must belong to the same orga
   });
 });
 
+/**
+ * The A/P reader's GL side (getCumulativeBalancesAsOf) walks the organization's own entries and sums
+ * every child line without looking at the line's own organization, and it never visits an
+ * organization-A line whose parent is missing or owned by another organization. Each of those states
+ * used to read as AVAILABLE, and with an offsetting line as reconciled. They now refuse.
+ */
+describe("SCRUM-889 - the A/P GL read refuses an inconsistent journal link (public supplierPayablesReconciliation)", () => {
+  const apAccountId = async (s: Seed) =>
+    (await s.t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
+    ))!._id;
+  /** A line on the A/P account owned by `lineOrg`, pointing at `entryId` (A/P is a liability: a credit raises the GL balance). */
+  const insertApLine = async (s: Seed, entryId: Id<"journalEntries">, lineOrg: Id<"organizations">, side: "credit" | "debit" = "credit") => {
+    const accountId = await apAccountId(s);
+    return s.t.run((ctx) =>
+      ctx.db.insert("journalLines", {
+        orgId: lineOrg, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: side === "debit" ? AMOUNT_MINOR : 0,
+        creditMinor: side === "credit" ? AMOUNT_MINOR : 0, currency: "JOD", scale: 3, accountingDate: Date.now() - 1000,
+      })
+    );
+  };
+  const expectRefused = (r: Awaited<ReturnType<typeof apRecon>>) => {
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("INCONSISTENT_REFERENCE");
+    expect(r.isReconciled).toBe(false);
+    expect(r.currencies).toEqual([]);
+    expect(r.byCurrency).toEqual({});
+  };
+
+  test("CONTROL: a same-org POSTED parent with an org-A line counts toward the A/P GL balance", async () => {
+    const s = await seed("apctl");
+    await insertApLine(s, await insertEntry(s, s.orgId), s.orgId);
+    const r = await apRecon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
+  });
+
+  test.each(["DRAFT", "VALIDATED", "REVERSED"] as const)(
+    "CONTROL: a same-org %s parent is skipped or counted by status, never refused",
+    async (status) => {
+      const s = await seed(`apstatus${status}`);
+      const entryId = await s.t.run((ctx) =>
+        ctx.db.insert("journalEntries", {
+          orgId: s.orgId, journalNumber: "RAW", accountingDate: Date.now() - 1000, periodId: s.periodId, sourceType: "raw",
+          sourceId: "raw", category: "SYSTEM", memo: "raw", status, postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+        })
+      );
+      await insertApLine(s, entryId, s.orgId);
+      const r = await apRecon(s);
+      expect(r.status).toBe("AVAILABLE");
+      if (status === "REVERSED") {
+        // A REVERSED entry's original lines remain postings (offset by a separate reversal).
+        expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
+      } else {
+        // DRAFT / VALIDATED parents are not on the books: the line is skipped and the ledger is empty.
+        expect(r.isReconciled).toBe(true);
+        expect(r.currencies).toEqual([]);
+      }
+    }
+  );
+
+  test("B1: an org-B line under an org-A POSTED entry on the A/P account is UNAVAILABLE, not org A's GL balance", async () => {
+    const s = await seed("apb1");
+    await insertApLine(s, await insertEntry(s, s.orgId), s.otherOrgId);
+    expectRefused(await apRecon(s));
+  });
+
+  test("B1 offset: a foreign line plus an offsetting org-A line must not read as reconciled", async () => {
+    const s = await seed("apb1offset");
+    const entryId = await insertEntry(s, s.orgId);
+    await insertApLine(s, entryId, s.otherOrgId, "credit");
+    await insertApLine(s, entryId, s.orgId, "debit");
+    expectRefused(await apRecon(s));
+  });
+
+  test("B1-reverse: an org-A A/P line whose parent entry belongs to org B is UNAVAILABLE, not silently omitted", async () => {
+    const s = await seed("apb1rev");
+    await insertApLine(s, await insertEntry(s, s.otherOrgId), s.orgId);
+    expectRefused(await apRecon(s));
+  });
+
+  test("B1-reverse: a foreign parent in DRAFT is UNAVAILABLE too, its status cannot decide whether the line is skipped", async () => {
+    const s = await seed("apb1revdraft");
+    await insertApLine(s, await insertEntry(s, s.otherOrgId, "DRAFT"), s.orgId);
+    expectRefused(await apRecon(s));
+  });
+
+  test("B2: an org-A A/P line whose parent entry no longer exists is UNAVAILABLE, never silently dropped", async () => {
+    const s = await seed("apb2");
+    const entryId = await insertEntry(s, s.orgId);
+    await insertApLine(s, entryId, s.orgId);
+    await s.t.run((ctx) => ctx.db.delete(entryId));
+    expectRefused(await apRecon(s));
+  });
+});
+
 describe("SCRUM-889 - a queued reversal's original event must belong to the same organization", () => {
   const insertOriginal = (s: Seed, owner: Id<"organizations">, eventType: string) =>
     s.t.run((ctx) =>
