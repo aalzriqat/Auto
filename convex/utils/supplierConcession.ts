@@ -27,7 +27,10 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { AppErrorCode, throwAppError } from "./errors";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
+import { isServerDerivedPlanVersion, planVersionOf } from "./financedSalePostingPlan";
+import { isManualFinanceApplication } from "./manualFinancePayer";
 import { denominationOf, toMinorUnits } from "./money";
 import { SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE, SUPPLIER_ERROR, throwSupplierError } from "./supplierRegistry";
 import { isConsignedAgentSale } from "./vehicleOwnership";
@@ -55,6 +58,10 @@ export const SUPPLIER_CONCESSION_REFUSALS = {
     "The shortfall on this deal could not be worked out from its recorded quotation, so a supplier concession cannot be recorded against it.",
   HELD_BY_DEAL:
     "This vehicle's supplier terms are held by a supplier concession on an open deal. Reopen that deal's approved amount to release the concession before changing the supplier, the cost or the vehicle type.",
+  // Coded (AppErrorCode.SUPPLIER_CONCESSION_PLAN_REFUSED); the English text must equal
+  // ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED in lib/i18n/domains/sales.ts.
+  NOT_CURRENT_PLAN:
+    "A supplier concession can be recorded only on a deal that is financed through a finance company and closes on the current sale plan. This deal does not, so the shortfall cannot be placed on the supplier.",
 } as const;
 
 /**
@@ -116,6 +123,51 @@ export function financedConsignedNetMinor(args: {
   const net = considerationMinor - entitlementMinor - contraMinor;
   if (!isSafeMinor(net)) throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.INVALID_AMOUNT);
   return net;
+}
+
+/**
+ * Does this application close on the current (v3) sale plan with a finance company? Only that plan
+ * carries the commission basis M = K - E_eff - contra and the `consignedFinancedNet` freeze, and only
+ * a deal with a financier (a configured company or a manual letter) builds a plan at all. A plan
+ * version already frozen on the row (v1, v2, or a v1/v2 fingerprint) is an older plan. A deal not yet
+ * finalized with no stamp is asked as `finalizeDeal` will build it: v3 (financedSaleRecognition's
+ * `recognitionPlanVersion` states the same rule).
+ */
+export function closesOnCurrentSalePlan(
+  app: Pick<
+    Doc<"financeApplications">,
+    | "companyId"
+    | "quoteModeAtSubmission"
+    | "financedSalePlanVersion"
+    | "financedSaleRecognitionFingerprint"
+    | "finalizedSaleId"
+  >
+): boolean {
+  const hasFinancier = app.companyId !== undefined || isManualFinanceApplication(app);
+  if (!hasFinancier) return false;
+  const frozen = planVersionOf(app);
+  return frozen === 0 ? app.finalizedSaleId === undefined : isServerDerivedPlanVersion(frozen);
+}
+
+/** At RESOLUTION: a positive concession is refused unless the application closes on the current plan. */
+export function assertSupplierConcessionPlan(app: Parameters<typeof closesOnCurrentSalePlan>[0]): void {
+  if (!closesOnCurrentSalePlan(app)) {
+    throwAppError(AppErrorCode.SUPPLIER_CONCESSION_PLAN_REFUSED, SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN);
+  }
+}
+
+/**
+ * At COMPLETION: a stored concession is applied only when the sale is built on a v3 plan. Without one the
+ * supplier payable would fall to E_eff while no commission basis or frozen margin matched it. `plan` is the
+ * plan this completion posts (undefined when none is built).
+ */
+export function assertConcessionBuiltOnCurrentPlan(args: {
+  concessionMinor: number;
+  plan: { version: number } | undefined | null;
+}): void {
+  if (args.concessionMinor > 0 && !(args.plan && isServerDerivedPlanVersion(args.plan.version))) {
+    throwAppError(AppErrorCode.SUPPLIER_CONCESSION_PLAN_REFUSED, SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN);
+  }
 }
 
 /** Every vehicle the application covers: `vehicleItems ?? [{ vehicleId }]`. */

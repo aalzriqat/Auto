@@ -1919,6 +1919,12 @@ const dealOverviewMessages = defineBilingualMessages({
  * equal the server's own `message`; the placeholders are the payload's fields.
  */
 const serverErrorMessages = defineBilingualMessages({
+  // SCRUM-766 PR-C follow-up. The English text must equal SUPPLIER_CONCESSION_REFUSALS.NOT_CURRENT_PLAN
+  // in convex/utils/supplierConcession.ts.
+  ServerError_SUPPLIER_CONCESSION_PLAN_REFUSED: [
+    "A supplier concession can be recorded only on a deal that is financed through a finance company and closes on the current sale plan. This deal does not, so the shortfall cannot be placed on the supplier.",
+    "لا يمكن تسجيل تنازل المورّد إلا على صفقة ممولة عبر شركة تمويل وتُغلق وفق خطة البيع الحالية. هذه الصفقة ليست كذلك، لذا لا يمكن تحميل الفرق على المورّد.",
+  ],
   ServerError_COMMISSION_BASE_UNUSABLE: [
     "This deal's financing figures (recorded in {baseCurrency}) cannot be used to work out the commissionable vehicle margin in the dealership's currency ({orgCurrency}). Settle the deal's currency and figures before completing it.",
     "لا يمكن استخدام أرقام التمويل لهذه الصفقة (المسجلة بعملة {baseCurrency}) لاحتساب هامش المركبة الخاضع للعمولة بعملة المعرض ({orgCurrency}). يرجى تسوية عملة الصفقة وأرقامها قبل إتمامها.",

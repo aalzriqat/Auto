@@ -58,6 +58,7 @@ import {
 } from "../accounting/postingRules";
 import { isServerDerivedPlanVersion } from "./financedSalePostingPlan";
 import {
+  assertConcessionBuiltOnCurrentPlan,
   effectiveSupplierEntitlementMinor,
   financedConsignedNetMinor,
   resolveEffectiveEntitlementForCompletion,
@@ -673,6 +674,9 @@ async function prepareSaleCompletion(
       ? resolveEffectiveEntitlementForCompletion({ app: financeApplication, vehicle, currency })
       : { concessionMinor: 0, contractEntitlementMinor: undefined };
   const supplierConcessionMinor = supplierTerms.concessionMinor;
+  // A stored concession is applied only on a v3 plan (the one that carries the commission basis below);
+  // a sale built without one refuses before any write rather than lowering the payable alone.
+  assertConcessionBuiltOnCurrentPlan({ concessionMinor: supplierConcessionMinor, plan: args.financedSalePlan });
 
   // The ONE commission basis of a financed consigned deal: M = K - E_eff - contra
   // (owner c22421: whoever covers the gap, the margin is the same). Computed here from the

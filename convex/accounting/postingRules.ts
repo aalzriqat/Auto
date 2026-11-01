@@ -167,6 +167,45 @@ export const AP_AFFECTING_BY_EVENT_TYPE = {
   JOURNAL_REVERSAL: false,
 } satisfies Record<EventType, boolean>;
 
+/**
+ * SCRUM-869 (S2): does a posting of this event type debit or credit
+ * RECEIVABLE_FROM_SUPPLIERS (1240)? Exhaustive over EventType (`satisfies`), so a
+ * new event type fails typecheck until it is classified. The 1240 reconciliation
+ * reads this to decide whether a queued posting makes its comparison non-final.
+ * Rules touching 1240: ruleSaleCompleted (consigned DIRECT_TO_SUPPLIER margin),
+ * ruleDepositAppliedToSettlement (deposit retained against commission),
+ * ruleSupplierReceivableCollected, ruleSupplierCostRecoveryReceived, and
+ * ruleExpensePosted for a supplier-borne cost. EXPENSE_POSTED is classified true
+ * for every expense: the queued payload is not read, and unknown must not read as safe.
+ */
+export const SUPPLIER_RECEIVABLE_AFFECTING_BY_EVENT_TYPE = {
+  DEPOSIT_RECEIVED: false, DEPOSIT_APPLIED: false, DEPOSIT_APPLIED_TO_SETTLEMENT: true,
+  DEPOSIT_REFUNDED: false, DEPOSIT_FORFEITED: false,
+  SALE_COMPLETED: true, SALE_CANCELLED: false, COLLECTION_PAYMENT: false, COLLECTION_REFUND: false,
+  RECEIPT_CREDIT_APPLIED: false, RETAINED_CREDIT_REFUNDED: false, EXPENSE_POSTED: true,
+  CHEQUE_RECEIVED: false, CHEQUE_DEPOSITED: false, CHEQUE_CLEARED: false, CHEQUE_RETURNED: false,
+  COMMISSION_ACCRUED: false, COMMISSION_ADJUSTED: false, COMMISSION_PAID: false,
+  FINANCE_DISBURSED: false, FINANCE_CASH_RECEIVED: false, PAYMENT_LINK_RECEIVED: false,
+  SUPPLIER_PAYMENT_SETTLED: false, SUPPLIER_RECEIVABLE_COLLECTED: true, SUPPLIER_COST_RECOVERY_RECEIVED: true,
+  ASSET_CAPITALIZED: false, DEPRECIATION_POSTED: false, ASSET_IMPAIRED: false, ASSET_DISPOSED: false,
+  CAPITAL_CONTRIBUTED: false, PARTNER_DREW: false, PROFIT_DISTRIBUTED: false,
+  CLAIM_SETTLED: false, CLAIM_WRITTEN_OFF: false,
+  CASH_DRAWER_DEPOSITED: false,
+  VEHICLE_ACQUIRED: false, VEHICLE_LANDED_COST_CAPITALIZED: false, VEHICLE_INVENTORY_OPENING_BALANCE: false,
+  VEHICLE_ACQUISITION_COST_CORRECTED: false, VEHICLE_PREP_EXPENSE_RECLASSIFIED: false, TRADE_IN_ACCEPTED: false,
+  FI_COMMISSION_RECOGNIZED: false,
+  PREPAID_EXPENSE_AMORTIZED: false, PREPAID_EXPENSE_REFUNDED: false, PREPAID_EXPENSE_WRITTEN_OFF: false,
+  RECEIVABLE_CREATED: false,
+  CONSIGNED_SALE_RECLASSIFIED: false,
+  EMPLOYEE_ADVANCE_PAID: false, EMPLOYEE_ADVANCE_RECOVERED: false, PAYROLL_ACCRUED: false, PAYROLL_PAID: false,
+  CUSTODY_CASH_ISSUED: false, CUSTODY_CASH_RETURNED: false, CUSTODY_REIMBURSED: false,
+  CUSTODY_FEE_PAID: false, CUSTODY_WRITTEN_OFF: false,
+  CUSTODY_PAYABLE_RECLASSIFIED: false,
+  HANDOVER_COST_PAID_DIRECT: false,
+  FINANCE_COMPANY_FORWARD_PAID: false,
+  JOURNAL_REVERSAL: false,
+} satisfies Record<EventType, boolean>;
+
 interface LineAmountsAndDimensions {
   debitMinor: number;
   creditMinor: number;

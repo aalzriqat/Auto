@@ -1,0 +1,45 @@
+{
+  "id": "supplier-receivable-corrupt-amount-has-generic-error",
+  "fingerprint": "70de5b21b9c62f8a13e10d58a3b438c8b273f15fd522110f4e58ce9028c38f9a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-seat2-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "storedAmountDue": "NaN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "query.error",
+      "value": "GENERIC_ERROR"
+    },
+    {
+      "observable": "server.rawErrorLogged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a stored NaN produces a generic public error and logs conversion details only on the server"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}
