@@ -1777,6 +1777,90 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
       expect(await links(t)).toEqual([]);
     });
+
+    // ─── Round 9: the same question after the first job finished, and across links AND pending jobs ───
+    //
+    // Seat 2 of round 8 reproduced two ways the receipt could still read "complete" while an id of the
+    // account was stored: (F1) an id learned from a pending job never led to a link, and (F2) once the
+    // job that consumed the link had finished, nothing remembered the pair, so a delivery stored in
+    // between survived a later deletion request. Seat 1 found (F3) the internal disconnect that keeps
+    // no pair at all.
+
+    test("F1: an id reached through a pending job leads on to a link kept for another webhook id of the same business account", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      const NEW_WEBHOOK_ID = "17841400000055842";
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      // An earlier callback disconnects the account and leaves a pending job holding {business, webhook}.
+      await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+      expect(await jobs(t)).toHaveLength(1);
+      // The dealer reconnects the same business account under a NEW webhook id, then lets go: link business-new.
+      await saveAccount(t, orgId, BUSINESS_ID, NEW_WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const late = await seedLateDelivery(t, NEW_WEBHOOK_ID);
+
+      // The deletion request names the OLD webhook id: the pending job gives it the business id, and the
+      // link behind the business id gives it the new webhook id.
+      const code = await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+      const job = await jobOf(t, code!);
+      expect(job).toBeDefined();
+      await runOnce(t, job!._id);
+
+      await expectCompleteMeansErased(t, code!);
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(NEW_WEBHOOK_ID);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
+
+    test("F2: a deletion request after the deauthorize job has finished still erases the webhook id of a delivery stored in between", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+
+      await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await jobs(t)).toEqual([]);
+      // Meta keeps delivering until the app is removed: this body arrives after the first job is gone.
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
+
+    test("F2: the same holds when the first callback found the account still connected", async () => {
+      const t = newTest();
+      await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await jobs(t)).toEqual([]);
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
+
+    test("F3: the internal disconnect by Instagram id keeps the account's pair for a later callback", async () => {
+      const t = newTest();
+      await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      await t.mutation(internal.socialIntegrations.disconnectByInstagramUserId, { instagramBusinessAccountId: BUSINESS_ID });
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
   });
 });
 
