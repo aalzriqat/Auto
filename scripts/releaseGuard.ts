@@ -1258,6 +1258,127 @@ export function bankRefusalMessage(result: BankRebuildResult): string | null {
   );
 }
 
+export type RegistryStep = { ok: true; value: unknown } | Refusal;
+const REGISTRY_DEPLOYED = "Production is DEPLOYED, but the supplier registry initialisation";
+/** The refusal names at most this many organizations by opaque ref; the count always covers all of them. */
+const MAX_LISTED_MISSING_REFS = 10;
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+type CursorPage = { isDone: boolean; continueCursor: string | null };
+type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; maxPages: number };
+
+/**
+ * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`.
+ * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
+ * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
+ * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
+ */
+function walkRegistryPages<T extends CursorPage>(
+  limits: WalkLimits,
+  runPage: (cursor: string | null) => RegistryStep,
+  parse: (value: unknown) => T | null,
+  onPage: (page: T) => void,
+): { ok: true } | Refusal {
+  let cursor: string | null = null;
+  const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
+  const deadlineRefusal: Refusal = {
+    ok: false,
+    reason: `${REGISTRY_DEPLOYED} reached the rollout deadline. A re-run resumes it.`,
+  };
+  for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
+    if (pastDeadline()) return deadlineRefusal;
+    const result = runPage(cursor);
+    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
+    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
+    if (pastDeadline()) return deadlineRefusal;
+    if (!result.ok) {
+      return { ok: false, reason: `${REGISTRY_DEPLOYED} call failed. See backend logs; a re-run resumes it.` };
+    }
+    const page = parse(result.value);
+    if (!page) return { ok: false, reason: `${REGISTRY_DEPLOYED} returned an unrecognised result.` };
+    onPage(page);
+    if (page.isDone) return { ok: true };
+    if (typeof page.continueCursor !== "string" || page.continueCursor === cursor) {
+      return { ok: false, reason: `${REGISTRY_DEPLOYED} cursor stopped advancing; refusing to page forever.` };
+    }
+    cursor = page.continueCursor;
+  }
+  return { ok: false, reason: `${REGISTRY_DEPLOYED} reached its page cap. A re-run resumes it.` };
+}
+
+function parseCursorPage(value: unknown): CursorPage | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { isDone, continueCursor } = value as { isDone?: unknown; continueCursor?: unknown };
+  if (typeof isDone !== "boolean") return null;
+  if (continueCursor !== null && typeof continueCursor !== "string") return null;
+  return { isDone, continueCursor };
+}
+
+function parseBackfillPage(value: unknown): (CursorPage & { migrated: number }) | null {
+  const cursor = parseCursorPage(value);
+  const migrated = (value as { migrated?: unknown } | null)?.migrated;
+  return cursor && isCount(migrated) ? { ...cursor, migrated } : null;
+}
+
+function parseCoveragePage(value: unknown): (CursorPage & { checked: number; deleting: number; missing: string[] }) | null {
+  const cursor = parseCursorPage(value);
+  const { checked, deleting, missing } = (value ?? {}) as { checked?: unknown; deleting?: unknown; missing?: unknown };
+  if (!cursor || !isCount(checked) || !isCount(deleting)) return null;
+  if (!Array.isArray(missing) || !missing.every((id) => typeof id === "string")) return null;
+  return { ...cursor, checked, deleting, missing };
+}
+
+/**
+ * SCRUM-888: gives every live organization its `supplierRegistryState` row, then proves it.
+ * Without the row every supplier write refuses with REGISTRY_NOT_INITIALISED, so consigned
+ * (SOURCED) vehicle intake cannot start.
+ *
+ * Phase 1 drives `suppliers:backfillRegistry` one page per call (continueAutomatically: false, so
+ * this script, not the scheduler, observes completion). It is idempotent and skips organizations
+ * being deleted. Phase 2 walks `suppliers:registryCoverageForRelease` and refuses if any live
+ * organization is still missing a row. Organizations being deleted are reported, never refused
+ * (same rule as `ensureRegistryState`). Output is counts and opaque refs only.
+ */
+export function initialiseSupplierRegistry(
+  input: WalkLimits & {
+    backfillPage: (cursor: string | null) => RegistryStep;
+    verifyPage: (cursor: string | null) => RegistryStep;
+  },
+): { ok: true; created: number; checked: number; deleting: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+
+  let created = 0;
+  const backfill = walkRegistryPages(limits, input.backfillPage, parseBackfillPage, (page) => {
+    created += page.migrated;
+  });
+  if (!backfill.ok) return backfill;
+
+  let checked = 0;
+  let deleting = 0;
+  const missing: string[] = [];
+  const verify = walkRegistryPages(limits, input.verifyPage, parseCoveragePage, (page) => {
+    checked += page.checked;
+    deleting += page.deleting;
+    missing.push(...page.missing.map(opaqueOrgRef));
+  });
+  if (!verify.ok) return verify;
+
+  if (missing.length > 0) {
+    // Every missing org is counted; only the first few refs are listed so the public log stays readable.
+    const listed = missing.slice(0, MAX_LISTED_MISSING_REFS).join(", ");
+    const more = missing.length - MAX_LISTED_MISSING_REFS;
+    return {
+      ok: false,
+      reason:
+        `${REGISTRY_DEPLOYED} is INCOMPLETE: ${missing.length} organization(s) still have no supplier registry ` +
+        `(${listed}${more > 0 ? `, and ${more} more` : ""}). Consigned intake stays blocked for them. A re-run retries.`,
+    };
+  }
+  return { ok: true, created, checked, deleting };
+}
 /** SCRUM-782: same serial, bounded rollout pattern as rebuildBankBalances.
  * The backend persists its own cursor, so a failed CLI call can be retried
  * without losing a committed page or trusting a cursor printed into public logs.
@@ -1332,8 +1453,6 @@ export type SupplierIdentityOutcome =
   | { ok: true; orgs: number; repaired: number; pages: number; outstanding: string[] }
   /** The phase could not finish or could not be trusted; nothing about the counts is known. */
   | { ok: false; reason: string };
-
-const isCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 
 type SupplierIdentityPage = { more: boolean; cursor: string | null; repaired: number; unresolved: number };
 
