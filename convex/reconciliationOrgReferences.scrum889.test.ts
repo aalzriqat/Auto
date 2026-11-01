@@ -20,7 +20,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { getControlAccountBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf, getCumulativeBalancesAsOfChecked } from "./accounting/accountSnapshots";
+import { computeSupplierPayablesReconciliation } from "./accountingReports";
 import {
   SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
@@ -394,4 +395,135 @@ describe("SCRUM-889 - a queued reversal's original event must belong to the same
   test("A/P: a queued reversal whose original belongs to another organization is unresolved, PENDING_POSTINGS", () =>
     foreignOriginal("rforeignap", apRecon));
   test("A/P: a queued reversal whose original no longer exists is unresolved, PENDING_POSTINGS", () => missingOriginal("rmissingap", apRecon));
+});
+/**
+ * SCRUM-889 round 3 (B4). The A/P GL read verifies every control-account line and every parent entry outside the
+ * period's entry set, on top of the unchecked walk. That extra read now draws on a budget (the reconciliation's
+ * `readLimit`, counted in documents like the A/R reader's) and answers OVER_LIMIT before exceeding it, never a
+ * number and never "reconciled". The unchecked reader and every caller that passes no accounts keep the unbudgeted
+ * behaviour they had.
+ *
+ * Evidence boundary: convex-test counts nothing against Convex's 16 MiB / 32,000-document transaction limits
+ * (https://docs.convex.dev/production/state/limits), so this proves the budget logic, not the platform limit.
+ */
+describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", () => {
+  const asOf = () => Date.now() + 86_400_000;
+  const apAccount = async (s: Seed) =>
+    (await s.t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
+    ))!._id;
+  /** `count` A/P credit lines, each under its own same-org POSTED entry dated inside the open period. */
+  async function inPeriodApLines(s: Seed, count: number) {
+    const accountId = await apAccount(s);
+    for (let i = 0; i < count; i += 1) {
+      const entryId = await insertEntry(s, s.orgId);
+      await s.t.run((ctx) =>
+        ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
+          scale: 3, accountingDate: Date.now() - 1000,
+        })
+      );
+    }
+    return accountId;
+  }
+  /** `count` A/P lines inside the period whose same-org parent entry is dated after the cutoff, so it is outside the period's entry set. */
+  async function apLinesWithParentOutsideTheEntrySet(s: Seed, count: number) {
+    const accountId = await apAccount(s);
+    for (let i = 0; i < count; i += 1) {
+      const entryId = await s.t.run((ctx) =>
+        ctx.db.insert("journalEntries", {
+          orgId: s.orgId, journalNumber: "RAW", accountingDate: Date.now() + 30 * 86_400_000, periodId: s.periodId, sourceType: "raw",
+          sourceId: "raw", category: "SYSTEM", memo: "raw", status: "POSTED", postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+        })
+      );
+      await s.t.run((ctx) =>
+        ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
+          scale: 3, accountingDate: Date.now() - 1000,
+        })
+      );
+    }
+    return accountId;
+  }
+  const checked = (s: Seed, accountId: Id<"chartOfAccounts">, limit: number) =>
+    s.t.run((ctx) => getCumulativeBalancesAsOfChecked(ctx, s.orgId, asOf(), [accountId], limit));
+  const door = (s: Seed, limit: number) => s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, undefined, { readLimit: limit }));
+
+  test("B4: more control-account lines than the budget is OVER_LIMIT, not a balance", async () => {
+    const s = await seed("b4lines");
+    const accountId = await inPeriodApLines(s, 6);
+    expect(await checked(s, accountId, 5)).toEqual({ status: "OVER_LIMIT" });
+  });
+
+  test("B4: the reconciliation answers UNAVAILABLE / OVER_LIMIT when the verification pass exceeds its budget", async () => {
+    const s = await seed("b4door");
+    await inPeriodApLines(s, 6);
+    const r = await door(s, 5);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OVER_LIMIT");
+    expect(r.isReconciled).toBe(false);
+    expect(r.currencies).toEqual([]);
+    expect(r.byCurrency).toEqual({});
+  });
+
+  test("B4: a parent entry read outside the entry set is charged to the budget", async () => {
+    const s = await seed("b4parents");
+    const accountId = await apLinesWithParentOutsideTheEntrySet(s, 3);
+    expect(await checked(s, accountId, 5)).toEqual({ status: "OVER_LIMIT" });
+    const door5 = await door(s, 5);
+    expect(door5.unavailableReason).toBe("OVER_LIMIT");
+  });
+
+  test("B4 CONTROL: lines exactly at the budget are read and summed", async () => {
+    const s = await seed("b4edge");
+    const accountId = await inPeriodApLines(s, 5);
+    const r = await checked(s, accountId, 5);
+    expect(r.status).toBe("OK");
+    if (r.status === "OK") expect(r.balances).toEqual([{ accountId, currency: "JOD", debitMinor: 0, creditMinor: 5 * AMOUNT_MINOR }]);
+    expect((await door(s, 5)).status).toBe("AVAILABLE");
+  });
+
+  test("B4 CONTROL: lines plus parent reads exactly at the budget are read, and the outside-the-set parents add nothing to the sum", async () => {
+    const s = await seed("b4edgeparents");
+    const accountId = await apLinesWithParentOutsideTheEntrySet(s, 2);
+    const r = await checked(s, accountId, 4);
+    expect(r).toEqual({ status: "OK", balances: [] });
+    expect(accountId).toBeTruthy();
+  });
+
+  test("B4 CONTROL: an ordinary small subledger still reconciles through the checked, budgeted read", async () => {
+    const s = await seed("b4reconciles");
+    await inPeriodApLines(s, 1);
+    const vehicleId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId: s.orgId, vin: "VIN889B4", make: "Nissan", model: "Patrol", year: 2023, mileage: 0, color: "White", fuelType: "Petrol",
+        transmission: "Automatic", sellingPrice: 30_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer", sourceCost: 123.4, status: "AVAILABLE",
+      })
+    );
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, vehicleId, sourcedFromName: "Partner Dealer", amountDue: 123.4, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId,
+        createdAt: Date.now() - 5_000, updatedAt: Date.now() - 5_000,
+      } as never)
+    );
+    const r = await door(s, 5);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
+    expect(r.byCurrency.JOD.subledgerBalanceMinor).toBe(AMOUNT_MINOR);
+  });
+  test("B4 CONTROL: the unchecked reader has no budget and returns the same fixture's balance", async () => {
+    const s = await seed("b4unchecked");
+    const accountId = await inPeriodApLines(s, 6);
+    const balances = await s.t.run((ctx) => getCumulativeBalancesAsOf(ctx, s.orgId, asOf()));
+    expect(balances.find((b) => b.accountId === accountId)).toEqual({ accountId, currency: "JOD", debitMinor: 0, creditMinor: 6 * AMOUNT_MINOR });
+  });
+
+  test("B4 CONTROL: with the default budget the same six lines reconcile as before (public supplierPayablesReconciliation)", async () => {
+    const s = await seed("b4public");
+    await inPeriodApLines(s, 6);
+    const r = await apRecon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(6 * AMOUNT_MINOR);
+  });
 });
