@@ -1309,6 +1309,39 @@ describe("supplier registry: bootstrap and backfill", () => {
     for (const orgId of [suspended, resetting, ordinary]) expect(await registryVersion(t, orgId)).toBe(0);
   });
 
+  test("SCRUM-888: the release coverage query reports orgs without a registry row, skips deleting orgs, and reads bounded pages", async () => {
+    const t = setup();
+    const { live, covered, doomed } = await t.run(async (ctx) => ({
+      live: await ctx.db.insert("organizations", { name: "Uncovered", createdAt: 1 }),
+      covered: await ctx.db.insert("organizations", { name: "Covered", createdAt: 2 }),
+      doomed: await ctx.db.insert("organizations", { name: "Doomed", createdAt: 3, deletionRequestedAt: 3 }),
+    }));
+    await initRegistry(t, covered);
+
+    const walk = async () => {
+      const missing: string[] = [];
+      let checked = 0;
+      let deleting = 0;
+      let cursor: string | null = null;
+      for (let guard = 0; guard < 10; guard += 1) {
+        const page: { checked: number; deleting: number; missing: string[]; isDone: boolean; continueCursor: string | null } =
+          await t.query(internal.suppliers.registryCoverageForRelease, { paginationOpts: { numItems: 2, cursor } });
+        expect(page.checked + page.deleting).toBeLessThanOrEqual(2);
+        checked += page.checked;
+        deleting += page.deleting;
+        missing.push(...page.missing);
+        if (page.isDone) return { missing, checked, deleting };
+        cursor = page.continueCursor;
+      }
+      throw new Error("coverage walk did not finish");
+    };
+
+    expect(await walk()).toEqual({ missing: [live], checked: 2, deleting: 1 });
+    await t.mutation(internal.suppliers.backfillRegistry, { batchSize: 100, continueAutomatically: false });
+    expect(await walk()).toEqual({ missing: [], checked: 2, deleting: 1 });
+    expect(await t.run(async (ctx) => (await ctx.db.query("supplierRegistryState").withIndex("by_org", (q) => q.eq("orgId", doomed)).take(1)).length)).toBe(0);
+  });
+
   test("the backfill reschedules itself from the returned cursor until every organization is covered", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
