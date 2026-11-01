@@ -5,6 +5,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
+import { snapshotSupplier } from "./utils/supplierRegistry";
 
 /**
  * SCRUM-887 slice A: the management reads behind the Suppliers screen.
@@ -113,15 +114,12 @@ describe("SCRUM-887 suppliers.listForManagement", () => {
     const listed = await a.identity.query(api.suppliers.listForManagement, { orgId: a.orgId, paginationOpts: PAGE });
     expect(listed.page.map((r) => r.displayName)).toEqual(["A Supplier"]);
     // Asking for the other organization's data is refused outright.
-    expect(await refusalCode(a.identity.query(api.suppliers.listForManagement, { orgId: b.orgId, paginationOpts: PAGE }))).toMatch(
-      /UNAUTHORIZED|FORBIDDEN|member/i,
-    );
-    expect(await refusalCode(a.identity.query(api.suppliers.searchForManagement, { orgId: b.orgId, query: "Secret" }))).toMatch(
-      /UNAUTHORIZED|FORBIDDEN|member/i,
-    );
+    // A caller who is not a member of the organization gets the exact UNAUTHORIZED refusal.
+    expect(await refusalCode(a.identity.query(api.suppliers.listForManagement, { orgId: b.orgId, paginationOpts: PAGE }))).toBe("UNAUTHORIZED");
+    expect(await refusalCode(a.identity.query(api.suppliers.searchForManagement, { orgId: b.orgId, query: "Secret" }))).toBe("UNAUTHORIZED");
     const found = await a.identity.query(api.suppliers.searchForManagement, { orgId: a.orgId, query: "Secret B Supplier" });
     // Full text may match A's own "Supplier" word; what matters is B's row never appears.
-    expect(found.map((r) => r.displayName)).not.toContain("Secret B Supplier");
+    expect(found.rows.map((r) => r.displayName)).not.toContain("Secret B Supplier");
   });
 
   test("VIEW_VEHICLES alone is refused, and the picker projection stays narrow for it", async () => {
@@ -146,11 +144,21 @@ describe("SCRUM-887 suppliers.listForManagement", () => {
     const t = setup();
     const { orgId, identity } = await financeOrg(t, "A");
     const { supplierId } = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const { aliasId } = await identity.mutation(api.suppliers.addAlias, { orgId, supplierId, alias: "GM Trading" });
     const reader = await memberWith(t, orgId, [PERMISSIONS.VIEW_FINANCE]);
     const listed = await reader.query(api.suppliers.listForManagement, { orgId, paginationOpts: PAGE });
     expect(listed.page).toHaveLength(1);
     const record = await reader.query(api.suppliers.get, { orgId, supplierId });
     expect(record).toHaveProperty("version");
+
+    // Everything the registry stores: suppliers, aliases and the registry version.
+    const registry = () =>
+      t.run(async (ctx) => ({
+        suppliers: await ctx.db.query("suppliers").collect(),
+        aliases: await ctx.db.query("supplierAliases").collect(),
+        state: await ctx.db.query("supplierRegistryState").collect(),
+      }));
+    const before = await registry();
 
     const missing = /FORBIDDEN|Missing/i;
     expect(await refusalCode(reader.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "New One" }))).toMatch(missing);
@@ -158,9 +166,12 @@ describe("SCRUM-887 suppliers.listForManagement", () => {
     expect(await refusalCode(reader.mutation(api.suppliers.deactivate, { orgId, supplierId, reason: "no" }))).toMatch(missing);
     expect(await refusalCode(reader.mutation(api.suppliers.reactivate, { orgId, supplierId }))).toMatch(missing);
     expect(await refusalCode(reader.mutation(api.suppliers.addAlias, { orgId, supplierId, alias: "GM" }))).toMatch(missing);
+    expect(await refusalCode(reader.mutation(api.suppliers.retireAlias, { orgId, aliasId }))).toMatch(missing);
+
+    // suppliers.changed: 0 - the six refused writes left every registry row exactly as it was.
+    expect(await registry()).toEqual(before);
   });
 });
-
 describe("SCRUM-887 suppliers.searchForManagement", () => {
   test("finds a supplier by name, active alias and tax id, including an inactive one", async () => {
     const t = setup();
@@ -177,13 +188,13 @@ describe("SCRUM-887 suppliers.searchForManagement", () => {
     await identity.mutation(api.suppliers.deactivate, { orgId, supplierId: old.supplierId, reason: "closed" });
 
     const byName = await identity.query(api.suppliers.searchForManagement, { orgId, query: "gulf motors" });
-    expect(byName.map((r) => r._id)).toEqual([gulf.supplierId]);
+    expect(byName.rows.map((r) => r._id)).toEqual([gulf.supplierId]);
     const byAlias = await identity.query(api.suppliers.searchForManagement, { orgId, query: "GM Trading" });
-    expect(byAlias.map((r) => r._id)).toEqual([gulf.supplierId]);
+    expect(byAlias.rows.map((r) => r._id)).toEqual([gulf.supplierId]);
     const byTax = await identity.query(api.suppliers.searchForManagement, { orgId, query: "tx777a" });
-    expect(byTax.map((r) => r._id)).toEqual([gulf.supplierId]);
+    expect(byTax.rows.map((r) => r._id)).toEqual([gulf.supplierId]);
     const inactive = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Old Dealer" });
-    expect(inactive.map((r) => r.status)).toEqual(["INACTIVE"]);
+    expect(inactive.rows.map((r) => r.status)).toEqual(["INACTIVE"]);
   });
 
   test("the status filter excludes the other status and a retired alias finds nothing", async () => {
@@ -191,21 +202,182 @@ describe("SCRUM-887 suppliers.searchForManagement", () => {
     const { orgId, identity } = await financeOrg(t, "A");
     const old = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Old Dealer" });
     await identity.mutation(api.suppliers.deactivate, { orgId, supplierId: old.supplierId, reason: "closed" });
-    expect(await identity.query(api.suppliers.searchForManagement, { orgId, query: "Old Dealer", status: "ACTIVE" })).toEqual([]);
+    expect((await identity.query(api.suppliers.searchForManagement, { orgId, query: "Old Dealer", status: "ACTIVE" })).rows).toEqual([]);
     expect(
-      (await identity.query(api.suppliers.searchForManagement, { orgId, query: "Old Dealer", status: "INACTIVE" })).map((r) => r._id),
+      (await identity.query(api.suppliers.searchForManagement, { orgId, query: "Old Dealer", status: "INACTIVE" })).rows.map((r) => r._id),
     ).toEqual([old.supplierId]);
 
     const alias = await identity.mutation(api.suppliers.addAlias, { orgId, supplierId: old.supplierId, alias: "Former Name" });
     await identity.mutation(api.suppliers.retireAlias, { orgId, aliasId: alias.aliasId });
-    expect(await identity.query(api.suppliers.searchForManagement, { orgId, query: "Former Name" })).toEqual([]);
+    expect((await identity.query(api.suppliers.searchForManagement, { orgId, query: "Former Name" })).rows).toEqual([]);
   });
 
   test("blank text returns nothing and the result is capped", async () => {
     const t = setup();
     const { orgId, identity } = await financeOrg(t, "A");
     await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
-    expect(await identity.query(api.suppliers.searchForManagement, { orgId, query: "   " })).toEqual([]);
-    expect(await identity.query(api.suppliers.searchForManagement, { orgId, query: "Gulf", limit: 0 })).toHaveLength(1);
+    expect(await identity.query(api.suppliers.searchForManagement, { orgId, query: "   " })).toEqual({ rows: [], truncated: false });
+    expect((await identity.query(api.suppliers.searchForManagement, { orgId, query: "Gulf", limit: 0 })).rows).toHaveLength(1);
+  });
+});
+
+describe("SCRUM-887 suppliers.listForManagement ordering", () => {
+  test("the All filter lists active suppliers before inactive ones", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const dormant = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Dormant Co" });
+    await identity.mutation(api.suppliers.deactivate, { orgId, supplierId: dormant.supplierId, reason: "closed" });
+    await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Alpha Motors" });
+    await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Beta Motors" });
+
+    const all = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: PAGE });
+    expect(all.page.map((r) => r.status)).toEqual(["ACTIVE", "ACTIVE", "INACTIVE"]);
+  });
+});
+
+describe("SCRUM-887 suppliers.searchForManagement truncation", () => {
+  test("26 suppliers sharing an alias: 25 rows come back and the answer says more exist", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const aliasIds: Array<Id<"supplierAliases">> = [];
+    for (let i = 0; i < 26; i++) {
+      const { supplierId } = await identity.mutation(api.suppliers.create, {
+        orgId,
+        idempotencyKey: next(),
+        displayName: `Branch supplier ${String(i).padStart(2, "0")}`,
+      });
+      const { aliasId } = await identity.mutation(api.suppliers.addAlias, { orgId, supplierId, alias: "Shared Trading" });
+      aliasIds.push(aliasId);
+    }
+
+    const capped = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Shared Trading" });
+    expect(capped.rows).toHaveLength(25);
+    expect(capped.truncated).toBe(true);
+
+    // Exactly 25 matches is a complete answer, not a truncated one.
+    await identity.mutation(api.suppliers.retireAlias, { orgId, aliasId: aliasIds[0] });
+    const exact = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Shared Trading" });
+    expect(exact.rows).toHaveLength(25);
+    expect(exact.truncated).toBe(false);
+
+    // A smaller caller limit truncates at that limit.
+    const small = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Shared Trading", limit: 3 });
+    expect(small.rows).toHaveLength(3);
+    expect(small.truncated).toBe(true);
+  });
+
+  test("a search with few matches is never marked truncated", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const result = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Gulf Motors" });
+    expect(result).toMatchObject({ truncated: false });
+    expect(result.rows).toHaveLength(1);
+  });
+});
+
+/**
+ * The edit token a reader holds: `revision` once the server exposes it. The fallback to `version`
+ * is what a client without the revision would send, so these tests fail for the right reason
+ * (the lost update) before the revision exists.
+ */
+function editToken(record: unknown): number {
+  const row = record as { revision?: number; version: number };
+  return row.revision ?? row.version;
+}
+
+describe("SCRUM-887 suppliers.update: expectedVersion protects every edited field", () => {
+  test("two editors who loaded the same record cannot overwrite each other's contact edits", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const { supplierId } = await identity.mutation(api.suppliers.create, {
+      orgId,
+      idempotencyKey: next(),
+      displayName: "Gulf Motors",
+      contact: { phone: "111" },
+    });
+    const loadedByA = await identity.query(api.suppliers.get, { orgId, supplierId });
+    const loadedByB = await identity.query(api.suppliers.get, { orgId, supplierId });
+
+    await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: editToken(loadedByA), contact: { phone: "222" } });
+
+    // B's form still holds phone 111 and adds an email; it sends the whole contact object.
+    const second = await refusalCode(
+      identity.mutation(api.suppliers.update, {
+        orgId,
+        supplierId,
+        expectedVersion: editToken(loadedByB),
+        contact: { phone: "111", email: "b@example.com" },
+      }),
+    );
+    expect(second).toBe("SUPPLIER_VERSION_CONFLICT");
+
+    const stored = await identity.query(api.suppliers.get, { orgId, supplierId });
+    expect(stored).toMatchObject({ contact: { phone: "222" } });
+    expect((stored as { contact?: { email?: string } }).contact?.email).toBeUndefined();
+  });
+
+  test("the same editor can save again after reading the result of the last save", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const { supplierId } = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const loaded = await identity.query(api.suppliers.get, { orgId, supplierId });
+
+    const first = await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: editToken(loaded), contact: { phone: "222" } });
+    const second = await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: editToken(first), contact: { phone: "333" } });
+    // Each save moves the token forward, so a repeat of the same request cannot apply twice.
+    expect(editToken(second)).toBeGreaterThan(editToken(first));
+    expect(editToken(first)).toBeGreaterThan(editToken(loaded));
+    expect(editToken(await identity.query(api.suppliers.get, { orgId, supplierId }))).toBe(editToken(second));
+    expect(await refusalCode(identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: editToken(first), contact: { phone: "444" } }))).toBe(
+      "SUPPLIER_VERSION_CONFLICT",
+    );
+  });
+
+  test("a row stored before the revision existed is edited with its version, and the version stays a snapshot version", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const { supplierId } = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    await t.run(async (ctx) => {
+      await ctx.db.patch("suppliers", supplierId, { version: 3 });
+    });
+    const legacy = await identity.query(api.suppliers.get, { orgId, supplierId });
+    expect(editToken(legacy)).toBe(3);
+    await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: 3, contact: { phone: "222" } });
+    const after = await identity.query(api.suppliers.get, { orgId, supplierId });
+    expect(editToken(after)).toBe(4);
+    expect(after).toMatchObject({ version: 3 });
+  });
+
+  test("snapshot consumers are unchanged: contact edits leave `version` alone, a snapshot-field edit raises it by exactly one", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const { supplierId } = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const recorded = await t.run((ctx) => snapshotSupplier(ctx, orgId, supplierId));
+    expect(recorded.version).toBe(1);
+
+    let token = editToken(await identity.query(api.suppliers.get, { orgId, supplierId }));
+    for (const phone of ["222", "333", "444"]) {
+      const saved = await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: token, contact: { phone } });
+      token = editToken(saved);
+    }
+    // A payable that recorded version 1 still matches the master: nothing it snapshots has moved.
+    const afterContact = await t.run((ctx) => snapshotSupplier(ctx, orgId, supplierId));
+    expect(afterContact).toEqual(recorded);
+
+    await identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: token, displayName: "Gulf Motors Group", reason: "Rebranded" });
+    const afterName = await t.run((ctx) => snapshotSupplier(ctx, orgId, supplierId));
+    expect(afterName.version).toBe(2);
+    expect(afterName.version).toBeGreaterThanOrEqual(recorded.version);
+    expect(afterName.name).toBe("Gulf Motors Group");
+  });
+
+  test("a refused update does not move the token", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    const { supplierId } = await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const loaded = await identity.query(api.suppliers.get, { orgId, supplierId });
+    expect(await refusalCode(identity.mutation(api.suppliers.update, { orgId, supplierId, expectedVersion: editToken(loaded) }))).toBe("SUPPLIER_NO_CHANGE");
+    expect(editToken(await identity.query(api.suppliers.get, { orgId, supplierId }))).toBe(editToken(loaded));
   });
 });

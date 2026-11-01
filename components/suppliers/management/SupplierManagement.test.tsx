@@ -20,6 +20,7 @@ type Row = {
 type Full = Row & {
   contact?: { phone?: string; email?: string; address?: string };
   version: number;
+  revision: number;
   deactivatedReason?: string;
   aliases: Array<{ _id: string; alias: string; status: "ACTIVE" | "RETIRED" }>;
 };
@@ -29,7 +30,7 @@ const world = vi.hoisted(() => ({
   permissions: [] as string[],
   permissionsLoading: false,
   paged: { results: [] as Row[], status: "Exhausted" as string },
-  searchRows: undefined as undefined | Row[],
+  searchRows: undefined as undefined | { rows: Row[]; truncated: boolean },
   record: undefined as undefined | Full,
   queryThrows: null as null | Error,
   queryCalls: [] as Array<{ name: string; args: unknown }>,
@@ -111,12 +112,16 @@ const SUP = "sup_gulf" as never;
 
 const gulf: Row = { _id: "sup_gulf", displayName: "Gulf Motors", legalName: "Gulf Motors LLC", status: "ACTIVE", taxId: "123", taxJurisdiction: "JO" };
 const dormant: Row = { _id: "sup_dormant", displayName: "Dormant Co", status: "INACTIVE" };
+const hitOne: Row = { _id: "sup_hit_1", displayName: "Search Hit One", status: "ACTIVE" };
+const hitTwo: Row = { _id: "sup_hit_2", displayName: "Search Hit Two", status: "ACTIVE" };
 
 function fullRecord(over: Partial<Full> = {}): Full {
   return {
     ...gulf,
     contact: { phone: "0790000000" },
     version: 3,
+    // The edit token differs from the snapshot version on purpose: the screen must send the token.
+    revision: 5,
     aliases: [
       { _id: "al_1", alias: "GM Trading", status: "ACTIVE" },
       { _id: "al_2", alias: "Old GM", status: "RETIRED" },
@@ -182,7 +187,7 @@ describe("list", () => {
   });
 
   test("search sends the typed text to the search query (name, alias or tax id) after the debounce", async () => {
-    world.searchRows = [gulf];
+    world.searchRows = { rows: [gulf], truncated: false };
     render(<SupplierListScreen orgId={ORG} />);
     fireEvent.change(screen.getByLabelText("Search suppliers"), { target: { value: "123" } });
     await waitFor(() =>
@@ -190,6 +195,27 @@ describe("list", () => {
     );
   });
 
+  test("a search that hit the server's cap says so in English and Arabic, and offers no load-more", async () => {
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      world.searchRows = { rows: [hitOne, hitTwo], truncated: true };
+      render(<SupplierListScreen orgId={ORG} />);
+      fireEvent.change(screen.getByLabelText((dictionaries[locale] as Record<string, string>).SuppliersSearchLabel), { target: { value: "shared" } });
+      await screen.findByRole("link", { name: "Search Hit One" });
+      const notice = await screen.findByText((dictionaries[locale] as Record<string, string>).SuppliersSearchTruncated.replace("{count}", "2"));
+      expect(notice.getAttribute("role")).toBe("status");
+      expect(screen.queryByRole("button", { name: (dictionaries[locale] as Record<string, string>).SuppliersLoadMore })).toBeNull();
+      cleanup();
+    }
+  });
+
+  test("a complete search result shows no truncation notice", async () => {
+    world.searchRows = { rows: [hitOne], truncated: false };
+    render(<SupplierListScreen orgId={ORG} />);
+    fireEvent.change(screen.getByLabelText("Search suppliers"), { target: { value: "gulf" } });
+    await screen.findByRole("link", { name: "Search Hit One" });
+    expect(screen.queryByText(/Refine your search/)).toBeNull();
+  });
   test("loading, empty, no-match and load-more states", () => {
     world.paged = { results: [], status: "LoadingFirstPage" };
     const { unmount } = render(<SupplierListScreen orgId={ORG} />);
@@ -415,18 +441,34 @@ describe("detail and edit", () => {
     expect(buildUpdate(base, { ...form, taxId: "", taxJurisdiction: "" }, "")).toEqual({ taxId: null, taxJurisdiction: null });
   });
 
-  test("edit saves with the loaded version as expectedVersion and only the changed field", async () => {
-    world.mutationImpl["suppliers:update"] = async () => ({ version: 3 });
+  test("edit saves with the loaded edit token as expectedVersion and only the changed field", async () => {
+    world.mutationImpl["suppliers:update"] = async () => ({ version: 3, revision: 6 });
     renderDetail();
     expect((screen.getByRole("button", { name: label("SuppliersEditSubmit") }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldLegalName")), { target: { value: "Gulf Motors Ltd" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     await waitFor(() => expect(world.mutationCalls).toHaveLength(1));
-    expect(world.mutationCalls[0].args).toEqual({ orgId: ORG, supplierId: "sup_gulf", expectedVersion: 3, legalName: "Gulf Motors Ltd" });
+    expect(world.mutationCalls[0].args).toEqual({ orgId: ORG, supplierId: "sup_gulf", expectedVersion: 5, legalName: "Gulf Motors Ltd" });
+  });
+
+  test("a contact-only edit sends the edit token, and the next save sends the token the server returned", async () => {
+    const answers = [{ version: 3, revision: 6 }, { version: 3, revision: 7 }];
+    world.mutationImpl["suppliers:update"] = async () => answers.shift();
+    renderDetail();
+    fireEvent.change(screen.getByLabelText(label("SuppliersFieldPhone")), { target: { value: "0791111111" } });
+    fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
+    await waitFor(() => expect(world.mutationCalls).toHaveLength(1));
+    expect(world.mutationCalls[0].args).toEqual({ orgId: ORG, supplierId: "sup_gulf", expectedVersion: 5, contact: { phone: "0791111111" } });
+
+    await waitFor(() => expect((screen.getByRole("button", { name: label("SuppliersEditSubmit") }) as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.change(screen.getByLabelText(label("SuppliersFieldEmail")), { target: { value: "a@gulf.example" } });
+    fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
+    await waitFor(() => expect(world.mutationCalls).toHaveLength(2));
+    expect(world.mutationCalls[1].args).toMatchObject({ expectedVersion: 6, contact: { phone: "0791111111", email: "a@gulf.example" } });
   });
 
   test("a display-name change asks for a reason and does not call the server without one", async () => {
-    world.mutationImpl["suppliers:update"] = async () => ({ version: 4 });
+    world.mutationImpl["suppliers:update"] = async () => ({ version: 4, revision: 6 });
     renderDetail();
     expect(screen.queryByLabelText(label("SuppliersNameReason"))).toBeNull();
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldDisplayName")), { target: { value: "Gulf Motors Group" } });
@@ -437,7 +479,7 @@ describe("detail and edit", () => {
     fireEvent.change(reason, { target: { value: "Rebranded" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     await waitFor(() => expect(world.mutationCalls).toHaveLength(1));
-    expect(world.mutationCalls[0].args).toMatchObject({ displayName: "Gulf Motors Group", reason: "Rebranded", expectedVersion: 3 });
+    expect(world.mutationCalls[0].args).toMatchObject({ displayName: "Gulf Motors Group", reason: "Rebranded", expectedVersion: 5 });
   });
 
   test("a version conflict keeps the user's edits out of the record and offers a reload", async () => {
