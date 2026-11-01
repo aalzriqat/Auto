@@ -10,6 +10,7 @@ import { discoverModules, functionMetadata, missingCurrentFunctions, renderCurre
 import { runRenderCurrentSpec } from "./renderCurrentSpec.mjs";
 import { specProblems } from "./specIndex.mjs";
 import { bundleForMetadata } from "./metadataBundle.mjs";
+import { writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 const sandboxes: string[] = [];
 
@@ -565,10 +566,10 @@ a({ label: "new" }); b({}); }`);
   fs.writeFileSync(path.join(root, "deployed.json"), JSON.stringify({ functions: [fn("a.js:update", {}), fn("b.js:update", {})] }));
   fs.writeFileSync(path.join(root, "partial.json"), JSON.stringify({ functions: [updated] }));
   fs.writeFileSync(path.join(root, "complete.json"), JSON.stringify({ functions: [updated, fn("b.js:update", {})] }));
-  fs.writeFileSync(path.join(root, "baseline.json"), '{"version":1,"entries":[]}');
+  writeBaselineDirectory(path.join(root, "baseline"), []);
   for (const current of [undefined, "partial.json", "complete.json"]) {
     const extra = current ? ["--current", current] : [];
-    const run = spawnSync(process.execPath, [path.resolve("scripts/contractSkew/cli.mjs"), "--mode", "production", "--spec", "deployed.json", "--baseline", "baseline.json", "--json", "report.json", ...extra], {
+    const run = spawnSync(process.execPath, [path.resolve("scripts/contractSkew/cli.mjs"), "--mode", "production", "--spec", "deployed.json", "--baseline", "baseline", "--json", "report.json", ...extra], {
       cwd: root, encoding: "utf8", timeout: 30_000,
     });
     expect(run.error).toBeUndefined();

@@ -8,6 +8,7 @@ import test from "node:test";
 import ts from "typescript";
 import { callExpressionAt } from "./baselineIdentity.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+import { readBaselineEntries, snapshotBaseline, writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 const checker = fileURLToPath(new URL("./checkBaselineIdentity.mjs", import.meta.url));
 const helper = fileURLToPath(new URL("./relocateBaseline.mjs", import.meta.url));
@@ -32,13 +33,13 @@ function fixture(head = source(156)) {
     contractPath, kind: "TYPE_UNKNOWN", cause: "reviewed cause", fingerprint: "reviewed fingerprint",
     multiplicity: 1, rationale: "reviewed rationale", issue: "SCRUM-866", expires: "2026-11-01",
   }));
-  const baseline = JSON.stringify({ version: 1, entries }, null, 2) + "\n";
-  fs.writeFileSync(path.join(root, "baseline.json"), baseline);
+  writeBaselineDirectory(path.join(root, "baseline"), entries);
+  const baseline = snapshotBaseline(path.join(root, "baseline"));
   const git = resolveGit();
   assert.ok(git, "git is required for real base-revision controls");
   const runGit = (args) => execFileSync(git, args, { cwd: root, encoding: "utf8", stdio: "pipe", timeout: 10000 });
   runGit(["init", "--quiet"]);
-  runGit(["add", "--", file, "baseline.json", "tsconfig.json"]);
+  runGit(["add", "--", file, "baseline", "tsconfig.json"]);
   runGit(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "base fixture"]);
   const base = runGit(["rev-parse", "HEAD"]).trim();
   fs.writeFileSync(path.join(root, file), head);
@@ -46,12 +47,16 @@ function fixture(head = source(156)) {
 }
 
 function run(script, root, args = []) {
-  const child = spawnSync(process.execPath, [script, "--baseline", "baseline.json", ...args], {
+  const child = spawnSync(process.execPath, [script, "--baseline", "baseline", ...args], {
     cwd: root, encoding: "utf8", timeout: 30000,
   });
   assert.ifError(child.error);
   return { status: child.status, output: child.stdout + child.stderr };
 }
+
+const snapshotOf = (root) => snapshotBaseline(path.join(root, "baseline"));
+// A shard holds its entries in canonical order (here: by contract path), whatever order the fixture listed them in.
+const inShardOrder = (entries) => [...entries].sort((a, b) => (a.contractPath < b.contractPath ? -1 : a.contractPath > b.contractPath ? 1 : 0));
 
 test("#690 line shift fails the PR check and identifies the replacement call", () => {
   const { root, baseline } = fixture();
@@ -60,7 +65,7 @@ test("#690 line shift fails the PR check and identifies the replacement call", (
   assert.ok(checked.output.includes(oldSite), checked.output);
   assert.ok(checked.output.includes(newSite), checked.output);
   assert.match(checked.output, /sourcingPayables:markPaid/);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
+  assert.equal(snapshotOf(root), baseline);
 });
 
 test("dry-run proposes and --write relocates byte-identical calls, preserving all review fields", () => {
@@ -68,11 +73,10 @@ test("dry-run proposes and --write relocates byte-identical calls, preserving al
   const proposed = run(helper, root, ["--base", base]);
   assert.equal(proposed.status, 0, proposed.output);
   assert.ok(proposed.output.includes(newSite), proposed.output);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
+  assert.equal(snapshotOf(root), baseline);
   const written = run(helper, root, ["--base", base, "--write"]);
   assert.equal(written.status, 0, written.output);
-  const actual = JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8"));
-  assert.deepEqual(actual.entries, entries.map((entry) => ({ ...entry, callSiteId: newSite })));
+  assert.deepEqual(readBaselineEntries(path.join(root, "baseline")), inShardOrder(entries.map((entry) => ({ ...entry, callSiteId: newSite }))));
   const checked = run(checker, root);
   assert.equal(checked.status, 0, checked.output);
 });
@@ -83,7 +87,7 @@ test("changed argument text requires human review and --write leaves the baselin
   assert.equal(refused.status, 10, refused.output);
   assert.match(refused.output, /human review/i);
   assert.ok(refused.output.includes(newSite), refused.output);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
+  assert.equal(snapshotOf(root), baseline);
 });
 
 test("ambiguous identical calls are never rewritten", () => {
@@ -91,7 +95,7 @@ test("ambiguous identical calls are never rewritten", () => {
   const refused = run(helper, root, ["--base", base, "--write"]);
   assert.equal(refused.status, 10, refused.output);
   assert.match(refused.output, /human review/i);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
+  assert.equal(snapshotOf(root), baseline);
 });
 
 test("a different function at the old coordinates does not satisfy the identity check", () => {
@@ -106,8 +110,8 @@ test("unreadable baseline or base revision cannot pass or rewrite evidence", () 
   const refused = run(helper, root, ["--base", "missing-base", "--write"]);
   assert.equal(refused.status, 3, refused.output);
   assert.match(refused.output, /Relocation UNAVAILABLE:?.*missing-base/s);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
-  fs.writeFileSync(path.join(root, "baseline.json"), "broken json");
+  assert.equal(snapshotOf(root), baseline);
+  fs.writeFileSync(path.join(root, "baseline", fs.readdirSync(path.join(root, "baseline"))[0]), "broken json");
   const malformed = run(checker, root);
   assert.equal(malformed.status, 3, malformed.output);
   assert.match(malformed.output, /Call identity check UNAVAILABLE:.*JSON/s);
@@ -115,9 +119,8 @@ test("unreadable baseline or base revision cannot pass or rewrite evidence", () 
 
 test("two old calls cannot both relocate onto one surviving identical call", () => {
   const { root, entries } = fixture();
-  const document = { version: 1, entries: [...entries, { ...entries[0], callSiteId: `${file}:151:13` }] };
-  const baseline = JSON.stringify(document, null, 2) + "\n";
-  fs.writeFileSync(path.join(root, "baseline.json"), baseline);
+  writeBaselineDirectory(path.join(root, "baseline"), [...entries, { ...entries[0], callSiteId: `${file}:151:13` }]);
+  const baseline = snapshotOf(root);
   // The second base site must contain a real call too, rather than testing a missing old expression.
   fs.writeFileSync(path.join(root, file), source(150).replace("\n}", `\n            ${expression};\n}`));
   const git = resolveGit();
@@ -128,7 +131,7 @@ test("two old calls cannot both relocate onto one surviving identical call", () 
   const refused = run(helper, root, ["--base", "HEAD", "--write"]);
   assert.equal(refused.status, 10, refused.output);
   assert.match(refused.output, /NEEDS HUMAN REVIEW \(changed, absent, ambiguous or occupied call\)/);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), baseline);
+  assert.equal(snapshotOf(root), baseline);
 });
 
 test("a deleted client file fails with no candidate instead of an empty successful scan", () => {
@@ -158,8 +161,7 @@ test("a multi-line call relocates when the head is checked out with CRLF and the
   assert.ok(fs.readFileSync(path.join(root, file), "utf8").includes("\r\n"), "the head must be CRLF");
   const written = run(helper, root, ["--base", multiBase, "--write"]);
   assert.equal(written.status, 0, written.output);
-  const actual = JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8"));
-  assert.deepEqual(actual.entries, entries.map((entry) => ({ ...entry, callSiteId: newSite })));
+  assert.deepEqual(readBaselineEntries(path.join(root, "baseline")), inShardOrder(entries.map((entry) => ({ ...entry, callSiteId: newSite }))));
   assert.equal(run(checker, root).status, 0);
 });
 
@@ -175,16 +177,21 @@ test("CRLF normalisation does not hide a real change inside a multi-line call", 
   const refused = run(helper, root, ["--base", multiBase, "--write"]);
   assert.equal(refused.status, 10, refused.output);
   assert.match(refused.output, /NEEDS HUMAN REVIEW \(changed, absent, ambiguous or occupied call\)/);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "baseline.json"), "utf8")).entries[0].callSiteId, entries[0].callSiteId);
+  assert.equal(readBaselineEntries(path.join(root, "baseline"))[0].callSiteId, entries[0].callSiteId);
 });
 
-test("--write preserves the baseline's CRLF line endings and every unrelated byte", () => {
-  const { root, baseline, base } = fixture();
-  const crlf = baseline.replace(/\n/g, "\r\n");
-  fs.writeFileSync(path.join(root, "baseline.json"), crlf);
+test("--write preserves each shard's CRLF line endings and every unrelated byte", () => {
+  const { root, base } = fixture();
+  const directory = path.join(root, "baseline");
+  for (const name of fs.readdirSync(directory)) {
+    const shard = path.join(directory, name);
+    fs.writeFileSync(shard, fs.readFileSync(shard, "utf8").replace(/\n/g, "\r\n"));
+  }
+  const crlf = snapshotOf(root);
+  assert.ok(crlf.includes("\r\n"));
   const written = run(helper, root, ["--base", base, "--write"]);
   assert.equal(written.status, 0, written.output);
-  assert.equal(fs.readFileSync(path.join(root, "baseline.json"), "utf8"), crlf.replaceAll(oldSite, newSite));
+  assert.equal(snapshotOf(root), crlf.replaceAll(oldSite, newSite));
 });
 
 test("request maps inside unrelated wrapper calls cannot authorize relocation", () => {
@@ -196,7 +203,7 @@ test("request maps inside unrelated wrapper calls cannot authorize relocation", 
 
 test("an empty baseline is refused, not reported as matching zero entries", () => {
   const { root } = fixture();
-  fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }, null, 2) + "\n");
+  writeBaselineDirectory(path.join(root, "baseline"), []);
   const refused = run(checker, root);
   assert.equal(refused.status, 3, refused.output);
   assert.match(refused.output, /no baseline entries/i);
