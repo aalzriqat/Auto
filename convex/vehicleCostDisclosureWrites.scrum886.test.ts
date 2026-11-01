@@ -20,6 +20,13 @@ import type { Id } from "./_generated/dataModel";
 import { supplierIdFor } from "../test-utils/supplierFixture";
 import { DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 
+// The pilot containment refuses every ownership change before it reaches the code under test; the
+// buy-out controls below need the door open (shipped-state refusals live in rt11DoorContainment.test.ts).
+vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>
+  (await import("../test-utils/rt11DoorSwitches")).openRt11Doors(
+    await importOriginal<typeof import("./utils/rt11DoorContainment")>()
+  ));
+
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }), check: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
@@ -40,8 +47,13 @@ const IMPORTER = ["view:vehicles", "create:vehicles"];
 const SALES = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "SALES")!.permissions as string[];
 // A requester who MAY read cost: the control for "a cost reader keeps the detailed answers".
 const COST_REQUESTER = ["view:vehicles", "edit:vehicles:request", "view:cost_price"];
+// Direct editors (`vehicles.update` needs edit:vehicles). A custom role: no default template pairs
+// edit:vehicles with a missing view:cost_price.
+const EDITOR = ["view:vehicles", "edit:vehicles"];
+const FINANCE_EDITOR = ["view:vehicles", "edit:vehicles", "manage:finance"];
+const COST_EDITOR = ["view:vehicles", "edit:vehicles", "view:cost_price"];
 
-type Who = "owner" | "importer" | "sales" | "costRequester";
+type Who = "owner" | "importer" | "sales" | "costRequester" | "editor" | "financeEditor" | "costEditor";
 
 async function seed() {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -57,6 +69,9 @@ async function seed() {
     importer: IMPORTER,
     sales: SALES,
     costRequester: COST_REQUESTER,
+    editor: EDITOR,
+    financeEditor: FINANCE_EDITOR,
+    costEditor: COST_EDITOR,
   };
   const actors = {} as Record<Who, ReturnType<typeof t.withIdentity>>;
   const userIds = {} as Record<Who, Id<"users">>;
@@ -248,5 +263,63 @@ describe("SCRUM-886 round 4: requestUpdate gives a caller without cost access no
     await expect(s.actors.costRequester.mutation(api.vehicleEdits.requestUpdate, {
       orgId: s.orgId, vehicleId: s.sourcedId, payload: { sourceCost: STORED_SOURCE_COST },
     })).rejects.toThrow("No changes detected.");
+  });
+});
+
+describe("SCRUM-886 round 5: vehicles.update gives a caller without cost access no equality oracle", () => {
+  const COST_REFUSAL = { data: { code: "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS" } };
+  const update = (s: Seeded, who: Who, vehicleId: Id<"vehicles">, patch: Record<string, unknown>) =>
+    s.actors[who].mutation(api.vehicles.update, { orgId: s.orgId, vehicleId, ...patch });
+
+  test("an editor without cost access is refused for a cost equal to the stored one and for a different one, identically", async () => {
+    const s = await seed();
+    const equal = await refusalText(update(s, "editor", s.stockId, { purchasePrice: STORED_PURCHASE_PRICE }));
+    const different = await refusalText(update(s, "editor", s.stockId, { purchasePrice: STORED_PURCHASE_PRICE + 1 }));
+    expect(equal).toBe(different);
+    await expect(update(s, "editor", s.stockId, { purchasePrice: STORED_PURCHASE_PRICE })).rejects.toMatchObject(COST_REFUSAL);
+    await expect(update(s, "editor", s.stockId, { minimumProfit: STORED_MINIMUM_PROFIT })).rejects.toMatchObject(COST_REFUSAL);
+    await expect(update(s, "editor", s.sourcedId, { sourceCost: STORED_SOURCE_COST })).rejects.toMatchObject(COST_REFUSAL);
+  });
+
+  test("a different cost from the same editor is refused and nothing is written", async () => {
+    const s = await seed();
+    await expect(update(s, "editor", s.stockId, { minimumProfit: STORED_MINIMUM_PROFIT + 1, sellingPrice: 26_000 }))
+      .rejects.toMatchObject(COST_REFUSAL);
+    await expect(update(s, "editor", s.sourcedId, { sourceCost: STORED_SOURCE_COST + 1 })).rejects.toMatchObject(COST_REFUSAL);
+    const stock = await s.t.run((ctx) => ctx.db.get(s.stockId));
+    const sourced = await s.t.run((ctx) => ctx.db.get(s.sourcedId));
+    expect(stock?.minimumProfit).toBe(STORED_MINIMUM_PROFIT);
+    expect(stock?.sellingPrice).toBe(25_000);
+    expect(sourced?.sourceCost).toBe(STORED_SOURCE_COST);
+  });
+
+  test("control: the same editor sending no cost keys still edits the vehicle", async () => {
+    const s = await seed();
+    await update(s, "editor", s.stockId, { sellingPrice: 26_000 });
+    expect((await s.t.run((ctx) => ctx.db.get(s.stockId)))?.sellingPrice).toBe(26_000);
+  });
+
+  test("control: a holder of view:cost_price still edits a cost", async () => {
+    const s = await seed();
+    await update(s, "costEditor", s.stockId, { minimumProfit: STORED_MINIMUM_PROFIT + 1 });
+    expect((await s.t.run((ctx) => ctx.db.get(s.stockId)))?.minimumProfit).toBe(STORED_MINIMUM_PROFIT + 1);
+  });
+
+  test("control: a finance editor without view:cost_price completes a consignment buy-out", async () => {
+    const s = await seed();
+    await update(s, "financeEditor", s.sourcedId, {
+      sourceType: "STOCK", purchasePrice: 9_800, purchasePaymentMethod: "CASH",
+    });
+    const bought = await s.t.run((ctx) => ctx.db.get(s.sourcedId));
+    expect(bought?.sourceType).toBe("STOCK");
+    expect(bought?.purchasePrice).toBe(9_800);
+  });
+
+  test("an editor with neither manage:finance nor view:cost_price is refused for ownership-change keys", async () => {
+    const s = await seed();
+    await expect(update(s, "editor", s.sourcedId, {
+      sourceType: "STOCK", purchasePrice: 9_800, purchasePaymentMethod: "CASH",
+    })).rejects.toMatchObject(COST_REFUSAL);
+    expect((await s.t.run((ctx) => ctx.db.get(s.sourcedId)))?.sourceType).toBe("SOURCED");
   });
 });
