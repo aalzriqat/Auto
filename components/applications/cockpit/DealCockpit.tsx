@@ -925,12 +925,21 @@ export function DealCockpit({
   const concessionEntitlementMinor = supplierConcessionBasis?.eligible ? supplierConcessionBasis.entitlementMinor : null;
   const concessionCurrency = supplierConcessionBasis?.eligible ? supplierConcessionBasis.currency : null;
   const concessionSupplierName = supplierConcessionBasis?.eligible ? supplierConcessionBasis.supplierName : null;
+  const concessionSupplierId = supplierConcessionBasis?.eligible ? supplierConcessionBasis.supplierId : null;
   const supplierBasis = useMemo(
     () =>
-      concessionEntitlementMinor !== null && concessionCurrency !== null && concessionSupplierName !== null
-        ? { entitlementMinor: concessionEntitlementMinor, currency: concessionCurrency, supplierName: concessionSupplierName }
+      concessionEntitlementMinor !== null &&
+      concessionCurrency !== null &&
+      concessionSupplierName !== null &&
+      concessionSupplierId !== null
+        ? {
+            entitlementMinor: concessionEntitlementMinor,
+            currency: concessionCurrency,
+            supplierName: concessionSupplierName,
+            supplierId: concessionSupplierId,
+          }
         : null,
-    [concessionEntitlementMinor, concessionCurrency, concessionSupplierName]
+    [concessionEntitlementMinor, concessionCurrency, concessionSupplierName, concessionSupplierId]
   );
 
   /**
@@ -3820,6 +3829,7 @@ export function DealCockpit({
                   supplierGapShareMinor: values.supplierGapShareMinor,
                   observedSupplierEntitlementMinor: values.observedSupplierEntitlementMinor,
                   observedSupplierName: values.observedSupplierName,
+                  observedSupplierId: values.observedSupplierId,
                   notes: values.notes || undefined,
                 }),
               "GapResolved"
@@ -5386,6 +5396,7 @@ export function DealCockpitView({
       supplierGapShareMinor?: number;
       observedSupplierEntitlementMinor?: number;
       observedSupplierName?: string;
+      observedSupplierId?: Id<"suppliers">;
       notes: string;
       economicsStamp: string | undefined;
     }) => Promise<void>;

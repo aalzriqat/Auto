@@ -1,7 +1,7 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
-import { codeUnitCompare } from "./supplierNames";
+import { codeUnitCompare, normalizeNameKey } from "./supplierNames";
 import { requireOwnedRow } from "./tenancy";
 
 /**
@@ -60,12 +60,31 @@ export const SUPPLIER_ERROR = {
   LINK_FROZEN: "SUPPLIER_LINK_FROZEN",
   /** SCRUM-868 P2 (N9): a supplier id was sent in a role the vehicle's shape does not have. */
   ROLE_CONFLICT: "SUPPLIER_ROLE_CONFLICT",
+  /**
+   * SCRUM-868 P3 round 2: a supplier concession recorded before supplier ids existed, not yet bound to its
+   * supplier. Distinct from a stale basis because the remedy differs: re-recording is impossible after
+   * handover, and the release repair or a reviewed correction is the step that exists.
+   */
+  CONCESSION_BASIS_UNBOUND: "SUPPLIER_CONCESSION_BASIS_UNBOUND",
+  /**
+   * SCRUM-868 P4/P5 round 4: a consignment vehicle with money and no supplier link takes its FIRST link only
+   * from a caller who holds manage:finance. Refused here, never silently downgraded to the frozen refusal,
+   * so the user is told which role can do it.
+   */
+  FIRST_LINK_NEEDS_FINANCE_MANAGER: "SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER",
+  /** SCRUM-868 P4/P5 round 4: the picked supplier is not confirmed by the names stored on the vehicle and its money rows. */
+  FIRST_LINK_NOT_PROVEN: "SUPPLIER_FIRST_LINK_NOT_PROVEN",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
 /** Same message for a missing and a foreign id: no existence oracle (TEN-1, invariant I2). */
 export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
+/** English equals the dictionary entry under ServerError_<code> (lib/i18n/domains/common.ts). */
+export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE =
+  "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the record is then linked to that supplier by the next supplier identity repair, which runs with every release.";
+export const SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE =
+  "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the concession is then linked to that supplier by the next supplier identity repair, which runs with every release.";
 const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 export function throwSupplierError(
@@ -341,6 +360,56 @@ async function readSupplierSnapshot(
  * copied into a new record; the name snapshot already on the source record still carries the history.
  * Read-only. It lives here because only the supplier modules read the supplier tables.
  */
+
+/**
+ * Asserts that a row has a resolved supplierId in the given orgId (N5, N6, N10).
+ * Throws SUPPLIER_ERROR.IDENTITY_UNRESOLVED with SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE if absent or foreign.
+ * Note: Does NOT refuse if supplier is inactive (author self-attack #4: deactivation allows settlement).
+ */
+export async function requireResolvedSupplierId(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  row: { supplierId?: Id<"suppliers">; origin?: string },
+): Promise<Id<"suppliers"> | undefined> {
+  if (row.origin === "OPENING") {
+    return undefined;
+  }
+  if (!row.supplierId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  const supplier = await ctx.db.get("suppliers", row.supplierId);
+  if (!supplier || supplier.orgId !== orgId) {
+    throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  return row.supplierId;
+}
+/**
+ * Resolves the supplier a SOURCED sale will owe (or be owed by) and its snapshot version, before any write.
+ * Fails closed with SUPPLIER_IDENTITY_UNRESOLVED when the vehicle carries no supplier id, when the id
+ * does not exist, or when it belongs to another organization (N5, N6). One message for all three, so
+ * the refusal is not an existence oracle (TEN-1). A completed sale must never write a payable or a
+ * receivable that the settlement doors would then refuse for the rest of its life.
+ * Does not refuse an inactive supplier: deactivation never strands an obligation (N10).
+ *
+ * Returns the id, the display name and the version from ONE read of the master, so a record that stores
+ * all three stores a pair that existed together (N3): the name and the version are never taken from
+ * different sources (the vehicle's intake label, say, beside the master's current version).
+ */
+export async function requireSupplierSnapshotForCompletion(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers"> | undefined,
+): Promise<{ supplierId: Id<"suppliers">; supplierSnapshotName: string; supplierSnapshotVersion: number }> {
+  const supplier = supplierId ? await ctx.db.get("suppliers", supplierId) : null;
+  if (!supplier || supplier.orgId !== orgId) {
+    return throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE);
+  }
+  return {
+    supplierId: supplier._id,
+    supplierSnapshotName: supplier.displayName,
+    supplierSnapshotVersion: supplier.version,
+  };
+}
 export async function ownedStoredSupplierId(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
@@ -349,6 +418,44 @@ export async function ownedStoredSupplierId(
   if (storedId === undefined) return undefined;
   const row = await ctx.db.get("suppliers", storedId);
   return row !== null && row.orgId === orgId ? storedId : undefined;
+}
+
+/** The alias keys read for one name before the lookup gives up and treats it as no evidence (fail closed). */
+const ALIAS_EVIDENCE_READ_BOUND = 50;
+
+export type SupplierNameEvidence =
+  | { kind: "MATCH"; matchedOn: "DISPLAY_NAME" | "ALIAS"; version: number }
+  | { kind: "NOT_IN_ORG" }
+  | { kind: "NO_NAME_MATCH" };
+
+/**
+ * Whether `name` is the display name, or an ACTIVE or RETIRED alias, of a supplier of this organization
+ * (SCRUM-868 P3 release repair). Read-only; never throws and never writes. Corroboration only: the caller
+ * already holds the supplier id from a frozen vehicle link, and this never searches for a supplier BY name.
+ * An alias lookup that fills its read bound without finding this supplier counts as no evidence.
+ * Returns the master's current version so the caller can reject a snapshot version the master never reached.
+ */
+export async function supplierNameEvidence(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  supplierId: Id<"suppliers">,
+  name: string,
+): Promise<SupplierNameEvidence> {
+  const supplier = await ctx.db.get("suppliers", supplierId);
+  if (!supplier || supplier.orgId !== orgId) return { kind: "NOT_IN_ORG" };
+  const key = normalizeNameKey(name);
+  if (key === "") return { kind: "NO_NAME_MATCH" };
+  if (supplier.displayNameKey === key) return { kind: "MATCH", matchedOn: "DISPLAY_NAME", version: supplier.version };
+  for (const status of ["ACTIVE", "RETIRED"] as const) {
+    const aliases = await ctx.db
+      .query("supplierAliases")
+      .withIndex("by_org_and_aliasKey_and_status", (q) => q.eq("orgId", orgId).eq("aliasKey", key).eq("status", status))
+      .take(ALIAS_EVIDENCE_READ_BOUND);
+    if (aliases.some((alias) => alias.supplierId === supplier._id)) {
+      return { kind: "MATCH", matchedOn: "ALIAS", version: supplier.version };
+    }
+  }
+  return { kind: "NO_NAME_MATCH" };
 }
 
 // ─── Duplicate detection (read-only; callers run it inside the lock) ──────────────────────────

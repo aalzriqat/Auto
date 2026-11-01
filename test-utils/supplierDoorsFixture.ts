@@ -62,11 +62,25 @@ export async function seedSupplierDoors(tag = "s869") {
   const org = await addSupplierOrg(t, tag);
   const viewer = await addViewOnlyUser(t, org.orgId, tag);
   const other = await addSupplierOrg(t, `${tag}x`);
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId: org.orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: org.userId,
+      createdAt: Date.now(),
+      updatedBy: org.userId,
+      updatedAt: Date.now(),
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId: org.orgId, vin: `VIN${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 12_500, status: "SOLD",
-      sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
+      sourceType: "SOURCED", sourcedSupplierId: supplierId, sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
     } as never)
   );
   const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId: org.orgId, firstName: "Jane", lastName: "Doe" }));
@@ -76,14 +90,14 @@ export async function seedSupplierDoors(tag = "s869") {
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
     })
   );
-  return { t, ...org, viewer, other, vehicleId, saleId };
+  return { t, ...org, viewer, other, supplierId, vehicleId, saleId };
 }
 export type SupplierDoors = Awaited<ReturnType<typeof seedSupplierDoors>>;
 
 export async function insertPayable(s: SupplierDoors, amountDue: number) {
   return await s.t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Amman Importer Co",
+      orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, supplierId: s.supplierId, supplierSnapshotVersion: 1, sourcedFromName: "Amman Importer Co",
       amountDue, currency: "JOD", status: "PENDING", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );
@@ -92,7 +106,7 @@ export async function insertPayable(s: SupplierDoors, amountDue: number) {
 export async function insertReceivable(s: SupplierDoors, amountDue: number) {
   return await s.t.run((ctx) =>
     ctx.db.insert("vehicleSupplierReceivables", {
-      orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Amman Importer Co",
+      orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, supplierId: s.supplierId, supplierSnapshotVersion: 1, sourcedFromName: "Amman Importer Co",
       amountDue, currency: "JOD", status: "OPEN", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
     } as never)
   );

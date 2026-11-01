@@ -33,6 +33,7 @@ import {
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -121,10 +122,13 @@ async function seed(tag: string, options: { transactionLimits?: boolean } = {}) 
 type Seed = Awaited<ReturnType<typeof seed>>;
 
 const addSourcedVehicle = (s: Seed, tag: string) =>
-  s.t.run((ctx) =>
+  s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin: `VINS2${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10, color: "White",
       fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
+      // A SOURCED car always carries its frozen supplier link in production (SCRUM-868 P2); sale completion
+      // and the settlement doors refuse one without it (P3), so the fixture carries it too.
+      sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"),
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
     })
   );

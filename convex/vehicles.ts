@@ -13,6 +13,7 @@ import { internalMutation, mutation } from "./functions";
 import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
+import { writeAuditLog } from "./utils/auditLog";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import {
@@ -1559,7 +1560,25 @@ export const update = mutation({
     // SCRUM-868 P2: the consignment supplier link (N3: the name is the server's snapshot; N11: it cannot
     // be swapped once money exists against the vehicle). Refused before any write.
     if (sourcedSnapshot) {
-      await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot);
+      // This is the one door that can give a consignment car with money its FIRST supplier link: it passes
+      // the caller's role (manage:finance is checked inside, next to the proof of the picked supplier).
+      // The edit-request doors in vehicleEdits.ts pass no role and can never take that exception.
+      const firstLinkProof = await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot, { role });
+      if (firstLinkProof) {
+        await writeAuditLog(ctx, user, {
+          action: "vehicle.supplierFirstLink",
+          targetTable: "vehicles",
+          targetId: vehicle._id,
+          orgId: args.orgId,
+          before: { sourcedSupplierId: null, sourcedFromName: vehicle.sourcedFromName ?? null },
+          after: {
+            sourcedSupplierId: sourcedSnapshot.supplierId,
+            sourcedFromName: sourcedSnapshot.name,
+            nameMatchedOn: firstLinkProof.nameMatchedOn,
+            rowsChecked: firstLinkProof.rowsChecked,
+          },
+        });
+      }
       // Written only when the link actually moves. Re-sending the supplier the vehicle already has changes
       // nothing: the stored name stays the snapshot taken when the link was made (N3), and the "supplier
       // terms changed" guard below does not fire on an echo.

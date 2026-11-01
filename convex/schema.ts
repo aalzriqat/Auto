@@ -31,6 +31,17 @@ import {
 import { directPaymentValidator } from "./utils/handoverCostPayment";
 import { consignedSettlementRouteValidator } from "./utils/vehicleOwnership";
 
+/**
+ * SCRUM-868 P3 round 2: the audit stamp the release repair writes when it gives a row written before supplier
+ * ids existed its `supplierId`. Optional in storage forever (every other row never has it). It records HOW the
+ * id was found: always the vehicle's frozen supplier link, never a name; the name only corroborated it.
+ */
+const supplierIdentityRepairStamp = v.object({
+  at: v.number(),
+  source: v.literal("VEHICLE_LINK"),
+  nameMatchedOn: v.union(v.literal("DISPLAY_NAME"), v.literal("ALIAS")),
+});
+
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
   v.literal("REJECTED"),
@@ -53,6 +64,7 @@ orgId: v.id("organizations"),
      */
     supplierId: v.optional(v.id("suppliers")),
 supplierSnapshotVersion: v.optional(v.number()),
+supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
 amountDueMinor: v.number(),
 amountRecoveredMinor: v.number(),
 currency: v.string(),
@@ -111,6 +123,7 @@ orgId: v.id("organizations"),
     sourcedFromName: v.string(),
 supplierId: v.optional(v.id("suppliers")),
 supplierSnapshotVersion: v.optional(v.number()),
+supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
 amountDue: v.number(),
 currency: v.string(),
 // PENDING is retained permanently as a legacy value. Every row written
@@ -1720,6 +1733,7 @@ export default defineSchema({
     /** SCRUM-868 P1 (widen-only, unread): the supplier master row and its `version` when the name was captured. */
     supplierId: v.optional(v.id("suppliers")),
     supplierSnapshotVersion: v.optional(v.number()),
+    supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
     /** The dealership's agency margin on the deal — what the supplier owes back. */
     amountDue: v.number(),
     currency: v.string(),
@@ -3497,6 +3511,7 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
       supplierName: v.string(),
       /** SCRUM-868 P1 (widen-only, unread): the supplier master row the concession was agreed against. */
       supplierId: v.optional(v.id("suppliers")),
+      supplierIdentityRepair: v.optional(supplierIdentityRepairStamp),
     })),
     customerGapCashToDealerMinor: v.optional(v.number()),
     customerGapInstallmentToDealerMinor: v.optional(v.number()),
@@ -8043,6 +8058,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     sharedLegalIdentityReason: v.optional(v.string()),
     /** Bumped by every change to a snapshot field (name, legal name, tax identity). */
     version: v.number(),
+    /**
+     * The edit token (SCRUM-887): raised by EVERY successful `suppliers.update`, contact and shared-
+     * identity link included, so `expectedVersion` protects every field the screen writes (the
+     * strong-validator rule of RFC 9110 section 13: the token must change whenever the
+     * representation does). Absent on a row never updated since this field was added; the token is
+     * then `version`. A money record never reads it: records snapshot `version` only.
+     */
+    editRevision: v.optional(v.number()),
     origin: v.union(v.literal("MANUAL"), v.literal("MIGRATION"), v.literal("IMPORT")),
     createdBy: v.id("users"),
     createdAt: v.number(),

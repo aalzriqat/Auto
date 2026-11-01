@@ -1,0 +1,49 @@
+{
+  "id": "payables-close-warning-names-unverifiable-opening-source",
+  "fingerprint": "1196a175c4c09c430333e8697bcdb53a3a213a0de00a73d07c7b4e99d86db8f5",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "openingPayable": "source_draft_deleted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierPayablesWarning",
+      "value": "OPENING_SOURCE_TEXT"
+    },
+    {
+      "observable": "tooManyRecordsWarning",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "M1: period close names an unverifiable opening-balance source, not 'too many records'"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "7e947b6f5cd90b60f6f75a13d5bbcac752f3a6ec"
+  }
+}

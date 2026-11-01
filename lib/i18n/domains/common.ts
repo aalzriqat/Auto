@@ -591,6 +591,15 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "اسم المورّد مطلوب للمركبة المشتراة على الحساب.",
   ],
   // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
+  ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
+    "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the record is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "هوية المورّد غير محددة لهذا السجل. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط السجل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
+  ],
+  // SCRUM-868 P3 round 2. English equals the server message exactly.
+  ServerError_SUPPLIER_CONCESSION_BASIS_UNBOUND: [
+    "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the concession is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "سُجّل تنازل المورّد هذا قبل تتبّع المورّدين بالهوية، ولم يُربط بمورّده بعد. لا تُسجّله من جديد، فلا يمكن تغييره بعد التسليم. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط التنازل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
+  ],
   ServerError_SUPPLIER_IDENTITY_REQUIRED: [
     "A supplier is required.",
     "المورّد مطلوب.",
@@ -606,6 +615,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_SUPPLIER_LINK_FROZEN: [
     "This vehicle's supplier can no longer be changed because money has already been recorded against it. Ask your accountant for a reviewed correction.",
     "لا يمكن تغيير مورّد هذه المركبة بعد الآن لأنه سُجّل عليها مبلغ مالي. اطلب من المحاسب تصحيحاً مراجعاً.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER: [
+    "This vehicle has money recorded against it but no supplier yet. Only a finance manager can set its first supplier. Ask a finance manager to link the vehicle on the vehicle edit screen; an edit request cannot do it.",
+    "سُجّل على هذه المركبة مبلغ مالي ولا مورّد لها بعد. المدير المالي وحده يستطيع تحديد مورّدها الأول. اطلب من مدير مالي ربط المركبة من شاشة تعديل المركبة؛ فطلب التعديل لا يستطيع ذلك.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NOT_PROVEN: [
+    "This supplier cannot be linked because the supplier name stored on the vehicle and on its money records does not match this supplier's name or one of its aliases. Pick the supplier those records were made for, or ask a finance manager to add the old name as an alias of that supplier first. Nothing was changed.",
+    "لا يمكن ربط هذا المورّد لأن اسم المورّد المحفوظ على المركبة وعلى سجلاتها المالية لا يطابق اسم هذا المورّد ولا أحد أسمائه البديلة. اختر المورّد الذي أُنشئت له هذه السجلات، أو اطلب من مدير مالي إضافة الاسم القديم اسماً بديلاً لهذا المورّد أولاً. لم يتم تغيير أي شيء.",
   ],
   ServerError_SUPPLIER_ROLE_CONFLICT: [
     "This supplier was sent in a role the vehicle does not have. A consignment supplier belongs to a consignment vehicle, and a purchase creditor belongs to an owned vehicle bought on account.",
@@ -1452,6 +1469,8 @@ export const commonEn = {
   ClosePeriodWarnSupplierPayablesReconPending: "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.",
   ClosePeriodWarnSupplierPayablesReconPostCutoff: "Supplier payables reconciliation could not be completed as of the period end: supplier payable or accounts payable activity is dated after that date (or the date is not usable), and the payables cannot be restated to it. Review supplier payables manually.",
+  ClosePeriodWarnSupplierPayablesReconInconsistentReference: "Supplier payables reconciliation could not be completed: a journal line on the supplier payables account is not consistent with this organization's records (its journal entry is missing or belongs to another organization, or the line carries another organization's id). Review the ledger manually.",
+  ClosePeriodWarnSupplierPayablesReconOpeningSource: "Supplier payables reconciliation could not be completed: the opening-balance source records of a supplier payable could not be verified. Review the opening balances manually.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "Customer deposits reconciliation could not be completed as of the period end: deposit activity was recorded after that date, and the deposit side cannot be restated to it. Review customer deposits manually.",
   ClosePeriodOverrideReasonLabel: "Override reason",
   ClosePeriodOverrideReasonPlaceholder: "Explain why this period is being closed despite open blockers.",
@@ -2610,6 +2629,8 @@ export const commonAr = {
   ClosePeriodWarnSupplierPayablesReconPending: "تعذّر إكمال تسوية ذمم الموردين: ما زالت قيود الترحيل المحاسبية أو المسودات المؤثرة على ذمم الموردين معلقة. عالجها ثم أعد التحقق.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "تعذّر إكمال تسوية ذمم الموردين: عدد السجلات أكبر من أن يُتحقق منه في مرة واحدة. راجع ذمم الموردين يدوياً.",
   ClosePeriodWarnSupplierPayablesReconPostCutoff: "تعذّر إكمال تسوية ذمم الموردين حتى نهاية الفترة: يوجد نشاط على ذمم الموردين أو حساب الذمم الدائنة مؤرخ بعد ذلك التاريخ (أو أن التاريخ غير صالح)، ولا يمكن إعادة احتساب الذمم إلى تاريخ النهاية. راجع ذمم الموردين يدوياً.",
+  ClosePeriodWarnSupplierPayablesReconInconsistentReference: "تعذّر إكمال تسوية ذمم الموردين: يوجد سطر قيد على حساب ذمم الموردين غير متسق مع سجلات هذه المؤسسة (قيد اليومية الخاص به مفقود أو يعود إلى مؤسسة أخرى، أو أن السطر يحمل معرّف مؤسسة أخرى). راجع الأستاذ العام يدوياً.",
+  ClosePeriodWarnSupplierPayablesReconOpeningSource: "تعذّر إكمال تسوية ذمم الموردين: لم يمكن التحقق من سجلات مصدر الرصيد الافتتاحي لإحدى ذمم الموردين. راجع الأرصدة الافتتاحية يدوياً.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "تعذّر إكمال تسوية عربونات العملاء حتى نهاية الفترة: سُجّل نشاط على العربونات بعد ذلك التاريخ ولا يمكن إعادة احتساب جانب العربونات إلى تاريخ النهاية. راجع عربونات العملاء يدوياً.",
   ClosePeriodOverrideReasonLabel: "سبب التجاوز",
   ClosePeriodOverrideReasonPlaceholder: "اشرح سبب إغلاق هذه الفترة رغم وجود معوقات.",

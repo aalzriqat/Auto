@@ -94,8 +94,22 @@ async function addVehicle(t: T, orgId: Id<"organizations">, tag: string, extra: 
 async function seed(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
   const org = await addOrg(t, tag);
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId: org.orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: org.userId,
+      createdAt: Date.now(),
+      updatedBy: org.userId,
+      updatedAt: Date.now(),
+    })
+  );
   const sourcedId = await addVehicle(t, org.orgId, `${tag}S`, {
-    sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
+    sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourcedSupplierId: supplierId, sourceCost: 9_500,
   });
   const stockId = await addVehicle(t, org.orgId, `${tag}K`, { sourceType: "STOCK", purchasePrice: 8_000 });
   return { t, ...org, sourcedId, stockId };

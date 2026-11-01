@@ -1,3 +1,9 @@
+import {
+  SUPPLIER_ERROR,
+  SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+  throwSupplierError,
+  requireSupplierSnapshotForCompletion,
+} from "./supplierRegistry";
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
@@ -357,6 +363,10 @@ type PreparedSaleCompletion = {
   // left unposted. Both branches below now set this from `commissionAmount`
   // alone, so the mode no longer decides it.
   accrueAtCompletion: boolean;
+  resolvedSupplierId?: Id<"suppliers">;
+  /** The master's display name and version, from the SAME read as `resolvedSupplierId` (N3). */
+  supplierSnapshotName?: string;
+  supplierSnapshotVersion?: number;
 };
 
 /**
@@ -516,6 +526,25 @@ async function prepareSaleCompletion(
   assertVehicleReadyForSale(vehicle);
   if (intent === "COMPLETION" && vehicle.sourceType !== "SOURCED") {
     await assertOpeningVehicleBasis(ctx, args.orgId, args.vehicleId, args.saleDate);
+  }
+  let supplierSnapshotVersion: number | undefined;
+  let supplierSnapshotName: string | undefined;
+  let resolvedSupplierId: Id<"suppliers"> | undefined;
+  if (intent === "COMPLETION" && vehicle.sourceType === "SOURCED") {
+    const rawName = vehicle.sourcedFromName?.trim();
+    if (!rawName || rawName === "Unknown supplier") {
+      throwSupplierError(
+        SUPPLIER_ERROR.IDENTITY_UNRESOLVED,
+        SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+      );
+    }
+    // The id, not the name, is the identity (N5/N6): a SOURCED car with no id, a missing supplier or
+    // another organization's supplier refuses HERE, before any write, so no obligation is created
+    // that the settlement doors would later refuse for good.
+    const snap = await requireSupplierSnapshotForCompletion(ctx, args.orgId, vehicle.sourcedSupplierId);
+    resolvedSupplierId = snap.supplierId;
+    supplierSnapshotName = snap.supplierSnapshotName;
+    supplierSnapshotVersion = snap.supplierSnapshotVersion;
   }
 
   const customer = await ctx.db.get(args.customerId);
@@ -799,6 +828,9 @@ async function prepareSaleCompletion(
     accrueAtCompletion,
     supplierConcessionMinor,
     consignedFinancedNetMinor: consignedFinancedNet?.netMinor,
+    resolvedSupplierId,
+    supplierSnapshotName,
+    supplierSnapshotVersion,
   };
 }
 
@@ -2276,7 +2308,9 @@ async function applySaleCompletionSideEffects(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       saleId,
-      sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
+      supplierId: prepared.resolvedSupplierId,
+      supplierSnapshotVersion: prepared.supplierSnapshotVersion,
+      sourcedFromName: prepared.supplierSnapshotName ?? "",
       amountDue: marginAmount,
       currency: prepared.currency,
       alreadyReceivedAmount: appliedToSupplierSettlement,
@@ -2290,7 +2324,9 @@ async function applySaleCompletionSideEffects(
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       saleId,
-      sourcedFromName: prepared.vehicle.sourcedFromName ?? "Unknown supplier",
+      supplierId: prepared.resolvedSupplierId,
+      supplierSnapshotVersion: prepared.supplierSnapshotVersion,
+      sourcedFromName: prepared.supplierSnapshotName ?? "",
       // At the currency's scale, mirroring the receivable side. `sourceCost` is
       // a decimal a person typed and the capitalized cost is a sum of them, so
       // stored raw this becomes a payable no payment can close: `recordPayment`

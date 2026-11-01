@@ -29,6 +29,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: language.rtl, locale: language.rtl ? "ar" : "en" }),
 }));
 
+import type { Id } from "@/convex/_generated/dataModel";
 import { ResolveGapDialog } from "./ResolveGapDialog";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 
@@ -354,7 +355,7 @@ describe("the figures are a snapshot", () => {
 });
 
 describe("the supplier's concession on a SOURCED vehicle (SCRUM-766 PR-C)", () => {
-  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors" };
+  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors", supplierId: "supplier_a" as Id<"suppliers"> };
   const supplierBox = () => screen.getByLabelText(/GapSupplierConcession/) as HTMLInputElement;
 
   test("no basis from the server: no supplier field at all, in any mode (stock cars stay refused)", () => {
@@ -412,6 +413,7 @@ describe("the supplier's concession on a SOURCED vehicle (SCRUM-766 PR-C)", () =
       supplierGapShareMinor: 300 * FACTOR,
       observedSupplierEntitlementMinor: 9_500 * FACTOR,
       observedSupplierName: "Al Noor Motors",
+      observedSupplierId: "supplier_a",
       notes: "",
       economicsStamp: "v2|3",
     });
@@ -471,13 +473,13 @@ describe("the supplier's concession on a SOURCED vehicle (SCRUM-766 PR-C)", () =
     const view = renderDialog({ onSubmit, supplierBasis: BASIS });
     view.rerender(
       <ResolveGapDialog
-        {...props({ onSubmit, supplierBasis: { ...BASIS, entitlementMinor: 8_000 * FACTOR } })}
+        {...props({ onSubmit, supplierBasis: { ...BASIS, entitlementMinor: 8_000 * FACTOR, supplierId: "supplier_b" as Id<"suppliers"> } })}
       />
     );
     fireEvent.click(radio(/GapDealerAbsorbs/));
     fireEvent.change(supplierBox(), { target: { value: "300" } });
     fireEvent.click(confirmButton());
-    expect(onSubmit.mock.calls[0][0]).toMatchObject({ observedSupplierEntitlementMinor: 9_500 * FACTOR });
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ observedSupplierEntitlementMinor: 9_500 * FACTOR, observedSupplierId: "supplier_a" });
   });
 
   test("switching back to customer-absorbs drops a typed concession from the request", () => {
@@ -503,7 +505,7 @@ describe.each([
   ["English", salesEn],
   ["Arabic", salesAr],
 ] as const)("the no-customer-part option tells the truth about who covers the shortfall (%s)", (_name, dict) => {
-  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors" };
+  const BASIS = { entitlementMinor: 9_500 * FACTOR, currency: "JOD", supplierName: "Al Noor Motors", supplierId: "supplier_a" as Id<"suppliers"> };
   const words = dict as Record<string, string>;
   const t = (key: string) => words[key] ?? key;
   const optionText = () => document.getElementById("gap-mode-DEALER_ABSORBS")?.textContent ?? "";

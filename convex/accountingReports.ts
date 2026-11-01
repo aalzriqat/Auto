@@ -22,7 +22,7 @@ import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
-import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf, getCumulativeBalancesAsOfChecked } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
@@ -968,13 +968,16 @@ export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
  * SCRUM-876. POST_CUTOFF_ACTIVITY: the subledger and the GL cannot be shown to be measured at the
  * cutoff (a native payable row moved after it, or the AP control account holds a line dated after it).
  * INVALID_DATE: the cutoff is not a finite instant.
+ * INCONSISTENT_REFERENCE (SCRUM-889): a journal line carries another organization's id, or an A/P-account
+ * line names a parent entry that is missing or belongs to another organization.
  */
 type SupplierPayablesUnavailableReason =
   | "OVER_LIMIT"
   | "PENDING_POSTINGS"
   | "OPENING_SOURCE_UNAVAILABLE"
   | "POST_CUTOFF_ACTIVITY"
-  | "INVALID_DATE";
+  | "INVALID_DATE"
+  | "INCONSISTENT_REFERENCE";
 
 /**
  * How many supplier-payable rows (all open-balance statuses and CANCELLED together) and, separately, how many
@@ -982,12 +985,26 @@ type SupplierPayablesUnavailableReason =
  * figure is needed to be true, so a truncated read is refused rather than summed. Convex allows 32,000
  * documents scanned and 4,096 index ranges per function (https://docs.convex.dev/production/state/limits);
  * this figure has not been re-derived against both (the A/R reader's budget has: see
- * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds only this function's own
- * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
- * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
- * still count toward it.
+ * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds this function's own payable, outbox and draft reads
+ * and, since SCRUM-889, the extra control-account line and parent-entry reads of the checked GL read
+ * (getCumulativeBalancesAsOfChecked), which also has a byte cap (SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT) and is
+ * admitted read by read against the transaction's own remaining headroom. The caps do not budget that read's walk over
+ * the period's entries and lines, or the rest of the period-close checklist; the headroom check is what accounts for
+ * them. Fully paid rows still count toward it.
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
+
+/**
+ * The byte cap of the checked GL read's extra verification pass (SCRUM-889 round 4), beside the document cap above,
+ * measured with `getDocumentSize`: Convex caps one function at 16 MiB read as well as 32,000 documents
+ * (https://docs.convex.dev/production/state/limits), and a journal line's description or an entry's memo is an
+ * unbounded string. This is an UPPER BOUND on the pass's own spend and nothing more. The limit is per transaction, and
+ * the unchanged entry walk, which reads the same lines once, spends first and is not visible to a constant: round 5
+ * showed 12.8 MB of lines the walk reads fit under 16 MiB while a 4 MiB cap still let the pass run into the limit. The
+ * pass is therefore also admitted before every read against the transaction's remaining headroom
+ * (`ctx.meta.getTransactionMetrics()`, see getCumulativeBalancesAsOfChecked), which is what keeps it from throwing.
+ */
+const SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT = 4 * 1024 * 1024;
 
 /**
  * How many AP-control lines dated after the cutoff are attributed one by one (one journal-entry read each)
@@ -1040,13 +1057,15 @@ async function hasPendingAffectingPosting(
   }
   // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
   // resolved is treated as AP-affecting: unknown must not read as safe.
-  const originalIds = new Set<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>>();
+  // `db.get` does not scope by tenant, so an original owned by another organization is unresolved too
+  // (SCRUM-889): a foreign event's type must not decide this organization's reconciliation.
+  const originalOrgs = new Map<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>, Id<"organizations">>();
   for (const event of reversals) {
     if (!event.originalEventId) return true;
-    originalIds.add(event.originalEventId);
+    originalOrgs.set(event.originalEventId, event.orgId);
   }
-  const originals = await Promise.all([...originalIds].map((id) => ctx.db.get(id)));
-  return originals.some((original) => !original || affectingEventTypes.has(original.eventType));
+  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await ctx.db.get(id) })));
+  return originals.some(({ orgId, original }) => !original || original.orgId !== orgId || affectingEventTypes.has(original.eventType));
 }
 
 /**
@@ -1201,11 +1220,14 @@ export async function computeSupplierPayablesReconciliation(
   toDate: number | undefined,
   opts: {
     readLimit?: number;
+    /** Byte cap (`getDocumentSize`) of the checked GL read's verification pass (tests); defaults to SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT. */
+    readBytesLimit?: number;
     /** PENDING + FAILED outbox rows the caller already read (period close shares them); read here if omitted. */
     outboxEvents?: Array<Doc<"pendingAccountingEvents">>;
   } = {}
 ): Promise<SupplierPayablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const readBytesLimit = opts.readBytesLimit ?? SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT;
   const unavailable = (unavailableReason: SupplierPayablesUnavailableReason): SupplierPayablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
@@ -1310,8 +1332,17 @@ export async function computeSupplierPayablesReconciliation(
     if (later === "UNEXPLAINED") return unavailable("POST_CUTOFF_ACTIVITY");
   }
 
+  // The checked read refuses a journal line that carries another organization's id and a line on a control
+  // account whose parent entry is missing or foreign (SCRUM-889): neither may be summed or skipped, because
+  // dropping one could report an unreconciled ledger as reconciled. Its extra line and parent reads are
+  // counted against `readLimit` (documents) and `readBytesLimit` (bytes), and each is admitted against the transaction's own
+  // remaining read headroom; it is refused as OVER_LIMIT past any of them. The trial balance and the other
+  // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit);
+  if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
+  if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   const glByCurrency=new Map<string,number>();
-  for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,cutoff)){
+  for(const balance of glRead.balances){
     if(!controlAccounts.has(balance.accountId))continue;
     glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
   }
@@ -1361,7 +1392,9 @@ export type SupplierReceivablesUnavailableReason =
    * so the GL as of the cutoff and the subledger are not the same moment: neither "reconciled" nor a
    * difference would be true.
    */
-  | "ACTIVITY_AFTER_CUTOFF";
+  | "ACTIVITY_AFTER_CUTOFF"
+  /** A stored journal reference points at a missing entry or another organization's (SCRUM-889): the GL cannot be trusted. */
+  | "INCONSISTENT_REFERENCE";
 
 const SUPPLIER_RECEIVABLES_GL_LABEL = {
   en: "GL 1240 and declared opening supplier recovery control accounts",
@@ -1821,6 +1854,7 @@ export async function computeSupplierReceivablesReconciliation(
   // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
   const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
   if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (gl.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
   // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
   // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
@@ -1869,6 +1903,7 @@ export const supplierReceivablesReconciliation = query({
     unavailableReason: v.optional(v.union(
       v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"),
       v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("INVALID_AS_OF_DATE"), v.literal("ACTIVITY_AFTER_CUTOFF"),
+      v.literal("INCONSISTENT_REFERENCE"),
     )),
     complete: v.boolean(),
     rowsRead: v.optional(v.object({ receivables: v.number(), recoveries: v.number() })),

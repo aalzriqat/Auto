@@ -1,0 +1,60 @@
+{
+  "id": "supplier-search-empty-result-at-the-cap-says-the-search-did-not-finish",
+  "domain": "screen",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "supplierListScreen.search",
+      "input": {
+        "renderer": "jsdom",
+        "locales": "EN_AR",
+        "query": "shared",
+        "searchRows": 0,
+        "truncated": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "notice.messageKey",
+      "value": "SuppliersSearchTruncatedNoMatch"
+    },
+    {
+      "observable": "notice.role",
+      "value": "status"
+    },
+    {
+      "observable": "noMatch.messageCount",
+      "value": 0
+    },
+    {
+      "observable": "rows.linkCount",
+      "value": 0
+    },
+    {
+      "observable": "notice.arabicText",
+      "value": "TRANSLATED"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierManagement.test.tsx",
+    "testName": "an empty search that hit the server's cap says the search did not finish, not 'no match', in English and Arabic"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum887-suppliers-screen",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "65b112967af75a4440add9f29bb959e72e7fdd1c913a94c7558695e697078c2c"
+}

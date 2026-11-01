@@ -1,0 +1,50 @@
+{
+  "id": "payables-reconciliation-same-org-draft-journal-parent-is-skipped",
+  "fingerprint": "830c9d8e31965c08a0049cecf69e7590f4ef4b1fdef5e4c568676eb4502a9163",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "lineOwner": "A",
+        "journalParent": "A_DRAFT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    },
+    {
+      "observable": "currencies",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "CONTROL: a same-org DRAFT parent is skipped, not refused"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS"
+}

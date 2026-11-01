@@ -1,0 +1,47 @@
+{
+  "id": "payables-reconciliation-small-subledger-still-reconciles-in-budget",
+  "fingerprint": "5c737b7118ac39f5a6089e5aa5f71b2017e562056e4bf897402f8060e40b458f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.computeSupplierPayablesReconciliation",
+      "input": {
+        "apLines": "1",
+        "payables": "1",
+        "readLimit": "5"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 CONTROL: an ordinary small subledger still reconciles through the checked, budgeted read"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS"
+}

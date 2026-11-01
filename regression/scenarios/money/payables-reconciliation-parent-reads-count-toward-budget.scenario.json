@@ -1,0 +1,51 @@
+{
+  "id": "payables-reconciliation-parent-reads-count-toward-budget",
+  "fingerprint": "43cb50f771962aece145d68a4b11fe9ab6b987628131bd55fee58b066d8d5c58",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.computeSupplierPayablesReconciliation",
+      "input": {
+        "apLines": "3",
+        "parentsOutsideEntrySet": "3",
+        "readLimit": "5"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4: a parent entry read outside the entry set is charged to the budget"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "af2a66f30d33efa1c75f38fab7ee0c13180d28ca"
+  }
+}
