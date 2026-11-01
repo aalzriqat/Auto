@@ -235,6 +235,98 @@ describe("SCRUM-887 suppliers.listForManagement ordering", () => {
   });
 });
 
+/**
+ * Seat 2 finding: `numItems` was clamped to 100 but a caller-supplied `endCursor` defines the range
+ * independently of `numItems`
+ * (https://docs.convex.dev/api/interfaces/server.PaginationOptions), so one call with `numItems: 1`
+ * and a distant `endCursor` read the whole range. The server now also passes `maximumRowsRead`, so
+ * an over-wide range comes back split (`pageStatus: "SplitRequired"`) instead of oversized.
+ */
+describe("SCRUM-887 suppliers.listForManagement read bound", () => {
+  const SEEDED = 121;
+
+  async function seededOrg() {
+    const t = setup();
+    const org = await financeOrg(t, "A");
+    for (let i = 0; i < SEEDED; i++) {
+      await org.identity.mutation(api.suppliers.create, {
+        orgId: org.orgId,
+        idempotencyKey: next(),
+        displayName: `Bound supplier ${String(i).padStart(3, "0")}`,
+      });
+    }
+    return org;
+  }
+
+  test("a distant endCursor with numItems 1 never returns more than 100 rows, and the page is split", async () => {
+    const { orgId, identity } = await seededOrg();
+    // Cursors come from ordinary list calls: after row 100, then after row 120.
+    const first = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: { numItems: 100, cursor: null } });
+    const second = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: { numItems: 20, cursor: first.continueCursor } });
+    expect(first.page).toHaveLength(100);
+    expect(second.page).toHaveLength(20);
+
+    const wide = await identity.query(api.suppliers.listForManagement, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null, endCursor: second.continueCursor },
+    });
+    expect(wide.page.length).toBeLessThanOrEqual(100);
+    expect(wide.pageStatus).toBe("SplitRequired");
+    expect(wide.splitCursor).toBeTruthy();
+
+    // A client that follows the split gets bounded halves that together cover the range.
+    const left = await identity.query(api.suppliers.listForManagement, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null, endCursor: wide.splitCursor },
+    });
+    const right = await identity.query(api.suppliers.listForManagement, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: wide.splitCursor ?? null, endCursor: second.continueCursor },
+    });
+    expect(left.page.length).toBeLessThanOrEqual(100);
+    expect(right.page.length).toBeLessThanOrEqual(100);
+    const covered = new Set([...left.page, ...right.page].map((row) => row._id));
+    expect(covered.size).toBe(120);
+  });
+
+  test("a caller-supplied maximumRowsRead cannot widen the bound", async () => {
+    const { orgId, identity } = await seededOrg();
+    const wide = await identity.query(api.suppliers.listForManagement, {
+      orgId,
+      paginationOpts: { numItems: 1, cursor: null, endCursor: "_end_cursor", maximumRowsRead: 1_000_000 },
+    });
+    expect(wide.page.length).toBeLessThanOrEqual(100);
+  });
+
+  test("the screen's ordinary 25-row pages are not split, and a full 100-row page stays complete", async () => {
+    const { orgId, identity } = await seededOrg();
+    const screenPage = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: { numItems: 25, cursor: null } });
+    expect(screenPage.page).toHaveLength(25);
+    expect(screenPage.pageStatus ?? null).toBeNull();
+    // Exactly at the bound, convex-test marks the page SplitRequired (its row counter reaches
+    // maximumRowsRead on the 100th row). The page itself is complete and ordered; a client that
+    // splits it only re-reads smaller halves. The real runtime's boundary rule is not source-visible.
+    const full = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: { numItems: 100, cursor: null } });
+    expect(full.page).toHaveLength(100);
+    expect(full.page.slice(0, 25).map((row) => row._id)).toEqual(screenPage.page.map((row) => row._id));
+  });
+
+  test("a NaN numItems is bounded, not read without limit", async () => {
+    const { orgId, identity } = await seededOrg();
+    const page = await identity.query(api.suppliers.listForManagement, { orgId, paginationOpts: { numItems: Number.NaN, cursor: null } });
+    expect(page.page.length).toBeLessThanOrEqual(100);
+  });
+
+  test("a NaN search limit falls back to the search cap", async () => {
+    const t = setup();
+    const { orgId, identity } = await financeOrg(t, "A");
+    await identity.mutation(api.suppliers.create, { orgId, idempotencyKey: next(), displayName: "Gulf Motors" });
+    const found = await identity.query(api.suppliers.searchForManagement, { orgId, query: "Gulf Motors", limit: Number.NaN });
+    expect(found.rows).toHaveLength(1);
+    expect(found.truncated).toBe(false);
+  });
+});
+
 describe("SCRUM-887 suppliers.searchForManagement truncation", () => {
   test("26 suppliers sharing an alias: 25 rows come back and the answer says more exist", async () => {
     const t = setup();

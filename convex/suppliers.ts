@@ -330,6 +330,14 @@ export const search = query({
 /** Rows per management page, whatever the client asks for, so one read stays bounded. */
 const MANAGEMENT_PAGE_MAX = 100;
 
+/**
+ * Clamp a caller-supplied count to 1..max. `v.number()` accepts NaN, which would slip through
+ * `Math.min`/`Math.max` unchanged, so NaN falls back to `max` (the bounded default) instead.
+ */
+function boundedCount(value: number, max: number): number {
+  return Number.isNaN(value) ? max : Math.min(Math.max(Math.floor(value), 1), max);
+}
+
 const statusFilterValidator = v.optional(v.union(v.literal("ACTIVE"), v.literal("INACTIVE")));
 
 /**
@@ -365,7 +373,13 @@ export const listForManagement = query({
   handler: async (ctx, args) =>
     runGuarded(async () => {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-      const numItems = Math.min(Math.max(Math.floor(args.paginationOpts.numItems), 1), MANAGEMENT_PAGE_MAX);
+      const numItems = boundedCount(args.paginationOpts.numItems, MANAGEMENT_PAGE_MAX);
+      // A caller-supplied `endCursor` sets the range independently of `numItems`
+      // (https://docs.convex.dev/api/interfaces/server.PaginationOptions), and `usePaginatedQuery`
+      // needs it to split pages. `maximumRowsRead` is the server-side bound on that range: a range
+      // that would read more comes back as `pageStatus: "SplitRequired"` with a `splitCursor`, which
+      // the client follows, instead of as an oversized page. The caller may lower it, never raise it.
+      const maximumRowsRead = boundedCount(args.paginationOpts.maximumRowsRead ?? MANAGEMENT_PAGE_MAX, MANAGEMENT_PAGE_MAX);
       const result = await ctx.db
         .query("suppliers")
         .withIndex("by_org_and_status", (q) =>
@@ -374,7 +388,7 @@ export const listForManagement = query({
         // "All" reads the status index in ascending order, so ACTIVE suppliers come before INACTIVE.
         // A single-status filter is newest first.
         .order(args.status === undefined ? "asc" : "desc")
-        .paginate({ ...args.paginationOpts, numItems });
+        .paginate({ ...args.paginationOpts, numItems, maximumRowsRead });
       return { ...result, page: result.page.map(managementRow) };
     }),
 });
@@ -399,7 +413,7 @@ export const searchForManagement = query({
       const nameKey = normalizeNameKey(text);
       const taxKey = normalizeTaxIdKey(text);
       if (!nameKey && !taxKey) return { rows: [], truncated: false };
-      const limit = Math.min(Math.max(Math.floor(args.limit ?? SEARCH_MAX), 1), SEARCH_MAX);
+      const limit = boundedCount(args.limit ?? SEARCH_MAX, SEARCH_MAX);
       // Each source is read one row past the limit: a full probe is how the screen learns that more
       // suppliers match than it is showing. Continuation across four different sources is not a
       // simple bounded cursor, so the answer says "more exist" and the user refines the search.
