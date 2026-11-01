@@ -1,0 +1,49 @@
+{
+  "id": "supplier-receivable-opening-recoveries-over-cap-is-unavailable",
+  "fingerprint": "27e90c8b32249667b4db21e3f8e389b6955463ad21c9b02ebe6fdfa1e217353c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "complete",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "more OPENING recoveries than can be verified within the per-function limits is UNAVAILABLE (OVER_LIMIT)"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}
