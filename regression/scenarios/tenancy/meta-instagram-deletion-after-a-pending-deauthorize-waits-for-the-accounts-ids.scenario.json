@@ -1,0 +1,61 @@
+{
+  "id": "meta-instagram-deletion-after-a-pending-deauthorize-waits-for-the-accounts-ids",
+  "fingerprint": "a87001c72a8483a517c59cf653c023bfa6da8e8235ac132d2141bb9a3c2f3031",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "redactionJob.runOnce",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoCapturedIdInAnyRetainedRow",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a data-deletion request that arrives while the deauthorize job for the same account is pending cannot complete before the account's ids are erased"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

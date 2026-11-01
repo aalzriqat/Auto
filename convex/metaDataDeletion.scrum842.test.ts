@@ -6,7 +6,11 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
 import type { MutationCtx } from "./_generated/server";
-import { META_LOG_REDACTION_WEDGED_AFTER_RESTARTS, redactOneStep } from "./metaLogRedaction";
+import {
+  META_LOG_REDACTION_MAX_PENDING_JOBS,
+  META_LOG_REDACTION_WEDGED_AFTER_RESTARTS,
+  redactOneStep,
+} from "./metaLogRedaction";
 import {
   META_LOG_REDACTION_MAX_BYTES_READ,
   META_LOG_REDACTION_PAGE_SIZE,
@@ -1298,6 +1302,186 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
     await expect(
       t.mutation(internal.socialIntegrations.disconnectByInstagramUserId, { instagramBusinessAccountId: BUSINESS_ID }),
     ).resolves.toEqual([]);
+  });
+
+  // ─── Overlapping callbacks for one user (SCRUM-842 round 7, Seat 2 HIGH) ─────────
+  //
+  // The second callback finds the account already disconnected, so it cannot read the
+  // account's other id from the settings. Each test lets the SECOND job finish while the
+  // FIRST is still pending and asks the one question the receipt makes: when it reads
+  // "complete", does any stored row still hold an id this user was known by?
+  describe("overlapping callbacks for one user", () => {
+    const callback = async (t: T, path: string, id: string): Promise<string | null> => {
+      const res = await post(t, path, await signedRequest({ user_id: id }, INSTAGRAM_SECRET));
+      expect(res.status).toBe(200);
+      return path.endsWith("data-deletion") ? ((await res.json()) as { confirmation_code: string }).confirmation_code : null;
+    };
+    const jobs = (t: T) => t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+    const statusOf = (t: T, code: string) => t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
+    const jobOf = async (t: T, code: string) => (await jobs(t)).find((job) => job.receiptCode === code);
+    const runOnce = (t: T, jobId: Id<"metaLogRedactionJobs">) =>
+      t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
+
+    /** The invariant: a receipt that reads complete leaves no id of this user in any retained row. */
+    async function expectCompleteMeansErased(t: T, code: string): Promise<void> {
+      const status = await statusOf(t, code);
+      expect(typeof status?.completedAt).toBe("number");
+      const stored = JSON.stringify(await allWebhookLogs(t));
+      expect(stored).not.toContain(BUSINESS_ID);
+      expect(stored).not.toContain(WEBHOOK_ID);
+    }
+
+    test("a replayed data-deletion request that names the same id cannot complete while the earlier job still holds the webhook account id", async () => {
+      const t = newTest();
+      await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      const first = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const second = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const secondJob = await jobOf(t, second!);
+      expect(secondJob).toBeDefined();
+
+      // Only the second job runs: the first is still pending, as it is when Meta retries.
+      await runOnce(t, secondJob!._id);
+      expect((await jobOf(t, first!))?.otherMetaUserIds).toEqual([WEBHOOK_ID]);
+      await expectCompleteMeansErased(t, second!);
+
+      // The earlier job is unaffected: it finishes by itself and completes its own receipt.
+      expect((await statusOf(t, first!))?.completedAt).toBeNull();
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectCompleteMeansErased(t, first!);
+      expect(await jobs(t)).toEqual([]);
+    });
+
+    test("a replayed data-deletion request that names the OTHER id of the account cannot complete while the earlier job still holds the first id", async () => {
+      const t = newTest();
+      await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      const first = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const second = await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+      const secondJob = await jobOf(t, second!);
+      expect(secondJob).toBeDefined();
+
+      await runOnce(t, secondJob!._id);
+      await expectCompleteMeansErased(t, second!);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectCompleteMeansErased(t, first!);
+    });
+
+    test("a data-deletion request that arrives while the deauthorize job for the same account is pending cannot complete before the account's ids are erased", async () => {
+      const t = newTest();
+      await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+      const deletion = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const deletionJob = await jobOf(t, deletion!);
+      expect(deletionJob).toBeDefined();
+
+      await runOnce(t, deletionJob!._id);
+      await expectCompleteMeansErased(t, deletion!);
+    });
+
+    test("a pending job for a different account is not merged: the new job carries only its own account's ids and leaves the other account's rows alone", async () => {
+      const t = newTest();
+      await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedAccount(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+      const mine = await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+
+      await callback(t, "/instagram-deauthorize", BUSINESS_ID);
+      const deletion = await callback(t, "/instagram-data-deletion", UNRELATED_BUSINESS_ID);
+      const deletionJob = await jobOf(t, deletion!);
+      expect(deletionJob?.metaUserId).toBe(UNRELATED_BUSINESS_ID);
+      expect(deletionJob?.otherMetaUserIds).toEqual([UNRELATED_WEBHOOK_ID]);
+
+      await runOnce(t, deletionJob!._id);
+      expect(typeof (await statusOf(t, deletion!))?.completedAt).toBe("number");
+      // The first account's own job has not run: its webhook account id is still stored, untouched.
+      expect((await logById(t, mine.inbox))?.rawPayload).toBe(webhookBody(WEBHOOK_ID));
+    });
+
+    const seedPendingJob = (
+      t: T,
+      platform: Platform,
+      metaUserId: string,
+      otherMetaUserIds: string[],
+    ): Promise<Id<"metaLogRedactionJobs">> =>
+      t.run((ctx) =>
+        ctx.db.insert("metaLogRedactionJobs", {
+          platform,
+          metaUserId,
+          otherMetaUserIds,
+          sourceIndex: 1,
+          cursor: null,
+          updatedAt: Date.now(),
+        }),
+      );
+
+    test("ids are inherited through a chain of pending jobs: a job reached only through another job's id is the same user", async () => {
+      const t = newTest();
+      // Inserted in this order so a single pass over the jobs would miss the second one.
+      await seedPendingJob(t, "instagram", "chain-a", ["chain-b"]);
+      await seedPendingJob(t, "instagram", "chain-c", ["chain-b", "chain-d"]);
+
+      const code = await callback(t, "/instagram-data-deletion", "chain-a");
+      const job = await jobOf(t, code!);
+
+      expect(job?.metaUserId).toBe("chain-a");
+      expect([...(job?.otherMetaUserIds ?? [])].sort()).toEqual(["chain-b", "chain-c", "chain-d"]);
+    });
+
+    test("a pending job of the OTHER platform that happens to hold the same id is not merged", async () => {
+      const t = newTest();
+      await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedPendingJob(t, "facebook", BUSINESS_ID, ["facebook-only-id"]);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const job = await jobOf(t, code!);
+
+      expect(job?.otherMetaUserIds).toEqual([WEBHOOK_ID]);
+    });
+
+    test("ids that would not all fit in one job refuse the callback: a generic 500, the account stays connected, no receipt and no new job", async () => {
+      const t = newTest();
+      const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      // Eight ids already (the most a job carries); the connection brings a ninth: WEBHOOK_ID.
+      await seedPendingJob(t, "instagram", BUSINESS_ID, ["held-1", "held-2", "held-3", "held-4", "held-5", "held-6", "held-7"]);
+
+      const res = await post(t, "/instagram-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("An unexpected error occurred. Please try again later.");
+      expect((await settingsOf(t, orgId))?.instagramWebhookAccountId).toBe(WEBHOOK_ID);
+      expect(await allDeletionRequests(t)).toEqual([]);
+      expect(await jobs(t)).toHaveLength(1);
+      expect(consoleOutput.join("\n")).not.toContain(BUSINESS_ID);
+      expect(consoleOutput.join("\n")).not.toContain(WEBHOOK_ID);
+    });
+
+    test("a backlog of pending jobs larger than a callback reads refuses it instead of redacting on a partial view", async () => {
+      const t = newTest();
+      const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await t.run(async (ctx) => {
+        for (let i = 0; i <= META_LOG_REDACTION_MAX_PENDING_JOBS; i += 1) {
+          await ctx.db.insert("metaLogRedactionJobs", {
+            platform: "instagram",
+            metaUserId: `backlog-${i}`,
+            sourceIndex: 1,
+            cursor: null,
+            updatedAt: Date.now(),
+          });
+        }
+      });
+
+      const res = await post(t, "/instagram-deauthorize", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+
+      expect(res.status).toBe(500);
+      expect((await settingsOf(t, orgId))?.instagramBusinessAccountId).toBe(BUSINESS_ID);
+      expect(await jobs(t)).toHaveLength(META_LOG_REDACTION_MAX_PENDING_JOBS + 1);
+    });
   });
 });
 

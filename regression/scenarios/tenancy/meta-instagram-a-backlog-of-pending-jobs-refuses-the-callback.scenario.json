@@ -1,0 +1,55 @@
+{
+  "id": "meta-instagram-a-backlog-of-pending-jobs-refuses-the-callback",
+  "fingerprint": "8b7e9ed427e8699a11b7e0100530241ed9ac295494b245cdfe0bd448f987129b",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "db.seedPendingJob",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "account.stillConnected",
+      "value": true
+    },
+    {
+      "observable": "job.countAdded",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a backlog of pending jobs larger than a callback reads refuses it instead of redacting on a partial view"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

@@ -6621,6 +6621,10 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // when a page of large webhook bodies reaches the byte budget and follows the row
   // size afterwards. `stalledRestarts` counts sweep restarts with no page committed
   // in between; at a threshold the sweep reports the job as wedged.
+  // A callback that arrives while a job of the same platform is pending, and shares any
+  // id with it, starts its own job with the UNION of the ids, so its receipt is true on
+  // its own account (the account is already disconnected, so the settings no longer
+  // supply the other id).
   metaLogRedactionJobs: defineTable({
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     metaUserId: v.string(),
@@ -6631,7 +6635,11 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     pageSize: v.optional(v.number()),
     stalledRestarts: v.optional(v.number()),
     updatedAt: v.number(),
-  }).index("by_updatedAt", ["updatedAt"]),
+  })
+    .index("by_updatedAt", ["updatedAt"])
+    // `by_platform`: a new callback reads its platform's pending jobs to inherit the ids a
+    // pending job already holds for the same user (see `startMetaLogRedaction`).
+    .index("by_platform", ["platform"]),
 
   instagramEvents: defineTable({
     orgId: v.id("organizations"),

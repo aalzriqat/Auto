@@ -12,6 +12,19 @@
 // a business account id and a different webhook account id; see
 // `metaLogRedactionSources`). The job row stores them all, so the walk redacts all of them.
 //
+// Overlapping callbacks for one user: once a first callback has disconnected the account,
+// a second one (Meta's retry, a deauthorize followed by a deletion request, a user asking
+// twice) finds no connection and cannot read the account's other id. It would start a job
+// holding only the id it named and complete its receipt while the first job, still pending,
+// holds the other id and the stored webhook bodies still show it. So a starting job
+// inherits the ids of every pending job of its platform that shares an id with it
+// (`idsOfPendingJobsLinkedTo`), and walks from the start with the union: its receipt is true
+// on its own, whatever happens to the earlier job. Each job still completes only its own
+// receipt. An earlier job does not learn a later job's new ids: its receipt answers for the
+// ids captured by its own callback. If the union would exceed MAX_REDACTED_IDS, or more than
+// META_LOG_REDACTION_MAX_PENDING_JOBS jobs are pending, the callback is refused (the whole
+// transaction rolls back and Meta retries) instead of dropping an id.
+//
 // Which rows: every `webhookLogs` source that can hold that platform's id, not only
 // the callback source. `metaLogRedactionSources` lists them (`<platform>-oauth`, then
 // `<platform>`: the delivery inbox, the auto-reply failures and the Instagram
@@ -55,7 +68,7 @@
 // - A run reads the position from the job row inside its own transaction and writes
 //   the next one back in that transaction, so two chains for one job (the live chain
 //   and a sweep restart) never skip a page: Convex serialises their writes.
-import { getDocumentSize, v } from "convex/values";
+import { ConvexError, getDocumentSize, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -114,13 +127,57 @@ export type MetaLogRedactionStep = { done: true } | { done: false; next: MetaLog
 
 const WALK_START: MetaLogRedactionPosition = { sourceIndex: 0, cursor: null, pageSize: META_LOG_REDACTION_PAGE_SIZE };
 
+/**
+ * The most pending jobs of one platform a callback reads to find the jobs that hold the
+ * same user's ids. A job lives for minutes (one page per scheduled run), so the table is
+ * normally empty; more than this many pending jobs on one platform is a backlog, and the
+ * callback refuses (a 500, Meta retries) rather than redact on a partial view.
+ */
+export const META_LOG_REDACTION_MAX_PENDING_JOBS = 200;
+
+/** Fixed text: this error reaches a log line, so it names no id and no code. */
+const REDACTION_REFUSED = "The redaction could not be started. Please try again later.";
+
 /** The ids to redact: the callback's id first, then the account's other ids, once each, bounded. */
-function distinctIds(primary: string, others: readonly string[] | undefined): string[] {
+function distinctIds(primary: string, others: readonly string[] | undefined, limit = MAX_REDACTED_IDS): string[] {
   const ids = [primary];
   for (const id of others ?? []) {
-    if (id.trim() !== "" && !ids.includes(id) && ids.length < MAX_REDACTED_IDS) ids.push(id);
+    if (id.trim() !== "" && !ids.includes(id) && ids.length < limit) ids.push(id);
   }
   return ids;
+}
+
+/**
+ * The ids of every pending job of this platform that holds any of `ids`, and of every
+ * pending job linked to those through a shared id (a fixpoint: a job reached through a
+ * second job's id is still the same user). Reads one platform's index range, at most
+ * META_LOG_REDACTION_MAX_PENDING_JOBS + 1 rows; a concurrent callback that inserts a job in
+ * that range makes this transaction retry (https://docs.convex.dev/database/advanced/occ),
+ * so two overlapping callbacks cannot both miss each other's job.
+ */
+async function idsOfPendingJobsLinkedTo(
+  ctx: MutationCtx,
+  platform: MetaPlatform,
+  ids: readonly string[],
+): Promise<string[]> {
+  const pending = await ctx.db
+    .query("metaLogRedactionJobs")
+    .withIndex("by_platform", (q) => q.eq("platform", platform))
+    .take(META_LOG_REDACTION_MAX_PENDING_JOBS + 1);
+  if (pending.length > META_LOG_REDACTION_MAX_PENDING_JOBS) throw new ConvexError(REDACTION_REFUSED);
+  const known = new Set(ids);
+  const unlinked = pending.map((job) => distinctIds(job.metaUserId, job.otherMetaUserIds, Number.POSITIVE_INFINITY));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (let i = unlinked.length - 1; i >= 0; i -= 1) {
+      if (!unlinked[i].some((id) => known.has(id))) continue;
+      for (const id of unlinked[i]) known.add(id);
+      unlinked.splice(i, 1);
+      grew = true;
+    }
+  }
+  return [...known].filter((id) => !ids.includes(id));
 }
 
 type RedactedFields = Partial<Pick<Doc<"webhookLogs">, (typeof META_LOG_REDACTED_FIELDS)[number]>>;
@@ -238,7 +295,15 @@ async function completeReceipt(ctx: MutationCtx, receiptCode: string | undefined
  * first page was the whole walk, which `metaLogRedactionSources` (two sources) rules out.
  */
 export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionStartArgs): Promise<void> {
-  const metaUserIds = distinctIds(args.metaUserId, args.otherMetaUserIds);
+  // The account may already be disconnected by an earlier callback whose job is still
+  // pending, so the settings no longer supply the account's other id. That pending job
+  // does: this job inherits its ids, so its receipt is complete only when EVERY id this
+  // user is known by is erased, not only the one this callback named.
+  const captured = distinctIds(args.metaUserId, args.otherMetaUserIds, Number.POSITIVE_INFINITY);
+  const inherited = await idsOfPendingJobsLinkedTo(ctx, args.platform, captured);
+  const metaUserIds = distinctIds(args.metaUserId, [...captured.slice(1), ...inherited], Number.POSITIVE_INFINITY);
+  // Dropping an id would let the receipt read "complete" with that id still stored.
+  if (metaUserIds.length > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
   const step = await redactOneStep(ctx, args.platform, metaUserIds, WALK_START);
   if (step.done) {
     await completeReceipt(ctx, args.receiptCode);

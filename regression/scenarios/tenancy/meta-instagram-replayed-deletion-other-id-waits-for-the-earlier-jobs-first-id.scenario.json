@@ -1,0 +1,65 @@
+{
+  "id": "meta-instagram-replayed-deletion-other-id-waits-for-the-earlier-jobs-first-id",
+  "fingerprint": "747e52efbb56a9d1d8e49769b7d3c686bb4d547690e1aa79afc5b689e47b6cb9",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "redactionJob.runOnce",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.second.completedImpliesNoCapturedIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "receipt.first.completedAfterItsOwnJobFinishes",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a replayed data-deletion request that names the OTHER id of the account cannot complete while the earlier job still holds the first id"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}
