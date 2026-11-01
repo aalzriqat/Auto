@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-data-deletion-confirmation-code-is-opaque-and-names-this-platform",
-  "fingerprint": "249925359924886901d67ff4c8e6f08e5805d2e2b7acba8386341230db97f786",
+  "fingerprint": "e0abf9eefce7d1a225ee5fc7b0ca0f9349370d05dd6c6c57cdc47c53ac28fda0",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -48,7 +48,7 @@
     },
     {
       "observable": "status.fields",
-      "value": "platform-completedAt-only"
+      "value": "platform-completedAt-connectionRemoved"
     }
   ],
   "rulings": [

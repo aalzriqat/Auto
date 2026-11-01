@@ -1,0 +1,47 @@
+{
+  "id": "meta-facebook-data-deletion-id-matching-no-connection-does-not-claim-removal",
+  "fingerprint": "2cede39f2bbdf66246cbdacdf8476524b4668badb8674ebae9c03af9a04ab03b",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "unknown-meta-user",
+        "connectionHeld": false,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "status.completed",
+      "value": true
+    },
+    {
+      "observable": "status.connectionRemoved",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Facebook data-deletion: an id that matches no connection completes without claiming credentials were removed"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

@@ -1,6 +1,6 @@
 {
   "id": "meta-facebook-data-deletion-confirmation-code-is-opaque-and-names-this-platform",
-  "fingerprint": "f9abb8f968070242d93e936bbabce89221a195973f6a5917948307d6fd96f634",
+  "fingerprint": "694189331fd9c04796413c43b8c228c7cf664035deb23410d520a07be81728f0",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -48,7 +48,7 @@
     },
     {
       "observable": "status.fields",
-      "value": "platform-completedAt-only"
+      "value": "platform-completedAt-connectionRemoved"
     }
   ],
   "rulings": [

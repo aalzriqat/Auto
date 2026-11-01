@@ -1,0 +1,43 @@
+{
+  "id": "meta-facebook-data-deletion-matching-connection-is-reported-removed",
+  "fingerprint": "a260d05be17f2795577526068f6a24ff1caa78f18b7544d6cba6b0f0b3d6a3f2",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "connectionHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "status.connectionRemoved",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Facebook data-deletion: a matching connection is reported as removed"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

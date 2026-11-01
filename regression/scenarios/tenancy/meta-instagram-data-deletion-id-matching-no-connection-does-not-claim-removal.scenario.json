@@ -1,0 +1,47 @@
+{
+  "id": "meta-instagram-data-deletion-id-matching-no-connection-does-not-claim-removal",
+  "fingerprint": "6b56299d5c9bc61a8fc42d5bee81a3d1b04045799fd70634a2cb9050baa72161",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "unknown-meta-user",
+        "connectionHeld": false,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "status.completed",
+      "value": true
+    },
+    {
+      "observable": "status.connectionRemoved",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram data-deletion: an id that matches no connection completes without claiming credentials were removed"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

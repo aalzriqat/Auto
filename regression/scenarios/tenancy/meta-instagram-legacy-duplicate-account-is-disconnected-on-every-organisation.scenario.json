@@ -1,0 +1,61 @@
+{
+  "id": "meta-instagram-legacy-duplicate-account-is-disconnected-on-every-organisation",
+  "fingerprint": "5b0e6cc75b72810ef80b781e4c9f070dcbcf6e1391d5926aad8dc27822173d35",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "sameAccountOnOrgs": 2,
+        "otherAccountOnOrgs": 1,
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-webhook-account-id",
+        "sameAccountOnOrgs": 2,
+        "otherAccountOnOrgs": 1,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "orgSettings.instagramCredentialsCleared.allHoldingOrgs",
+      "value": true
+    },
+    {
+      "observable": "orgSettings.otherAccountUntouched",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: every organisation that holds the same legacy account is disconnected, not only the first"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

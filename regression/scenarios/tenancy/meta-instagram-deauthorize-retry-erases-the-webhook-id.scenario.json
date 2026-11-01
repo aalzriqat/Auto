@@ -1,0 +1,69 @@
+{
+  "id": "meta-instagram-deauthorize-retry-erases-the-webhook-id",
+  "fingerprint": "dfa5627d51f5dd1f661596e7b6cd548bafb0485813baad36e0e2b6cbfcc82775",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "webhookAccountIdHeld": true,
+        "firstPageFails": true,
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "firstPageFails": false,
+        "signed": true,
+        "retry": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstAttempt.status",
+      "value": 500
+    },
+    {
+      "observable": "firstAttempt.accountStillConnected",
+      "value": true
+    },
+    {
+      "observable": "webhookLogs.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "redactionJobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram deauthorize: a first attempt that fails after the disconnect step leaves the account connected, and the retry erases the webhook account id"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

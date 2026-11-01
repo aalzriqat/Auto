@@ -1,0 +1,47 @@
+{
+  "id": "meta-instagram-deletion-naming-business-id-disconnects-and-receipt-says-so",
+  "fingerprint": "8457cf70135a8c8f84f1c08a6affa2db4ad2ded46a549ef26ac444a3d8267b63",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "webhookAccountIdHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "orgSettings.instagramCredentialsCleared",
+      "value": true
+    },
+    {
+      "observable": "status.connectionRemoved",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram data-deletion: a callback that names the business account id disconnects the account and the receipt says so"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

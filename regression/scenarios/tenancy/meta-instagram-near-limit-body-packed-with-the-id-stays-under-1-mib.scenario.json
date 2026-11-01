@@ -1,0 +1,52 @@
+{
+  "id": "meta-instagram-near-limit-body-packed-with-the-id-stays-under-1-mib",
+  "fingerprint": "91e77b1945e03dfc0265f7de2ccbf0803fc9ab61f455c781b2d5acb543a0fb29",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "rawPayloadBytes": 1000000,
+        "idRepeated": "to-the-limit",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.documentBytes",
+      "value": "within-1-mib"
+    },
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "receipt.completed",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: a near-limit webhook body packed with the id is redacted without outgrowing the document limit"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}
