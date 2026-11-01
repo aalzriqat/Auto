@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-an-id-learned-from-one-kept-link-leads-to-the-next",
-  "fingerprint": "aba769e18a77aab1467549ddb198d3dbeb6800300c35add9ecf4025b3d777634",
+  "fingerprint": "27956544905a5127dfd1aa0b92077c81ff7fedb705ddf0dd1c406a18dddff376",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -63,7 +63,7 @@
       "value": true
     },
     {
-      "observable": "secondWebhookId.storedAnywhere",
+      "observable": "secondWebhookId.storedInWebhookLogs",
       "value": false
     },
     {

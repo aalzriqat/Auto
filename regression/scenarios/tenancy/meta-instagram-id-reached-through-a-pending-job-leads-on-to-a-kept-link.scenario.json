@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-id-reached-through-a-pending-job-leads-on-to-a-kept-link",
-  "fingerprint": "3eccc39f30711bfff5143e1b87d65f09d82b36323fcf342dbd3e7a2dc21a0601",
+  "fingerprint": "adbeeb9693b7dfd0a1b51c098a82f4ecd9279801c98480b295ac93b7dd49abcb",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -70,7 +70,7 @@
       "value": true
     },
     {
-      "observable": "newWebhookId.storedAnywhere",
+      "observable": "newWebhookId.storedInWebhookLogs",
       "value": false
     },
     {
