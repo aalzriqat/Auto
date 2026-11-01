@@ -1917,6 +1917,35 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect(await allDeletionRequests(t)).toEqual([]);
       expect(await jobs(t)).toEqual([]);
     });
+
+    test("a Facebook callback ignores the Instagram links: its job holds only the id it named and no Instagram row or link changes", async () => {
+      const t = newTest();
+      // An Instagram pair is kept against the very id the Facebook callback names.
+      await t.run((ctx) => ctx.db.insert("instagramAccountIdLinks", { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID }));
+      const instagram = await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      const facebookRow = await seedLegacyLog(t, "facebook-oauth", legacyLine("Facebook", BUSINESS_ID, "deletion"));
+      const instagramRowsBefore = JSON.stringify(
+        await Promise.all([instagram.inbox, instagram.ambiguous, instagram.subscription, instagram.oauth].map((id) => logById(t, id))),
+      );
+
+      const res = await post(t, "/facebook-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, FACEBOOK_SECRET));
+      expect(res.status).toBe(200);
+      const code = ((await res.json()) as { confirmation_code: string }).confirmation_code;
+      const job = await jobOf(t, code);
+      expect(job?.platform).toBe("facebook");
+      expect(job?.metaUserId).toBe(BUSINESS_ID);
+      expect(job?.otherMetaUserIds ?? []).toEqual([]);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect(typeof (await statusOf(t, code))?.completedAt).toBe("number");
+      expect((await logById(t, facebookRow))?.summary).not.toContain(BUSINESS_ID);
+      expect(
+        JSON.stringify(await Promise.all([instagram.inbox, instagram.ambiguous, instagram.subscription, instagram.oauth].map((id) => logById(t, id)))),
+      ).toBe(instagramRowsBefore);
+      expect((await links(t)).map(({ businessAccountId, webhookAccountId }) => ({ businessAccountId, webhookAccountId }))).toEqual([
+        { businessAccountId: BUSINESS_ID, webhookAccountId: WEBHOOK_ID },
+      ]);
+    });
   });
 });
 
