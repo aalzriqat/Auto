@@ -1,0 +1,93 @@
+{
+  "id": "collections-form-payment-at-a-utc-midnight-write-stays-on-its-picked-date",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "method": "CASH",
+        "paymentDate": "2026-11-01",
+        "writeClock": "2026-11-01T00:00:00.000Z",
+        "orgTimeZone": "America.New_York"
+      },
+      "action": "collections.recordPayment"
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      },
+      "action": "collections.dailyCollectionList"
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-11-01",
+        "orgTimeZone": "America.New_York"
+      },
+      "action": "collections.dailyCollectionList"
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      },
+      "action": "collections.getReconciliationDraft"
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "step3.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "step3.incomplete",
+      "value": false
+    },
+    {
+      "observable": "step4.expectedCash",
+      "value": 0
+    },
+    {
+      "observable": "collectionPayments.paymentDateKind",
+      "value": "calendarKey"
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "Seat 2's reproduction: a form payment for 1 Nov written at exactly 2026-11-01T00:00:00.000Z is on 1 Nov, not 31 Oct"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-3",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "915f05eda7a68ac9873763f1a6cf5eba010aca787e2390dff07dee5a1a1c5235"
+}

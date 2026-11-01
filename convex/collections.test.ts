@@ -83,6 +83,11 @@ async function drainScheduled(t: ReturnType<typeof convexTestWithComponents>) {
 
 const paginationOpts = { numItems: 20, cursor: null };
 
+// SCRUM-264: Collections day boundaries follow the organization time zone (default Asia/Amman). A business date
+// travels as the UTC midnight of its calendar date, so these tests name the Amman date of an instant.
+const orgDayKey = (at: number) =>
+  Date.parse(`${new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Amman" }).format(at)}T00:00:00Z`);
+
 async function seedFinanceMember(t: ReturnType<typeof convexTestWithComponents>) {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Collections Dealer", createdAt: Date.now() })
@@ -366,6 +371,8 @@ describe("Collections", () => {
         .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId))
         .unique();
       expect(payment?.method).toBe("CHEQUE");
+      // SCRUM-264: the clearing time is a real moment, even when it lands on a UTC midnight.
+      expect(payment?.paymentDateKind).toBe("instant");
       expect(payment?.status).toBe("POSTED");
       expect(payment?.canonicalPaymentId).toBeTruthy();
       expect(payment?.paymentAllocationId).toBeTruthy();
@@ -1089,9 +1096,9 @@ describe("Collections", () => {
     const { orgId, customerId, userId, asFinance } = await seedFinanceMember(t);
     const { vehicleId } = await seedVehicleQuoteSaleAndApplication(t, { orgId, customerId, userId, vin: "QUERYHYDRATE0001" });
     const now = Date.now();
-    const dueToday = new Date(now);
-    dueToday.setHours(23, 59, 59, 0);
-    const dueTodayMs = dueToday.getTime();
+    // SCRUM-264: a due date is a calendar key (UTC midnight). The last millisecond of the org's date is inside
+    // today's key range and never earlier than `now`, so this receivable is due today and not yet overdue.
+    const dueTodayMs = orgDayKey(now) + 24 * 60 * 60 * 1000 - 1;
 
     const todayReceivableId = await insertReceivable(t, {
       orgId,
@@ -1256,7 +1263,7 @@ describe("Collections", () => {
     const payments = await asFinance.query(api.collections.listPayments, { orgId, paginationOpts });
     expect(payments.page.some((payment) => payment.customerName === "Layla Nasser" && payment.receivableTitle === "Today balance")).toBe(true);
 
-    const dailyList = await asFinance.query(api.collections.dailyCollectionList, { orgId, businessDate: now });
+    const dailyList = await asFinance.query(api.collections.dailyCollectionList, { orgId, businessDate: orgDayKey(now) });
     expect(dailyList.total).toBe(20);
     expect(dailyList.totalsByMethod).toMatchObject({ CASH: 25, REFUND: -5 });
     expect(dailyList.rows).toHaveLength(2);
@@ -2196,18 +2203,18 @@ describe("Collections", () => {
       })
     );
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ expectedCash: 70, paymentCount: 2 });
 
     await expect(asFinance.mutation(api.collections.submitCashierReconciliation, { idempotencyKey: crypto.randomUUID(),
       orgId,
-      businessDate: now,
+      businessDate: orgDayKey(now),
       countedCash: -1,
     })).rejects.toThrow("Counted cash must be zero or greater");
 
     const reconciliationId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
       orgId,
-      businessDate: now,
+      businessDate: orgDayKey(now),
       countedCash: 65,
       notes: "Short by five",
       idempotencyKey: "cash-recon-short",
@@ -2286,11 +2293,11 @@ describe("Collections", () => {
     await seedCashierPayments(t, seed, 500, { paymentDate: now - 30 * 24 * 60 * 60 * 1000 });
     await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 250 });
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ complete: true, expectedCash: 250, paymentCount: 1 });
 
     const reconciliationId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
-      orgId, businessDate: now, countedCash: 250, idempotencyKey: crypto.randomUUID(),
+      orgId, businessDate: orgDayKey(now), countedCash: 250, idempotencyKey: crypto.randomUUID(),
     });
     await t.run(async (ctx) => {
       expect(await ctx.db.get(reconciliationId)).toMatchObject({ expectedCash: 250, difference: 0 });
@@ -2311,11 +2318,11 @@ describe("Collections", () => {
     await seedCashierPayments(t, seed, 499, { paymentDate: now });
     await seedCashierPayments(t, seed, 1, { paymentDate: now, method: "REFUND", direction: "OUT" });
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
 
     await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
-      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-too-large",
+      orgId, businessDate: orgDayKey(now), countedCash: 0, idempotencyKey: "recon-too-large",
     })).rejects.toThrow("too many unreconciled payments");
     await t.run(async (ctx) => {
       expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
@@ -2332,10 +2339,10 @@ describe("Collections", () => {
     // CASH alone reaches the 500-document budget, so no REFUND read is issued.
     await seedCashierPayments(t, seed, 500, { paymentDate: now });
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ complete: false, expectedCash: null, paymentCount: null });
     await expect(asFinance.mutation(api.collections.submitCashierReconciliation, {
-      orgId, businessDate: now, countedCash: 0, idempotencyKey: "recon-cash-only-too-large",
+      orgId, businessDate: orgDayKey(now), countedCash: 0, idempotencyKey: "recon-cash-only-too-large",
     })).rejects.toThrow("too many unreconciled payments");
     await t.run(async (ctx) => {
       expect(await ctx.db.query("cashierReconciliations").collect()).toHaveLength(0);
@@ -2349,7 +2356,7 @@ describe("Collections", () => {
     await seedCashierPayments(t, seed, 450, { paymentDate: now });
     await seedCashierPayments(t, seed, 49, { paymentDate: now, method: "REFUND", direction: "OUT" });
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ complete: true, expectedCash: 401, paymentCount: 499 });
   });
 
@@ -2361,14 +2368,14 @@ describe("Collections", () => {
     // A day already reconciled once must stay reconcilable: rows it linked, rows
     // since voided, and payments that never enter the drawer do not count.
     const earlierId = await asFinance.mutation(api.collections.submitCashierReconciliation, {
-      orgId, businessDate: now, countedCash: 0, idempotencyKey: crypto.randomUUID(),
+      orgId, businessDate: orgDayKey(now), countedCash: 0, idempotencyKey: crypto.randomUUID(),
     });
     await seedCashierPayments(t, seed, 500, { paymentDate: now, reconciliationId: earlierId });
     await seedCashierPayments(t, seed, 500, { paymentDate: now, status: "VOIDED" });
     await seedCashierPayments(t, seed, 500, { paymentDate: now, method: "BANK_TRANSFER" });
     await seedCashierPayments(t, seed, 1, { paymentDate: now, amount: 40 });
 
-    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: now });
+    const draft = await asFinance.query(api.collections.getReconciliationDraft, { orgId, businessDate: orgDayKey(now) });
     expect(draft).toMatchObject({ complete: true, expectedCash: 40, paymentCount: 1 });
   });
   test("SCRUM-447 reminders never chase a finance-company cheque from the customer", async () => {

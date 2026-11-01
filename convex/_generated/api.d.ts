@@ -279,6 +279,7 @@ import type * as utils_openingSupplierBasis from "../utils/openingSupplierBasis.
 import type * as utils_openingSupplierPosting from "../utils/openingSupplierPosting.js";
 import type * as utils_openingUnallocatedLiabilities from "../utils/openingUnallocatedLiabilities.js";
 import type * as utils_openingVehicleBasis from "../utils/openingVehicleBasis.js";
+import type * as utils_orgBusinessDay from "../utils/orgBusinessDay.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgOwner from "../utils/orgOwner.js";
 import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
@@ -630,6 +631,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingSupplierPosting": typeof utils_openingSupplierPosting;
   "utils/openingUnallocatedLiabilities": typeof utils_openingUnallocatedLiabilities;
   "utils/openingVehicleBasis": typeof utils_openingVehicleBasis;
+  "utils/orgBusinessDay": typeof utils_orgBusinessDay;
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgOwner": typeof utils_orgOwner;
   "utils/orgResetGeneration": typeof utils_orgResetGeneration;

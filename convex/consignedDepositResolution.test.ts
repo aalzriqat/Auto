@@ -1072,6 +1072,14 @@ describe("REFUND_TO_CUSTOMER and FORFEITED keep every control they carry elsewhe
     expect(canonical).toHaveLength(1);
     expect(canonical[0]!.amountMinor).toBe(DEPOSIT * SCALE);
 
+    // SCRUM-264: the sale's date reaches paymentDate as a key from one screen and an instant from another,
+    // so the writer records it as a sale date, not as either.
+    const refundPayments = await s.t.run(async (ctx) =>
+      (await ctx.db.query("collectionPayments").collect()).filter((p) => p.orgId === s.orgId && p.direction === "OUT")
+    );
+    expect(refundPayments).toHaveLength(1);
+    expect(refundPayments[0]!.paymentDateKind).toBe("saleDate");
+
     const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
     expect(deposit?.status).toBe("REFUNDED");
     expect(deposit?.resolutionTreatment).toBe("REFUND_TO_CUSTOMER");
