@@ -58,6 +58,10 @@
   ],
   "rulings": [
     {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
       "id": "SCRUM-842#description",
       "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
     }
