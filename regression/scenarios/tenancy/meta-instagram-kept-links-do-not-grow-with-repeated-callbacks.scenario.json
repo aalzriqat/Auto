@@ -1,0 +1,77 @@
+{
+  "id": "meta-instagram-kept-links-do-not-grow-with-repeated-callbacks",
+  "fingerprint": "f55725b4c42e62e1ddbcece471271fcf389bc490ad71ab212a2fab87a2cf15be",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "repeated": 3
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "webhook",
+        "signed": true,
+        "repeated": 3
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameAccount": true,
+        "repeated": 3
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true,
+        "repeated": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.afterAllRounds",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "kept links do not grow with repeated callbacks: one pair per account, however many callbacks and disconnects"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

@@ -1,0 +1,74 @@
+{
+  "id": "meta-instagram-nothing-kept-for-one-id-or-same-account-other-pair-untouched",
+  "fingerprint": "9b899e7ada95d078a50608a002e898356f3478a3c42c1b52c39660a515fccdfb",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameAccount": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "onlyOneIdStored": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "otherAccount",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.afterSameAccountSave",
+      "value": 0
+    },
+    {
+      "observable": "links.afterOneIdDisconnect",
+      "value": 0
+    },
+    {
+      "observable": "otherAccountJob.carriesOwnIdsOnly",
+      "value": true
+    },
+    {
+      "observable": "links.afterOtherAccountCallback",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "nothing is kept when only one id was stored or when the same account is saved again, and a callback for another account leaves this account's pair alone"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

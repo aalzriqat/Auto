@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-an-id-learned-from-one-kept-link-leads-to-the-next",
-  "fingerprint": "1bb09a5830a06b46df352a1cfb8d7d2afb634d56d969983c06f5fb71eca91a4c",
+  "fingerprint": "aba769e18a77aab1467549ddb198d3dbeb6800300c35add9ecf4025b3d777634",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -68,7 +68,7 @@
     },
     {
       "observable": "links.afterCallback",
-      "value": 0
+      "value": 3
     }
   ],
   "rulings": [

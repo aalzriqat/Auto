@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-reconnect-new-webhook-id-old-one-erased-by-callback",
-  "fingerprint": "f93ed28238a9fa47167cb69ab0fa44684f840c14d4eb602744a1cbbff8755521",
+  "fingerprint": "b70ded1b3ae41ff66b4eef764f910bef0c6d6d13aff52fc51354fef4aec55466",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -53,7 +53,7 @@
     },
     {
       "observable": "links.afterCallback",
-      "value": 0
+      "value": 2
     }
   ],
   "rulings": [

@@ -1,6 +1,6 @@
 {
   "id": "meta-instagram-deletion-after-the-whole-organization-was-deleted-erases-both-ids",
-  "fingerprint": "750c5ae21ca653237bcb2da30ea6efe8d6c6ceb58864a0b897fb64f0775cf425",
+  "fingerprint": "8fc23cb6880022b95792d0a4f9004304e8f47c944a0eabdd88ddbb617d835c6d",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -43,7 +43,7 @@
     },
     {
       "observable": "links.afterCallback",
-      "value": 0
+      "value": 1
     }
   ],
   "rulings": [

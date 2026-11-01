@@ -1,6 +1,6 @@
 {
-  "id": "meta-instagram-nothing-is-kept-for-one-id-the-same-account-or-another-account",
-  "fingerprint": "8a5a7c50efbe542a5ce24e562b1b3020d05dc2dac93e3c3243f8f02a0d874af5",
+  "id": "meta-instagram-deletion-after-a-finished-job-on-a-connected-account-erases-a-body",
+  "fingerprint": "9a4215e8e28fc0ccbaddb19f37872c7bca34325115e5ac331b8ea252f48214f5",
   "domain": "tenancy",
   "level": "backend",
   "status": "active",
@@ -12,22 +12,25 @@
   "steps": [
     {
       "actor": {
-        "role": "owner",
+        "role": "meta-callback",
         "org": "A"
       },
-      "action": "saveInstagramCredentials",
+      "action": "http.instagram-deauthorize",
       "input": {
-        "sameAccount": true
+        "namedId": "business",
+        "signed": true,
+        "accountConnected": true,
+        "jobFinished": true
       }
     },
     {
       "actor": {
-        "role": "owner",
+        "role": "meta-callback",
         "org": "A"
       },
-      "action": "socialIntegrations.disconnect",
+      "action": "webhook.instagram-delivery",
       "input": {
-        "onlyOneIdStored": true
+        "afterJobFinished": true
       }
     },
     {
@@ -37,27 +40,19 @@
       },
       "action": "http.instagram-data-deletion",
       "input": {
-        "namedId": "otherAccount",
+        "namedId": "business",
         "signed": true
       }
     }
   ],
   "expected": [
     {
-      "observable": "links.afterSameAccountSave",
-      "value": 0
-    },
-    {
-      "observable": "links.afterOneIdDisconnect",
-      "value": 0
-    },
-    {
-      "observable": "otherAccountJob.carriesOwnIdsOnly",
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
       "value": true
     },
     {
-      "observable": "links.afterOtherAccountCallback",
-      "value": 1
+      "observable": "lateDelivery.containsWebhookId",
+      "value": false
     }
   ],
   "rulings": [
@@ -68,7 +63,7 @@
   ],
   "impl": {
     "file": "convex/metaDataDeletion.scrum842.test.ts",
-    "testName": "nothing is kept when only one id was stored, when the same account is saved again, or when the callback names another account"
+    "testName": "F2: the same holds when the first callback found the account still connected"
   },
   "matrixRow": "SCRUM-842-meta-erasure"
 }
