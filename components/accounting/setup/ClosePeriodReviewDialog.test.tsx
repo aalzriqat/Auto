@@ -12,6 +12,7 @@ import {
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
 } from "@/convex/utils/closeWarnings";
 
 const UNKNOWN_WARNING = "Some future warning the dialog has never heard of.";
@@ -128,6 +129,31 @@ describe("ClosePeriodReviewDialog supplier payables warnings", () => {
       SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
       UNKNOWN_WARNING,
     ]);
+  });
+});
+
+describe("ClosePeriodReviewDialog supplier payables post-cutoff warning (SCRUM-876)", () => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.close.mockResolvedValue(undefined);
+    mocks.checklist = { canClose: true, blockers: [], warnings: [SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING] };
+  });
+  afterEach(cleanup);
+
+  test("renders in Arabic and English, and acknowledges the raw server text", async () => {
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    expect(en.ClosePeriodWarnSupplierPayablesReconPostCutoff).toBe(SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING);
+    expect(ar.ClosePeriodWarnSupplierPayablesReconPostCutoff).toBeTruthy();
+    expect(ar.ClosePeriodWarnSupplierPayablesReconPostCutoff).not.toBe(en.ClosePeriodWarnSupplierPayablesReconPostCutoff);
+
+    renderDialog("ar");
+    expect(screen.getByText(ar.ClosePeriodWarnSupplierPayablesReconPostCutoff)).toBeTruthy();
+    expect(screen.queryByText(SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: ar.ClosePeriod }));
+    await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
+    expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual([SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING]);
   });
 });
 

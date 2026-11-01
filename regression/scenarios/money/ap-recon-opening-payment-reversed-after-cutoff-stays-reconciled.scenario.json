@@ -1,0 +1,86 @@
+{
+  "id": "ap-recon-opening-payment-reversed-after-cutoff-stays-reconciled",
+  "fingerprint": "187a838d0006a7fdedb03374364266a94008411b74424e5bd8b5e5f709c96bc9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "creditMinor": 100000,
+        "kind": "SUPPLIER_PAYABLE",
+        "asOf": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postOpeningPayment",
+      "input": {
+        "amountMinor": 40000,
+        "dated": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.reverseOpeningPayment",
+      "input": {
+        "dated": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": true
+    },
+    {
+      "observable": "glBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "subledgerBalanceMinor",
+      "value": 100000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.opening.test.ts",
+    "testName": "CONTROL: a payment made after the cutoff and reversed after it (reversal entry copies the payment's source) is still dated-reconstructable"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}
