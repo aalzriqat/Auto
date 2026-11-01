@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf, getCumulativeBalancesAsOfChecked } from "./accounting/accountSnapshots";
 import { computeSupplierPayablesReconciliation } from "./accountingReports";
 import {
@@ -403,8 +404,9 @@ describe("SCRUM-889 - a queued reversal's original event must belong to the same
  * number and never "reconciled". The unchecked reader and every caller that passes no accounts keep the unbudgeted
  * behaviour they had.
  *
- * Evidence boundary: convex-test counts nothing against Convex's 16 MiB / 32,000-document transaction limits
- * (https://docs.convex.dev/production/state/limits), so this proves the budget logic, not the platform limit.
+ * Evidence boundary: these tests run without convex-test's transaction limits enforced, so they prove the budget
+ * logic and the headroom decision, not the platform limit (the describe below enforces it, with convex-test's
+ * emulation of https://docs.convex.dev/production/state/limits).
  */
 describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", () => {
   const asOf = () => Date.now() + 86_400_000;
@@ -590,6 +592,85 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
     const r = await apRecon(s);
     expect(r.status).toBe("AVAILABLE");
     expect(r.byCurrency.JOD.glBalanceMinor).toBe(6 * AMOUNT_MINOR);
+  });
+
+  // The verification pass is also admitted against the TRANSACTION's remaining headroom, read from
+  // `ctx.meta.getTransactionMetrics()` before every read (round 5). These tests pass the checked reader a context
+  // whose metrics are set by hand, so the boundary is pinned with literals from the platform limits and the
+  // policy (one 1 MiB document + a 2 MiB reserve, 1 + 2,000 documents, 1 + 256 queries), not read back from the code.
+  const MIB = 1024 * 1024;
+  const ample = { bytes: 16 * MIB, docs: 32_000, queries: 4_096 };
+  const metricsOf = (m: { bytes: number; docs: number; queries: number }) => {
+    const unlimited = { used: 0, remaining: Number.MAX_SAFE_INTEGER };
+    return {
+      bytesRead: { used: 0, remaining: m.bytes }, documentsRead: { used: 0, remaining: m.docs }, databaseQueries: { used: 0, remaining: m.queries },
+      bytesWritten: unlimited, documentsWritten: unlimited, functionsScheduled: unlimited, scheduledFunctionArgsBytes: unlimited,
+    };
+  };
+  /** The checked reader called with a context that reports `metrics` (or none), so the headroom decision is the only variable. */
+  const checkedWithMetrics = (s: Seed, accountId: Id<"chartOfAccounts">, metrics: ReturnType<typeof metricsOf> | "unreadable") =>
+    s.t.run((ctx) => {
+      const withMeta = metrics === "unreadable" ? { db: ctx.db } : { db: ctx.db, meta: { getTransactionMetrics: async () => metrics } };
+      return getCumulativeBalancesAsOfChecked(withMeta as unknown as QueryCtx, s.orgId, asOf(), [accountId], 100, Number.MAX_SAFE_INTEGER);
+    });
+
+  test("B4 headroom: a read is admitted at exactly 1 MiB + 2 MiB of bytes, 1 + 2,000 documents and 1 + 256 queries, and refused one below any of them", async () => {
+    const s = await seed("b4headroomedge");
+    const accountId = await inPeriodApLines(s, 2);
+    const atEdge = { bytes: 3 * MIB, docs: 2_001, queries: 257 };
+    expect((await checkedWithMetrics(s, accountId, metricsOf(atEdge))).status).toBe("OK");
+    expect(await checkedWithMetrics(s, accountId, metricsOf({ ...atEdge, bytes: 3 * MIB - 1 }))).toEqual({ status: "OVER_LIMIT" });
+    expect(await checkedWithMetrics(s, accountId, metricsOf({ ...atEdge, docs: 2_000 }))).toEqual({ status: "OVER_LIMIT" });
+    expect(await checkedWithMetrics(s, accountId, metricsOf({ ...atEdge, queries: 256 }))).toEqual({ status: "OVER_LIMIT" });
+    // The same fixture reads and sums in full with ample headroom.
+    expect(await checkedWithMetrics(s, accountId, metricsOf(ample))).toEqual({
+      status: "OK", balances: [{ accountId, currency: "JOD", debitMinor: 0, creditMinor: 2 * AMOUNT_MINOR }],
+    });
+  });
+
+  test("B4 headroom: a context that cannot report its metrics has no headroom (fails closed, never open)", async () => {
+    const s = await seed("b4headroomnometa");
+    const accountId = await inPeriodApLines(s, 1);
+    expect(await checkedWithMetrics(s, accountId, "unreadable")).toEqual({ status: "OVER_LIMIT" });
+  });
+
+  test("B4 headroom: the metrics are read afresh before the parent fetch, which is not made once the line has spent the headroom", async () => {
+    const s = await seed("b4headroomparent");
+    // One line whose parent belongs to another organization: if the parent is read, the answer is INCONSISTENT_REFERENCE;
+    // if the transaction has no headroom to read it, the parent is never fetched and the answer is OVER_LIMIT.
+    const accountId = await apAccount(s);
+    const foreignEntryId = await insertEntry(s, s.otherOrgId);
+    await s.t.run((ctx) =>
+      ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId: foreignEntryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
+        scale: 3, accountingDate: Date.now() - 1000,
+      })
+    );
+    // Reported remaining bytes = `margin` above the 3 MiB the next read needs, less whatever the real transaction has read since the
+    // first look. One line is a few hundred bytes, so a margin of 100 admits the line and no more.
+    const runWith = (margin: number) =>
+      s.t.run(async (ctx) => {
+        let firstUsed: number | undefined;
+        const getTransactionMetrics = async () => {
+          const real = await ctx.meta.getTransactionMetrics();
+          firstUsed ??= real.bytesRead.used;
+          return metricsOf({ ...ample, bytes: 3 * MIB + margin - (real.bytesRead.used - firstUsed) });
+        };
+        return getCumulativeBalancesAsOfChecked(
+          { db: ctx.db, meta: { getTransactionMetrics } } as unknown as QueryCtx, s.orgId, asOf(), [accountId], 100, Number.MAX_SAFE_INTEGER
+        );
+      });
+    expect(await runWith(100)).toEqual({ status: "OVER_LIMIT" });
+    // CONTROL: with room for the line and the parent the same fixture reaches the parent and refuses its foreign owner.
+    expect(await runWith(100_000)).toEqual({ status: "INCONSISTENT_REFERENCE" });
+  });
+
+  test("B4 headroom CONTROL: under transaction limits, a heavy ledger that fits with its reserve still reconciles (the headroom check does not over-refuse)", async () => {
+    const s = await seed("b4headroomok", { transactionLimits: true });
+    await inPeriodApLines(s, 4, 400_000);
+    const r = await apRecon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(4 * AMOUNT_MINOR);
   });
 });
 
