@@ -6654,12 +6654,19 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // names the account can arrive afterwards, and a later deletion request would find no
   // connection, no link and no job. Rows are written by Disconnect, a credential overwrite,
   // an organisation deletion and a callback's own disconnect, once per distinct pair.
+  // Round 10 (owner ruling): the pair is not kept for good. When a deletion job that read the row
+  // completes, `purgeAfter` is stamped 30 days ahead (GDPR Art. 5(1)(e), storage limitation) and the
+  // 30-minute Meta sweep deletes rows past it; a later completion re-stamps, a Disconnect or an
+  // overwrite of the pair clears the stamp (the account is in use again). A row without `purgeAfter`
+  // is kept, as before. Optional, so existing rows stay valid (additive).
   instagramAccountIdLinks: defineTable({
     businessAccountId: v.string(),
     webhookAccountId: v.string(),
+    purgeAfter: v.optional(v.number()),
   })
     .index("by_business_account_id", ["businessAccountId"])
-    .index("by_webhook_account_id", ["webhookAccountId"]),
+    .index("by_webhook_account_id", ["webhookAccountId"])
+    .index("by_purge_after", ["purgeAfter"]),
 
   instagramEvents: defineTable({
     orgId: v.id("organizations"),

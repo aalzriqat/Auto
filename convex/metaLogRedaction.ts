@@ -13,8 +13,9 @@
 // `metaLogRedactionSources`). The job row stores them all, so the walk redacts all of them.
 // A dealer's own Disconnect, a reconnect to another account, an organisation deletion or an
 // earlier callback clears those ids from the settings before the next callback arrives;
-// `instagramAccountIdLinks` keeps the pair, for good, because a webhook body that names the account
-// can still arrive after the job that erased it has finished (`idsKnownFor` reads it back).
+// `instagramAccountIdLinks` keeps the pair for 30 days after the last completed deletion (then the
+// 30-minute sweep deletes it), because a webhook body that names the account can still arrive after
+// the job that erased it has finished (`idsKnownFor` reads it back).
 //
 // Overlapping callbacks for one user: once a first callback has disconnected the account,
 // a second one (Meta's retry, a deauthorize followed by a deletion request, a user asking
@@ -154,13 +155,22 @@ function distinctIds(primary: string, others: readonly string[] | undefined, lim
 /**
  * The ids of an Instagram account that `instagramAccountIdLinks` keeps against `id`: both of the
  * account's ids are kept as one row when the dealer lets go (Disconnect, a reconnect to another
- * account, an organisation deletion) or a callback disconnects it, and the row stays, because a
- * webhook body that names the account can still arrive after the job that erased it finished.
+ * account, an organisation deletion) or a callback disconnects it, and the row stays after the job
+ * that erased it finished, because a webhook body that names the account can still arrive. It stays
+ * for 30 days from the last completed deletion (INSTAGRAM_ID_LINK_RETENTION_MS), then the sweep
+ * deletes it.
  * More than MAX_REDACTED_IDS rows against one id cannot all be read, and could not all be carried by
  * one job either, so the callback refuses instead of dropping one.
  */
 async function idsLinkedTo(ctx: MutationCtx, id: string): Promise<string[]> {
-  const rows = [
+  const rows = await linkRowsOf(ctx, id);
+  if (rows.length > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
+  return rows.flatMap((row) => [row.businessAccountId, row.webhookAccountId]);
+}
+
+/** The link rows that name `id` as either of the account's ids, at most MAX_REDACTED_IDS + 1 from each index. */
+async function linkRowsOf(ctx: MutationCtx, id: string): Promise<Doc<"instagramAccountIdLinks">[]> {
+  return [
     ...(await ctx.db
       .query("instagramAccountIdLinks")
       .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", id))
@@ -170,8 +180,49 @@ async function idsLinkedTo(ctx: MutationCtx, id: string): Promise<string[]> {
       .withIndex("by_webhook_account_id", (q) => q.eq("webhookAccountId", id))
       .take(MAX_REDACTED_IDS + 1)),
   ];
-  if (rows.length > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
-  return rows.flatMap((row) => [row.businessAccountId, row.webhookAccountId]);
+}
+
+/**
+ * How long the id pair of a finished Instagram deletion is kept. A record that outlives its purpose
+ * is itself retained personal data, so it is bounded (GDPR Art. 5(1)(e), storage limitation:
+ * https://gdpr-info.eu/art-5-gdpr/). 30 days covers Meta's callback retries and a user repeating the
+ * request; after it a callback naming one id erases that id only. Each completion re-stamps.
+ */
+export const INSTAGRAM_ID_LINK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Link rows one sweep deletes; a longer queue simply continues on the next run (30 minutes later). */
+export const INSTAGRAM_ID_LINK_PURGE_BATCH = 100;
+
+/**
+ * Starts the retention clock on the links a finished Instagram job read: every row that names one of
+ * the job's ids (the same ranges `idsKnownFor` read, so exactly the rows that led the job to its ids).
+ * Called in the transaction that completes the receipt, so the clock never starts while an id is
+ * still stored. Other accounts' rows are never touched.
+ */
+async function stampLinksOf(ctx: MutationCtx, platform: MetaPlatform, ids: readonly string[]): Promise<void> {
+  if (platform !== "instagram") return;
+  const purgeAfter = Date.now() + INSTAGRAM_ID_LINK_RETENTION_MS;
+  const stamped = new Set<Id<"instagramAccountIdLinks">>();
+  for (const id of ids) {
+    for (const row of await linkRowsOf(ctx, id)) {
+      if (stamped.has(row._id)) continue;
+      stamped.add(row._id);
+      await ctx.db.patch(row._id, { purgeAfter });
+    }
+  }
+}
+
+/**
+ * Deletes the links past `purgeAfter`, at most INSTAGRAM_ID_LINK_PURGE_BATCH per call, by the
+ * `by_purge_after` index (https://docs.convex.dev/database/reading-data/indexes/). In Convex's
+ * ordering `undefined < null < all other values` (https://docs.convex.dev/database/types), so a bare
+ * `lte` would also match every row with no `purgeAfter`; the `gte(0)` lower bound excludes them.
+ */
+async function purgeExpiredInstagramIdLinks(ctx: MutationCtx, now: number): Promise<void> {
+  const due = await ctx.db
+    .query("instagramAccountIdLinks")
+    .withIndex("by_purge_after", (q) => q.gte("purgeAfter", 0).lte("purgeAfter", now))
+    .take(INSTAGRAM_ID_LINK_PURGE_BATCH);
+  for (const row of due) await ctx.db.delete(row._id);
 }
 
 /**
@@ -348,6 +399,7 @@ export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionSta
   const step = await redactOneStep(ctx, args.platform, metaUserIds, WALK_START);
   if (step.done) {
     await completeReceipt(ctx, args.receiptCode);
+    await stampLinksOf(ctx, args.platform, metaUserIds);
     return;
   }
   const [, ...otherMetaUserIds] = metaUserIds;
@@ -368,7 +420,8 @@ export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionSta
 async function advanceJob(ctx: MutationCtx, jobId: Id<"metaLogRedactionJobs">): Promise<void> {
   const job = await ctx.db.get(jobId);
   if (!job) return;
-  const step = await redactOneStep(ctx, job.platform, distinctIds(job.metaUserId, job.otherMetaUserIds), {
+  const jobIds = distinctIds(job.metaUserId, job.otherMetaUserIds);
+  const step = await redactOneStep(ctx, job.platform, jobIds, {
     sourceIndex: job.sourceIndex,
     cursor: job.cursor,
     pageSize: job.pageSize ?? META_LOG_REDACTION_PAGE_SIZE,
@@ -377,6 +430,7 @@ async function advanceJob(ctx: MutationCtx, jobId: Id<"metaLogRedactionJobs">): 
     // Completion and erasure of the identifiers are one transaction: the receipt
     // can never read "complete" while the job still holds an id, or the reverse.
     await completeReceipt(ctx, job.receiptCode);
+    await stampLinksOf(ctx, job.platform, jobIds);
     await ctx.db.delete(jobId);
     return;
   }
@@ -441,6 +495,8 @@ export const resumeStalledMetaLogRedactionJobs = internalMutation({
       }
       await ctx.scheduler.runAfter(0, internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: job._id });
     }
+    // The same 30-minute run also ends the retention of finished deletions' id pairs.
+    await purgeExpiredInstagramIdLinks(ctx, now);
     return null;
   },
 });

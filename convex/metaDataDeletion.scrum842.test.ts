@@ -1975,6 +1975,150 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(PENDING_ONLY_ID);
       expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
     });
+
+    // ─── The kept link is kept for 30 days after a completed deletion, then deleted (round 10, owner ruling) ───
+    //
+    // GDPR Art. 5(1)(e) (storage limitation) is the reason for the bound: a record of an id pair that
+    // outlives its purpose is itself personal-data retention. 30 days is long enough for Meta's retries
+    // and a user's repeat request, and short enough that the record is not kept for good.
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+    const sweep = (t: T) => t.mutation(internal.metaLogRedaction.resumeStalledMetaLogRedactionJobs, {});
+    const linkOf = async (t: T, businessId: string) =>
+      (await links(t)).find((row) => row.businessAccountId === businessId);
+    const insertLink = (t: T, businessId: string, webhookId: string, purgeAfter?: number) =>
+      t.run((ctx) =>
+        ctx.db.insert("instagramAccountIdLinks", {
+          businessAccountId: businessId,
+          webhookAccountId: webhookId,
+          ...(purgeAfter === undefined ? {} : { purgeAfter }),
+        }),
+      );
+
+    test("a completed deletion stamps purgeAfter 30 days ahead on exactly the links its job read, and only when the job completes", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      // Another account's pair: the job never reads it, so it must not be stamped.
+      await insertLink(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      // The job is pending: the ids are not yet erased, so nothing may start the clock.
+      expect((await linkOf(t, BUSINESS_ID))?.purgeAfter).toBeUndefined();
+
+      const before = Date.now();
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const after = Date.now();
+      await expectCompleteMeansErased(t, code!);
+
+      const stamped = (await linkOf(t, BUSINESS_ID))?.purgeAfter;
+      expect(stamped).toBeGreaterThanOrEqual(before + THIRTY_DAYS_MS);
+      expect(stamped).toBeLessThanOrEqual(after + THIRTY_DAYS_MS);
+      expect((await linkOf(t, UNRELATED_BUSINESS_ID))?.purgeAfter).toBeUndefined();
+    });
+
+    test("the sweep deletes the links past purgeAfter, keeps the unexpired and the unstamped, and deletes at most 100 per run", async () => {
+      const t = newTest();
+      const now = Date.now();
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 103; i += 1) {
+          await ctx.db.insert("instagramAccountIdLinks", {
+            businessAccountId: `synthetic-expired-business-${i}`,
+            webhookAccountId: `synthetic-expired-webhook-${i}`,
+            purgeAfter: now - 1000,
+          });
+        }
+      });
+      await insertLink(t, "synthetic-future-business", "synthetic-future-webhook", now + THIRTY_DAYS_MS);
+      await insertLink(t, "synthetic-unstamped-business", "synthetic-unstamped-webhook");
+
+      await sweep(t);
+      expect(await links(t)).toHaveLength(105 - 100);
+      await sweep(t);
+      const left = (await links(t)).map(({ businessAccountId }) => businessAccountId).sort();
+      expect(left).toEqual(["synthetic-future-business", "synthetic-unstamped-business"]);
+    });
+
+    test("inside the 30 days a later callback naming the other id still reaches the first id, and its completion extends the window", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const first = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectCompleteMeansErased(t, first!);
+      // Nearly expired: a sweep now would delete it, so this one is the window that must be extended.
+      const soon = Date.now() + 1000;
+      await t.run(async (ctx) => {
+        const row = (await ctx.db.query("instagramAccountIdLinks").collect())[0];
+        await ctx.db.patch(row._id, { purgeAfter: soon });
+      });
+      // A delivery that carries the webhook id arrives, then a repeat request names that id.
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+      const before = Date.now();
+      const second = await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+      expect((await jobOf(t, second!))?.otherMetaUserIds).toEqual([BUSINESS_ID]);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, second!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+      expect((await linkOf(t, BUSINESS_ID))?.purgeAfter).toBeGreaterThanOrEqual(before + THIRTY_DAYS_MS);
+    });
+
+    test("after the 30-day purge a callback naming the surviving id erases that id only: the purged pair's other id is no longer known, which is the documented bound of the retention", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const first = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(await links(t)).toHaveLength(1);
+      // Thirty days later the sweep deletes the pair.
+      await t.run(async (ctx) => {
+        const row = (await ctx.db.query("instagramAccountIdLinks").collect())[0];
+        await ctx.db.patch(row._id, { purgeAfter: Date.now() - 1 });
+      });
+      await sweep(t);
+      expect(await links(t)).toEqual([]);
+      expect((await statusOf(t, first!))?.completedAt).toEqual(expect.any(Number));
+
+      // A delivery stored after the first request carries the webhook id; the repeat names the business id.
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      const second = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const status = await statusOf(t, second!);
+      expect(typeof status?.completedAt).toBe("number");
+      // The id it named is gone from every retained row; the id it could not know is not touched.
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(BUSINESS_ID);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(WEBHOOK_ID));
+      expect(await jobs(t)).toEqual([]);
+    });
+
+    test("a reconnect and a later Disconnect or overwrite of the same pair clear purgeAfter: the account is in use again", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectCompleteMeansErased(t, code!);
+      expect(typeof (await linkOf(t, BUSINESS_ID))?.purgeAfter).toBe("number");
+
+      // Reconnect to the same account, then the dealer lets go again: the pair is not on a clock.
+      await saveAccount(t, orgId, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      expect(await links(t)).toHaveLength(1);
+      expect((await linkOf(t, BUSINESS_ID))?.purgeAfter).toBeUndefined();
+
+      // The same through an overwrite by another account's credentials.
+      await t.run(async (ctx) => {
+        const row = (await ctx.db.query("instagramAccountIdLinks").collect())[0];
+        await ctx.db.patch(row._id, { purgeAfter: Date.now() + THIRTY_DAYS_MS });
+      });
+      await saveAccount(t, orgId, BUSINESS_ID, WEBHOOK_ID);
+      await saveAccount(t, orgId, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+      expect(await links(t)).toHaveLength(1);
+      expect((await linkOf(t, BUSINESS_ID))?.purgeAfter).toBeUndefined();
+    });
   });
 });
 

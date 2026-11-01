@@ -408,10 +408,14 @@ const isStoredId = (id: string | undefined): id is string => id !== undefined &&
  * The row is never deleted by a callback: the job that erases the ids finishes, a webhook body
  * that names the account can arrive afterwards, and a later deletion request would otherwise find
  * no connection, no link and no job (SCRUM-842 round 9). It names no organisation, token or person.
- * The rows are bounded by the distinct (business id, webhook id) pairs ever seen, written only here.
+ * It is kept for 30 days after the last completed deletion that read it, then the Meta sweep deletes
+ * it (`purgeAfter`, metaLogRedaction.ts; round 10). The rows are bounded by the distinct (business id,
+ * webhook id) pairs seen within that window, written only here.
  *
- * Nothing is kept when only one id was ever stored (the callback names that id itself), when
- * the pair is unchanged (the settings still hold it), or when the pair is already linked.
+ * Nothing is kept when only one id was ever stored (the callback names that id itself), or when
+ * the pair is unchanged (the settings still hold it). A pair that is already linked is not written
+ * again, but a `purgeAfter` on it is cleared: the account is in use again, so its retention clock
+ * starts over at the next completed deletion.
  */
 export async function rememberInstagramIdPair(
   ctx: MutationCtx,
@@ -426,7 +430,11 @@ export async function rememberInstagramIdPair(
     .query("instagramAccountIdLinks")
     .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", business))
     .take(MAX_REDACTED_IDS + 1);
-  if (linked.some((row) => row.webhookAccountId === webhook)) return;
+  const existing = linked.find((row) => row.webhookAccountId === webhook);
+  if (existing !== undefined) {
+    if (existing.purgeAfter !== undefined) await ctx.db.patch(existing._id, { purgeAfter: undefined });
+    return;
+  }
   await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: business, webhookAccountId: webhook });
 }
 
