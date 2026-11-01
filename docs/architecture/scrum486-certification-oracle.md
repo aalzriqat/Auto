@@ -707,3 +707,36 @@ supplier, refunds a deposit, corrects a cost, or enables an excluded door.
 The direct-route browser witness records the supplier advice and asserts no
 bank movement. G9/G10 supplier identity and settlement certification remain
 independent obligations; these rows do not stand for them.
+
+Matrix rows `SCRUM264-org-day` (money) and `SCRUM265-capped-reports` (money) bind literal tests in
+`convex/collectionsOrgDay.scrum264.test.ts`, `convex/collectionsOrgDayKeys.scrum264.test.ts` and
+`convex/collectionsOrgDayProvenance.scrum264.test.ts`. Collections "today" and a business date are the
+organization's day (`orgSettings.timezone`, default Asia/Amman), computed with `Intl.DateTimeFormat`
+and exact at 23-hour and 25-hour daylight-saving days; a calendar date the zone skipped (Pacific/Apia,
+2011-12-30) has no instants, and the day before it runs to the start of the next date that exists.
+`collectionPayments.paymentDate` is stored as either a calendar key (the Record Payment form: UTC midnight
+of the picked date, with `createdAt` stamped at the write time) or an event instant (cheque clearing, which is
+the only writer that sets `chequeId`; refund approval; payment links; deposits). Timestamp equality cannot
+tell the two apart (a form payment written exactly at the picked date's UTC midnight has `createdAt` equal to
+`paymentDate`), so every writer records which one it stored in `paymentDateKind` (`calendarKey`, `instant`, or
+`saleDate` for the sale-completion deposit refund, whose date is a key from one screen and an instant from
+another) and a row that has it is placed by it (`paymentDateProvenance` in `convex/utils/orgBusinessDay.ts`,
+which lists every writer). A row without the field (written before it existed; the field is optional and
+there is no backfill) is placed by its footprint: a row with `chequeId`, or a value that is not a UTC
+midnight, is an instant and is filed under the zone's wall-clock date; a UTC midnight whose `createdAt`
+differs is a key and is filed under the date it names; a UTC midnight whose `createdAt` equals it, and a
+`saleDate` at a UTC midnight, cannot be told apart. West of UTC (where the key's date and the instant's date
+differ) such a row is left out of both days, `dailyCollectionList` and `summary` report
+`paymentDateUncertain` with `incomplete`, and the reconciliation refuses the day (`reason: DATE_UNCERTAIN`)
+without attaching any payment; east of UTC both readings name one date and it is filed there. An instant of
+2026-11-01T00:00:00.000Z in America/New_York is therefore 20:00 on 31 Oct, not a 1 Nov key, while a form
+payment for 1 Nov written at that same instant is stamped `calendarKey` and stays on 1 Nov. The
+reconciliation idempotency fingerprint and its stored values are unchanged. The week of upcoming cheques in `summary` is bounded
+in organization calendar keys (today through today + 7), because a cheque date is a calendar key. A capped
+Collections read (`summary`, `dailyCollectionList`, `upcomingChequeReport`, `agingReport`) reports
+`incomplete` instead of a silent bound. Receivables, aging and cheque totals cannot be negative, so for them
+it is a lower bound; `collectedToday` and the daily list net refunds, the earliest rows are read, and a hidden
+refund makes the shown figure too high, so for them it is only partial (the screen says "higher or lower").
+They do not certify `overdueOutstanding` or the aging buckets against the
+organization day (those still compare a due date with the current instant), the reconciliation
+history list (50 rows), or measured I/O.
