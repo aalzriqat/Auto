@@ -137,10 +137,13 @@ more than one result shares the same producer and name. So, in this order:
 3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
    repository event for the full tip SHA, and confirm both are green (a red
    rehearsal refuses the release; see above).
-4. Wait for SonarCloud to report on the tip. The push already runs `Sonar Main`
-   (it can take 30 to 50 minutes). Dispatch `sonar-main.yml` only if that run is
-   missing or cancelled; a second manual run can leave two results and refuse the
-   release, so cancel the extra one.
+4. Wait for SonarCloud to report on the tip. `Sonar Main` does not run on the push
+   itself: it starts when the `Tests` run for that push completes, reuses the
+   coverage that `Tests` produced (it runs no tests of its own), then scans. It
+   refuses when `Tests` failed, so a red `Tests` run means no Sonar result until
+   that run is re-run green (see below). Dispatch `sonar-main.yml` only if its
+   run is missing or cancelled after a green `Tests` run; a second manual run can
+   leave two results and refuse the release, so cancel the extra one.
 5. Dispatch **Deploy production** for the full tip SHA. Its `authorize` job runs
    the release guard; the `deploy` job then waits for the human approval.
 6. Merge nothing to `main` while the approval waits: any new commit moves the tip
@@ -490,14 +493,31 @@ use "Re-run all jobs".
 
 **SonarCloud is enforced with no waiver (SCRUM-128, 2026-09-26).** The release
 needs `sonarqubecloud / SonarCloud Code Analysis` = success at the exact tip. That
-result comes from the **Sonar Main** workflow (`sonar-main.yml`), which runs on
-every push to `main`, with a timeout sized for coverage plus the scan (SCRUM-384).
-Two separate problems:
+result comes from the **Sonar Main** workflow (`sonar-main.yml`). It starts when
+the `Tests` run for a push to `main` completes, and reuses that run's
+`coverage-report` artifact instead of re-running the suite (SCRUM-764). Before it
+scans, a trusted copy of the validator proves that the artifact came from the
+exact tip SHA, from a successful `Tests` push run on `main` in this repository,
+and that its manifest, byte length and SHA-256 match. Any mismatch, or a missing
+or ambiguous artifact, refuses the scan and leaves no Sonar result at that tip.
+
+Re-running `Tests` after a flaky job is admitted. The validator reads the jobs of
+every attempt, finds the successful `unit-and-integration` job (the one that
+uploads `coverage-report`), takes the attempt in which it actually executed, and
+accepts only the one `coverage-report` created while that job ran. So both
+"Re-run failed jobs" (the passed coverage job is reused from attempt 1) and
+"Re-run all jobs" (one artifact per attempt) work. If the re-run does not start
+`Sonar Main` by itself, dispatch it. The artifact is kept for 7 days
+(`retention-days: 7`), so past that window the commit needs a "Re-run all jobs"
+or a new commit. Re-running a `Tests` run that is already green on the tip fires
+`Sonar Main` again and can produce a second SonarCloud result at the same SHA,
+which the release guard refuses; re-run `Tests` only after a failure, and cancel
+any extra `Sonar Main` run. Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
-  on `main` (only when the push-triggered run did not report, see the release
-  order above), then confirm the producer-bound result at that exact SHA before
-  re-running the release:
+  on `main` (only when the run that follows a green `Tests` run did not report,
+  see the release order above), then confirm the producer-bound result at that
+  exact SHA before re-running the release:
 
   ```bash
   gh workflow run sonar-main.yml --repo aalzriqat/Auto --ref main
