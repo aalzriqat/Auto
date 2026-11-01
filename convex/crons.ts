@@ -196,8 +196,10 @@ crons.interval(
 // SCRUM-842: restart a Meta retained-log redaction job whose scheduled chain died.
 // A job exists only while a Meta user's log source still has unredacted pages and
 // holds that user's id until the last page; the sweep reads only job rows quiet for
-// 15 minutes, so with no job it reads nothing. Not a retention sweep: it never
-// deletes operational history (the job row is the only thing the last page removes).
+// 15 minutes, so with no job it reads nothing. It never deletes operational history
+// (the job row is the only thing the last page removes). The same run also deletes, at
+// most 100 per run, the instagramAccountIdLinks rows whose purgeAfter has passed
+// (stamped 30 days after a completed deletion receipt; SCRUM-842 c24305).
 crons.interval(
   "resume-stalled-meta-log-redaction",
   { minutes: 30 },

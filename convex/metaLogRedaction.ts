@@ -469,6 +469,12 @@ export const runMetaLogRedactionJob = internalMutation({
  * id) and every further restart writes an error line to the Convex logs, so a job that
  * can never finish is visible to an operator instead of retrying in silence. The
  * receipt stays pending: it is true, and it is not completed on a guess.
+ *
+ * The same run also calls `purgeExpiredInstagramIdLinks`, which deletes the
+ * `instagramAccountIdLinks` rows whose `purgeAfter` has passed, at most
+ * INSTAGRAM_ID_LINK_PURGE_BATCH (100) per run. `purgeAfter` is stamped 30 days after a
+ * completed deletion receipt (SCRUM-842 c24305). The purge touches no webhook log and
+ * no job row.
  */
 export const resumeStalledMetaLogRedactionJobs = internalMutation({
   args: {},
