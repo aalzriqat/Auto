@@ -17,6 +17,7 @@
  */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { getDocumentSize } from "convex/values";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -454,11 +455,11 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
     s.t.run((ctx) => getCumulativeBalancesAsOfChecked(ctx, s.orgId, asOf(), [accountId], limit, bytes));
   const door = (s: Seed, limit: number, bytes?: number) =>
     s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, undefined, { readLimit: limit, readBytesLimit: bytes }));
-  /** The serialized size of every line on `accountId`, summed the way the budget measures it (these fixtures are ASCII, so characters equal bytes). */
+  /** The `getDocumentSize` of every line on `accountId`, summed the way the byte cap measures it. */
   const lineBytes = (s: Seed, accountId: Id<"chartOfAccounts">) =>
     s.t.run(async (ctx) =>
       (await ctx.db.query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", s.orgId).eq("accountId", accountId)).collect())
-        .reduce((sum, line) => sum + JSON.stringify(line).length, 0)
+        .reduce((sum, line) => sum + getDocumentSize(line), 0)
     );
 
   test("B4: more control-account lines than the budget is OVER_LIMIT, not a balance", async () => {

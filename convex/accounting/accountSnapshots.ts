@@ -9,6 +9,8 @@
  * the single still-open containing period), instead of O(every line ever
  * posted).
  */
+import { getDocumentSize } from "convex/values";
+import type { TransactionMetrics } from "convex/server";
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 
@@ -110,7 +112,8 @@ export type CheckedCumulativeBalances =
    */
   | { status: "INCONSISTENT_REFERENCE" }
   /**
-   * The verification pass would read more documents, or more serialized bytes, than its budgets allow (SCRUM-889).
+   * The verification pass would read more documents, or more bytes, than its budgets allow, or the transaction
+   * has too little read headroom left to take the next read and still leave its caller a reserve (SCRUM-889).
    * A partial verification cannot show the ledger is consistent, so no balance is returned.
    */
   | { status: "OVER_LIMIT" };
@@ -130,24 +133,33 @@ export type CheckedCumulativeBalances =
  * Closed-period and certified-snapshot balances are read from snapshots, as before; no line is read there.
  * The extra line read happens only for `accountIds` and only when the journal-line path runs.
  *
- * Budget: that extra read is charged against two budgets, and is refused with OVER_LIMIT before it would exceed
- * either (the discipline of getControlAccountBalancesAsOf). Convex caps one function at 32,000 documents scanned
- * and 16 MiB read, https://docs.convex.dev/production/state/limits, and meters both, so both are budgeted:
- *   - `readLimit` counts documents: one per control-account line read and one per parent entry fetched;
- *   - `readBytesLimit` counts the serialized size (see `serializedSize`) of those same documents. A document
- *     count alone does not bound bytes: `journalLines.description` and `journalEntries.memo` are unbounded
- *     strings, so a few documents can pass the document budget and still carry megabytes (SCRUM-889 round 4:
- *     12 balanced journals with 400,000-character descriptions made the pass read the lines the entry walk had
- *     already read, and the query threw "Read too much data in a single function execution" instead of answering).
- * The lines are read as a stream (`for await`) and each document is charged as it arrives, so a refusal stops the
- * read at the budget plus one document; a single `take(n)` page cannot stop part-way. The caller chooses
- * `readBytesLimit` well under 16 MiB because the budget does not cover the unchanged walk over the period's
- * entries and lines, which getCumulativeBalancesAsOf also does, and that walk plus this pass share the one limit.
+ * Budget: that extra read is bounded two ways, and is refused with OVER_LIMIT before it would exceed either.
+ * Convex caps one function at 32,000 documents scanned, 16 MiB read and 4,096 index ranges,
+ * https://docs.convex.dev/production/state/limits, and meters all three for the whole transaction:
+ *   - Caller caps, upper bounds that hold whatever else the transaction did. `readLimit` counts documents (one per
+ *     control-account line read and one per parent entry fetched); `readBytesLimit` counts their `getDocumentSize`,
+ *     the size formula Convex's own metering is built on (https://docs.convex.dev/database/types). A document count
+ *     alone does not bound bytes: `journalLines.description` and `journalEntries.memo` are unbounded strings.
+ *   - The transaction's own headroom, asked of `ctx.meta.getTransactionMetrics()` before EVERY read
+ *     (https://docs.convex.dev/database/writing-data, "Checking transaction headroom"). A fixed cap cannot see what
+ *     the rest of the transaction has already spent: the entry walk in this function reads the same lines the
+ *     pass reads again, and (SCRUM-889 round 5) 16 balanced journals with 400,000-character descriptions fit the
+ *     16 MiB limit for the walk alone while leaving no room for a second pass, so a 4 MiB cap still ended in a
+ *     "Read too much data in a single function execution" throw. A read is refused unless the transaction can still
+ *     take one more worst-case document (1 MiB) AND keep `VERIFICATION_RESERVE_*` free for the caller's remaining
+ *     work. A context whose metrics cannot be read is refused too; the guard never fails open.
+ * The lines are read as a stream, one `next()` at a time, and each document is charged as it arrives, so a refusal
+ * stops the read at the budget plus one document; a single `take(n)` page cannot stop part-way. Because every
+ * read is preceded by a fresh metrics read, nothing is cached across reads: concurrent readers in the same
+ * transaction (the period-close checklist runs several reconciliations together) are seen as they spend.
  *
- * Evidence boundary: the byte budget is proven against convex-test's emulation of the 16 MiB limit
- * (`transactionLimits: true`), not against the Convex backend. The real-backend measurement, which also fixes
- * whether `serializedSize` over- or under-counts what Convex meters, cannot be produced before merge and is
- * deferred to the release rehearsal (SCRUM-762).
+ * Evidence boundary: the headroom check is proven against convex-test's emulation of the 16 MiB limit
+ * (`transactionLimits: true`), not against the Convex backend. Three things only the real backend can show are
+ * deferred to the release rehearsal (SCRUM-762): that its metering matches `getDocumentSize`, the cost of one
+ * `getTransactionMetrics` call per read (the documentation states no cost), and that a streamed `next()` does not
+ * read ahead past one document. The reserve is a policy for the caller's later and concurrent work, not a proof
+ * about it: a concurrent reader that spends more than the reserve between this guard's check and its read can
+ * still exhaust the limit, as it could without this pass.
  */
 export async function getCumulativeBalancesAsOfChecked(
   ctx: QueryCtx,
@@ -163,17 +175,80 @@ export async function getCumulativeBalancesAsOfChecked(
 
 type BalanceAdder = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => void;
 type ReadOutcome = "OK" | "INCONSISTENT_REFERENCE" | "OVER_LIMIT";
-/** The accounts whose lines and parent entries are verified, and the document and byte budgets for that verification. */
+/** The accounts whose lines and parent entries are verified, and the caller's document and byte caps for that verification. */
 type LedgerCheck = { accountIds: ReadonlyArray<Id<"chartOfAccounts">>; readLimit: number; readBytesLimit: number };
 
+/** The largest a single Convex document can be, https://docs.convex.dev/production/state/limits: what one more read can cost. */
+const MAX_DOCUMENT_BYTES = 1024 * 1024;
 /**
- * The UTF-8 size of a document's JSON form, which the byte budget charges. An approximation of what Convex meters
- * (its accounting is internal and not documented to the byte), chosen to be on the conservative side: JSON text
- * repeats every field name, so it is at least as large as the stored value for the string-heavy documents that
- * matter here. Journal documents hold no bigint, which JSON.stringify would reject.
+ * What the transaction must still be able to read after a verification read, so the caller's later work and the
+ * readers running beside it in the same transaction are not starved by this pass. The figures follow the reserve
+ * the custody proof already holds back (CUSTODY_PROOF_CALLER_RESERVE_* in utils/custodySourceLedger.ts). They are
+ * a policy, not a derivation: nothing here knows what the caller will read next. Exported for the tests that pin
+ * the boundary.
  */
-function serializedSize(doc: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(doc)).length;
+export const VERIFICATION_RESERVE_BYTES = 2 * 1024 * 1024;
+export const VERIFICATION_RESERVE_DOCUMENTS = 2_000;
+export const VERIFICATION_RESERVE_QUERIES = 256;
+
+/** The part of a query or mutation context the headroom check needs. A context without it is one whose headroom cannot be read. */
+type HeadroomCtx = { meta?: { getTransactionMetrics?: () => Promise<TransactionMetrics> } };
+
+/** The size Convex's own read metering is built on (`getDocumentSize`), not a JSON approximation of it. */
+function documentSize(doc: object): number {
+  return getDocumentSize(doc as Parameters<typeof getDocumentSize>[0]);
+}
+
+/**
+ * The read budget of one verification pass: the caller's document and byte caps, and the transaction's own headroom.
+ * `hasHeadroom` is asked before every read; the `charge*` methods account for a document after it arrives, and
+ * return false once a cap is passed.
+ */
+class VerificationBudget {
+  private remainingDocs: number;
+  private remainingBytes: number;
+
+  constructor(
+    private readonly ctx: HeadroomCtx,
+    check: LedgerCheck
+  ) {
+    this.remainingDocs = check.readLimit;
+    this.remainingBytes = check.readBytesLimit;
+  }
+
+  /**
+   * True when the transaction can take one more read of a worst-case document and still leave the reserve.
+   * Read fresh every time (see getCumulativeBalancesAsOfChecked). Fails closed: a context that cannot report its
+   * metrics has no headroom.
+   */
+  async hasHeadroom(): Promise<boolean> {
+    const read = this.ctx.meta?.getTransactionMetrics;
+    if (typeof read !== "function") return false;
+    const metrics = await read.call(this.ctx.meta);
+    return (
+      metrics.bytesRead.remaining >= MAX_DOCUMENT_BYTES + VERIFICATION_RESERVE_BYTES &&
+      metrics.documentsRead.remaining >= 1 + VERIFICATION_RESERVE_DOCUMENTS &&
+      metrics.databaseQueries.remaining >= 1 + VERIFICATION_RESERVE_QUERIES
+    );
+  }
+
+  /** One control-account line read: one document and its bytes. */
+  chargeLine(line: object): boolean {
+    this.remainingDocs -= 1;
+    this.remainingBytes -= documentSize(line);
+    return this.remainingDocs >= 0 && this.remainingBytes >= 0;
+  }
+
+  /** One parent entry about to be fetched: charged a document before the fetch, its bytes after (see chargeParentBytes). */
+  chargeParentFetch(): boolean {
+    this.remainingDocs -= 1;
+    return this.remainingDocs >= 0;
+  }
+
+  chargeParentBytes(parent: object): boolean {
+    this.remainingBytes -= documentSize(parent);
+    return this.remainingBytes >= 0;
+  }
 }
 
 async function addPeriodSnapshots(
@@ -215,11 +290,13 @@ async function addEntryLines(
 /**
  * Line-first: the entry walk never visits a line whose parent is missing or owned by another organization, so
  * this reads the organization's own lines on the checked accounts in the period's range and resolves each parent
- * that is not one of `knownEntryIds`. Every line read and every parent fetched is charged to `check.readLimit`
- * (one document each) and to `check.readBytesLimit` (its `serializedSize`); the first document that takes either
- * budget below zero answers OVER_LIMIT and nothing further is read. Lines arrive as a stream so the read stops
- * there; a parent is charged one document before it is fetched and its bytes once it is, so the bytes can pass
- * the budget by at most that one parent (a document is at most 1 MiB, far under the 16 MiB function limit).
+ * that is not one of `knownEntryIds`. Every read is first admitted by the transaction's own headroom
+ * (`VerificationBudget.hasHeadroom`), and every line read and parent fetched is charged to `check.readLimit` (one
+ * document each) and to `check.readBytesLimit` (its `getDocumentSize`); the first read that the transaction cannot
+ * take, or that takes either cap below zero, answers OVER_LIMIT and nothing further is read. Lines arrive as a
+ * stream, one `next()` at a time, so the read stops there. A parent is charged one document before it is fetched and
+ * its bytes once it is, so the bytes can pass the cap by at most that one parent (a document is at most 1 MiB). The
+ * headroom is checked before the line AND before the parent, so a parent the transaction cannot take is not fetched.
  */
 async function verifyControlLineParents(
   ctx: QueryCtx,
@@ -232,39 +309,68 @@ async function verifyControlLineParents(
   }>
 ): Promise<ReadOutcome> {
   const { orgId, periodStartDate, asOfDate, check, knownEntryIds } = request;
-  let remainingDocs = check.readLimit;
-  let remainingBytes = check.readBytesLimit;
+  const budget = new VerificationBudget(ctx, check);
   const resolvedElsewhere = new Set<Id<"journalEntries">>();
   for (const accountId of new Set(check.accountIds)) {
-    const accountLines = ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account_date", (q) =>
-        q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", periodStartDate).lte("accountingDate", asOfDate)
-      );
-    for await (const line of accountLines) {
-      remainingDocs -= 1;
-      remainingBytes -= serializedSize(line);
-      if (remainingDocs < 0 || remainingBytes < 0) return "OVER_LIMIT";
-      if (knownEntryIds.has(line.journalEntryId) || resolvedElsewhere.has(line.journalEntryId)) continue;
-      // Not one of this organization's entries in the period: a same-org entry of another period or date
-      // is outside this sum (as before); a missing or foreign one is an inconsistency.
-      remainingDocs -= 1;
-      if (remainingDocs < 0) return "OVER_LIMIT";
-      const parent = await ctx.db.get(line.journalEntryId);
-      if (!parent || parent.orgId !== orgId) return "INCONSISTENT_REFERENCE";
-      remainingBytes -= serializedSize(parent);
-      if (remainingBytes < 0) return "OVER_LIMIT";
-      resolvedElsewhere.add(line.journalEntryId);
-    }
+    const outcome = await verifyAccountLines(ctx, { orgId, accountId, periodStartDate, asOfDate, knownEntryIds, resolvedElsewhere, budget });
+    if (outcome !== "OK") return outcome;
   }
   return "OK";
+}
+
+/** One checked account's lines in the period's range, streamed one document at a time, each admitted, charged and resolved. */
+async function verifyAccountLines(
+  ctx: QueryCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    accountId: Id<"chartOfAccounts">;
+    periodStartDate: number;
+    asOfDate: number;
+    knownEntryIds: ReadonlySet<Id<"journalEntries">>;
+    resolvedElsewhere: Set<Id<"journalEntries">>;
+    budget: VerificationBudget;
+  }>
+): Promise<ReadOutcome> {
+  const { orgId, accountId, periodStartDate, asOfDate, knownEntryIds, resolvedElsewhere, budget } = request;
+  const lines = ctx.db
+    .query("journalLines")
+    .withIndex("by_org_account_date", (q) =>
+      q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", periodStartDate).lte("accountingDate", asOfDate)
+    )[Symbol.asyncIterator]();
+  for (;;) {
+    if (!(await budget.hasHeadroom())) return "OVER_LIMIT";
+    const next = await lines.next();
+    if (next.done) return "OK";
+    if (!budget.chargeLine(next.value)) return "OVER_LIMIT";
+    const entryId = next.value.journalEntryId;
+    if (knownEntryIds.has(entryId) || resolvedElsewhere.has(entryId)) continue;
+    const outcome = await resolveParentEntry(ctx, orgId, entryId, budget);
+    if (outcome !== "OK") return outcome;
+    resolvedElsewhere.add(entryId);
+  }
+}
+
+/**
+ * A line whose parent is not one of this organization's entries in the period: a same-org entry of another period or
+ * date is outside this sum (as before); a missing or foreign one is an inconsistency.
+ */
+async function resolveParentEntry(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  entryId: Id<"journalEntries">,
+  budget: VerificationBudget
+): Promise<ReadOutcome> {
+  if (!(await budget.hasHeadroom()) || !budget.chargeParentFetch()) return "OVER_LIMIT";
+  const parent = await ctx.db.get(entryId);
+  if (!parent || parent.orgId !== orgId) return "INCONSISTENT_REFERENCE";
+  return budget.chargeParentBytes(parent) ? "OK" : "OVER_LIMIT";
 }
 
 async function readCumulativeBalances(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
-  /** When given, the journal-line path verifies line and parent ownership within a document and a byte budget (see getCumulativeBalancesAsOfChecked). */
+  /** When given, the journal-line path verifies line and parent ownership within document and byte caps and the transaction's read headroom (see getCumulativeBalancesAsOfChecked). */
   check: LedgerCheck | undefined
 ): Promise<{ balances: CumulativeBalance[]; outcome: ReadOutcome }> {
   const periods = await ctx.db
