@@ -98,6 +98,7 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersDupReason_ALIAS: ["Matches an alias", "يطابق اسماً مستعاراً"],
   SuppliersDupReason_CLOSE_NAME: ["Similar name", "اسم مشابه"],
   SuppliersDupReason_TAX_ID: ["Same tax id", "الرقم الضريبي نفسه"],
+  SuppliersDupReason_UNKNOWN: ["Possible duplicate", "تكرار محتمل"],
 
   // Legal-identity conflict (create and edit)
   SuppliersLegalTitle: ["This tax id already belongs to a supplier", "هذا الرقم الضريبي يخص مورّداً موجوداً"],
@@ -216,6 +217,10 @@ const suppliersMessages = defineBilingualMessages({
   ServerError_SUPPLIER_INVALID_INPUT: [
     "Check the entered details. A tax jurisdiction must be a two-letter country code and needs a tax id, and text fields have length limits.",
     "تحقق من البيانات المدخلة. يجب أن يكون بلد الإصدار الضريبي رمز دولة من حرفين ويتطلب رقماً ضريبياً، وللحقول النصية حدود طول.",
+  ],
+  ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
+    "This record has no linked supplier yet. Link it to a supplier first.",
+    "هذا السجل غير مرتبط بمورّد بعد. اربطه بمورّد أولاً.",
   ],
   ServerError_SUPPLIER_NO_CHANGE: ["There is nothing to change.", "لا يوجد ما يُغيَّر."],
   ServerError_SUPPLIER_ALIAS_EXISTS: ["This supplier already has that alias.", "لدى هذا المورّد هذا الاسم المستعار بالفعل."],

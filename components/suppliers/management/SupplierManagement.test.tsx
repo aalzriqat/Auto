@@ -100,6 +100,7 @@ import { buildUpdate, formFromSupplier } from "./SupplierDetailScreen";
 import { SupplierSelect } from "../SupplierSelect";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { SUPPLIER_ERROR, type CandidateReason } from "@/convex/utils/supplierRegistry";
 import { mainNavigation, navItemPermitted } from "@/lib/navigation";
 import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
@@ -316,6 +317,20 @@ describe("create", () => {
     expect(world.mutationCalls[1].args.idempotencyKey).not.toBe(world.mutationCalls[0].args.idempotencyKey);
   });
 
+  test("a duplicate reason the screen has no label for shows the generic label, never a raw key", async () => {
+    world.mutationImpl["suppliers:create"] = async () => {
+      throw codedError({
+        code: "SUPPLIER_DUPLICATE_CANDIDATES",
+        candidates: [{ supplierId: "sup_gulf", displayName: "Gulf Motors", status: "ACTIVE", reasons: ["SAME_TAX_ID"] }],
+      });
+    };
+    const dialog = open();
+    fill(dialog, "Gulf Motors");
+    submit(dialog);
+    const group = await within(dialog).findByRole("group", { name: label("SuppliersDupTitle") });
+    expect(group.textContent).not.toContain("SuppliersDupReason_");
+    expect(within(group).getByText(label("SuppliersDupReason_UNKNOWN"))).toBeTruthy();
+  });
   test("legal-identity conflict: explains it, links the existing supplier, and the shared path needs a reason", async () => {
     let calls = 0;
     world.mutationImpl["suppliers:create"] = async () => {
@@ -567,4 +582,19 @@ describe("dictionary", () => {
       expect(ar[key], `${key} left in English`).not.toBe(en[key]);
     }
   });
-});
+
+  test("every duplicate reason the server can return has an English and Arabic label", () => {
+    // Record<CandidateReason, ...> stops compiling when the server union gains a member.
+    const reasons: Record<CandidateReason, true> = { SAME_NAME: true, ALIAS: true, CLOSE_NAME: true, TAX_ID: true };
+    for (const reason of Object.keys(reasons)) {
+      expect(en[`SuppliersDupReason_${reason}`], reason).toBeTruthy();
+      expect(ar[`SuppliersDupReason_${reason}`], reason).toBeTruthy();
+    }
+  });
+
+  test("every supplier registry error code has an English and Arabic ServerError label", () => {
+    for (const code of Object.values(SUPPLIER_ERROR)) {
+      expect(en[`ServerError_${code}`], `${code} (en)`).toBeTruthy();
+      expect(ar[`ServerError_${code}`], `${code} (ar)`).toBeTruthy();
+    }
+  });});

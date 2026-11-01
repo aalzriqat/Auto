@@ -224,7 +224,7 @@ export function DuplicateCandidatesPanel({
               )}
               {(candidate.reasons ?? []).map((reason) => (
                 <Badge key={reason} variant="outline" className="ms-2">
-                  {translate(`SuppliersDupReason_${reason}`)}
+                  {duplicateReasonLabel(reason, translate)}
                 </Badge>
               ))}
             </span>
@@ -315,6 +315,13 @@ export class QueryErrorBoundary extends Component<
 }
 
 /** The localized line for a failed read: a coded refusal, else the generic load error. */
+/** A reason code this screen has no label for must not surface as a raw dictionary key. */
+function duplicateReasonLabel(reason: string, translate: Translate): string {
+  const key = `SuppliersDupReason_${reason}`;
+  const label = translate(key);
+  return label === key ? translate("SuppliersDupReason_UNKNOWN") : label;
+}
+
 export function loadErrorMessage(error: unknown, translate: Translate): string {
   return getCodedErrorMessage(error, translate) ?? translate("SuppliersLoadError");
 }
