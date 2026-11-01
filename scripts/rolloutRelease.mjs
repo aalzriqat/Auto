@@ -27,6 +27,7 @@ import {
   decidePollOutcome,
   describeConvexFailure,
   forLog,
+  initialiseSupplierRegistry,
   mergeVerdicts,
   parseConvexRunJson,
   pollIntervalMs,
@@ -43,6 +44,10 @@ const REPORT_FN = "adminSystem:materializationReportForRelease";
 const START_FN = "migrations:startSocialConversationBackfills";
 const BANK_BACKFILL_FN = "bankBalanceBackfill:runPage";
 const SUPPLIER_VAT_HOLD_FN = "accountingOutbox:recoverPeriodHeldSupplierVat";
+const SUPPLIER_REGISTRY_BACKFILL_FN = "suppliers:backfillRegistry";
+const SUPPLIER_REGISTRY_VERIFY_FN = "suppliers:registryCoverageForRelease";
+/** 50 orgs per page, so this bounds a deployment at 25,000 organizations. */
+const MAX_SUPPLIER_REGISTRY_PAGES = 500;
 /** At most two parked rows per page, with a durable completion marker. */
 const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
@@ -76,6 +81,7 @@ let lastVerdict = null;
 let lastOutcome = "continue";
 let bankSummary = null;
 let supplierVatSummary = null;
+let supplierRegistrySummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -97,6 +103,7 @@ function writeSummary(extra) {
   });
   if (bankSummary) body += `\n### Bank balances\n\n${bankSummary}\n`;
   if (supplierVatSummary) body += `\n### Supplier VAT holds\n\n${supplierVatSummary}\n`;
+  if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -314,6 +321,33 @@ console.log(`  ${bankSummary}`);
 // Hard stops: the shared deadline and the page cap end the whole phase.
 const bankStop = bankRebuildStopMessage(bank, MAX_BANK_PAGES_PER_ORG);
 if (bankStop) fail(bankStop);
+
+// ─── 2c. Initialise the supplier registry for every live organization ───────
+
+// SCRUM-888: organizations that predate the registry have no row, so every
+// supplier write refuses and consigned intake cannot start. One page per call
+// through the operator key (internal functions, never the public API), then a
+// counts-only verification. Idempotent, so a re-run resumes. Same shared deadline.
+console.log(`Initialising the supplier registry…`);
+const supplierRegistry = initialiseSupplierRegistry({
+  backfillPage: (cursor) =>
+    convex(["run", SUPPLIER_REGISTRY_BACKFILL_FN, JSON.stringify({ cursor, continueAutomatically: false })]),
+  verifyPage: (cursor) =>
+    convex([
+      "run",
+      SUPPLIER_REGISTRY_VERIFY_FN,
+      JSON.stringify({ paginationOpts: { cursor, numItems: PAGE_SIZE } }),
+    ]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPages: MAX_SUPPLIER_REGISTRY_PAGES,
+});
+if (!supplierRegistry.ok) fail(supplierRegistry.reason);
+supplierRegistrySummary =
+  `${supplierRegistry.created} registries created, ${supplierRegistry.checked} organizations verified, ` +
+  `${supplierRegistry.deleting} being deleted and skipped.`;
+console.log(`  ${supplierRegistrySummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 

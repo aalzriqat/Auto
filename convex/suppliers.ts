@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { internalQuery, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { writeAuditLog } from "./utils/auditLog";
@@ -22,6 +22,7 @@ import {
   findSupplierCandidates,
   insertSupplier,
   insertSupplierAlias,
+  registryCoverageOf,
   patchSupplier,
   patchSupplierAlias,
   type RegistryLock,
@@ -919,6 +920,34 @@ export const retireAlias = mutation({
 });
 
 // ─── Registry bootstrap and backfill (internal) ───────────────────────────────────────────────
+
+/**
+ * Counts-only release verification (SCRUM-888): one bounded page of organizations, reporting which
+ * live ones still have no registry document. Organizations being deleted are counted separately,
+ * never as missing, matching `ensureRegistryState`. Paginated per
+ * https://docs.convex.dev/database/pagination so a read never grows with the table. The ids exist
+ * only so the caller can hash them into opaque refs; the rollout script never prints them.
+ */
+export const registryCoverageForRelease = internalQuery({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("organizations").paginate(args.paginationOpts);
+    const missing: Id<"organizations">[] = [];
+    let deleting = 0;
+    for (const org of page.page) {
+      const coverage = await registryCoverageOf(ctx, org);
+      if (coverage === "DELETING") deleting += 1;
+      else if (coverage === "MISSING") missing.push(org._id);
+    }
+    return {
+      checked: page.page.length - deleting,
+      deleting,
+      missing,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});
 
 /** Creates the organization's registry document if it has none. Idempotent. */
 export const initialiseRegistry = internalMutation({
