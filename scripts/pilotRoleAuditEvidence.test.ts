@@ -424,7 +424,7 @@ test.each([
       CONVEX_PREVIEW_NAME: "e2e-role-test", CONVEX_DEPLOY_KEY: "preview:test:key|synthetic",
       CONVEX_PREVIEW_URL: "https://tame-mouse-328.convex.cloud", CONVEX_PREVIEW_CREATED_AT: "1234567" }) });
   expect(diagnosticCalls).toBe(exitCode === 0 ? 0 : 1);
-  expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 136, isolationVerified: true,
+  expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 140, isolationVerified: true,
     complete, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
     roleRegressionsVerified: reportMode === "passed",
     roleRegressionsMeasurement: reportMode === "passed" ? "PASS" : reportMode === "skipped" ? "FAIL" : "UNAVAILABLE",
