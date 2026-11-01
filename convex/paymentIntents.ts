@@ -437,6 +437,7 @@ async function createCanonicalIntentSettlement(
         method: "PAYMENT_LINK",
         amount: appliedAmount,
         paymentDate: occurredAt,
+        paymentDateKind: "instant",
         status: "POSTED",
         idempotencyKey: `payment_intent_${intent._id}`,
         reference: externalId ?? intent.externalId ?? `Payment intent ${intent._id}`,
