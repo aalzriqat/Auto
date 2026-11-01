@@ -1,0 +1,60 @@
+{
+  "id": "payables-reconciliation-parent-entry-read-is-charged-to-byte-budget",
+  "fingerprint": "b014cbd8865812c39f1f40f73a8dcb838c2530a444e68201e60965f4b96d6dca",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.computeSupplierPayablesReconciliation",
+      "input": {
+        "apLines": "2",
+        "parentEntryMemoChars": "30000",
+        "readLimit": "100",
+        "readBytesLimit": "40000"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    },
+    {
+      "observable": "currencies",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 bytes: a parent entry read is charged to the byte budget"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "6f8d2c7901f827185ec5a0d04622347268d2654f"
+  }
+}

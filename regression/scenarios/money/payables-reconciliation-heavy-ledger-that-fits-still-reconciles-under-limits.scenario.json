@@ -1,0 +1,47 @@
+{
+  "id": "payables-reconciliation-heavy-ledger-that-fits-still-reconciles-under-limits",
+  "fingerprint": "84cfde0dda53425002d4e45209858ec598a8b3c2693e206906ad55bd41e56efa",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "transactionLimits": "enforced",
+        "apLines": "4",
+        "apLineDescriptionChars": "400000"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": "493600"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 headroom CONTROL: under transaction limits, a heavy ledger that fits with its reserve still reconciles (the headroom check does not over-refuse)"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS"
+}
