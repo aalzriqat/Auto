@@ -1,0 +1,53 @@
+{
+  "id": "reconciliation-foreign-journal-parent-is-unavailable",
+  "fingerprint": "732b12f62bd5d359ccfda8739ff2f9bd096d363293e68ddb1f0edf6c879a6b1e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "foreignJournalParent": "POSTED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "INCONSISTENT_REFERENCE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "a line whose parent entry belongs to another organization makes the result UNAVAILABLE, not a balance"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "53132edfe1bcfa009b4adc761644df95916be029"
+  }
+}

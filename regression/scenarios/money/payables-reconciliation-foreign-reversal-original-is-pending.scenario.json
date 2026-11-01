@@ -1,0 +1,53 @@
+{
+  "id": "payables-reconciliation-foreign-reversal-original-is-pending",
+  "fingerprint": "c5e9fb9e961e5ba887fa3a68bc13f547155aac862969c6c3395c54b0d0790d34",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "reversalOriginal": "FOREIGN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "PENDING_POSTINGS"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "A/P: a queued reversal whose original belongs to another organization is unresolved, PENDING_POSTINGS"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "53132edfe1bcfa009b4adc761644df95916be029"
+  }
+}

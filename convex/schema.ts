@@ -8058,6 +8058,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     sharedLegalIdentityReason: v.optional(v.string()),
     /** Bumped by every change to a snapshot field (name, legal name, tax identity). */
     version: v.number(),
+    /**
+     * The edit token (SCRUM-887): raised by EVERY successful `suppliers.update`, contact and shared-
+     * identity link included, so `expectedVersion` protects every field the screen writes (the
+     * strong-validator rule of RFC 9110 section 13: the token must change whenever the
+     * representation does). Absent on a row never updated since this field was added; the token is
+     * then `version`. A money record never reads it: records snapshot `version` only.
+     */
+    editRevision: v.optional(v.number()),
     origin: v.union(v.literal("MANUAL"), v.literal("MIGRATION"), v.literal("IMPORT")),
     createdBy: v.id("users"),
     createdAt: v.number(),

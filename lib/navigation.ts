@@ -110,6 +110,7 @@ export const mainNavigation: NavItem[] = [
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, group: "customersSales", permission: "view:sales" },
   { name: "Vehicles", href: "/vehicles", icon: Car, group: "inventorySourcing", permission: "view:vehicles" },
   { name: "Sourcing", href: "/sourcing", icon: Truck, group: "inventorySourcing", permission: "view:finance" },
+  { name: "Suppliers", href: "/suppliers", icon: Building2, group: "inventorySourcing", permission: "view:finance" },
   {
     name: "MarketplaceRequests",
     href: "/marketplace/requests",
