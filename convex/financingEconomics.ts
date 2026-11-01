@@ -27,6 +27,8 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import {
   applicationVehicleIds,
   assertObservedBasisMatchesVehicle,
+  assertSupplierConcessionPlan,
+  closesOnCurrentSalePlan,
   contractEntitlementMinorOf,
   SUPPLIER_CONCESSION_ALLOWS_GROSS_MANUAL,
   SUPPLIER_CONCESSION_REFUSALS,
@@ -3290,6 +3292,9 @@ export const resolveAppraisalGap = mutation({
       if (!Number.isSafeInteger(supplierShare) || supplierShare < 0) {
         throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.INVALID_AMOUNT);
       }
+      // Only a deal that closes on the current (v3) plan with a finance company has the commission
+      // basis a concession changes; refused before any read of the vehicle and before any write.
+      assertSupplierConcessionPlan(app);
       if (applicationVehicleIds(app).length !== 1) {
         throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.MULTI_VEHICLE);
       }
@@ -3395,6 +3400,8 @@ export const supplierConcessionBasis = query({
     ]);
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
     if (applicationVehicleIds(app).length !== 1) return { eligible: false as const };
+    // The same plan rule the resolve door enforces, so the dialog never offers a field the server refuses.
+    if (!closesOnCurrentSalePlan(app)) return { eligible: false as const };
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", app.vehicleId);
     // A stock car has no supplier name: answer before the currency read.
     const supplierName = (vehicle.sourcedFromName ?? "").trim();

@@ -1,0 +1,49 @@
+{
+  "id": "supplier-receivable-balanced-opening-leg-replacement",
+  "fingerprint": "8ed90453207abda388c73ee55c68b1b5d9502a674f843773c46aed6043e90c69",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-round4-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "deleteAllocationsAndResults": true,
+        "deleteRecovery": true,
+        "replaceSupplierJournalLegWithCash": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.independentGlBalanceMinor",
+      "value": 100000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "balanced replacement of an opening supplier leg cannot hide its snapshot"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}
