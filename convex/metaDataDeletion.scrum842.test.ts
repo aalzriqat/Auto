@@ -4,6 +4,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
+import type { MutationCtx } from "./_generated/server";
+import { redactOneStep } from "./metaLogRedaction";
 import { META_LOG_REDACTION_PAGE_SIZE, REDACTED_META_USER } from "./utils/metaUserIdRedaction";
 
 // SCRUM-842: Meta's deauthorize and data-deletion callbacks must not copy the
@@ -81,6 +83,7 @@ type Platform = "facebook" | "instagram";
 
 const PLATFORMS: Array<{
   platform: Platform;
+  otherPlatform: Platform;
   label: string;
   otherLabel: string;
   secret: string;
@@ -92,6 +95,7 @@ const PLATFORMS: Array<{
 }> = [
   {
     platform: "facebook",
+    otherPlatform: "instagram",
     label: "Facebook",
     otherLabel: "Instagram",
     secret: FACEBOOK_SECRET,
@@ -103,6 +107,7 @@ const PLATFORMS: Array<{
   },
   {
     platform: "instagram",
+    otherPlatform: "facebook",
     label: "Instagram",
     otherLabel: "Facebook",
     secret: INSTAGRAM_SECRET,
@@ -147,6 +152,10 @@ const settingsOf = (t: T, orgId: Id<"organizations">) =>
       .unique(),
   );
 
+/** Scheduled functions fire only when a test drains them (`finishAllScheduledFunctions(vi.runAllTimers)`). */
+const useScheduledTimers = () =>
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
 const allWebhookLogs = (t: T) => t.run((ctx) => ctx.db.query("webhookLogs").collect());
 const allDeletionRequests = (t: T) =>
   t.run((ctx) => ctx.db.query("metaDataDeletionRequests").collect());
@@ -161,9 +170,13 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
         consoleOutput.push(args.map(String).join(" "));
       });
     }
+    // Every callback leaves a redaction job scheduled (there is always a second
+    // source to walk). Fake timers keep it from firing after the test ends.
+    useScheduledTimers();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -228,6 +241,7 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
 
       const first = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
       const second = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
 
       for (const reply of [first, second]) {
         expect(reply.confirmation_code).toMatch(/^[0-9a-f]{32}$/);
@@ -449,6 +463,7 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
     for (const method of ["log", "info", "warn", "error", "debug"] as const) {
       vi.spyOn(console, method).mockImplementation(() => undefined);
     }
+    useScheduledTimers();
   });
 
   afterEach(() => {
@@ -491,35 +506,42 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
 
       expect((await logById(t, rowId))?.error).toBe(`Graph rejected user ${REDACTED_META_USER}`);
     });
-    test("only the signed user's identifier is touched: another user, a longer id, another source and another platform stay as written", async () => {
+    test("only the signed user's identifier is touched: another user, a longer id, an unrelated source and the other platform's sources stay as written", async () => {
       const t = newTest();
       const other = await seedLegacyLog(t, p.logSource, legacyLine(p.label, OTHER_ID, "deletion"));
       const longer = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LONGER_ID, "deauth"));
-      const wrongSource = await seedLegacyLog(t, p.platform, `Facebook note ${LEGACY_ID}`);
-      const otherPlatform = await seedLegacyLog(
-        t,
-        p.platform === "facebook" ? "instagram-oauth" : "facebook-oauth",
-        legacyLine(p.otherLabel, LEGACY_ID, "deletion"),
-      );
+      const otherWebhookUser = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${OTHER_ID} failed`, "error");
+      const longerWebhookUser = await seedLegacyLog(t, p.platform, `DM from ${LONGER_ID}`);
+      // A source no Meta callback writes the id to: not walked, so left exactly as written.
+      const unrelatedSource = await seedLegacyLog(t, "whatsapp", `Note ${LEGACY_ID}`);
+      const otherPlatformOauth = await seedLegacyLog(t, p.otherLogSource, legacyLine(p.otherLabel, LEGACY_ID, "deletion"));
+      const otherPlatformWebhook = await seedLegacyLog(t, p.otherPlatform, `DM from ${LEGACY_ID}`);
 
       await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
 
       expect((await logById(t, other))?.summary).toBe(legacyLine(p.label, OTHER_ID, "deletion"));
       expect((await logById(t, longer))?.summary).toBe(legacyLine(p.label, LONGER_ID, "deauth"));
-      expect((await logById(t, wrongSource))?.summary).toBe(`Facebook note ${LEGACY_ID}`);
-      expect((await logById(t, otherPlatform))?.summary).toBe(legacyLine(p.otherLabel, LEGACY_ID, "deletion"));
+      expect((await logById(t, otherWebhookUser))?.summary).toBe(`Auto-reply DM to ${OTHER_ID} failed`);
+      expect((await logById(t, longerWebhookUser))?.summary).toBe(`DM from ${LONGER_ID}`);
+      expect((await logById(t, unrelatedSource))?.summary).toBe(`Note ${LEGACY_ID}`);
+      expect((await logById(t, otherPlatformOauth))?.summary).toBe(legacyLine(p.otherLabel, LEGACY_ID, "deletion"));
+      expect((await logById(t, otherPlatformWebhook))?.summary).toBe(`DM from ${LEGACY_ID}`);
     });
 
     test("it is idempotent: a second callback for the same user changes nothing more and both receipts complete", async () => {
       const t = newTest();
       const rowId = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+      const webhookRowId = await seedLegacyLog(t, p.platform, `DM from ${LEGACY_ID}`);
       const signed = await signedRequest({ user_id: LEGACY_ID }, p.secret);
 
       const first = (await (await post(t, p.deletion, signed)).json()) as { confirmation_code: string };
-      const afterFirst = await logById(t, rowId);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const afterFirst = [await logById(t, rowId), await logById(t, webhookRowId)];
       const second = (await (await post(t, p.deletion, signed)).json()) as { confirmation_code: string };
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
 
-      expect(await logById(t, rowId)).toEqual(afterFirst);
+      expect([await logById(t, rowId), await logById(t, webhookRowId)]).toEqual(afterFirst);
       for (const reply of [first, second]) {
         const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
         expect(typeof status?.completedAt).toBe("number");
@@ -697,17 +719,129 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       await expectSchedulerHoldsNone(t, [LEGACY_ID]);
     });
 
-    test("a source of one page never stores a job: the identifier is used inside one transaction and kept nowhere", async () => {
+    test("a deletion whose sources are each one page still walks both: the receipt waits for the second source, and nothing keeps the id afterwards", async () => {
       const t = newTest();
       await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+      await seedLegacyLog(t, p.platform, `DM from ${LEGACY_ID}`);
 
       const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
       const reply = (await res.json()) as { confirmation_code: string };
 
+      // The callback source is done, the platform's own source is not: not complete yet.
+      const [job] = await jobRows(t);
+      expect(job?.sourceIndex).toBe(1);
+      expect(job?.cursor).toBeNull();
+      const pending = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(pending?.completedAt).toBeNull();
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof done?.completedAt).toBe("number");
       expect(await jobRows(t)).toEqual([]);
-      expect(await scheduledRecords(t)).toEqual([]);
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
+    });
+
+    test("the walk crosses from one source to the next: the id sits only on the last page of the platform's own source, and the receipt is pending on every observation until then", async () => {
+      const t = newTest();
+      await seedLegacyLog(t, p.logSource, legacyLine(p.label, OTHER_ID, "deletion"));
+      await seedFillerLogs(t, p.platform, META_LOG_REDACTION_PAGE_SIZE * 2 + 5);
+      const lastRow = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${LEGACY_ID} failed`, "error");
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+      const statusOf = () => t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+
+      const seenPositions: Array<string> = [];
+      const seenCompletion: Array<number | null | undefined> = [(await statusOf())?.completedAt];
+      for (let guard = 0; guard < 12 && (await jobRows(t)).length > 0; guard += 1) {
+        const [job] = await jobRows(t);
+        seenPositions.push(`${job?.sourceIndex}:${job?.cursor === null ? "start" : "mid"}`);
+        await t.finishInProgressScheduledFunctions();
+        vi.runOnlyPendingTimers();
+        await t.finishInProgressScheduledFunctions();
+        seenCompletion.push((await statusOf())?.completedAt);
+      }
+
+      // Source 1 was entered at its start and then paged through before the job ended.
+      expect(seenPositions[0]).toBe("1:start");
+      expect(seenPositions).toContain("1:mid");
+      expect((await logById(t, lastRow))?.summary).toBe(`Auto-reply DM to ${REDACTED_META_USER} failed`);
+      expect(seenCompletion[0]).toBeNull();
+      expect(typeof seenCompletion[seenCompletion.length - 1]).toBe("number");
+      expect(seenCompletion.slice(0, -1).every((value) => value === null)).toBe(true);
+      expect(await jobRows(t)).toEqual([]);
+    });
+
+    test("the stored webhook body is redacted too: rawPayload and payloadPreview of a delivery-inbox row lose the id and keep their hash and event id", async () => {
+      const t = newTest();
+      const body = (id: string) => JSON.stringify({ object: p.platform, entry: [{ id, messaging: [{ sender: { id: OTHER_ID } }] }] });
+      const rowId = await t.run((ctx) =>
+        ctx.db.insert("webhookLogs", {
+          source: p.platform,
+          status: "success",
+          summary: "Batch with 1 entries",
+          eventId: "synthetic-event-sha",
+          payloadSha256: "synthetic-event-sha",
+          rawPayload: body(LEGACY_ID),
+          payloadPreview: body(LEGACY_ID),
+          payloadTruncated: false,
+          createdAt: Date.now(),
+        }),
+      );
+
+      await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      const row = await logById(t, rowId);
+      expect(row?.rawPayload).toBe(body(REDACTED_META_USER));
+      expect(row?.payloadPreview).toBe(body(REDACTED_META_USER));
+      // The other user named in the same body is not the signed user.
+      expect(row?.rawPayload).toContain(OTHER_ID);
+      expect(row?.eventId).toBe("synthetic-event-sha");
+      expect(row?.payloadSha256).toBe("synthetic-event-sha");
+      expect(row?.summary).toBe("Batch with 1 entries");
+    });
+
+    test("running the same job more than once, in any order, skips no page and completes once", async () => {
+      const t = newTest();
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE + 5);
+      await seedFillerLogs(t, p.platform, META_LOG_REDACTION_PAGE_SIZE);
+      const lastRow = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${LEGACY_ID} failed`, "error");
+      await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const [job] = await jobRows(t);
+      expect(job).toBeDefined();
+
+      // A sweep restart racing the live chain: extra direct runs, each from the stored position.
+      for (let i = 0; i < 3; i += 1) {
+        await t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: job._id });
+      }
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      // And a run for a job that no longer exists is a no-op.
+      await t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: job._id });
+
+      expect((await logById(t, lastRow))?.summary).toBe(`Auto-reply DM to ${REDACTED_META_USER} failed`);
+      const receipts = await allDeletionRequests(t);
+      expect(receipts).toHaveLength(1);
+      expect(typeof receipts[0]?.completedAt).toBe("number");
+      expect(await jobRows(t)).toEqual([]);
+    });
+
+    test("a stored position outside the source list fails the run: the receipt stays pending and the job stays", async () => {
+      const t = newTest();
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+      const [job] = await jobRows(t);
+      await t.run((ctx) => ctx.db.patch(job._id, { sourceIndex: 9 }));
+
+      await expect(t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: job._id })).rejects.toThrow(
+        "outside the source list",
+      );
+
+      expect(await jobRows(t)).toHaveLength(1);
       const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-      expect(typeof status?.completedAt).toBe("number");
+      expect(status?.completedAt).toBeNull();
     });
 
     test("a continuation that fails leaves the receipt pending and no identifier in any scheduler record, response or console line; the stalled-job sweep then finishes the SAME receipt", async () => {
@@ -770,7 +904,10 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
       const replay = await post(t, p.deletion, signed);
       expect(replay.status).toBe(200);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
       expect(await jobRows(t)).toEqual([]);
+      const [receipt] = await allDeletionRequests(t);
+      expect(typeof receipt?.completedAt).toBe("number");
     });
 
     test("a deauthorize whose first page fails answers a generic 500 and stores no job", async () => {
@@ -871,5 +1008,41 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
 
       expect((await summaries(t))[0].summary).toBe(legacyLine("Facebook", REDACTED_META_USER, "deletion"));
     });
+  });
+});
+
+describe("SCRUM-842 redaction step guards", () => {
+  // convex-test never reports a page status, so the one Convex answer that means
+  // "this page may be incomplete" is driven through a stand-in context.
+  const contextReturning = (page: Record<string, unknown>) =>
+    ({
+      db: { query: () => ({ withIndex: () => ({ paginate: async () => page }) }) },
+    }) as unknown as MutationCtx;
+
+  test("a page Convex says may be incomplete is never walked past: the step fails instead of moving the cursor", async () => {
+    const ctx = contextReturning({ page: [], isDone: false, continueCursor: "next", pageStatus: "SplitRequired" });
+
+    await expect(redactOneStep(ctx, "instagram", LEGACY_ID, { sourceIndex: 0, cursor: null })).rejects.toThrow(
+      "cut short by the read limit",
+    );
+  });
+
+  test("a page Convex only recommends splitting is complete and is walked on normally", async () => {
+    const ctx = contextReturning({ page: [], isDone: false, continueCursor: "next", pageStatus: "SplitRecommended" });
+
+    await expect(redactOneStep(ctx, "instagram", LEGACY_ID, { sourceIndex: 1, cursor: "here" })).resolves.toEqual({
+      done: false,
+      next: { sourceIndex: 1, cursor: "next" },
+    });
+  });
+
+  test("the end of the first source moves to the second, and the end of the last source ends the walk", async () => {
+    const ended = contextReturning({ page: [], isDone: true, continueCursor: "", pageStatus: null });
+
+    await expect(redactOneStep(ended, "facebook", LEGACY_ID, { sourceIndex: 0, cursor: "x" })).resolves.toEqual({
+      done: false,
+      next: { sourceIndex: 1, cursor: null },
+    });
+    await expect(redactOneStep(ended, "facebook", LEGACY_ID, { sourceIndex: 1, cursor: "x" })).resolves.toEqual({ done: true });
   });
 });

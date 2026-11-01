@@ -6589,18 +6589,22 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     completedAt: v.optional(v.number()),
   }).index("by_code", ["code"]),
 
-  // SCRUM-842: the unfinished remainder of a retained-log redaction. It exists ONLY
-  // when a Meta user's log source is longer than one page, so it is the one place
-  // that holds a Meta user id, and only until the last page is redacted: the final
-  // page deletes the row in the same transaction that marks the receipt complete.
-  // A source of one page never creates one. `cursor` is where the next page starts;
-  // `updatedAt` lets the stalled-job sweep (metaLogRedaction.ts) restart a chain
-  // that died. The scheduled function that advances it is given this row's own
-  // document id, never the Meta user id or the receipt code.
+  // SCRUM-842: the unfinished remainder of a retained-log redaction. The redaction
+  // walks every `webhookLogs` source that can hold a platform's Meta user id (see
+  // `metaLogRedactionSources`), one page per transaction, so there is always more to
+  // walk after the first page and this row carries it. It is the one place that
+  // holds a Meta user id, and only until the last page of the last source is
+  // redacted: that page deletes the row in the same transaction that marks the
+  // receipt complete. `sourceIndex` picks the source being walked and `cursor` is
+  // where its next page starts (null at the start of a source); `updatedAt` lets the
+  // stalled-job sweep (metaLogRedaction.ts) restart a chain that died. The scheduled
+  // function that advances it is given this row's own document id, never the Meta
+  // user id or the receipt code.
   metaLogRedactionJobs: defineTable({
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     metaUserId: v.string(),
     receiptCode: v.optional(v.string()),
+    sourceIndex: v.number(),
     cursor: v.union(v.string(), v.null()),
     updatedAt: v.number(),
   }).index("by_updatedAt", ["updatedAt"]),

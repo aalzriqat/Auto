@@ -2,20 +2,28 @@
 //
 // A signed deauthorize or data-deletion callback names one Meta user. Rows
 // written before SCRUM-842 carry that id in their summary (and may carry it in
-// `error`), and SCRUM-807 forbids deleting operational history, so the id is
-// replaced with fixed text and the row stays. The disposition is a coordinator
-// decision (authority delegated by the owner), not an owner ruling.
+// `error` and in the stored webhook body), and SCRUM-807 forbids deleting
+// operational history, so the id is replaced with fixed text and the row stays.
+// The disposition is a coordinator decision (authority delegated by the owner),
+// not an owner ruling.
+//
+// Which rows: every `webhookLogs` source that can hold that platform's id, not only
+// the callback source. `metaLogRedactionSources` lists them (`<platform>-oauth`, then
+// `<platform>`: the delivery inbox, the auto-reply failures and the Instagram
+// subscription failures). A receipt must not say "processed" while any of them still
+// holds the id, so completion waits for the last page of the last source.
 //
 // Bounded and resumable. One transaction examines at most
-// META_LOG_REDACTION_PAGE_SIZE rows of ONE source (`<platform>-oauth`) through
-// the existing `by_source_and_eventId` index: no table scan, no new index on
-// `webhookLogs`. The HTTP callback does exactly one such page, then returns.
-// Anything longer is carried by a job row, one page per scheduled run:
+// META_LOG_REDACTION_PAGE_SIZE rows of ONE source through the existing
+// `by_source_and_eventId` index: no table scan, no new index on `webhookLogs`, and
+// exactly one paginated query (Convex allows one per function). The HTTP callback
+// does exactly one such page, then returns. Everything else is carried by a job row
+// that remembers where the walk is (`sourceIndex` + `cursor`), one page per
+// scheduled run:
 //
-//   request:  page 1 -> [done?] yes: finish (receipt complete, nothing stored)
-//                               no:  insert job {cursor}, schedule run(jobId)
-//   run(jobId): page N -> [done?] yes: delete job + complete receipt, ONE transaction
-//                                no:  patch cursor, schedule run(jobId)
+//   request:  page 1 of source 0 -> insert job {sourceIndex, cursor}, schedule run(jobId)
+//   run(jobId): next page        -> more pages or more sources: patch position, schedule run(jobId)
+//                                   last page of last source: delete job + complete receipt, ONE transaction
 //   sweep (cron): a job quiet for META_LOG_REDACTION_STALL_MS gets run(jobId) again
 //
 // Why this shape (Convex limits: https://docs.convex.dev/production/state/limits;
@@ -33,15 +41,18 @@
 //   at a row that no longer exists after completion.
 // - The Meta user id sits in the job row only while pages remain. Redaction is a
 //   no-op on a redacted row, so every page, run, sweep and replay is idempotent.
+// - A run reads the position from the job row inside its own transaction and writes
+//   the next one back in that transaction, so two chains for one job (the live chain
+//   and a sweep restart) never skip a page: Convex serialises their writes.
 import { v } from "convex/values";
-import type { Infer } from "convex/values";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import {
+  META_LOG_REDACTED_FIELDS,
   META_LOG_REDACTION_PAGE_SIZE,
-  metaOauthLogSource,
+  metaLogRedactionSources,
   redactMetaUserIdInText,
   type MetaPlatform,
 } from "./utils/metaUserIdRedaction";
@@ -58,33 +69,60 @@ interface RedactionStartArgs {
   receiptCode?: string;
 }
 
-/** What one page reports back: whether it was the last, and where the next starts. */
-export const metaLogRedactionPageResult = v.object({
-  isDone: v.boolean(),
-  continueCursor: v.union(v.string(), v.null()),
-});
-export type MetaLogRedactionPageResult = Infer<typeof metaLogRedactionPageResult>;
+/** Where the walk is: which source of `metaLogRedactionSources`, and the cursor into it. */
+export interface MetaLogRedactionPosition {
+  sourceIndex: number;
+  cursor: string | null;
+}
 
-/** Redacts one page of one platform's callback log source. Never schedules, never completes. */
-async function redactOnePage(
+/** One step's outcome: the whole walk is finished, or the position the next step starts at. */
+export type MetaLogRedactionStep = { done: true } | { done: false; next: MetaLogRedactionPosition };
+
+const WALK_START: MetaLogRedactionPosition = { sourceIndex: 0, cursor: null };
+
+/**
+ * Redacts one page of one source of one platform and says where the walk goes next.
+ * Never schedules, never completes. Only this function reads `webhookLogs`, with one
+ * paginated query, so a step is one query however many sources there are.
+ */
+export async function redactOneStep(
   ctx: MutationCtx,
   platform: MetaPlatform,
   metaUserId: string,
-  cursor: string | null,
-): Promise<MetaLogRedactionPageResult> {
+  position: MetaLogRedactionPosition,
+): Promise<MetaLogRedactionStep> {
+  const sources = metaLogRedactionSources(platform);
+  const source = sources[position.sourceIndex];
+  if (source === undefined) {
+    // A stored position the list no longer has: finishing here would call a walk that
+    // never reached its sources "complete". Fail so the receipt stays pending.
+    throw new Error("Meta log redaction position is outside the source list.");
+  }
   const page = await ctx.db
     .query("webhookLogs")
-    .withIndex("by_source_and_eventId", (q) => q.eq("source", metaOauthLogSource(platform)))
-    .paginate({ numItems: META_LOG_REDACTION_PAGE_SIZE, cursor });
+    .withIndex("by_source_and_eventId", (q) => q.eq("source", source))
+    .paginate({ numItems: META_LOG_REDACTION_PAGE_SIZE, cursor: position.cursor });
+  if (page.pageStatus === "SplitRequired") {
+    // Convex says this page may be incomplete (it read too much). Moving the cursor
+    // past it could skip rows the receipt would then call redacted.
+    throw new Error("Meta log redaction page was cut short by the read limit.");
+  }
 
   for (const row of page.page) {
-    const summary = redactMetaUserIdInText(row.summary, metaUserId);
-    const error = row.error === undefined ? undefined : redactMetaUserIdInText(row.error, metaUserId);
-    if (summary !== row.summary || error !== row.error) {
-      await ctx.db.patch(row._id, { summary, ...(error === undefined ? {} : { error }) });
+    const patch: Partial<Pick<Doc<"webhookLogs">, (typeof META_LOG_REDACTED_FIELDS)[number]>> = {};
+    for (const field of META_LOG_REDACTED_FIELDS) {
+      const text = row[field];
+      if (text === undefined) continue;
+      const redacted = redactMetaUserIdInText(text, metaUserId);
+      if (redacted !== text) patch[field] = redacted;
     }
+    if (Object.keys(patch).length > 0) await ctx.db.patch(row._id, patch);
   }
-  return { isDone: page.isDone, continueCursor: page.isDone ? null : page.continueCursor };
+
+  if (!page.isDone) return { done: false, next: { sourceIndex: position.sourceIndex, cursor: page.continueCursor } };
+  const nextSource = position.sourceIndex + 1;
+  if (nextSource < sources.length) return { done: false, next: { sourceIndex: nextSource, cursor: null } };
+  return { done: true };
 }
 
 /** The status page must not say "processed" while rows still carry the id: only the last page calls this. */
@@ -101,12 +139,13 @@ async function completeReceipt(ctx: MutationCtx, receiptCode: string | undefined
 
 /**
  * Starts the redaction for one Meta user inside the caller's transaction: redacts
- * the first page and, when the source has more, stores the job and schedules its
- * next page in the same commit. A source of one page stores nothing at all.
+ * the first page of the first source and stores the job that carries the rest, with
+ * its next page scheduled in the same commit. The receipt is completed only if that
+ * first page was the whole walk, which `metaLogRedactionSources` (two sources) rules out.
  */
 export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionStartArgs): Promise<void> {
-  const page = await redactOnePage(ctx, args.platform, args.metaUserId, null);
-  if (page.isDone) {
+  const step = await redactOneStep(ctx, args.platform, args.metaUserId, WALK_START);
+  if (step.done) {
     await completeReceipt(ctx, args.receiptCode);
     return;
   }
@@ -114,7 +153,8 @@ export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionSta
     platform: args.platform,
     metaUserId: args.metaUserId,
     receiptCode: args.receiptCode,
-    cursor: page.continueCursor,
+    sourceIndex: step.next.sourceIndex,
+    cursor: step.next.cursor,
     updatedAt: Date.now(),
   });
   await ctx.scheduler.runAfter(0, internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
@@ -124,15 +164,22 @@ export async function startMetaLogRedaction(ctx: MutationCtx, args: RedactionSta
 async function advanceJob(ctx: MutationCtx, jobId: Id<"metaLogRedactionJobs">): Promise<void> {
   const job = await ctx.db.get(jobId);
   if (!job) return;
-  const page = await redactOnePage(ctx, job.platform, job.metaUserId, job.cursor);
-  if (page.isDone) {
+  const step = await redactOneStep(ctx, job.platform, job.metaUserId, {
+    sourceIndex: job.sourceIndex,
+    cursor: job.cursor,
+  });
+  if (step.done) {
     // Completion and erasure of the identifier are one transaction: the receipt
     // can never read "complete" while the job still holds the id, or the reverse.
     await completeReceipt(ctx, job.receiptCode);
     await ctx.db.delete(jobId);
     return;
   }
-  await ctx.db.patch(jobId, { cursor: page.continueCursor, updatedAt: Date.now() });
+  await ctx.db.patch(jobId, {
+    sourceIndex: step.next.sourceIndex,
+    cursor: step.next.cursor,
+    updatedAt: Date.now(),
+  });
   await ctx.scheduler.runAfter(0, internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
 }
 
@@ -163,7 +210,9 @@ export const runMetaLogRedactionJob = internalMutation({
  * Cron backstop: restarts a job whose chain died (a scheduled run that threw, a
  * deployment that dropped it). Reads only the `by_updatedAt` index range older than
  * the stall threshold, so with no job it reads nothing. Touching `updatedAt` first
- * keeps the next sweep from restarting a chain that is merely running.
+ * keeps the next sweep from restarting a chain that is merely running. One sweep
+ * restarts at most META_LOG_REDACTION_SWEEP_BATCH jobs; any further stalled job waits
+ * for a later sweep (the cron runs every 30 minutes).
  */
 export const resumeStalledMetaLogRedactionJobs = internalMutation({
   args: {},

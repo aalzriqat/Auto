@@ -208,9 +208,10 @@ export const listWebhookLogs = query({
     const result = await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
     // SCRUM-842: a Meta user id in a summary or error written before that fix is
     // masked on the way out, so a row the stored redaction has not reached never
-    // leaves the backend. This is also the only cover for stored `instagram`-source
-    // rows (the `IG account <id>` subscription failures), which the bounded
-    // redaction deliberately does not page through.
+    // leaves the backend. The stored redaction (metaLogRedaction.ts) walks the
+    // `<platform>-oauth` and `<platform>` sources for the user of a signed callback;
+    // this mask is the cover for every other user's rows and for the interval before
+    // that walk finishes. It does not mask `rawPayload` or `payloadPreview`.
     return {
       ...result,
       page: result.page.map((row) => {

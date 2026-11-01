@@ -13,11 +13,15 @@ export const REDACTED_META_USER = "[redacted Meta user]";
 
 /**
  * Rows examined per redaction transaction. A page reads at most this many
- * `webhookLogs` documents (each a short summary) and patches at most this many,
- * far inside Convex's per-transaction limits of 32,000 documents scanned,
- * 16,000 written and 16 MiB read (https://docs.convex.dev/production/state/limits).
+ * `webhookLogs` documents and patches at most this many. Most rows are one-line
+ * summaries, but the delivery-inbox rows of the `instagram` and `facebook` sources
+ * also keep the webhook body (`rawPayload` up to 700,000 characters and a 16 KiB
+ * `payloadPreview`), and Convex reads whole documents. 100 rows keeps a page inside
+ * the 16 MiB read limit while the average row is below about 160 KB, and is far inside
+ * the limits of 32,000 documents scanned and 16,000 written
+ * (https://docs.convex.dev/production/state/limits).
  */
-export const META_LOG_REDACTION_PAGE_SIZE = 500;
+export const META_LOG_REDACTION_PAGE_SIZE = 100;
 
 export type MetaPlatform = "facebook" | "instagram";
 
@@ -25,6 +29,27 @@ export type MetaPlatform = "facebook" | "instagram";
 export function metaOauthLogSource(platform: MetaPlatform): "facebook-oauth" | "instagram-oauth" {
   return `${platform}-oauth`;
 }
+
+/**
+ * Every `webhookLogs.source` that can hold one platform's Meta user id, in the
+ * order the redaction walks them:
+ *  - `<platform>-oauth`: the deauthorize / data-deletion callback rows, written
+ *    before SCRUM-842 with the id in the summary;
+ *  - `<platform>`: the delivery inbox and outcome rows of that platform's webhook
+ *    and engagement code (`DM from <id>`, `Auto-reply DM to <id> failed`, the
+ *    Instagram `subscribed_apps failed for IG account <id>` rows, the webhook body in
+ *    `rawPayload`). The Instagram business account id is both the account id in
+ *    `entry[].id` and the id the Instagram callbacks name.
+ * The other platform's sources are never walked.
+ */
+export function metaLogRedactionSources(
+  platform: MetaPlatform,
+): readonly [ReturnType<typeof metaOauthLogSource>, MetaPlatform] {
+  return [metaOauthLogSource(platform), platform];
+}
+
+/** The text fields of a `webhookLogs` row that can carry a Meta user id. */
+export const META_LOG_REDACTED_FIELDS = ["summary", "error", "rawPayload", "payloadPreview"] as const;
 
 const regexEscape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
