@@ -11,7 +11,7 @@ import { rateLimiter } from "./rateLimit";
 import { normalizedWebsiteHost } from "./websiteConfig";
 import { isLikelyBot } from "./utils/userAgent";
 import { INSTAGRAM_ACCOUNT_IN_USE_MESSAGE } from "./socialIntegrations";
-import type { MetaLogRedactionPageResult } from "./metaLogRedaction";
+
 
 const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
@@ -358,34 +358,10 @@ interface MetaCallbackPlatform {
 }
 
 /**
- * Runs the retained-log redaction for one Meta user to the end, one bounded page
- * per mutation, starting after `after` (null = from the first page, a result =
- * from the page that result points to). The pages are driven from the request
- * that already holds the id, not scheduled: the scheduler would keep the id, and
- * the receipt code that links it to the request, in `_scheduled_functions` for 7
- * days (https://docs.convex.dev/scheduling/scheduled-functions).
- */
-async function redactMetaLogPages(
-  ctx: ActionCtx,
-  platform: MetaCallbackPlatform["platform"],
-  metaUserId: string,
-  receiptCode: string | undefined,
-  after: MetaLogRedactionPageResult | null,
-): Promise<void> {
-  let page: MetaLogRedactionPageResult = after ?? { isDone: false, continueCursor: null };
-  while (!page.isDone) {
-    page = await ctx.runMutation(internal.metaLogRedaction.redactMetaUserFromLogsPage, {
-      platform,
-      metaUserId,
-      receiptCode,
-      cursor: page.continueCursor,
-    });
-  }
-}
-
-/**
- * A failed redaction page leaves the receipt pending and the work unfinished, so
- * Meta is told it failed rather than that it succeeded. Only the error class is
+ * The first redaction page (or the receipt insert with it) failed, so the whole
+ * mutation rolled back: no receipt, no job, nothing for Meta to be told is done.
+ * Meta gets a 500 rather than a code. Later pages never reach this response; they
+ * run as scheduled mutations (convex/metaLogRedaction.ts). Only the error class is
  * logged: a Convex error message can quote the arguments of the failed call, and
  * those hold the Meta user id (SCRUM-842).
  */
@@ -422,8 +398,12 @@ async function handleMetaCallback(
 
   if (kind === "deauthorize") {
     // Rows written before SCRUM-842 still name this user: redact them in place.
+    // One bounded page runs now; a longer source continues in a stored job.
     try {
-      await redactMetaLogPages(ctx, config.platform, metaUserId, undefined, null);
+      await ctx.runMutation(internal.metaLogRedaction.startMetaLogRedactionForUser, {
+        platform: config.platform,
+        metaUserId,
+      });
     } catch (error) {
       return metaCallbackFailure(error);
     }
@@ -437,12 +417,15 @@ async function handleMetaCallback(
 
   const confirmationCode = newMetaDeletionConfirmationCode();
   try {
-    // The first page commits with the receipt; any further page is run here.
-    const firstPage: MetaLogRedactionPageResult = await ctx.runMutation(
-      internal.socialIntegrations.recordMetaDataDeletion,
-      { code: confirmationCode, platform: config.platform, metaUserId },
-    );
-    await redactMetaLogPages(ctx, config.platform, metaUserId, confirmationCode, firstPage);
+    // The receipt and the first page commit together. If the source holds more,
+    // the continuation is committed in that same transaction, so once this returns
+    // the code is durable and the status page shows "in progress" until the last
+    // page is done. The code is only handed to Meta after that.
+    await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
+      code: confirmationCode,
+      platform: config.platform,
+      metaUserId,
+    });
   } catch (error) {
     return metaCallbackFailure(error);
   }

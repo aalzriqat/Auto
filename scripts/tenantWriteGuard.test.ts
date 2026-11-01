@@ -795,12 +795,20 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // deauthorize and data-deletion callbacks. It patches only the `summary` of `webhookLogs` rows of one source
   // (`<platform>-oauth`, read through `by_source_and_eventId`), which are not tenant data, and takes no
   // caller-supplied row id. The unguarded-write audit stays empty.
+  // SCRUM-842 (durable continuation): metaLogRedaction.redactMetaUserFromLogsPage (-1) is replaced by
+  // startMetaLogRedactionForUser, runMetaLogRedactionJob and resumeStalledMetaLogRedactionJobs (+3) - 568 -> 570
+  // total, 171 -> 173 skippedNoOrgId, `analysed` unchanged at 382 (re-measured FROM THE ANALYSER). Three
+  // internalMutations with no public entry point and no `orgId` arg. startMetaLogRedactionForUser is called only by
+  // the signed Meta deauthorize callback, runMetaLogRedactionJob only by the scheduler (its sole argument is the
+  // job row's own id) and resumeStalledMetaLogRedactionJobs only by its cron. They write `webhookLogs` rows of the
+  // `<platform>-oauth` sources (not tenant data) and the `metaLogRedactionJobs` / `metaDataDeletionRequests` rows
+  // this feature owns, none keyed by org, and take no caller-supplied row id. The unguarded-write audit stays empty.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 568,
+      totalMutations: 570,
       analysed: 382,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 171,
+      skippedNoOrgId: 173,
     });
   });
 });

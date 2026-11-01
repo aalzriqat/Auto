@@ -9,11 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { requireFeature } from "./subscriptions";
-import {
-  metaLogRedactionPageResult,
-  redactMetaUserFromWebhookLogs,
-  type MetaLogRedactionPageResult,
-} from "./metaLogRedaction";
+import { startMetaLogRedaction } from "./metaLogRedaction";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
@@ -378,13 +374,15 @@ const META_DELETION_CODE_PATTERN = /^[0-9a-f]{32}$/;
 
 /**
  * Records a Meta data-deletion request under the opaque confirmation code the
- * callback hands back to Meta (SCRUM-842), and redacts that user's id out of the
- * retained webhook logs in the same transaction. The receipt is marked complete
- * only when the last page of logs is redacted: at once for a normal log size,
- * otherwise by the callback running the remaining pages (it is handed the cursor
- * of the next one; nothing is scheduled, because the scheduler would keep the id
- * for 7 days). The user id is used for the redaction and is never stored on the
- * receipt, so the receipt does not link the code to a person.
+ * callback hands back to Meta (SCRUM-842), and starts redacting that user's id
+ * out of the retained webhook logs in the same transaction. Exactly one bounded
+ * page runs here. When the source holds more, a job row and its first scheduled
+ * run are committed with the receipt, so the work cannot be lost with the request
+ * (see metaLogRedaction.ts). The receipt is marked complete only by the last
+ * page: at once for a normal log size, otherwise by the scheduled runs, and the
+ * status page says "in progress" until then. The user id is used for the redaction
+ * and is never stored on the receipt, so the receipt does not link the code to a
+ * person.
  */
 export const recordMetaDataDeletion = internalMutation({
   args: {
@@ -392,8 +390,8 @@ export const recordMetaDataDeletion = internalMutation({
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     metaUserId: v.string(),
   },
-  returns: metaLogRedactionPageResult,
-  handler: async (ctx, args): Promise<MetaLogRedactionPageResult> => {
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
     if (!META_DELETION_CODE_PATTERN.test(args.code)) {
       throw new ConvexError("Invalid confirmation code.");
     }
@@ -401,12 +399,12 @@ export const recordMetaDataDeletion = internalMutation({
       code: args.code,
       platform: args.platform,
     });
-    return await redactMetaUserFromWebhookLogs(ctx, {
+    await startMetaLogRedaction(ctx, {
       platform: args.platform,
       metaUserId: args.metaUserId,
       receiptCode: args.code,
-      cursor: null,
     });
+    return null;
   },
 });
 

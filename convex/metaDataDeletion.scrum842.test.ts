@@ -1,7 +1,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
 import { META_LOG_REDACTION_PAGE_SIZE, REDACTED_META_USER } from "./utils/metaUserIdRedaction";
@@ -475,6 +475,22 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       expect({ ...after, summary: "" }).toEqual({ ...before, summary: "" });
     });
 
+    test("the error of a callback-source row that names the user is redacted too", async () => {
+      const t = newTest();
+      const rowId = await t.run((ctx) =>
+        ctx.db.insert("webhookLogs", {
+          source: p.logSource as never,
+          status: "error",
+          summary: "Callback failed",
+          error: `Graph rejected user ${LEGACY_ID}`,
+          createdAt: Date.now(),
+        }),
+      );
+
+      await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+
+      expect((await logById(t, rowId))?.error).toBe(`Graph rejected user ${REDACTED_META_USER}`);
+    });
     test("only the signed user's identifier is touched: another user, a longer id, another source and another platform stay as written", async () => {
       const t = newTest();
       const other = await seedLegacyLog(t, p.logSource, legacyLine(p.label, OTHER_ID, "deletion"));
@@ -559,79 +575,179 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       await expectSchedulerHoldsNone(t, [LEGACY_ID]);
     });
 
-    test("a data-deletion run that fails on a later page leaves the receipt pending, answers a generic 500, and still leaves no user id in any scheduler record, row, response or console line", async () => {
+    // ─── Durable continuation (SCRUM-842 round 3) ───────────────────────────────
+    //
+    // The HTTP request does ONE bounded page and returns. The rest is a job row
+    // advanced one page per scheduled run (the scheduled argument is the job's own
+    // document id, never the Meta user id or the receipt code), so a request that
+    // dies cannot strand the work and a replayed callback does not restart it.
+
+    const jobRows = (t: T) => t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+    const scheduledJobRuns = async (t: T) =>
+      (await scheduledRecords(t)).filter((r) => String(r.name).includes("runMetaLogRedactionJob"));
+
+    test("a data-deletion request whose source needs three pages answers at once with a pending receipt and the work survives the request", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE * 2 + 5);
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+
+      // The request ended here, after one page. Nothing finished it yet.
+      expect(res.status).toBe(200);
+      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+      const pending = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(pending).toEqual({ platform: p.platform, completedAt: null });
+      const jobs = await jobRows(t);
+      expect(jobs).toHaveLength(1);
+      expect(await scheduledJobRuns(t)).toHaveLength(1);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
+
+      // The continuation, with no further request, completes it.
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
+      const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof done?.completedAt).toBe("number");
+      // One page per run: every request-sized budget was exhausted by a single page.
+      expect((await scheduledJobRuns(t)).length).toBeGreaterThanOrEqual(2);
+      // Nothing keeps the identifier after completion: not the job, not a receipt, not a scheduler record.
+      expect(await jobRows(t)).toEqual([]);
+      expect(JSON.stringify(await allDeletionRequests(t))).not.toContain(LEGACY_ID);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
+    });
+
+    test("the receipt is marked complete only by the last page, never early", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE * 2 + 5);
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+      const statusOf = () => t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+
+      const seen: Array<number | null | undefined> = [(await statusOf())?.completedAt];
+      // Step the chain one scheduled run at a time.
+      for (let guard = 0; guard < 10 && (await jobRows(t)).length > 0; guard += 1) {
+        await t.finishInProgressScheduledFunctions();
+        vi.runOnlyPendingTimers();
+        await t.finishInProgressScheduledFunctions();
+        seen.push((await statusOf())?.completedAt);
+      }
+
+      expect(seen[0]).toBeNull();
+      expect(typeof seen[seen.length - 1]).toBe("number");
+      // Pending on every observation until the job row is gone.
+      expect(seen.slice(0, -1).every((value) => value === null)).toBe(true);
+      expect(await jobRows(t)).toEqual([]);
+    });
+
+    test("deauthorize with more than one page is carried by the same durable job and leaves no identifier behind", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE * 2 + 5);
+      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deauth"));
+
+      const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      expect(res.status).toBe(200);
+      expect(await jobRows(t)).toHaveLength(1);
+      expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deauth"));
+      expect(await jobRows(t)).toEqual([]);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
+    });
+
+    test("a source of one page never stores a job: the identifier is used inside one transaction and kept nowhere", async () => {
+      const t = newTest();
+      await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+
+      expect(await jobRows(t)).toEqual([]);
+      expect(await scheduledRecords(t)).toEqual([]);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof status?.completedAt).toBe("number");
+    });
+
+    test("a continuation that fails leaves the receipt pending and no identifier in any scheduler record, response or console line; the stalled-job sweep then finishes the SAME receipt", async () => {
       const t = newTest();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       const consoleOutput = captureConsole();
       // Page 1 is clean; the injected failure sits on page 2; the user's own row on page 3.
       await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
-      await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
+      const poisoned = await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
       await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
       const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
 
       const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
-      const body = await res.text();
+      const reply = (await res.json()) as { confirmation_code: string };
       await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
 
+      // Meta already has its code and the status page says "in progress": both true.
+      expect(res.status).toBe(200);
       const [receipt] = await allDeletionRequests(t);
-      await expectSchedulerHoldsNone(t, [LEGACY_ID, receipt?.code ?? "no-receipt"]);
       expect(receipt?.completedAt).toBeUndefined();
       expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
-      expect(res.status).toBe(500);
-      expect(body).toBe("An unexpected error occurred. Please try again later.");
-      for (const text of [body, JSON.stringify([...res.headers]), JSON.stringify(await allDeletionRequests(t))]) {
-        expect(text).not.toContain(LEGACY_ID);
-      }
+      const stuck = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(stuck?.completedAt).toBeNull();
+      const [job] = await jobRows(t);
+      expect(job).toBeDefined();
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
       expect(consoleOutput.join("\n")).not.toContain(LEGACY_ID);
-      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: receipt?.code ?? "" });
-      expect(status?.completedAt).toBeNull();
+
+      // A job that was advanced a moment ago is left to its own chain.
+      await t.mutation(internal.metaLogRedaction.resumeStalledMetaLogRedactionJobs, {});
+      expect(await scheduledJobRuns(t)).toHaveLength(1);
+
+      // The fault is gone and the job has gone quiet: the sweep restarts it.
+      await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
+      await t.run((ctx) => ctx.db.patch(job._id, { updatedAt: Date.now() - 60 * 60 * 1000 }));
+      await t.mutation(internal.metaLogRedaction.resumeStalledMetaLogRedactionJobs, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
+      const receipts = await allDeletionRequests(t);
+      expect(receipts).toHaveLength(1);
+      expect(typeof receipts[0]?.completedAt).toBe("number");
+      expect(await jobRows(t)).toEqual([]);
+      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code]);
     });
 
-    test("a deauthorize run that fails on a later page answers a generic 500 and leaves no user id in any scheduler record", async () => {
+    test("a failure on the FIRST page rolls the whole request back: generic 500, no receipt, no job, and a replay completes", async () => {
       const t = newTest();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      const consoleOutput = captureConsole();
-      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
-      await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
-
-      const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
-      await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
-
-      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
-      expect(res.status).toBe(500);
-      expect(await res.text()).not.toContain(LEGACY_ID);
-      expect(consoleOutput.join("\n")).not.toContain(LEGACY_ID);
-    });
-
-    test("replaying the callback after a failed multi-page run completes the redaction under a new receipt", async () => {
-      const t = newTest();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       captureConsole();
-      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
       const poisoned = await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
-      await seedFillerLogs(t, p.logSource, META_LOG_REDACTION_PAGE_SIZE);
-      const lastPageRow = await seedLegacyLog(t, p.logSource, legacyLine(p.label, LEGACY_ID, "deletion"));
       const signed = await signedRequest({ user_id: LEGACY_ID }, p.secret);
 
       const failed = await post(t, p.deletion, signed);
-      await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
-      await expectSchedulerHoldsNone(t, [LEGACY_ID]);
+
       expect(failed.status).toBe(500);
-      // The fault is gone (the poisoned row now reads like any other row).
+      expect(await failed.text()).toBe("An unexpected error occurred. Please try again later.");
+      expect(await allDeletionRequests(t)).toEqual([]);
+      expect(await jobRows(t)).toEqual([]);
+
       await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
       const replay = await post(t, p.deletion, signed);
-      const reply = (await replay.json()) as { confirmation_code: string };
-
       expect(replay.status).toBe(200);
-      expect((await logById(t, lastPageRow))?.summary).toBe(legacyLine(p.label, REDACTED_META_USER, "deletion"));
-      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-      expect(typeof status?.completedAt).toBe("number");
-      // The failed attempt's receipt stays pending: it never claims work that did not finish.
-      const receipts = await allDeletionRequests(t);
-      expect(receipts).toHaveLength(2);
-      expect(receipts.filter((r) => r.completedAt === undefined)).toHaveLength(1);
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-      await expectSchedulerHoldsNone(t, [LEGACY_ID, reply.confirmation_code, ...receipts.map((r) => r.code)]);
+      expect(await jobRows(t)).toEqual([]);
+    });
+
+    test("a deauthorize whose first page fails answers a generic 500 and stores no job", async () => {
+      const t = newTest();
+      const consoleOutput = captureConsole();
+      await seedLegacyLog(t, p.logSource, POISON_SUMMARY);
+
+      const res = await post(t, p.deauthorize, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+
+      expect(res.status).toBe(500);
+      expect(await res.text()).not.toContain(LEGACY_ID);
+      expect(await jobRows(t)).toEqual([]);
+      expect(consoleOutput.join("\n")).not.toContain(LEGACY_ID);
     });
   });
   describe("admin reader", () => {
@@ -676,6 +792,43 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       expect((await logById(t, rowId))?.summary).toBe(stored);
     });
 
+    test("the 'IG account <id>' row of a failed subscription is masked in the summary and the error, and the stored row is untouched", async () => {
+      const t = newTest();
+      const rowId = await t.run((ctx) =>
+        ctx.db.insert("webhookLogs", {
+          source: "instagram",
+          status: "error",
+          summary: `subscribed_apps failed for IG account ${LEGACY_ID}`,
+          error: `Invalid OAuth access token for object ${LEGACY_ID}`,
+          createdAt: Date.now(),
+        }),
+      );
+      const admin = await adminReader(t);
+
+      const result = await admin.query(api.adminSystem.listWebhookLogs, { paginationOpts: { numItems: 50, cursor: null } });
+
+      expect(JSON.stringify(result.page)).not.toContain(LEGACY_ID);
+      expect(result.page[0].summary).toBe(`subscribed_apps failed for IG account ${REDACTED_META_USER}`);
+      expect(result.page[0].error).toBe(`Invalid OAuth access token for object ${REDACTED_META_USER}`);
+      expect((await t.run((ctx) => ctx.db.get(rowId)))?.summary).toContain(LEGACY_ID);
+    });
+
+    test("the error of a Meta-source row is masked, and a row with no error stays without one", async () => {
+      const t = newTest();
+      for (const source of ["facebook-oauth", "instagram-oauth", "facebook", "instagram"]) {
+        await t.run((ctx) =>
+          ctx.db.insert("webhookLogs", { source: source as never, status: "error", summary: "x", error: `boom ${LEGACY_ID}`, createdAt: Date.now() }),
+        );
+      }
+      await seedLegacyLog(t, "clerk", "no error here");
+      const admin = await adminReader(t);
+
+      const result = await admin.query(api.adminSystem.listWebhookLogs, { paginationOpts: { numItems: 50, cursor: null } });
+
+      expect(JSON.stringify(result.page)).not.toContain(LEGACY_ID);
+      expect(result.page.filter((row) => row.error !== undefined)).toHaveLength(4);
+      expect(result.page.find((row) => row.source === "clerk")?.error).toBeUndefined();
+    });
     test("a row that is already redacted is returned as it is", async () => {
       const t = newTest();
       await seedLegacyLog(t, "facebook-oauth", legacyLine("Facebook", REDACTED_META_USER, "deletion"));

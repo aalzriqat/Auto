@@ -6589,6 +6589,22 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     completedAt: v.optional(v.number()),
   }).index("by_code", ["code"]),
 
+  // SCRUM-842: the unfinished remainder of a retained-log redaction. It exists ONLY
+  // when a Meta user's log source is longer than one page, so it is the one place
+  // that holds a Meta user id, and only until the last page is redacted: the final
+  // page deletes the row in the same transaction that marks the receipt complete.
+  // A source of one page never creates one. `cursor` is where the next page starts;
+  // `updatedAt` lets the stalled-job sweep (metaLogRedaction.ts) restart a chain
+  // that died. The scheduled function that advances it is given this row's own
+  // document id, never the Meta user id or the receipt code.
+  metaLogRedactionJobs: defineTable({
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    metaUserId: v.string(),
+    receiptCode: v.optional(v.string()),
+    cursor: v.union(v.string(), v.null()),
+    updatedAt: v.number(),
+  }).index("by_updatedAt", ["updatedAt"]),
+
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
     externalId: v.string(),
