@@ -6641,6 +6641,24 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // pending job already holds for the same user (see `startMetaLogRedaction`).
     .index("by_platform", ["platform"]),
 
+  // SCRUM-842 (round 8): the link between an Instagram account's two ids, kept after the
+  // organisation that held them let go. A dealer's own Disconnect, or a reconnect to another
+  // account, clears `instagramBusinessAccountId` and `instagramWebhookAccountId` from
+  // `orgSettings`. A Meta callback that arrives later names only ONE of them and finds no
+  // connection, so without this row it could not learn the other and would complete a
+  // data-deletion receipt while retained webhook rows still carry it (the webhook id is what
+  // `entry[].id` holds in every stored delivery, including deliveries that arrive after the
+  // dealer disconnected). The row names no organisation, token or person. A callback that
+  // names either id reads the rows, hands both ids to the redaction job and deletes the rows
+  // in the same transaction, so the pair does not outlive the erasure it was kept for. An
+  // account whose Meta callback never arrives keeps its row (disclosed on the PR).
+  instagramAccountIdLinks: defineTable({
+    businessAccountId: v.string(),
+    webhookAccountId: v.string(),
+  })
+    .index("by_business_account_id", ["businessAccountId"])
+    .index("by_webhook_account_id", ["webhookAccountId"]),
+
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
     externalId: v.string(),

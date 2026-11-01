@@ -1,0 +1,65 @@
+{
+  "id": "meta-instagram-owner-disconnect-then-too-many-ids-refuses-and-keeps-link",
+  "fingerprint": "a2937bf3d3ef4050323449aa6f799c5d7453548eb0f32996031466504b0f519c",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "jobHoldsEightIds": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callback.refusedWithGenericError",
+      "value": true
+    },
+    {
+      "observable": "links.remaining",
+      "value": 1
+    },
+    {
+      "observable": "receipts.written",
+      "value": 0
+    },
+    {
+      "observable": "console.containsId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "ids that would not all fit in one job after a disconnect refuse the callback and leave the kept link in place"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

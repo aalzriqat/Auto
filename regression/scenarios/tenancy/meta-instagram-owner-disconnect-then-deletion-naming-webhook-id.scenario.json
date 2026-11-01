@@ -1,0 +1,52 @@
+{
+  "id": "meta-instagram-owner-disconnect-then-deletion-naming-webhook-id",
+  "fingerprint": "032260db9450b965a5aaa73842d74dd441ea8d3deb5b89e3b536c46dd1d7a696",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "webhook",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a data-deletion request that names the webhook id after the dealer's own disconnect still erases the business id before the receipt completes"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

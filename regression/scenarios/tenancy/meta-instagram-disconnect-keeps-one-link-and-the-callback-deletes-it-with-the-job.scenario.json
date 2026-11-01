@@ -1,0 +1,106 @@
+{
+  "id": "meta-instagram-disconnect-keeps-one-link-and-the-callback-deletes-it-with-the-job",
+  "fingerprint": "3185df9831cbe0a7903ef22207c1aaf558baa59ec7724680e7f65be4a3f5a674",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameAccount": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "replay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.afterDisconnects",
+      "value": 1
+    },
+    {
+      "observable": "links.afterCallback",
+      "value": 0
+    },
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "receipt.replay.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a disconnect keeps one link for the account, a second disconnect adds nothing, and the callback deletes the link with the job"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

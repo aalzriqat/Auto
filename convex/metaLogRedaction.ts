@@ -11,6 +11,9 @@
 // that the caller read before the disconnect cleared it (an Instagram account has
 // a business account id and a different webhook account id; see
 // `metaLogRedactionSources`). The job row stores them all, so the walk redacts all of them.
+// A dealer's own Disconnect or a reconnect to another account clears those ids from the
+// settings before any callback arrives; `instagramAccountIdLinks` keeps the pair for that
+// case and the callback hands it to the job (`takeLinkedInstagramIds`, socialIntegrations.ts).
 //
 // Overlapping callbacks for one user: once a first callback has disconnected the account,
 // a second one (Meta's retry, a deauthorize followed by a deletion request, a user asking
@@ -100,7 +103,10 @@ export const META_LOG_REDACTION_SWEEP_BATCH = 50;
  */
 export const META_LOG_REDACTION_WEDGED_AFTER_RESTARTS = 8;
 /** The most ids one job carries (the callback id plus the other ids of the same account). */
-const MAX_REDACTED_IDS = 8;
+export const MAX_REDACTED_IDS = 8;
+
+/** Fixed text: this error reaches a log line, so it names no id and no code. */
+export const REDACTION_REFUSED = "The redaction could not be started. Please try again later.";
 
 interface RedactionStartArgs {
   platform: MetaPlatform;
@@ -134,9 +140,6 @@ const WALK_START: MetaLogRedactionPosition = { sourceIndex: 0, cursor: null, pag
  * callback refuses (a 500, Meta retries) rather than redact on a partial view.
  */
 export const META_LOG_REDACTION_MAX_PENDING_JOBS = 200;
-
-/** Fixed text: this error reaches a log line, so it names no id and no code. */
-const REDACTION_REFUSED = "The redaction could not be started. Please try again later.";
 
 /** The ids to redact: the callback's id first, then the account's other ids, once each, bounded. */
 function distinctIds(primary: string, others: readonly string[] | undefined, limit = MAX_REDACTED_IDS): string[] {

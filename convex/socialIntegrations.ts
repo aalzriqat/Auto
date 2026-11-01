@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, internalQuery, internalAction } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
@@ -9,7 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { requireFeature } from "./subscriptions";
-import { startMetaLogRedaction } from "./metaLogRedaction";
+import { MAX_REDACTED_IDS, REDACTION_REFUSED, startMetaLogRedaction } from "./metaLogRedaction";
 import { disconnectFacebookConnectedUser } from "./facebookIntegrations";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -386,6 +386,82 @@ export async function disconnectInstagramAccount(
   return { otherIds: [...otherIds], removed: rows.size > 0 };
 }
 
+interface InstagramAccountIds {
+  instagramBusinessAccountId?: string;
+  instagramWebhookAccountId?: string;
+}
+
+const isStoredId = (id: string | undefined): id is string => id !== undefined && id.trim() !== "";
+
+/**
+ * Keeps the link between an Instagram account's two ids when the organisation that holds
+ * them is about to let go: the dealer's own Disconnect (`after` is empty) or a reconnect to a
+ * different account (`after` holds the new ids). Both clear the ids from `orgSettings`, and a
+ * Meta callback that arrives later names only one of them, finds no connection and could not
+ * learn the other, so it would complete a data-deletion receipt while retained webhook rows
+ * still carry it (SCRUM-842 round 8). `takeLinkedInstagramIds` reads the link back.
+ *
+ * Nothing is kept when only one id was ever stored (the callback names that id itself), when
+ * the pair is unchanged (the settings still hold it), or when the pair is already linked.
+ */
+async function rememberInstagramIdPair(
+  ctx: MutationCtx,
+  before: InstagramAccountIds,
+  after: InstagramAccountIds,
+): Promise<void> {
+  const business = before.instagramBusinessAccountId;
+  const webhook = before.instagramWebhookAccountId;
+  if (!isStoredId(business) || !isStoredId(webhook) || business === webhook) return;
+  if (business === after.instagramBusinessAccountId && webhook === after.instagramWebhookAccountId) return;
+  const linked = await ctx.db
+    .query("instagramAccountIdLinks")
+    .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", business))
+    .take(MAX_REDACTED_IDS + 1);
+  if (linked.some((row) => row.webhookAccountId === webhook)) return;
+  await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: business, webhookAccountId: webhook });
+}
+
+/**
+ * The ids a Meta callback cannot read from `orgSettings` because the dealer already let go of
+ * the account: every id reachable from `knownIds` through the links `rememberInstagramIdPair`
+ * kept (a fixpoint, so an id learned from one link can lead to another). The rows read are
+ * deleted in this transaction, so the pair is kept only until the erasure it was kept for is
+ * handed to the redaction job; if that fails, the whole transaction rolls back and the rows are
+ * still there for the retry. A union that would not fit in one job refuses the callback rather
+ * than dropping an id, the same disposition as `startMetaLogRedaction`. The index ranges read
+ * are tracked by Convex, so a concurrent Disconnect that adds a link makes this transaction
+ * retry (https://docs.convex.dev/database/advanced/occ).
+ */
+async function takeLinkedInstagramIds(ctx: MutationCtx, knownIds: readonly string[]): Promise<string[]> {
+  const known = new Set(knownIds);
+  const queue = [...knownIds];
+  const rows = new Map<Id<"instagramAccountIdLinks">, Doc<"instagramAccountIdLinks">>();
+  for (let id = queue.pop(); id !== undefined; id = queue.pop()) {
+    const calledId = id;
+    const found = [
+      ...(await ctx.db
+        .query("instagramAccountIdLinks")
+        .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", calledId))
+        .take(MAX_REDACTED_IDS + 1)),
+      ...(await ctx.db
+        .query("instagramAccountIdLinks")
+        .withIndex("by_webhook_account_id", (q) => q.eq("webhookAccountId", calledId))
+        .take(MAX_REDACTED_IDS + 1)),
+    ];
+    for (const row of found) {
+      rows.set(row._id, row);
+      for (const linkedId of [row.businessAccountId, row.webhookAccountId]) {
+        if (known.has(linkedId)) continue;
+        known.add(linkedId);
+        queue.push(linkedId);
+      }
+    }
+    if (known.size > MAX_REDACTED_IDS || rows.size > MAX_REDACTED_IDS) throw new ConvexError(REDACTION_REFUSED);
+  }
+  for (const row of rows.values()) await ctx.db.delete(row._id);
+  return [...known].filter((id) => !knownIds.includes(id));
+}
+
 /**
  * Clears stored Instagram credentials by IG account ID rather than orgId. Kept as the
  * single-purpose form of `disconnectInstagramAccount`; the Meta callbacks do not call it
@@ -436,7 +512,9 @@ export const processMetaCallback = internalMutation({
     let connectionRemoved: boolean;
     if (args.platform === "instagram") {
       const result = await disconnectInstagramAccount(ctx, args.metaUserId);
-      otherMetaUserIds = result.otherIds;
+      // Ids the dealer's own Disconnect or a reconnect already cleared from the settings.
+      const linked = await takeLinkedInstagramIds(ctx, [args.metaUserId, ...result.otherIds]);
+      otherMetaUserIds = [...result.otherIds, ...linked];
       connectionRemoved = result.removed;
     } else {
       connectionRemoved = await disconnectFacebookConnectedUser(ctx, args.metaUserId);
@@ -494,6 +572,8 @@ export const disconnect = mutation({
       .unique();
     if (!settings) return;
 
+    // The account's two ids are about to be forgotten; a later Meta callback needs the link.
+    await rememberInstagramIdPair(ctx, settings, {});
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
       instagramWebhookAccountId: undefined,
@@ -619,6 +699,8 @@ export const saveInstagramCredentials = internalMutation({
       .unique();
 
     if (existing) {
+      // A reconnect to a different account overwrites the ids this organisation held.
+      await rememberInstagramIdPair(ctx, existing, fields);
       await ctx.db.patch(existing._id, fields);
     } else {
       await ctx.db.insert("orgSettings", {
