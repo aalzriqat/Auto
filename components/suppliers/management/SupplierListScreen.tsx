@@ -125,6 +125,15 @@ function SupplierListBody({
     );
   }
   if (rows.length === 0) {
+    if (truncated) {
+      // An empty page from a capped search is not "no match": the search stopped before it finished
+      // (WCAG 2.2 SC 4.1.3 status message, so it is a role="status" live region).
+      return (
+        <p role="status" className="py-8 text-center text-sm text-muted-foreground">
+          {translate("SuppliersSearchTruncatedNoMatch")}
+        </p>
+      );
+    }
     if (searching || filter !== "ALL") {
       return <p className="py-8 text-center text-sm text-muted-foreground">{translate("SuppliersNoMatch")}</p>;
     }

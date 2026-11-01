@@ -64,6 +64,10 @@ const suppliersMessages = defineBilingualMessages({
     "Showing the first {count} matches. More suppliers match. Refine your search.",
     "تُعرض أول {count} نتائج فقط. هناك مورّدون آخرون مطابقون، فحدّد البحث أكثر.",
   ],
+  SuppliersSearchTruncatedNoMatch: [
+    "The search reached its limit before finding a match, so it is not complete. Narrow your search or change the status filter.",
+    "بلغ البحث حدّه الأقصى قبل العثور على نتيجة مطابقة، لذا فهو غير مكتمل. حدّد البحث أكثر أو غيّر تصفية الحالة.",
+  ],
   SuppliersOpen: ["Open {name}", "فتح {name}"],
 
   // Form fields (create and edit)

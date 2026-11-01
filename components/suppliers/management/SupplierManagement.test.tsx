@@ -216,6 +216,32 @@ describe("list", () => {
     await screen.findByRole("link", { name: "Search Hit One" });
     expect(screen.queryByText(/Refine your search/)).toBeNull();
   });
+
+  test("an empty search that hit the server's cap says the search did not finish, not 'no match', in English and Arabic", async () => {
+    for (const locale of ["en", "ar"] as const) {
+      const words = dictionaries[locale] as Record<string, string>;
+      world.locale = locale;
+      world.searchRows = { rows: [], truncated: true };
+      render(<SupplierListScreen orgId={ORG} />);
+      fireEvent.change(screen.getByLabelText(words.SuppliersSearchLabel), { target: { value: "shared" } });
+      const notice = await screen.findByText(words.SuppliersSearchTruncatedNoMatch);
+      expect(notice.getAttribute("role")).toBe("status");
+      expect(screen.queryByText(words.SuppliersNoMatch)).toBeNull();
+      expect(screen.queryByRole("link")).toBeNull();
+      cleanup();
+    }
+    // The Arabic text is a real translation, not the English fallback or the key.
+    expect(ar.SuppliersSearchTruncatedNoMatch).not.toBe(en.SuppliersSearchTruncatedNoMatch);
+    expect(ar.SuppliersSearchTruncatedNoMatch).toMatch(/[؀-ۿ]/);
+  });
+
+  test("an empty search that did not hit the cap still says no match", async () => {
+    world.searchRows = { rows: [], truncated: false };
+    render(<SupplierListScreen orgId={ORG} />);
+    fireEvent.change(screen.getByLabelText("Search suppliers"), { target: { value: "nothing" } });
+    await screen.findByText(label("SuppliersNoMatch"));
+    expect(screen.queryByText(label("SuppliersSearchTruncatedNoMatch"))).toBeNull();
+  });
   test("loading, empty, no-match and load-more states", () => {
     world.paged = { results: [], status: "LoadingFirstPage" };
     const { unmount } = render(<SupplierListScreen orgId={ORG} />);
