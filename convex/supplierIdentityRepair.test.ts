@@ -15,7 +15,11 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
-import { SUPPLIER_ERROR, SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE } from "./utils/supplierRegistry";
+import {
+  SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE,
+  SUPPLIER_ERROR,
+  SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE,
+} from "./utils/supplierRegistry";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -614,8 +618,16 @@ describe("SCRUM-868 P3 repair: the counts-only check", () => {
 });
 
 describe("SCRUM-868 P3 repair: refusal texts name a step that exists", () => {
-  test("the unresolved-identity message gives a next step", () => {
-    expect(SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE).toMatch(/reviewed correction/i);
-    expect(SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE.length).toBeGreaterThan("Supplier identity is unresolved.".length);
+  // The step each text names (a finance manager links the vehicle, then the repair binds the row, then the
+  // settlement succeeds) is EXECUTED end to end in convex/vehicleSupplierFirstLink.scrum868.test.ts
+  // ("the unresolved-identity text sends the user to a finance manager, and doing exactly that clears the
+  // refusal"). This test pins the wording to that step: it must not point back to a step that does not exist.
+  test.each([
+    ["unresolved identity", SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE],
+    ["unbound concession basis", SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE],
+  ])("the %s message names the finance manager's link step and no longer sends the user to a reviewed correction", (_label, message) => {
+    expect(message).toMatch(/finance manager can link it on the vehicle edit screen/i);
+    expect(message).toMatch(/supplier identity repair/i);
+    expect(message).not.toMatch(/reviewed correction/i);
   });
 });

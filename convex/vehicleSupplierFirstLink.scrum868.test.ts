@@ -283,6 +283,7 @@ describe("first supplier link: an unlinked SOURCED car with money, linked by a f
     expect(typeof stuck === "object" ? stuck?.code : undefined).toBe(SUPPLIER_ERROR.IDENTITY_UNRESOLVED);
 
     await linkOnVehicle(w.finance, w, vehicleId, w.supplierId);
+    expect((await auditRows(w))[0].after).toMatchObject({ nameMatchedOn: "DISPLAY_NAME", rowsChecked: { payables: 1, receivables: 1, recoveries: 0 } });
     expect(await repairEverything(w)).toEqual({ repaired: 2, unresolved: 0 });
     await w.owner.as.mutation(api.sourcingPayables.markPaid, { orgId: w.orgId, payableId, paymentMethod: "CASH", idempotencyKey: "sold-after" });
     expect((await w.t.run((ctx) => ctx.db.get(payableId)))?.status).toBe("PAID");
@@ -378,6 +379,22 @@ describe("first supplier link: every condition that is missing refuses, with a c
     const w = await seedWorld("row_version");
     const vehicleId = await insertUnlinkedCar(w);
     await addPayable(w, vehicleId, { version: 9 });
+    await expectRefusedAndUnchanged(w, () => linkOnVehicle(w.finance, w, vehicleId, w.supplierId), NOT_PROVEN);
+  });
+
+  test("a car with more id-less rows than the proof can read refuses (fail closed), even though every row matches", async () => {
+    const w = await seedWorld("bound");
+    const vehicleId = await insertUnlinkedCar(w);
+    const saleId = await insertSale(w, vehicleId);
+    const now = Date.now();
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 101; i += 1) {
+        await ctx.db.insert("vehicleSupplierReceivables", {
+          orgId: w.orgId, vehicleId, saleId, sourcedFromName: SUPPLIER_NAME, amountDue: 10, currency: "JOD",
+          status: "OPEN", createdBy: w.owner.userId, createdAt: now, updatedAt: now,
+        });
+      }
+    });
     await expectRefusedAndUnchanged(w, () => linkOnVehicle(w.finance, w, vehicleId, w.supplierId), NOT_PROVEN);
   });
 

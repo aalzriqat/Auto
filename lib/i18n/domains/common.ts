@@ -592,13 +592,13 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
   ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
-    "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.",
-    "هوية المورّد غير محددة لهذا السجل. تأكد من ربط المركبة بالمورّد الصحيح، وإن كانت مربوطة به فاطلب من المحاسب تصحيحاً مراجعاً.",
+    "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the record is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "هوية المورّد غير محددة لهذا السجل. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط السجل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
   ],
   // SCRUM-868 P3 round 2. English equals the server message exactly.
   ServerError_SUPPLIER_CONCESSION_BASIS_UNBOUND: [
-    "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.",
-    "سُجّل تنازل المورّد هذا قبل تتبّع المورّدين بالهوية، ولم يُربط بمورّده بعد. لا تُسجّله من جديد، فلا يمكن تغييره بعد التسليم. تأكد من ربط المركبة بالمورّد الصحيح، وإن كانت مربوطة به فاطلب من المحاسب تصحيحاً مراجعاً.",
+    "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the concession is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "سُجّل تنازل المورّد هذا قبل تتبّع المورّدين بالهوية، ولم يُربط بمورّده بعد. لا تُسجّله من جديد، فلا يمكن تغييره بعد التسليم. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط التنازل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
   ],
   ServerError_SUPPLIER_IDENTITY_REQUIRED: [
     "A supplier is required.",
@@ -615,6 +615,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_SUPPLIER_LINK_FROZEN: [
     "This vehicle's supplier can no longer be changed because money has already been recorded against it. Ask your accountant for a reviewed correction.",
     "لا يمكن تغيير مورّد هذه المركبة بعد الآن لأنه سُجّل عليها مبلغ مالي. اطلب من المحاسب تصحيحاً مراجعاً.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER: [
+    "This vehicle has money recorded against it but no supplier yet. Only a finance manager can set its first supplier. Ask a finance manager to link the vehicle on the vehicle edit screen; an edit request cannot do it.",
+    "سُجّل على هذه المركبة مبلغ مالي ولا مورّد لها بعد. المدير المالي وحده يستطيع تحديد مورّدها الأول. اطلب من مدير مالي ربط المركبة من شاشة تعديل المركبة؛ فطلب التعديل لا يستطيع ذلك.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NOT_PROVEN: [
+    "This supplier cannot be linked because the supplier name stored on the vehicle and on its money records does not match this supplier's name or one of its aliases. Pick the supplier those records were made for, or ask a finance manager to add the old name as an alias of that supplier first. Nothing was changed.",
+    "لا يمكن ربط هذا المورّد لأن اسم المورّد المحفوظ على المركبة وعلى سجلاتها المالية لا يطابق اسم هذا المورّد ولا أحد أسمائه البديلة. اختر المورّد الذي أُنشئت له هذه السجلات، أو اطلب من مدير مالي إضافة الاسم القديم اسماً بديلاً لهذا المورّد أولاً. لم يتم تغيير أي شيء.",
   ],
   ServerError_SUPPLIER_ROLE_CONFLICT: [
     "This supplier was sent in a role the vehicle does not have. A consignment supplier belongs to a consignment vehicle, and a purchase creditor belongs to an owned vehicle bought on account.",

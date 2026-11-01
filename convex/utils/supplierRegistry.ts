@@ -66,6 +66,14 @@ export const SUPPLIER_ERROR = {
    * handover, and the release repair or a reviewed correction is the step that exists.
    */
   CONCESSION_BASIS_UNBOUND: "SUPPLIER_CONCESSION_BASIS_UNBOUND",
+  /**
+   * SCRUM-868 P4/P5 round 4: a consignment vehicle with money and no supplier link takes its FIRST link only
+   * from a caller who holds manage:finance. Refused here, never silently downgraded to the frozen refusal,
+   * so the user is told which role can do it.
+   */
+  FIRST_LINK_NEEDS_FINANCE_MANAGER: "SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER",
+  /** SCRUM-868 P4/P5 round 4: the picked supplier is not confirmed by the names stored on the vehicle and its money rows. */
+  FIRST_LINK_NOT_PROVEN: "SUPPLIER_FIRST_LINK_NOT_PROVEN",
 } as const;
 export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ERROR];
 
@@ -74,9 +82,9 @@ export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
 /** English equals the dictionary entry under ServerError_<code> (lib/i18n/domains/common.ts). */
 export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE =
-  "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.";
+  "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the record is then linked to that supplier by the next supplier identity repair, which runs with every release.";
 export const SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE =
-  "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier; if it is, ask your accountant for a reviewed correction.";
+  "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the concession is then linked to that supplier by the next supplier identity repair, which runs with every release.";
 const GENERIC_ERROR_MESSAGE = "An unexpected error occurred. Please try again later.";
 
 export function throwSupplierError(
