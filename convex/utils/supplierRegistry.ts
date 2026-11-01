@@ -157,6 +157,19 @@ export async function ensureRegistryState(
 }
 
 /**
+ * Read-only mirror of `ensureRegistryState` for the release verification (SCRUM-888): DELETING is
+ * exactly the organizations `ensureRegistryState` skips, so a deleting organization is never
+ * reported as MISSING.
+ */
+export async function registryCoverageOf(
+  ctx: QueryCtx,
+  org: Doc<"organizations">,
+): Promise<"COVERED" | "DELETING" | "MISSING"> {
+  if (isOrgBeingDeleted(org)) return "DELETING";
+  return (await readRegistryState(ctx, org._id)) ? "COVERED" : "MISSING";
+}
+
+/**
  * Reads the organization's registry document, runs `fn`, then bumps the document's version by
  * one. If `fn` throws, the whole mutation rolls back, the bump included.
  */
