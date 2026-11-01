@@ -6,7 +6,7 @@ import { z } from "zod";
 import { ConvexError } from "convex/values";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
-import { mainNavigation, settingsNavigation } from "../../lib/navigation";
+import { mainNavigation, navPlacementOf, settingsNavigation } from "../../lib/navigation";
 import { USER_AUTH_FILE, authenticatedConvexClient, testDataSuffix } from "../utils";
 import { newContainedContext } from "../containedContext";
 import { probe, TENANT_REFUSAL } from "../../scripts/intelligence/browserSwarmBoundaryOracle";
@@ -112,14 +112,25 @@ for (const locale of ["en", "ar"] as const) {
         // Readiness above excludes known visible loading states for allowed pages.
         await expect(page.locator("main")).not.toHaveText(/^\s*$/);
         expect(await page.locator("main").innerText()).not.toMatch(/\bNaN\b|\bundefined\b|\[object Object\]|Something went wrong|Application error|حدث خطأ ما/);
+        // SCRUM-890: Notifications is reached from the header bell, so every role must still get its link there.
+        const bell = page.getByRole("button", { name: locale === "ar" ? "الإشعارات" : "Notifications", exact: true });
+        await bell.click();
+        await expect(page.locator(`a[href="/${orgId}/notifications"]:visible`).first()).toBeVisible();
+        await bell.click();
         if (viewport.name === "phone") {
           await page.getByRole("button", { name: locale === "ar" ? "تبديل قائمة التنقل" : "Toggle navigation menu", exact: true }).click();
         }
+        // Settings is a collapsed disclosure by default; open it so its links are visible.
+        for (const closed of await page.locator('nav button[aria-expanded="false"]:visible').all()) await closed.click();
         for (const item of navigation) {
           const visible = item.ownerOnly ? attestation.approver.isSystemOwnerRole
             : item.anyPermission ? item.anyPermission.some((permission) => membership.permissions.includes(permission))
               : !item.permission || membership.permissions.includes(item.permission);
-          const link = page.locator(`nav a[href="/${orgId}${item.href}"]:visible`);
+          const placement = navPlacementOf(item);
+          if (placement === "header") continue; // checked through the bell above
+          // Billing is the plan card in the sidebar footer (outside the nav landmark).
+          const scope = placement === "footer" ? '[data-nav-surface="plan-card"]' : "nav";
+          const link = page.locator(`${scope} a[href="/${orgId}${item.href}"]:visible`);
           if (visible) await expect(link.first()).toBeVisible();
           else await expect(link).toHaveCount(0);
         }

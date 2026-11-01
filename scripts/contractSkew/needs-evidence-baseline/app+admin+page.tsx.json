@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "file": "app/admin/page.tsx",
+  "entries": [
+    {
+      "surface": "web",
+      "file": "app/admin/page.tsx",
+      "callSiteId": "app/admin/page.tsx:59:13",
+      "functionId": "adminSystem:retryWebhookEvent",
+      "contractPath": "webhookLogId",
+      "kind": "TYPE_UNKNOWN",
+      "cause": "client sends an unbranded string where the backend declares id: it is a string, but NOT verified as a document id for this table",
+      "fingerprint": "b118ca59a14111e1",
+      "multiplicity": 1,
+      "rationale": "Webhook retry asserts a supplied id to the mutation's parameter ID type. Native requires webhookLogs ID. Type-derived casting is not namespace evidence; no concrete wrong-table identifier is established.",
+      "issue": "SCRUM-711",
+      "expires": "2026-12-01",
+      "renewal": "SCRUM-866 import-closure review at 67debadf4: files in the import closure of this entry's client file and backend module that changed since reviewed revision c82890bd, each read against its diff: convex/utils/errors.ts (adds two AppErrorCode constants (LEGACY_COLLECTION_REFUND_PILOT_DISABLED, CONSIGNED_PAYABLE_VAT_REFUSED); no existing code changed). None changes the value sent at this call or the backend's handling of this argument. Fingerprint, cause and multiplicity matched in production run 40647249580. Closure re-derived at ffe284917 with configuration inputs (tsconfig, package.json, pnpm-lock.yaml, convex/schema.ts) and Convex function references (api.* and internal.*) as edges; additionally changed since c82890bd, each read against its diff: convex/schema.ts (appends three tables (suppliers, supplierAliases, supplierRegistryState) and their indexes at the end of the schema; at ffe284917 no existing table, field, validator or index was edited). None changes the value sent at this call or the backend's handling of this argument. Closure re-derived (SCRUM-866 round 3) so that the imports of convex/schema.ts, which every closure already included as a file, are followed too; additionally changed since c82890bd, each read against its diff: convex/utils/vehicleOwnership.ts (adds the exported supplierPayableVatReclassAllowed; existing exports untouched). None changes the value sent at this call or the backend's handling of this argument. SCRUM-866 round 7 review against origin/main 549267ae, for changed closure files since c82890bd (including #697): convex/schema.ts (adds supplier concession and basis fields to the existing financeApplications and sales tables); convex/utils/financingEconomics.ts (adds SUPPLIER_ABSORBS to gap outcomes, includes the supplier share in validation and clears the supplier fields when a resolution is reopened). These additions are recorded as changed closure inputs; the entry remains UNKNOWN and no unchanged-handling claim is made for #697. SCRUM-842 freshness review for PR #740 (retained-log redaction change), for its changes to convex/adminSystem.ts: one import (maskMetaErrorForAdmin and maskMetaUserIdsForAdmin from ./utils/metaUserIdRedaction) and the handler of the query listWebhookLogs, which now maps each returned row's summary and error through those masks for Meta sources; no other function in the file is edited. adminSystem:retryWebhookEvent, its args validator and the webhookLogId argument are untouched, and the PR does not change app/admin/page.tsx, so the client call is unchanged. A later SCRUM-842 commit (redaction of every Meta webhookLogs source) changes convex/adminSystem.ts again, comment text only: the comment above the listWebhookLogs handler now says which sources the stored redaction walks; no statement, import, function, validator or argument is edited. The entry stays UNKNOWN and no new value claim is made. This is implementer freshness review, not an independent review seat. evidence-blobs [[\"app/admin/page.tsx\",\"2e37e39a85d53a40aee7da20a7f1d7a0695eae22\"],[\"convex/adminSystem.ts\",\"3f2f81af05b0d81120cb1586f04689642f2e4603\"]]"
+    }
+  ]
+}
