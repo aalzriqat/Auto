@@ -1,5 +1,6 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { getDocumentSize } from "convex/values";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -29,9 +30,9 @@ vi.mock("./utils/metaUserIdRedaction", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./utils/metaUserIdRedaction")>();
   return {
     ...actual,
-    redactMetaUserIdInText: (text: string, metaUserId: string) => {
+    redactMetaUserIdInText: (text: string, metaUserId: string, ...rest: [replacement?: string]) => {
       if (text === "POISON-ROW-842") throw new Error("injected page failure");
-      return actual.redactMetaUserIdInText(text, metaUserId);
+      return actual.redactMetaUserIdInText(text, metaUserId, ...rest);
     },
   };
 });
@@ -1540,5 +1541,320 @@ describe("SCRUM-842 a wedged redaction job is reported, not retried in silence",
       expect((await jobs(t))[0]?.stalledRestarts).toBe(0);
       expect(await wedgeReports(t)).toEqual([]);
     });
+  });
+});
+// ─── Round 5: the identifiers are captured with the disconnect, every id finds its account,
+// and a redacted document always fits (SCRUM-842, PR #740 round 5) ────────────────────────────
+//
+// B1: the disconnect used to commit alone and clear the Instagram webhook account id; if the
+// next mutation failed, a retry could no longer learn that id and completed the receipt while a
+// stored webhook body still held it. Disconnect, receipt and first redaction page are now one
+// transaction, so a failure leaves the account connected and the retry sees every id.
+// B2: a callback that carried the webhook account id (not the business account id) cleared
+// nothing, and only the first of several organisations holding the account was cleared.
+// B3: the replacement text is longer than a short id, so redaction could push one document past
+// Convex's 1 MiB limit (https://docs.convex.dev/production/state/limits) and the patch would be
+// refused for ever.
+
+describe("SCRUM-842 round 5: identifiers are captured atomically with the disconnect", () => {
+  const BUSINESS_ID = "17841400000000842";
+  const WEBHOOK_ID = "17841400000099842";
+  let consoleOutput: string[];
+
+  beforeEach(() => {
+    consoleOutput = captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const seedAccount = (t: T, businessId: string, webhookId: string) =>
+    t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic Org", createdAt: Date.now() });
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
+        instagramBusinessAccountId: businessId,
+        instagramWebhookAccountId: webhookId,
+        instagramAccessToken: "synthetic-ig-token-842",
+        instagramPageName: "synthetic_ig",
+      });
+      return orgId;
+    });
+
+  const seedWebhookBody = (t: T, webhookId: string) =>
+    t.run((ctx) =>
+      ctx.db.insert("webhookLogs", {
+        source: "instagram",
+        status: "success",
+        summary: "Batch with 1 entries",
+        eventId: "synthetic-event-sha",
+        rawPayload: JSON.stringify({ object: "instagram", entry: [{ id: webhookId }] }),
+        payloadTruncated: false,
+        createdAt: Date.now(),
+      }),
+    );
+
+  async function aFailedFirstAttemptKeepsTheAccountSoTheRetryErasesTheWebhookIdBeforeCompleting(path: string) {
+    const t = newTest();
+    const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const inbox = await seedWebhookBody(t, WEBHOOK_ID);
+    const poisoned = await seedLegacyLog(t, "instagram-oauth", POISON_SUMMARY);
+    const signed = await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET);
+
+    const failed = await post(t, path, signed);
+
+    expect(failed.status).toBe(500);
+    // Nothing committed: the account is still connected, so its second id is still on file.
+    const kept = await settingsOf(t, orgId);
+    expect(kept?.instagramBusinessAccountId).toBe(BUSINESS_ID);
+    expect(kept?.instagramWebhookAccountId).toBe(WEBHOOK_ID);
+    expect(kept?.instagramAccessToken).toBe("synthetic-ig-token-842");
+    expect(await allDeletionRequests(t)).toEqual([]);
+
+    await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
+    const retried = await post(t, path, signed);
+    expect(retried.status).toBe(200);
+
+    // Until the walk reaches the platform's own source the receipt is pending AND the id is still there.
+    const [pending] = await allDeletionRequests(t);
+    if (path.endsWith("data-deletion")) {
+      expect(pending?.completedAt).toBeUndefined();
+      expect((await logById(t, inbox))?.rawPayload).toContain(WEBHOOK_ID);
+    }
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(WEBHOOK_ID);
+    expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(BUSINESS_ID);
+    if (path.endsWith("data-deletion")) {
+      const [receipt] = await allDeletionRequests(t);
+      expect(typeof receipt?.completedAt).toBe("number");
+    }
+    const cleared = await settingsOf(t, orgId);
+    expect(cleared?.instagramAccessToken).toBeUndefined();
+    expect(await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect())).toEqual([]);
+    expect(consoleOutput.join("\n")).not.toContain(WEBHOOK_ID);
+  }
+
+  test("Instagram data-deletion: a first attempt that fails after the disconnect step leaves the account connected, and the retry erases the webhook account id before the receipt completes", () =>
+    aFailedFirstAttemptKeepsTheAccountSoTheRetryErasesTheWebhookIdBeforeCompleting("/instagram-data-deletion"));
+  test("Instagram deauthorize: a first attempt that fails after the disconnect step leaves the account connected, and the retry erases the webhook account id", () =>
+    aFailedFirstAttemptKeepsTheAccountSoTheRetryErasesTheWebhookIdBeforeCompleting("/instagram-deauthorize"));
+
+  test("Facebook data-deletion: a first attempt that fails leaves the connection in place and no receipt, and the retry completes", async () => {
+    const t = newTest();
+    const orgId = await seedConnectedOrg(t, "facebook");
+    const poisoned = await seedLegacyLog(t, "facebook-oauth", POISON_SUMMARY);
+    const signed = await signedRequest({ user_id: META_USER_ID }, FACEBOOK_SECRET);
+
+    const failed = await post(t, "/facebook-data-deletion", signed);
+
+    expect(failed.status).toBe(500);
+    expect((await settingsOf(t, orgId))?.facebookPageAccessToken).toBe("synthetic-page-token-842");
+    expect(await allDeletionRequests(t)).toEqual([]);
+
+    await t.run((ctx) => ctx.db.patch(poisoned, { summary: "Connected for org recovered" }));
+    expect((await post(t, "/facebook-data-deletion", signed)).status).toBe(200);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await settingsOf(t, orgId))?.facebookPageAccessToken).toBeUndefined();
+    const [receipt] = await allDeletionRequests(t);
+    expect(typeof receipt?.completedAt).toBe("number");
+  });
+});
+
+describe("SCRUM-842 round 5: a callback finds the account by either Instagram id", () => {
+  const BUSINESS_ID = "17841400000000842";
+  const WEBHOOK_ID = "17841400000099842";
+
+  beforeEach(() => {
+    captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const seedAccount = (t: T, businessId: string, webhookId: string) =>
+    t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic Org", createdAt: Date.now() });
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
+        instagramBusinessAccountId: businessId,
+        instagramWebhookAccountId: webhookId,
+        instagramAccessToken: "synthetic-ig-token-842",
+        instagramPageName: "synthetic_ig",
+        instagramAutoReplyEnabled: true,
+      });
+      return orgId;
+    });
+
+  const expectDisconnected = async (t: T, orgId: Id<"organizations">) => {
+    const settings = await settingsOf(t, orgId);
+    expect(settings?.instagramBusinessAccountId).toBeUndefined();
+    expect(settings?.instagramWebhookAccountId).toBeUndefined();
+    expect(settings?.instagramAccessToken).toBeUndefined();
+    expect(settings?.instagramPageName).toBeUndefined();
+    expect(settings?.instagramAutoReplyEnabled).toBe(false);
+  };
+
+  async function aCallbackNamingTheWebhookAccountIdDisconnectsTheAccount(path: string) {
+    const t = newTest();
+    const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+
+    const res = await post(t, path, await signedRequest({ user_id: WEBHOOK_ID }, INSTAGRAM_SECRET));
+
+    expect(res.status).toBe(200);
+    await expectDisconnected(t, orgId);
+    if (path.endsWith("data-deletion")) {
+      const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+      expect(status?.connectionRemoved).toBe(true);
+    }
+  }
+
+  test("Instagram deauthorize: a callback that names the webhook account id disconnects the account", () =>
+    aCallbackNamingTheWebhookAccountIdDisconnectsTheAccount("/instagram-deauthorize"));
+  test("Instagram data-deletion: a callback that names the webhook account id disconnects the account and the receipt says so", () =>
+    aCallbackNamingTheWebhookAccountIdDisconnectsTheAccount("/instagram-data-deletion"));
+
+  test("Instagram data-deletion: a callback that names the business account id disconnects the account and the receipt says so", async () => {
+    const t = newTest();
+    const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+
+    const res = await post(t, "/instagram-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+
+    expect(res.status).toBe(200);
+    await expectDisconnected(t, orgId);
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(status?.connectionRemoved).toBe(true);
+  });
+
+  test("Instagram: every organisation that holds the same legacy account is disconnected, not only the first", async () => {
+    const t = newTest();
+    const first = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const second = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const unrelated = await seedAccount(t, "17841400000011111", "17841400000022222");
+
+    const res = await post(t, "/instagram-deauthorize", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+    expect(res.status).toBe(200);
+    await expectDisconnected(t, first);
+    await expectDisconnected(t, second);
+    expect((await settingsOf(t, unrelated))?.instagramAccessToken).toBe("synthetic-ig-token-842");
+
+    // The same account again, found through the webhook account id this time.
+    const third = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const fourth = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const viaWebhook = await post(t, "/instagram-deauthorize", await signedRequest({ user_id: WEBHOOK_ID }, INSTAGRAM_SECRET));
+    expect(viaWebhook.status).toBe(200);
+    await expectDisconnected(t, third);
+    await expectDisconnected(t, fourth);
+    expect((await settingsOf(t, unrelated))?.instagramAccessToken).toBe("synthetic-ig-token-842");
+  });
+
+  async function anIdThatMatchesNoConnectionIsNotReportedAsRemoved(p: PlatformCase) {
+    const t = newTest();
+
+    const res = await post(t, p.deletion, await signedRequest({ user_id: "990000000000777" }, p.secret));
+
+    expect(res.status).toBe(200);
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(typeof status?.completedAt).toBe("number");
+    expect(status?.connectionRemoved).toBe(false);
+  }
+
+  test("Facebook data-deletion: an id that matches no connection completes without claiming credentials were removed", () =>
+    anIdThatMatchesNoConnectionIsNotReportedAsRemoved(PLATFORMS[0]));
+  test("Instagram data-deletion: an id that matches no connection completes without claiming credentials were removed", () =>
+    anIdThatMatchesNoConnectionIsNotReportedAsRemoved(PLATFORMS[1]));
+
+  test("Facebook data-deletion: a matching connection is reported as removed", async () => {
+    const t = newTest();
+    await seedConnectedOrg(t, "facebook");
+    const res = await post(t, "/facebook-data-deletion", await signedRequest({ user_id: META_USER_ID }, FACEBOOK_SECRET));
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(status?.connectionRemoved).toBe(true);
+  });
+});
+
+describe("SCRUM-842 round 5: a redacted document never outgrows Convex's 1 MiB limit", () => {
+  const DOCUMENT_LIMIT_BYTES = 1024 * 1024;
+  const IG_ID = "17841400000000842";
+
+  beforeEach(() => {
+    captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // A body packed with the shortest realistic ids: every 18 bytes becomes 21, so a body above
+  // about 900,000 bytes grows past the limit if the replacement is the long fixed text.
+  const packedBody = (id: string, bytes: number) => `${id} `.repeat(Math.floor(bytes / (id.length + 1)));
+
+  async function aNearLimitBodyPackedWithTheIdIsPatchedAndStaysUnderTheLimit(p: PlatformCase) {
+    const t = newTest();
+    const body = packedBody(IG_ID, 1_000_000);
+    const rowId = await t.run((ctx) =>
+      ctx.db.insert("webhookLogs", {
+        source: p.platform,
+        status: "success",
+        summary: "Batch with 1 entries",
+        eventId: "synthetic-event-sha",
+        payloadSha256: "synthetic-event-sha",
+        rawPayload: body,
+        payloadTruncated: false,
+        createdAt: Date.now(),
+      }),
+    );
+    const before = await t.run(async (ctx) => getDocumentSize((await ctx.db.get(rowId))!));
+    expect(before).toBeLessThan(DOCUMENT_LIMIT_BYTES);
+    // The long replacement text WOULD overflow: this is what the test guards against.
+    expect(before + (REDACTED_META_USER.length - IG_ID.length) * Math.floor(1_000_000 / (IG_ID.length + 1))).toBeGreaterThan(
+      DOCUMENT_LIMIT_BYTES,
+    );
+
+    const res = await post(t, p.deletion, await signedRequest({ user_id: IG_ID }, p.secret));
+    expect(res.status).toBe(200);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const after = await t.run(async (ctx) => (await ctx.db.get(rowId))!);
+    expect(getDocumentSize(after)).toBeLessThanOrEqual(DOCUMENT_LIMIT_BYTES);
+    expect(after.rawPayload).not.toContain(IG_ID);
+    expect(after.eventId).toBe("synthetic-event-sha");
+    expect(after.payloadSha256).toBe("synthetic-event-sha");
+    const { confirmation_code } = { confirmation_code: (await allDeletionRequests(t))[0]?.code ?? "" };
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(typeof status?.completedAt).toBe("number");
+  }
+
+  test("Facebook: a near-limit webhook body packed with the id is redacted without outgrowing the document limit", () =>
+    aNearLimitBodyPackedWithTheIdIsPatchedAndStaysUnderTheLimit(PLATFORMS[0]));
+  test("Instagram: a near-limit webhook body packed with the id is redacted without outgrowing the document limit", () =>
+    aNearLimitBodyPackedWithTheIdIsPatchedAndStaysUnderTheLimit(PLATFORMS[1]));
+
+  test("a normal row keeps the readable replacement text", async () => {
+    const t = newTest();
+    const rowId = await seedLegacyLog(t, "instagram", `DM from ${IG_ID}`);
+    await post(t, "/instagram-deauthorize", await signedRequest({ user_id: IG_ID }, INSTAGRAM_SECRET));
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await logById(t, rowId))?.summary).toBe(`DM from ${REDACTED_META_USER}`);
   });
 });
