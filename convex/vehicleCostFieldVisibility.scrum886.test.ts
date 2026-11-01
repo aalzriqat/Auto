@@ -20,6 +20,7 @@ import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { projectVehicleForRole } from "./utils/vehicleCostVisibility";
+import { projectSaleRow } from "./utils/saleRowProjection";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -38,10 +39,16 @@ const SENTINEL = {
   editedPurchasePrice: 7_100_006,
   editedSourceCost: 7_100_007,
   editedMinimumProfit: 7_100_008,
+  // Frozen onto the sale row at completion. The entitlement IS the supplier cost; the margin is the
+  // sale price minus it. The concession is the finance-tier sibling.
+  saleSupplierEntitlement: 7_100_009,
+  saleConsignedMargin: 7_100_010,
+  saleSupplierConcession: 7_100_011,
 } as const;
 type SentinelName = keyof typeof SENTINEL;
 
 const VEHICLE_COST_KEYS = ["purchasePrice", "landedCostTotal", "minimumProfit", "sourceCost"] as const;
+const SALE_COST_KEYS = ["consignedSupplierEntitlementMinor", "consignedMarginMinor"] as const;
 const VIN = "VIN886SENTINEL01";
 
 type RoleName = "SALES" | "RECEPTION" | "ACCOUNTANT" | "EDITOR" | "MANAGER" | "OWNER";
@@ -100,6 +107,10 @@ async function seed() {
     const salespersonId = members.SALES.userId;
     const saleId = await ctx.db.insert("sales", {
       orgId, vehicleId, customerId, salespersonId, salePrice: 25_000, saleDate: Date.now(), status: "COMPLETED",
+      consignedSupplierEntitlementMinor: SENTINEL.saleSupplierEntitlement,
+      consignedMarginMinor: SENTINEL.saleConsignedMargin,
+      consignedMarginCurrency: "JOD",
+      consignedSupplierConcessionMinor: SENTINEL.saleSupplierConcession,
     });
     const leadId = await ctx.db.insert("leads", { orgId, customerId, vehicleId, stage: "NEW", source: "Website" });
     const quoteId = await ctx.db.insert("quotes", {
@@ -134,7 +145,18 @@ type Actor = Seeded["members"][RoleName]["as"];
 /** Names of the sentinels whose value appears anywhere in the serialized response. */
 function leakedSentinels(response: unknown): SentinelName[] {
   const serialized = JSON.stringify(response) ?? "";
-  return (Object.keys(SENTINEL) as SentinelName[]).filter((name) => serialized.includes(String(SENTINEL[name])));
+  return (Object.keys(SENTINEL) as SentinelName[]).filter(
+    // The concession is finance-tier (view:finance), not cost-tier; it has its own assertion below.
+    (name) => name !== "saleSupplierConcession" && serialized.includes(String(SENTINEL[name]))
+  );
+}
+
+/** Sale-row cost keys present on any sale row the response carries. */
+function saleCostKeysIn(reader: Reader, response: unknown): string[] {
+  const rows = [reader.saleIn?.(response), ...(reader.salesIn?.(response) ?? [])].filter(
+    (row): row is Record<string, unknown> => Boolean(row)
+  );
+  return rows.flatMap((row) => SALE_COST_KEYS.filter((key) => key in row));
 }
 
 interface Reader {
@@ -142,11 +164,18 @@ interface Reader {
   call: (s: Seeded, as: Actor) => Promise<unknown>;
   /** The vehicle document inside the response, when the response carries one. */
   vehicleIn?: (response: unknown) => Record<string, unknown> | null | undefined;
+  /** The sale row inside the response, when the response carries one. */
+  saleIn?: (response: unknown) => Record<string, unknown> | null | undefined;
+  /** The sale rows inside the response, when it carries several. */
+  salesIn?: (response: unknown) => Array<Record<string, unknown>>;
   /** The sentinels a caller who may read cost must still receive from this reader. */
   served: SentinelName[];
 }
 
 const ALL_VEHICLE_SENTINELS: SentinelName[] = ["purchasePrice", "landedCostTotal", "minimumProfit", "sourceCost"];
+// The concession is finance-tier, not cost-tier: a cost-only reader (MANAGER holds both) may not get it
+// from a role that lacks view:finance. Asserted separately below.
+const SALE_COST_SENTINELS: SentinelName[] = ["saleSupplierEntitlement", "saleConsignedMargin"];
 
 const READERS: Reader[] = [
   {
@@ -188,13 +217,23 @@ const READERS: Reader[] = [
     name: "sales.get",
     call: (s, as) => as.query(api.sales.get, { orgId: s.orgId, saleId: s.saleId }),
     vehicleIn: (r) => (r as { vehicle: Record<string, unknown> | null }).vehicle,
-    served: ALL_VEHICLE_SENTINELS,
+    saleIn: (r) => r as Record<string, unknown>,
+    served: [...ALL_VEHICLE_SENTINELS, ...SALE_COST_SENTINELS],
   },
   {
     name: "sales.getSaleTrail",
     call: (s, as) => as.query(api.sales.getSaleTrail, { orgId: s.orgId, saleId: s.saleId }),
     vehicleIn: (r) => (r as { vehicle: Record<string, unknown> | null }).vehicle,
-    served: ALL_VEHICLE_SENTINELS,
+    saleIn: (r) => (r as { sale: Record<string, unknown> }).sale,
+    served: [...ALL_VEHICLE_SENTINELS, ...SALE_COST_SENTINELS],
+  },
+  {
+    // Returned the stored vehicle on every quote; the screens read only its label fields.
+    name: "customers.getRelations",
+    call: (s, as) => as.query(api.customers.getRelations, { orgId: s.orgId, customerId: s.customerId }),
+    vehicleIn: (r) => (r as { quotes: Array<{ vehicle: Record<string, unknown> | null }> }).quotes[0]?.vehicle,
+    salesIn: (r) => (r as { sales: Array<Record<string, unknown>> }).sales,
+    served: [...ALL_VEHICLE_SENTINELS, ...SALE_COST_SENTINELS],
   },
   {
     name: "leads.get",
@@ -242,6 +281,7 @@ test("scenario vehicle-readers-withhold-cost: SALES, RECEPTION, ACCOUNTANT and E
       if (outcome.refused) continue;
       reached.push(`${role}:${reader.name}`);
       expect(leakedSentinels(outcome.response), `${role} via ${reader.name}`).toEqual([]);
+      expect(saleCostKeysIn(reader, outcome.response), `${role} via ${reader.name} sale row`).toEqual([]);
       const vehicle = reader.vehicleIn?.(outcome.response);
       if (vehicle) for (const key of VEHICLE_COST_KEYS) expect(vehicle).not.toHaveProperty(key);
     }
@@ -251,6 +291,7 @@ test("scenario vehicle-readers-withhold-cost: SALES, RECEPTION, ACCOUNTANT and E
     expect.arrayContaining([
       "SALES:vehicles.get", "SALES:vehicles.list", "SALES:vehicles.listAll", "RECEPTION:vehicles.get",
       "SALES:vehicles.getByVin", "SALES:vehicles.getLandedCosts", "SALES:sales.get", "SALES:leads.get",
+      "SALES:sales.getSaleTrail", "SALES:customers.getRelations", "RECEPTION:customers.getRelations",
       "SALES:applications.get", "EDITOR:vehicleEdits.listPending", "SALES:vehicleEdits.getHistory",
     ])
   );
@@ -275,6 +316,7 @@ describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost",
       const outcome = await callOrRefusal(reader, s, role);
       if (outcome.refused) return;
       expect(leakedSentinels(outcome.response)).toEqual([]);
+      expect(saleCostKeysIn(reader, outcome.response)).toEqual([]);
       const vehicle = reader.vehicleIn?.(outcome.response);
       if (vehicle) {
         for (const key of VEHICLE_COST_KEYS) expect(vehicle).not.toHaveProperty(key);
@@ -303,6 +345,26 @@ describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost",
     });
   });
 
+  describe.each(READERS.filter((reader) => reader.saleIn || reader.salesIn))(
+    "$name: the supplier concession stays finance-tier",
+    (reader) => {
+      test.each([
+        ["SALES", false],
+        ["RECEPTION", false],
+        ["MANAGER", false],
+        ["EDITOR", false],
+        ["ACCOUNTANT", true],
+        ["OWNER", true],
+      ] as Array<[RoleName, boolean]>)("%s sees the concession: %s", async (role, mayRead) => {
+        const s = await seed();
+        const outcome = await callOrRefusal(reader, s, role);
+        if (outcome.refused) return;
+        const serialized = JSON.stringify(outcome.response);
+        expect(serialized.includes(String(SENTINEL.saleSupplierConcession))).toBe(mayRead);
+      });
+    }
+  );
+
   test("the sweep reaches the roles the ticket names: SALES and RECEPTION hold view:vehicles, neither holds view:cost_price", () => {
     for (const role of ["SALES", "RECEPTION"] as const) {
       const permissions = permissionsFor(role);
@@ -323,7 +385,8 @@ describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost",
     expect(reachable).toEqual(
       expect.arrayContaining([
         "vehicles.get", "vehicles.list", "vehicles.listAll", "vehicles.getByVin", "vehicles.getLandedCosts",
-        "sales.get", "sales.getSaleTrail", "leads.get", "applications.get", "vehicleEdits.getHistory",
+        "sales.get", "sales.getSaleTrail", "customers.getRelations", "leads.get", "applications.get",
+        "vehicleEdits.getHistory",
       ])
     );
   });
@@ -335,6 +398,30 @@ describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost",
       vehicleId: s.vehicleId,
     })) as Array<{ payload: Record<string, unknown> }>;
     expect(history[0].payload).toEqual({ mileage: 12_345 });
+  });
+
+  test("the sale projection withholds COST-tier fields by view:cost_price and FINANCE-tier fields by view:finance, independently", () => {
+    const stored = {
+      _id: "s1",
+      salePrice: 1,
+      consignedSupplierEntitlementMinor: SENTINEL.saleSupplierEntitlement,
+      consignedMarginMinor: SENTINEL.saleConsignedMargin,
+      consignedSupplierConcessionMinor: SENTINEL.saleSupplierConcession,
+    } as unknown as Doc<"sales">;
+    const role = (permissions: string[]) => ({ permissions }) as Doc<"roles">;
+    expect(projectSaleRow(stored, role(["view:sales"]))).toEqual({ _id: "s1", salePrice: 1 });
+    expect(projectSaleRow(stored, role(["view:sales", "view:finance"]))).toEqual({
+      _id: "s1",
+      salePrice: 1,
+      consignedSupplierConcessionMinor: SENTINEL.saleSupplierConcession,
+    });
+    expect(projectSaleRow(stored, role(["view:sales", "view:cost_price"]))).toEqual({
+      _id: "s1",
+      salePrice: 1,
+      consignedSupplierEntitlementMinor: SENTINEL.saleSupplierEntitlement,
+      consignedMarginMinor: SENTINEL.saleConsignedMargin,
+    });
+    expect(projectSaleRow(stored, role(["view:sales", "view:finance", "view:cost_price"]))).toBe(stored);
   });
 
   test("the restricted projection is an allowlist: a field nobody classified is withheld", () => {

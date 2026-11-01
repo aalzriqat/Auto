@@ -17,11 +17,17 @@
  *  - FINANCE: a figure of the deal's economics. Served only to a caller who may read finance
  *    economics (`view:finance` or a system owner), the same rule the application projection
  *    applies to `supplierGapShareMinor`.
+ *  - COST: a figure that reveals the vehicle's cost (SCRUM-886). Served only to a caller who may
+ *    read vehicle cost (`view:cost_price` or a system owner), the same rule the vehicle readers
+ *    apply to `sourceCost` and `purchasePrice`. `view:finance` alone does not grant it: no client
+ *    screen reads these fields from a sale row, and the server-side finance readers read the stored
+ *    row directly, so withholding them breaks no legitimate reader.
  */
 import type { Doc } from "../_generated/dataModel";
 import { mayReadFinanceEconomics } from "./financeApplicationProjection";
+import { canReadVehicleCost } from "./vehicleCostVisibility";
 
-export type SaleFieldVisibility = "PUBLIC_LEGACY" | "FINANCE";
+export type SaleFieldVisibility = "PUBLIC_LEGACY" | "FINANCE" | "COST";
 
 export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibility> = {
   _id: "PUBLIC_LEGACY",
@@ -55,11 +61,14 @@ export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibili
   quoteId: "PUBLIC_LEGACY",
   leadId: "PUBLIC_LEGACY",
   supplierSettlementRoute: "PUBLIC_LEGACY",
-  consignedMarginMinor: "PUBLIC_LEGACY",
+  // SCRUM-886 (OWASP API3:2023): COST-tier. The entitlement IS the vehicle's frozen supplier cost, and
+  // the margin is the sale price minus it, so either one gives a view:sales caller the cost the
+  // vehicle readers withhold. They reach only a caller who may read vehicle cost.
+  consignedMarginMinor: "COST",
   consignedMarginCurrency: "PUBLIC_LEGACY",
   commissionBase: "PUBLIC_LEGACY",
   financedNetRevenue: "PUBLIC_LEGACY",
-  consignedSupplierEntitlementMinor: "PUBLIC_LEGACY",
+  consignedSupplierEntitlementMinor: "COST",
   // New in SCRUM-766 PR-C. Never served to a caller without finance view.
   consignedSupplierConcessionMinor: "FINANCE",
   consignedSupplierGrossReceiptMinor: "PUBLIC_LEGACY",
@@ -77,11 +86,16 @@ export const SALE_FIELD_VISIBILITY: Record<keyof Doc<"sales">, SaleFieldVisibili
   deletedBy: "PUBLIC_LEGACY",
 };
 
-const FINANCE_SALE_FIELDS: ReadonlySet<string> = new Set(
-  Object.entries(SALE_FIELD_VISIBILITY)
-    .filter(([, tier]) => tier === "FINANCE")
-    .map(([field]) => field)
-);
+function fieldsInTier(wanted: SaleFieldVisibility): ReadonlySet<string> {
+  return new Set(
+    Object.entries(SALE_FIELD_VISIBILITY)
+      .filter(([, tier]) => tier === wanted)
+      .map(([field]) => field)
+  );
+}
+
+const FINANCE_SALE_FIELDS = fieldsInTier("FINANCE");
+const COST_SALE_FIELDS = fieldsInTier("COST");
 
 /**
  * The sale row as this caller may read it. A caller who may read finance economics gets the
@@ -90,8 +104,11 @@ const FINANCE_SALE_FIELDS: ReadonlySet<string> = new Set(
  * field added to the table later defaults to a classification, never to "visible".
  */
 export function projectSaleRow<T extends object>(sale: T, role: Doc<"roles">): T {
-  if (mayReadFinanceEconomics(role)) return sale;
+  const withheld: ReadonlySet<string>[] = [];
+  if (!mayReadFinanceEconomics(role)) withheld.push(FINANCE_SALE_FIELDS);
+  if (!canReadVehicleCost(role)) withheld.push(COST_SALE_FIELDS);
+  if (withheld.length === 0) return sale;
   return Object.fromEntries(
-    Object.entries(sale).filter(([field]) => !FINANCE_SALE_FIELDS.has(field))
+    Object.entries(sale).filter(([field]) => !withheld.some((tier) => tier.has(field)))
   ) as T;
 }

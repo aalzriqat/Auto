@@ -599,7 +599,7 @@ export const getSaleTrail = query({
     const commissionPaidByUser = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
 
     return {
-      sale,
+      sale: projectSaleRow(sale, role),
       vehicle: projectOptionalVehicleForRole(vehicle, role),
       customer,
       salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
