@@ -9,7 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { requireFeature } from "./subscriptions";
-import { MAX_REDACTED_IDS, REDACTION_REFUSED, startMetaLogRedaction } from "./metaLogRedaction";
+import { MAX_REDACTED_IDS, startMetaLogRedaction } from "./metaLogRedaction";
 import { disconnectFacebookConnectedUser } from "./facebookIntegrations";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
