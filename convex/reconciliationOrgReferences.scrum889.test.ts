@@ -198,30 +198,33 @@ describe("SCRUM-889 - the A/P GL read refuses an inconsistent journal link (publ
     expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
   });
 
-  test.each(["DRAFT", "VALIDATED", "REVERSED"] as const)(
-    "CONTROL: a same-org %s parent is skipped or counted by status, never refused",
-    async (status) => {
-      const s = await seed(`apstatus${status}`);
-      const entryId = await s.t.run((ctx) =>
-        ctx.db.insert("journalEntries", {
-          orgId: s.orgId, journalNumber: "RAW", accountingDate: Date.now() - 1000, periodId: s.periodId, sourceType: "raw",
-          sourceId: "raw", category: "SYSTEM", memo: "raw", status, postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
-        })
-      );
-      await insertApLine(s, entryId, s.orgId);
-      const r = await apRecon(s);
-      expect(r.status).toBe("AVAILABLE");
-      if (status === "REVERSED") {
-        // A REVERSED entry's original lines remain postings (offset by a separate reversal).
-        expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
-      } else {
-        // DRAFT / VALIDATED parents are not on the books: the line is skipped and the ledger is empty.
-        expect(r.isReconciled).toBe(true);
-        expect(r.currencies).toEqual([]);
-      }
-    }
-  );
+  /** A same-org parent in `status` on the A/P account: counted when POSTED/REVERSED, skipped otherwise, never refused. */
+  async function sameOrgParentIn(tag: string, status: "DRAFT" | "VALIDATED" | "REVERSED") {
+    const s = await seed(tag);
+    const entryId = await s.t.run((ctx) =>
+      ctx.db.insert("journalEntries", {
+        orgId: s.orgId, journalNumber: "RAW", accountingDate: Date.now() - 1000, periodId: s.periodId, sourceType: "raw",
+        sourceId: "raw", category: "SYSTEM", memo: "raw", status, postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+      })
+    );
+    await insertApLine(s, entryId, s.orgId);
+    return apRecon(s);
+  }
+  const expectSkipped = (r: Awaited<ReturnType<typeof apRecon>>) => {
+    // Not on the books: the line is skipped, the ledger side is empty, and nothing is refused.
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+    expect(r.currencies).toEqual([]);
+  };
 
+  test("CONTROL: a same-org DRAFT parent is skipped, not refused", async () => expectSkipped(await sameOrgParentIn("apdraft", "DRAFT")));
+  test("CONTROL: a same-org VALIDATED parent is skipped, not refused", async () =>
+    expectSkipped(await sameOrgParentIn("apvalidated", "VALIDATED")));
+  test("CONTROL: a same-org REVERSED parent still counts: its original lines remain postings", async () => {
+    const r = await sameOrgParentIn("apreversed", "REVERSED");
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(AMOUNT_MINOR);
+  });
   test("B1: an org-B line under an org-A POSTED entry on the A/P account is UNAVAILABLE, not org A's GL balance", async () => {
     const s = await seed("apb1");
     await insertApLine(s, await insertEntry(s, s.orgId), s.otherOrgId);

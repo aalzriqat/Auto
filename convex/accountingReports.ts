@@ -22,7 +22,7 @@ import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
-import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf, getCumulativeBalancesAsOfChecked } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
@@ -968,13 +968,16 @@ export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
  * SCRUM-876. POST_CUTOFF_ACTIVITY: the subledger and the GL cannot be shown to be measured at the
  * cutoff (a native payable row moved after it, or the AP control account holds a line dated after it).
  * INVALID_DATE: the cutoff is not a finite instant.
+ * INCONSISTENT_REFERENCE (SCRUM-889): a journal line carries another organization's id, or an A/P-account
+ * line names a parent entry that is missing or belongs to another organization.
  */
 type SupplierPayablesUnavailableReason =
   | "OVER_LIMIT"
   | "PENDING_POSTINGS"
   | "OPENING_SOURCE_UNAVAILABLE"
   | "POST_CUTOFF_ACTIVITY"
-  | "INVALID_DATE";
+  | "INVALID_DATE"
+  | "INCONSISTENT_REFERENCE";
 
 /**
  * How many supplier-payable rows (all open-balance statuses and CANCELLED together) and, separately, how many
@@ -1312,8 +1315,14 @@ export async function computeSupplierPayablesReconciliation(
     if (later === "UNEXPLAINED") return unavailable("POST_CUTOFF_ACTIVITY");
   }
 
+  // The checked read refuses a journal line that carries another organization's id and a line on a control
+  // account whose parent entry is missing or foreign (SCRUM-889): neither may be summed or skipped, because
+  // dropping one could report an unreconciled ledger as reconciled. The trial balance and the other
+  // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts]);
+  if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   const glByCurrency=new Map<string,number>();
-  for(const balance of await getCumulativeBalancesAsOf(ctx,orgId,cutoff)){
+  for(const balance of glRead.balances){
     if(!controlAccounts.has(balance.accountId))continue;
     glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
   }

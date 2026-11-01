@@ -97,6 +97,51 @@ export async function getCumulativeBalancesAsOf(
   orgId: Id<"organizations">,
   asOfDate: number
 ): Promise<CumulativeBalance[]> {
+  return (await readCumulativeBalances(ctx, orgId, asOfDate, undefined)).balances;
+}
+
+export type CheckedCumulativeBalances =
+  | { status: "OK"; balances: CumulativeBalance[] }
+  /**
+   * A journal line in the journal-line path is not consistent with its organization (SCRUM-889): it carries
+   * another organization's id, or a line on one of the checked accounts names a parent entry that is missing
+   * or belongs to another organization. Skipping or summing it could report an unreconciled ledger as
+   * reconciled, so no balance is returned.
+   */
+  | { status: "INCONSISTENT_REFERENCE" };
+
+/**
+ * getCumulativeBalancesAsOf plus an organization-consistency check on the journal-line path (SCRUM-889),
+ * for a caller that compares the result to a subledger and so must not read a corrupt link as "reconciled".
+ *
+ * `getCumulativeBalancesAsOf` walks the organization's own entries and adds every child line it finds
+ * through `by_journal_entry`, without checking the line's own `orgId`; and a line whose parent is missing
+ * or foreign is never reached from that walk. Convex's `db.get` and `by_journal_entry` do not scope by
+ * tenant, so the function has to (https://docs.convex.dev/database/reading-data; OWASP API1:2023). Here:
+ *   - a line under one of this organization's entries that carries another `orgId` is an inconsistency;
+ *   - every organization-scoped line on `accountIds` in the period's date range (the same
+ *     `by_org_account_date` index the bounded reader uses) whose parent entry is not one of the entries
+ *     already read must resolve to an existing entry of this organization, else it is an inconsistency.
+ * Closed-period and certified-snapshot balances are read from snapshots, as before; no line is read there.
+ * The extra line read happens only for `accountIds` and only when the journal-line path runs.
+ */
+export async function getCumulativeBalancesAsOfChecked(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number,
+  accountIds: ReadonlyArray<Id<"chartOfAccounts">>
+): Promise<CheckedCumulativeBalances> {
+  const read = await readCumulativeBalances(ctx, orgId, asOfDate, accountIds);
+  return read.inconsistentReference ? { status: "INCONSISTENT_REFERENCE" } : { status: "OK", balances: read.balances };
+}
+
+async function readCumulativeBalances(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number,
+  /** When given, the journal-line path verifies line and parent ownership (see getCumulativeBalancesAsOfChecked). */
+  verifyAccountIds: ReadonlyArray<Id<"chartOfAccounts">> | undefined
+): Promise<{ balances: CumulativeBalance[]; inconsistentReference: boolean }> {
   const periods = await ctx.db
     .query("accountingPeriods")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -146,21 +191,20 @@ export async function getCumulativeBalancesAsOf(
         for (const s of snapshots) {
           addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
         }
-        return Array.from(totals.values());
+        return { balances: Array.from(totals.values()), inconsistentReference: false };
       }
     }
 
     // On a partial-period read, narrow the range by accounting date before
     // loading entries. Include REVERSED entries too: their original lines
     // remain postings, offset by a separately posted reversal.
-    const entriesInPeriod = (
-      await ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_period_date", (q) =>
-          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
-        )
-        .collect()
-    ).filter((e) => e.status === "POSTED" || e.status === "REVERSED");
+    const allEntriesInPeriod = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_period_date", (q) =>
+        q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
+      )
+      .collect();
+    const entriesInPeriod = allEntriesInPeriod.filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
     for (const entry of entriesInPeriod) {
       const lines = await ctx.db
@@ -168,12 +212,40 @@ export async function getCumulativeBalancesAsOf(
         .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
         .collect();
       for (const line of lines) {
+        if (verifyAccountIds && line.orgId !== orgId) return { balances: [], inconsistentReference: true };
         addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
+      }
+    }
+
+    if (verifyAccountIds) {
+      // Line-first: the walk above never visits a line whose parent is missing or owned by another
+      // organization, so read the organization's own lines on the accounts the caller will use.
+      const knownEntryIds = new Set<Id<"journalEntries">>(allEntriesInPeriod.map((e) => e._id));
+      const resolvedElsewhere = new Set<Id<"journalEntries">>();
+      for (const accountId of new Set(verifyAccountIds)) {
+        const accountLines = await ctx.db
+          .query("journalLines")
+          .withIndex("by_org_account_date", (q) =>
+            q
+              .eq("orgId", orgId)
+              .eq("accountId", accountId)
+              .gte("accountingDate", containingPeriod.startDate)
+              .lte("accountingDate", asOfDate)
+          )
+          .collect();
+        for (const line of accountLines) {
+          if (knownEntryIds.has(line.journalEntryId) || resolvedElsewhere.has(line.journalEntryId)) continue;
+          // Not one of this organization's entries in the period: a same-org entry of another period or date
+          // is outside this sum (as before); a missing or foreign one is an inconsistency.
+          const parent = await ctx.db.get(line.journalEntryId);
+          if (!parent || parent.orgId !== orgId) return { balances: [], inconsistentReference: true };
+          resolvedElsewhere.add(line.journalEntryId);
+        }
       }
     }
   }
 
-  return Array.from(totals.values());
+  return { balances: Array.from(totals.values()), inconsistentReference: false };
 }
 
 export type BoundedControlBalances =
