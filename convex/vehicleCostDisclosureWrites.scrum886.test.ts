@@ -203,6 +203,34 @@ describe("SCRUM-886 round 4: importBulk refusals do not disclose a stored cost",
   });
 });
 
+const CREDITOR_VIN = "VIN886IMPORT0003";
+const onAccountRow = (purchaseSupplierId: Id<"suppliers">) => ({ ...ownedRow(ACQUISITION_COST), vin: CREDITOR_VIN, purchaseSupplierId });
+const importOnAccount = (s: Seeded, who: Who, importId: string, row: ReturnType<typeof onAccountRow>) =>
+  s.actors[who].mutation(api.vehicles.importBulk, {
+    orgId: s.orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "ON_ACCOUNT", vehicles: [row],
+  });
+
+describe("SCRUM-886 round 4: importBulk does not name a stored creditor", () => {
+  test("an owned VIN bought on account is refused without naming the stored creditor, and a different creditor looks like the same one", async () => {
+    const s = await seed();
+    const stored = await supplierIdFor(s.t, s.orgId, "Gulf Parts Ltd");
+    const other = await supplierIdFor(s.t, s.orgId, "Other Creditor Co");
+    await importOnAccount(s, "owner", "imp-acct-seed", onAccountRow(stored));
+    const different = await refusalText(importOnAccount(s, "importer", "imp-acct-1", onAccountRow(other)));
+    const matching = await refusalText(importOnAccount(s, "importer", "imp-acct-2", onAccountRow(stored)));
+    expect(different).toBe(matching);
+    expect(different).not.toContain("Gulf Parts Ltd");
+    expect(different).not.toMatch(/owed to/);
+  });
+
+  test("control: the system owner still gets the stored creditor named", async () => {
+    const s = await seed();
+    const stored = await supplierIdFor(s.t, s.orgId, "Gulf Parts Ltd");
+    const other = await supplierIdFor(s.t, s.orgId, "Other Creditor Co");
+    await importOnAccount(s, "owner", "imp-acct-seed", onAccountRow(stored));
+    expect(await refusalText(importOnAccount(s, "owner", "imp-acct-3", onAccountRow(other)))).toContain("owed to Gulf Parts Ltd");
+  });
+});
 describe("SCRUM-886 round 4: requestUpdate gives a caller without cost access no equality oracle", () => {
   const COST_REFUSAL = { data: { code: "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS" } };
 
@@ -315,6 +343,15 @@ describe("SCRUM-886 round 5: vehicles.update gives a caller without cost access 
     expect(bought?.purchasePrice).toBe(9_800);
   });
 
+  test("manage:finance alone does not unlock a cost edit that changes no ownership", async () => {
+    const s = await seed();
+    await expect(update(s, "financeEditor", s.stockId, { minimumProfit: STORED_MINIMUM_PROFIT }))
+      .rejects.toMatchObject(COST_REFUSAL);
+    await expect(update(s, "financeEditor", s.sourcedId, { sourceCost: STORED_SOURCE_COST + 1 }))
+      .rejects.toMatchObject(COST_REFUSAL);
+    const stock = await s.t.run((ctx) => ctx.db.get(s.stockId));
+    expect(stock?.minimumProfit).toBe(STORED_MINIMUM_PROFIT);
+  });
   test("an editor with neither manage:finance nor view:cost_price is refused for ownership-change keys", async () => {
     const s = await seed();
     await expect(update(s, "editor", s.sourcedId, {

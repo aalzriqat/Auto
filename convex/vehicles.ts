@@ -32,7 +32,7 @@ import {
   withServerSupplierNames,
 } from "./utils/vehicleSupplierIdentity";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { canReadVehicleCost, projectVehicleForRole } from "./utils/vehicleCostVisibility";
+import { canReadVehicleCost, editPayloadCarriesCost, projectVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -1372,13 +1372,28 @@ export const update = mutation({
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     validateInput(UpdateVehicleSchema, args);
 
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
     if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+    // SCRUM-886: a caller who cannot read cost must not submit one. Every later check compares the
+    // submitted cost with the stored one (precision, no-change, posted acquisition), so the outcome
+    // would confirm a guess. Decided by key presence alone (`editPayloadCarriesCost`; an
+    // unclassified key counts as cost), before any comparison. The one exemption is an ownership
+    // change by a `manage:finance` holder: a consignment buy-out must carry its purchase terms. The
+    // change is detected from the stored and submitted `sourceType` only (both OPEN), never from a
+    // client flag, so it reveals nothing about the stored cost.
+    if (!canReadVehicleCost(role)) {
+      const ownershipChange = requestedVehicleSourceTypeChange(vehicle, args) !== null;
+      const financeAuthority = role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
+      const { orgId: _orgId, vehicleId: _vehicleId, ...submitted } = args;
+      if (!(ownershipChange && financeAuthority) && editPayloadCarriesCost(submitted)) {
+        throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+      }
     }
     // The limiter writes component state, so refuse ownership changes before it.
     if (requestedVehicleSourceTypeChange(vehicle, args)) {

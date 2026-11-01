@@ -1,0 +1,83 @@
+{
+  "id": "update-refuses-a-submitted-cost-whether-or-not-it-matches-without-view-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "editoronly",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "purchasePrice": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "editoronly",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "purchasePrice": "DIFFERS_FROM_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "editoronly",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "minimumProfit": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "editoronly",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "CONSIGNED_CAR",
+        "sourceCost": "EQUALS_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusal.code",
+      "value": "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "update.refusal.sameForEqualAndDifferent",
+      "value": "true"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
+    "testName": "an editor without cost access is refused for a cost equal to the stored one and for a different one, identically"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round5",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "c42d512b27824eb74a914c04d37056e3660bf806"
+  },
+  "fingerprint": "0b967ab2c443d9450131ba19202d228547b228abd0ab169134b6dac733e7c5da"
+}

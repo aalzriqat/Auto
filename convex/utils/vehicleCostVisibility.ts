@@ -149,7 +149,7 @@ export function projectOptionalVehicleForRole(
  * against the stored value) would tell them whether it equals the stored cost. Decided by which
  * keys are present, never by their values, so the answer carries no signal about the stored row.
  */
-export function editPayloadCarriesCost(payload: VehicleEditPayload): boolean {
+export function editPayloadCarriesCost(payload: Readonly<Record<string, unknown>>): boolean {
   return Object.entries(payload).some(
     ([key, value]) => value !== undefined && VEHICLE_EDIT_PAYLOAD_TIER[key as keyof VehicleEditPayload] !== "OPEN"
   );
