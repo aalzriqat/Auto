@@ -1,0 +1,62 @@
+{
+  "id": "supplier-receivable-pilot-receipt-history",
+  "fingerprint": "80657b3536a1641e14a0c303c8ae81a5101354a04681a1ae1f949e972d207f3e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-round4-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "receiptPairs": 3000,
+        "preserveRealOpening": true,
+        "supplierExpenseMinor": 200000,
+        "receiptMinor": 80000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.complete",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 220000
+    },
+    {
+      "observable": "reconciliation.subledgerBalanceMinor",
+      "value": 220000
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "three thousand recovery receipts and their reversals remain reportable"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

@@ -1,0 +1,46 @@
+{
+  "id": "supplier-receivable-custom-control-manual-draft-is-pending",
+  "fingerprint": "8de850db6add9e4fd1a492382b876c78fb6da3155575017df95b47ba8c507c23",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-seat2-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "draftTable": "manualJournalDrafts"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "PENDING_POSTINGS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a pending manualJournalDrafts on a declared opening control account refuses the comparison"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

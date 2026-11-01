@@ -76,10 +76,10 @@ describe("supplier payable payment (control account 2400)", () => {
     await refusesWithoutWrites(s, () =>
       s.as.mutation(api.sourcingPayables.recordPartialPayment, payArgs(s, payableId as never, { amount: 5000.001 })),
       /That would pay 8000.001 against 8000 owed/);
-    // 0.0005 is not representable in JOD (3 decimals).
+    // 0.0005 is not representable in JOD (3 decimals); SCRUM-880 refuses it with the coded SUPPLIER_AMOUNT_PRECISION.
     await refusesWithoutWrites(s, () =>
       s.as.mutation(api.sourcingPayables.recordPartialPayment, payArgs(s, payableId as never, { amount: 0.0005 })),
-      /finer than the currency allows/);
+      /SUPPLIER_AMOUNT_PRECISION/);
     await refusesWithoutWrites(s, () =>
       s.as.mutation(api.sourcingPayables.recordPartialPayment, payArgs(s, payableId as never, { amount: 0 })),
       /greater than zero/);

@@ -13,6 +13,17 @@ import { getActiveDepositHolds } from "./utils/depositHelpers";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { supplierPayableVatReclassAllowed } from "./utils/vehicleOwnership";
 import { AppErrorCode, throwAppError } from "./utils/errors";
+import schema from "./schema";
+import { requireSupplierAmountMajor, requireSupplierAmountMinor, requireSupplierSettlementAmountMinor, supplierSettlementAmountMinor } from "./utils/supplierPaymentAmounts";
+
+const [nativePayable, openingPayable] = schema.tables.vehicleSupplierPayables.validator.members;
+const payableListFields = {
+  _id: v.id("vehicleSupplierPayables"), _creationTime: v.number(),
+  settlementAmountMinor: v.union(v.number(), v.null()),
+  vehicleDesc: v.string(), vehicleVin: v.optional(v.string()),
+  vatReclassAllowed: v.boolean(), customerName: v.union(v.string(), v.null()),
+  paidByName: v.optional(v.union(v.string(), v.null())), daysOutstanding: v.number(),
+};
 import { auditLog } from "./financialAudit";
 import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 
@@ -99,6 +110,10 @@ export const listPaymentBankOptions = query({
 });
 
 export const list = query({
+  returns: v.array(v.union(
+    v.object({ ...nativePayable.fields, ...payableListFields }),
+    v.object({ ...openingPayable.fields, ...payableListFields }),
+  )),
   args: {
     orgId: v.id("organizations"),
     status: v.optional(
@@ -196,6 +211,7 @@ async function payableListRows(ctx: QueryCtx, orgId: Id<"organizations">, payabl
 
       return {
         ...p,
+        settlementAmountMinor: supplierSettlementAmountMinor(p),
         vehicleDesc: supplierPayableVehicleDescription(safeVehicle, p),
         vehicleVin: safeVehicle?.vin,
         // SCRUM-781: the screens hide the VAT field unless this is true (absent also hides it).
@@ -348,6 +364,8 @@ export const markPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     payableId: v.id("vehicleSupplierPayables"),
+    /** The web dialog's displayed amount; checked atomically against the live balance. */
+    expectedSettlementAmountMinor: v.optional(v.number()),
     paymentNotes: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
     bankAccountId: v.optional(v.id("bankAccounts")),
@@ -386,8 +404,16 @@ export const markPaid = mutation({
         // would discharge AP-Suppliers a second time for the instalments
         // already posted, leaving the account short by exactly what had been
         // paid so far.
-        const alreadyPaidBeforeSettle = payable.amountPaid ?? 0;
-        const remainingToSettle = payable.amountDue - alreadyPaidBeforeSettle;
+        const settlementAmountMinor = requireSupplierSettlementAmountMinor(payable);
+        const paidInFull = requireSupplierAmountMajor(
+          requireSupplierAmountMinor(payable.amountPaid ?? 0, payable.currency) + settlementAmountMinor,
+          payable.currency,
+        );
+        if (args.expectedSettlementAmountMinor !== undefined && args.expectedSettlementAmountMinor !== settlementAmountMinor) {
+          throwAppError(AppErrorCode.SUPPLIER_PAYMENT_CHANGED,
+            "The amount outstanding has changed. Close and reopen the payment dialog before confirming.");
+        }
+        const remainingToSettle = fromMinorUnits(settlementAmountMinor, payable.currency);
         if (remainingToSettle <= 0) {
           throw new ConvexError("This payable has already been paid in full.");
         }
@@ -421,7 +447,7 @@ export const markPaid = mutation({
           // paid. Left at zero, `settlementView` would have to keep special-
           // casing this row forever to avoid reporting a settled supplier as
           // still owed the lot.
-          amountPaid: payable.amountDue,
+          amountPaid: paidInFull,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           paidAt: now,
           paidBy: user._id,
@@ -451,14 +477,14 @@ export const markPaid = mutation({
           const vehicle = await ctx.db.get(payable.vehicleId);
           costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
         }
-        const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:toMinorUnits(remainingToSettle, payable.currency),currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
+        const openingPaymentId = opening ? await ctx.db.insert("openingPayablePayments",{orgId:args.orgId,payableId:payable._id,seq:(payable.paymentSeq ?? 0)+1,openingBalanceDraftId:opening.draftId,openingRowKey:opening.rowKey,amountMinor:settlementAmountMinor,currency:payable.currency,method:paymentMethod,bankAccountId:args.bankAccountId,occurredAt:now,actorId:user._id,commandKey:args.idempotencyKey,operation:"markPaid",status:"LIVE"}) : undefined;
         await hookSupplierPaymentSettled(ctx, {
           openingSource:opening ? {draftId:opening.draftId,rowKey:opening.rowKey}:undefined,
           openingPaymentId,
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
-          amountMinor: toMinorUnits(remainingToSettle, currency),
+          amountMinor: settlementAmountMinor,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
@@ -477,8 +503,8 @@ export const markPaid = mutation({
           resourceType: "vehicleSupplierPayables",
           resourceId: args.payableId,
           description: `Paid ${remainingToSettle} ${currency} to ${payable.sourcedFromName} to settle the supplier payable of ${payable.amountDue} in full (${paymentMethod}).`,
-          before: { amountPaid: alreadyPaidBeforeSettle, status: payable.status },
-          after: { amountPaid: payable.amountDue, status: "PAID" },
+          before: { amountPaid: payable.amountPaid ?? 0, status: payable.status },
+          after: { amountPaid: paidInFull, status: "PAID" },
           idempotencyKey: args.idempotencyKey,
         });
       }
@@ -554,17 +580,10 @@ export const recordPartialPayment = mutation({
         // settle a 0.001 payable while each accounting hook rounded to a fils —
         // discharging two fils from the ledger against a one-fils liability.
         // The mirror of the guard on the receivable side.
-        if (
-          fromMinorUnits(toMinorUnits(args.amount, payable.currency), payable.currency) !==
-          args.amount
-        ) {
-          throw new ConvexError(
-            `A payment in ${payable.currency} cannot be finer than the currency allows. Round ${args.amount} to the nearest representable amount.`
-          );
-        }
+        const paymentMinor = requireSupplierAmountMinor(args.amount, payable.currency);
+        requireSupplierSettlementAmountMinor(payable);
 
         const alreadyPaid = payable.amountPaid ?? 0;
-        const projected = alreadyPaid + args.amount;
         // Both comparisons in integer minor units, the same fix applied to
         // `supplierReceivables.recordReceipt`. In major units they were float
         // comparisons against an accumulated float, which made a payable
@@ -574,7 +593,7 @@ export const recordPartialPayment = mutation({
         // further payment because the residue owing is under a thousandth of a
         // fils. The supplier had been paid in full and nothing could record it.
         const dueMinor = toMinorUnits(payable.amountDue, payable.currency);
-        const projectedMinor = toMinorUnits(projected, payable.currency);
+        const projectedMinor = toMinorUnits(alreadyPaid, payable.currency) + paymentMinor;
         // Paying a supplier more than he is owed is a real error with real
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
@@ -590,6 +609,7 @@ export const recordPartialPayment = mutation({
             due: dueMajor,
           });
         }
+        const projected = requireSupplierAmountMajor(projectedMinor, payable.currency);
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);
         if (opening && "taxAmount" in args && args.taxAmount) throw new ConvexError(OPENING_PAYABLE_VAT_REFUSAL);

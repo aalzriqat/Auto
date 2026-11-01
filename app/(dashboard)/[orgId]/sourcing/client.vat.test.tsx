@@ -18,6 +18,7 @@ const basePayable = {
   vehicleId: "veh_1",
   sourcedFromName: "Sister Dealer Co",
   amountDue: 18000,
+  settlementAmountMinor: 18000000,
   currency: "JOD",
   status: "PENDING",
   createdAt: Date.now(),
@@ -95,7 +96,7 @@ describe.each(["en", "ar"] as const)("SCRUM-781 supplier payable pay screen (%s)
 
     fireEvent.click(screen.getByRole("button", { name: dictionaries[locale].ConfirmPayment as string }));
     await waitFor(() => expect(markPaid).toHaveBeenCalledOnce());
-    expect(markPaid.mock.calls[0][0]).toMatchObject({ payableId: "pay_consigned", taxAmount: 0 });
+    expect(markPaid.mock.calls[0][0]).toMatchObject({ payableId: "pay_consigned", taxAmount: 0, expectedSettlementAmountMinor: 18000000 });
   });
 
   test("a non-consigned ineligible payable gets neutral wording, no VAT field, and submits taxAmount 0", async () => {

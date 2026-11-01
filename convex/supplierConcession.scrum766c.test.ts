@@ -394,6 +394,58 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     expect(refusal?.message.toLowerCase()).toContain("supplier concession");
   });
 
+  // SCRUM-766 follow-up (PR-C seats): a concession is recorded only where the deal will close on the
+  // current (v3) sale plan with a finance company, because only that plan carries the commission basis
+  // M = K - E_eff - contra. The refusal is coded so an Arabic screen can translate it.
+  test("a supplier concession on a deal that is not on the current sale plan is refused before any write", async () => {
+    const s = await seed("r10");
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    const before = await stateOf(s);
+
+    // (a) a plan version frozen on the row (an older plan)
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { financedSalePlanVersion: 2 }));
+    const stateWithV2 = await stateOf(s);
+    const v2 = await refusalOf(resolve(s, applicationId, V3));
+    expect((v2 as { code?: string } | null)?.code).toBe("SUPPLIER_CONCESSION_PLAN_REFUSED");
+    expect(v2?.message.toLowerCase()).toContain("supplier concession");
+    // The dialog's eligibility answer follows the same rule, so it never offers the field.
+    expect(await s.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })).toEqual({ eligible: false });
+    expect(await stateOf(s)).toEqual(stateWithV2);
+    expect((await appOf(s, applicationId))?.supplierGapShareMinor).toBeUndefined();
+    expect((await appOf(s, applicationId))?.supplierGapBasis).toBeUndefined();
+
+    // (b) an older plan known only by its fingerprint prefix
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { financedSalePlanVersion: undefined, financedSaleRecognitionFingerprint: "v1;legacy" }));
+    const stateWithV1Fingerprint = await stateOf(s);
+    const v1 = await refusalOf(resolve(s, applicationId, V3));
+    expect((v1 as { code?: string } | null)?.code).toBe("SUPPLIER_CONCESSION_PLAN_REFUSED");
+    expect(await stateOf(s)).toEqual(stateWithV1Fingerprint);
+
+    // (c) no finance company on the deal: nothing builds a v3 plan for it
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { financedSaleRecognitionFingerprint: undefined, companyId: undefined }));
+    const stateNoFinancier = await stateOf(s);
+    const none = await refusalOf(resolve(s, applicationId, V3));
+    expect((none as { code?: string } | null)?.code).toBe("SUPPLIER_CONCESSION_PLAN_REFUSED");
+    expect(await stateOf(s)).toEqual(stateNoFinancier);
+
+    // Positive control: with the row as the current plan would have it, the same concession is accepted.
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { companyId: s.companyId }));
+    expect(await stateOf(s)).toEqual(before);
+    expect(await s.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })).toMatchObject({ eligible: true });
+    await resolve(s, applicationId, V3);
+    expect((await appOf(s, applicationId))?.supplierGapShareMinor).toBe(jod(400));
+  });
+
+  test("a deal with no concession is unaffected by the plan rule: a zero supplier share records on any plan", async () => {
+    const s = await seed("r11");
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { financedSalePlanVersion: 2 }));
+    await resolve(s, applicationId, { customer: 0, dealer: 850 });
+    const app = await appOf(s, applicationId);
+    expect(app?.gapResolution).toBe("DEALER_ABSORBS");
+    expect(app?.supplierGapShareMinor).toBeUndefined();
+  });
+
   test("a shortfall that moves clears the concession and its observed basis", async () => {
     const s = await seed("r9");
     const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
@@ -541,6 +593,25 @@ describe("PR-C completion: THROUGH_DEALERSHIP", () => {
     const refusal = await refusalOf(finalizeAsOwner(s, applicationId));
     expect(refusal).not.toBeNull();
     expect((await appOf(s, applicationId))?.finalizedSaleId).toBeUndefined();
+  });
+
+  test("a stored concession is not applied when the deal builds no current-plan sale: finalize refuses and writes nothing", async () => {
+    const s = await seed("t6");
+    const applicationId = await readyConsignedDeal(s, "THROUGH_DEALERSHIP", V3);
+    // A direct write removes the finance company after the concession was recorded (the bypass a stale
+    // row could carry). With no financier no v3 plan is built, so E_eff would reduce the supplier payable
+    // with no commission basis to match it.
+    await s.t.run(async (ctx) => {
+      const row = await ctx.db.get(applicationId);
+      await ctx.db.patch(applicationId, { companyId: undefined });
+      await ctx.db.patch(row!.quoteId, { companyId: undefined } as never);
+    });
+    const before = await stateOf(s);
+    const refusal = await refusalOf(finalizeAsOwner(s, applicationId));
+    expect((refusal as { code?: string } | null)?.code).toBe("SUPPLIER_CONCESSION_PLAN_REFUSED");
+    expect(await stateOf(s)).toEqual(before);
+    expect((await appOf(s, applicationId))?.finalizedSaleId).toBeUndefined();
+    expect((await payableOf(s)) ?? null).toBeNull();
   });
 });
 

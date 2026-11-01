@@ -52,6 +52,7 @@ import {
 } from "../accounting/postingRules";
 import { isServerDerivedPlanVersion } from "./financedSalePostingPlan";
 import {
+  assertConcessionBuiltOnCurrentPlan,
   effectiveSupplierEntitlementMinor,
   financedConsignedNetMinor,
   resolveEffectiveEntitlementForCompletion,
@@ -59,6 +60,7 @@ import {
 } from "./supplierConcession";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits, fromMinorUnits, denominationOf, isValidMinorAmount, addMinor } from "./money";
+import { requireSupplierAmountMinor, requireTradeInValueMinor } from "./supplierPaymentAmounts";
 import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
@@ -610,6 +612,11 @@ async function prepareSaleCompletion(
   // defect this change exists to remove.
   const currency = await getOrgCurrency(ctx, args.orgId);
 
+  // Legacy entitlements must refuse before concession or commission calculations round them.
+  if (intent === "COMPLETION" && isConsignedAgentSale(vehicle) && vehicle.sourceCost !== undefined) {
+    requireSupplierAmountMinor(vehicle.sourceCost, currency);
+  }
+
   // Refused BEFORE the commission is worked out, not after.
   //
   // Both this and the commission calculator refuse the same missing fact, and
@@ -638,6 +645,9 @@ async function prepareSaleCompletion(
       ? resolveEffectiveEntitlementForCompletion({ app: financeApplication, vehicle, currency })
       : { concessionMinor: 0, contractEntitlementMinor: undefined };
   const supplierConcessionMinor = supplierTerms.concessionMinor;
+  // A stored concession is applied only on a v3 plan (the one that carries the commission basis below);
+  // a sale built without one refuses before any write rather than lowering the payable alone.
+  assertConcessionBuiltOnCurrentPlan({ concessionMinor: supplierConcessionMinor, plan: args.financedSalePlan });
 
   // The ONE commission basis of a financed consigned deal: M = K - E_eff - contra
   // (owner c22421: whoever covers the gap, the margin is the same). Computed here from the
@@ -2137,7 +2147,7 @@ async function applySaleCompletionSideEffects(
       );
     }
 
-    const tradeInValueMinor = toMinorUnits(args.tradeInValue, prepared.currency);
+    const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
     tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
       orgId: args.orgId,

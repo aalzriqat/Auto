@@ -155,6 +155,18 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "VAT cannot be reclassified on this payable.",
     "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
   ],
+  ServerError_SUPPLIER_AMOUNT_PRECISION: [
+    "Purchase and supplier payment amounts must match the currency's decimal places. Correct the amount before paying.",
+    "يجب أن تتوافق مبالغ الشراء ودفعات المورّد مع عدد المنازل العشرية للعملة. صحّح المبلغ قبل الدفع.",
+  ],
+  ServerError_TRADE_IN_VALUE_PRECISION: [
+    "The trade-in value must match the currency's decimal places. Correct the trade-in value before completing the sale.",
+    "يجب أن تتوافق قيمة الاستبدال مع عدد المنازل العشرية للعملة. صحّح قيمة الاستبدال قبل إتمام البيع.",
+  ],
+  ServerError_SUPPLIER_PAYMENT_CHANGED: [
+    "The amount outstanding has changed. Close and reopen the payment dialog before confirming.",
+    "تغيّر المبلغ المستحق. أغلق نافذة الدفع وافتحها مجدداً قبل التأكيد.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
@@ -1429,6 +1441,7 @@ export const commonEn = {
   ClosePeriodNoIssues: "No blockers or warnings for this period.",
   ClosePeriodWarnSupplierPayablesReconPending: "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.",
+  ClosePeriodWarnSupplierPayablesReconPostCutoff: "Supplier payables reconciliation could not be completed as of the period end: supplier payable or accounts payable activity is dated after that date (or the date is not usable), and the payables cannot be restated to it. Review supplier payables manually.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "Customer deposits reconciliation could not be completed as of the period end: deposit activity was recorded after that date, and the deposit side cannot be restated to it. Review customer deposits manually.",
   ClosePeriodOverrideReasonLabel: "Override reason",
   ClosePeriodOverrideReasonPlaceholder: "Explain why this period is being closed despite open blockers.",
@@ -2574,6 +2587,7 @@ export const commonAr = {
   ClosePeriodNoIssues: "لا توجد معوقات أو تحذيرات لهذه الفترة.",
   ClosePeriodWarnSupplierPayablesReconPending: "تعذّر إكمال تسوية ذمم الموردين: ما زالت قيود الترحيل المحاسبية أو المسودات المؤثرة على ذمم الموردين معلقة. عالجها ثم أعد التحقق.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "تعذّر إكمال تسوية ذمم الموردين: عدد السجلات أكبر من أن يُتحقق منه في مرة واحدة. راجع ذمم الموردين يدوياً.",
+  ClosePeriodWarnSupplierPayablesReconPostCutoff: "تعذّر إكمال تسوية ذمم الموردين حتى نهاية الفترة: يوجد نشاط على ذمم الموردين أو حساب الذمم الدائنة مؤرخ بعد ذلك التاريخ (أو أن التاريخ غير صالح)، ولا يمكن إعادة احتساب الذمم إلى تاريخ النهاية. راجع ذمم الموردين يدوياً.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "تعذّر إكمال تسوية عربونات العملاء حتى نهاية الفترة: سُجّل نشاط على العربونات بعد ذلك التاريخ ولا يمكن إعادة احتساب جانب العربونات إلى تاريخ النهاية. راجع عربونات العملاء يدوياً.",
   ClosePeriodOverrideReasonLabel: "سبب التجاوز",
   ClosePeriodOverrideReasonPlaceholder: "اشرح سبب إغلاق هذه الفترة رغم وجود معوقات.",
