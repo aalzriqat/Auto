@@ -1,0 +1,51 @@
+{
+  "id": "meta-instagram-nine-copies-of-one-kept-pair-refuse-the-callback",
+  "fingerprint": "da065cc9552475d7416ad8a5562a54175102da6526efd8951e8f87aed5924f2c",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "nineCopiesOfOnePair": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callback.refusedWithGenericError",
+      "value": true
+    },
+    {
+      "observable": "receipts.written",
+      "value": 0
+    },
+    {
+      "observable": "redactionJobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "nine copies of one kept pair refuse the callback too: a read cut at the bound is never treated as complete"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

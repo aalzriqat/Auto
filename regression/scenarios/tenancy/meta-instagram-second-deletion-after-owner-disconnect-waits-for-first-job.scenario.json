@@ -1,0 +1,81 @@
+{
+  "id": "meta-instagram-second-deletion-after-owner-disconnect-waits-for-first-job",
+  "fingerprint": "d0e3c9a2a154113b1d81542137b29b1855c9a1f588e9b12f773531a6e10f3ddc",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "webhook",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "redactionJob.runOnce",
+      "input": {
+        "job": "second"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.second.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "receipt.first.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "redactionJobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a second callback for the account, naming the other id, cannot complete while the first callback's job after an owner disconnect still holds an id"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

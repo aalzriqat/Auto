@@ -1,0 +1,77 @@
+{
+  "id": "meta-instagram-deletion-retry-erases-the-webhook-id-before-completing",
+  "fingerprint": "69df3c6ca090a326fc9b6ba354fd68081ba0be1be84cf1f2bdd66d4d97608831",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "webhookAccountIdHeld": true,
+        "firstPageFails": true,
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "firstPageFails": false,
+        "signed": true,
+        "retry": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstAttempt.status",
+      "value": 500
+    },
+    {
+      "observable": "firstAttempt.accountStillConnected",
+      "value": true
+    },
+    {
+      "observable": "firstAttempt.receipt",
+      "value": "none"
+    },
+    {
+      "observable": "webhookLogs.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "receipt.completedAfterWebhookIdErased",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24268",
+      "digest": "9c8fcb3c824da80bb7498d479f5434808e6a2a6c6c3875483ee5854087cbec9c"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram data-deletion: a first attempt that fails after the disconnect step leaves the account connected, and the retry erases the webhook account id before the receipt completes"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

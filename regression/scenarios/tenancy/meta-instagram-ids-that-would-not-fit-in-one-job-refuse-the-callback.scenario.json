@@ -1,0 +1,63 @@
+{
+  "id": "meta-instagram-ids-that-would-not-fit-in-one-job-refuse-the-callback",
+  "fingerprint": "63272e970f43b3b3650412eef24f3d8e495cff0a8472877f2061aac4c15337bc",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "db.seedPendingJob",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "account.stillConnected",
+      "value": true
+    },
+    {
+      "observable": "receipt.count",
+      "value": 0
+    },
+    {
+      "observable": "job.countAdded",
+      "value": 0
+    },
+    {
+      "observable": "response.isGenericError",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "ids that would not all fit in one job refuse the callback: a generic 500, the account stays connected, no receipt and no new job"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

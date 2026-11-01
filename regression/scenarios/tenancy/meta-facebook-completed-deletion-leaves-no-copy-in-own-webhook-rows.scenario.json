@@ -1,0 +1,51 @@
+{
+  "id": "meta-facebook-completed-deletion-leaves-no-copy-in-own-webhook-rows",
+  "fingerprint": "1adebe0ebbfe55e6e1ee26ba3972a472c8813f808e02a3ba437f033ee69d8210",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "seededRows": "platform-source-failures",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completed",
+      "value": true
+    },
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "platformSourceRows.summary",
+      "value": "redacted-in-place"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Facebook: a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

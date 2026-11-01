@@ -1,0 +1,124 @@
+{
+  "id": "meta-instagram-reconnect-or-disconnect-of-a-kept-pair-clears-its-purge-stamp",
+  "fingerprint": "e59ab82301c5b7a04a765f901ddc21a02389dffba4409deb44e58e210490dfb7",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "owner.disconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "businessOfA",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "oauth.reconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "owner.disconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "seed.stamp",
+      "input": {
+        "purgeAfterInFuture": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "oauth.reconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "oauth.reconnect",
+      "input": {
+        "account": "other"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "linkOfA.purgeAfterAfterDisconnect",
+      "value": "unset"
+    },
+    {
+      "observable": "linkOfA.purgeAfterAfterOverwrite",
+      "value": "unset"
+    },
+    {
+      "observable": "links.count",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a reconnect and a later Disconnect or overwrite of the same pair clear purgeAfter: the account is in use again"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

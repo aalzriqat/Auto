@@ -1,0 +1,89 @@
+{
+  "id": "meta-instagram-an-id-learned-from-one-kept-link-leads-to-the-next",
+  "fingerprint": "27956544905a5127dfd1aa0b92077c81ff7fedb705ddf0dd1c406a18dddff376",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameBusinessNewWebhook": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameBusinessNewWebhook": true,
+        "again": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "firstWebhook",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.beforeCallback",
+      "value": 3
+    },
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "secondWebhookId.storedInWebhookLogs",
+      "value": false
+    },
+    {
+      "observable": "links.afterCallback",
+      "value": 3
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "an id learned from one kept link leads to the next: three webhook ids of one business account are all erased by a callback that names the first"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

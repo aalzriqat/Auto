@@ -111,6 +111,7 @@ import type * as marketplaceResponses from "../marketplaceResponses.js";
 import type * as marketplaceTradeIns from "../marketplaceTradeIns.js";
 import type * as marketplaceWhatsAppIntake from "../marketplaceWhatsAppIntake.js";
 import type * as memberships from "../memberships.js";
+import type * as metaLogRedaction from "../metaLogRedaction.js";
 import type * as migrateCommissionAccruals from "../migrateCommissionAccruals.js";
 import type * as migrateConsignedSaleBasis from "../migrateConsignedSaleBasis.js";
 import type * as migrateExpenseReversals from "../migrateExpenseReversals.js";
@@ -254,6 +255,7 @@ import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js
 import type * as utils_marketplaceWeeklyReportEmail from "../utils/marketplaceWeeklyReportEmail.js";
 import type * as utils_materialization from "../utils/materialization.js";
 import type * as utils_metaText from "../utils/metaText.js";
+import type * as utils_metaUserIdRedaction from "../utils/metaUserIdRedaction.js";
 import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_openingAccountPolicy from "../utils/openingAccountPolicy.js";
@@ -461,6 +463,7 @@ declare const fullApi: ApiFromModules<{
   marketplaceTradeIns: typeof marketplaceTradeIns;
   marketplaceWhatsAppIntake: typeof marketplaceWhatsAppIntake;
   memberships: typeof memberships;
+  metaLogRedaction: typeof metaLogRedaction;
   migrateCommissionAccruals: typeof migrateCommissionAccruals;
   migrateConsignedSaleBasis: typeof migrateConsignedSaleBasis;
   migrateExpenseReversals: typeof migrateExpenseReversals;
@@ -604,6 +607,7 @@ declare const fullApi: ApiFromModules<{
   "utils/marketplaceWeeklyReportEmail": typeof utils_marketplaceWeeklyReportEmail;
   "utils/materialization": typeof utils_materialization;
   "utils/metaText": typeof utils_metaText;
+  "utils/metaUserIdRedaction": typeof utils_metaUserIdRedaction;
   "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;
   "utils/openingAccountPolicy": typeof utils_openingAccountPolicy;

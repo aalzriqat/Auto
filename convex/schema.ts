@@ -6584,6 +6584,90 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_facebook_user_id", ["facebookUserId"])
     .index("by_revoked_at", ["revokedAt"]),
 
+  // SCRUM-842: the receipt behind the confirmation code returned to Meta's
+  // data-deletion callback. It holds only what the public status page needs:
+  // an opaque random code, which platform's request it was, and when the
+  // deletion finished. It never holds the Meta user id (or anything from the
+  // signed request), so it is not itself user data that outlives the deletion.
+  // `completedAt` is absent while the retained-log redaction is still running
+  // (metaLogRedaction.ts) and is set by its last page, so the status page never
+  // reports a deletion as done before it is.
+  // `connectionRemoved` records whether the callback found a stored connection to
+  // clear (false: the id matched no dealer connection, so the page must not say that
+  // credentials were removed). Absent on a receipt written before the field existed.
+  metaDataDeletionRequests: defineTable({
+    code: v.string(),
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    completedAt: v.optional(v.number()),
+    connectionRemoved: v.optional(v.boolean()),
+  }).index("by_code", ["code"]),
+
+  // SCRUM-842: the unfinished remainder of a retained-log redaction. The redaction
+  // walks every `webhookLogs` source that can hold a platform's Meta user id (see
+  // `metaLogRedactionSources`), one page per transaction, so there is always more to
+  // walk after the first page and this row carries it. It is the one place that
+  // holds a Meta user id, and only until the last page of the last source is
+  // redacted: that page deletes the row in the same transaction that marks the
+  // receipt complete. `sourceIndex` picks the source being walked and `cursor` is
+  // where its next page starts (null at the start of a source); `updatedAt` lets the
+  // stalled-job sweep (metaLogRedaction.ts) restart a chain that died. The scheduled
+  // function that advances it is given this row's own document id, never the Meta
+  // user id or the receipt code.
+  // `metaUserId` is the id the callback named. `otherMetaUserIds` are the other ids
+  // of the same account, read in the transaction that disconnected it (an Instagram
+  // account has a business account id AND a different webhook account id, and the
+  // stored webhook bodies carry the second); at most a handful, all redacted and all
+  // erased with the row. `pageSize` is the page the next step asks for: it is halved
+  // when a page of large webhook bodies reaches the byte budget and follows the row
+  // size afterwards. `stalledRestarts` counts sweep restarts with no page committed
+  // in between; at a threshold the sweep reports the job as wedged.
+  // A callback that arrives while a job of the same platform is pending, and shares any
+  // id with it, starts its own job with the UNION of the ids, so its receipt is true on
+  // its own account (the account is already disconnected, so the settings no longer
+  // supply the other id).
+  metaLogRedactionJobs: defineTable({
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    metaUserId: v.string(),
+    otherMetaUserIds: v.optional(v.array(v.string())),
+    receiptCode: v.optional(v.string()),
+    sourceIndex: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    pageSize: v.optional(v.number()),
+    stalledRestarts: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_updatedAt", ["updatedAt"])
+    // `by_platform`: a new callback reads its platform's pending jobs to inherit the ids a
+    // pending job already holds for the same user (see `startMetaLogRedaction`).
+    .index("by_platform", ["platform"]),
+
+  // SCRUM-842 (round 8): the link between an Instagram account's two ids, kept after the
+  // organisation that held them let go. A dealer's own Disconnect, or a reconnect to another
+  // account, clears `instagramBusinessAccountId` and `instagramWebhookAccountId` from
+  // `orgSettings`. A Meta callback that arrives later names only ONE of them and finds no
+  // connection, so without this row it could not learn the other and would complete a
+  // data-deletion receipt while retained webhook rows still carry it (the webhook id is what
+  // `entry[].id` holds in every stored delivery, including deliveries that arrive after the
+  // dealer disconnected). The row names no organisation, token or person. A callback that
+  // names either id reads the rows and hands both ids to the redaction job. Round 9: the row
+  // is NOT deleted when it is read. The job that erases the ids finishes, a webhook body that
+  // names the account can arrive afterwards, and a later deletion request would find no
+  // connection, no link and no job. Rows are written by Disconnect, a credential overwrite,
+  // an organisation deletion and a callback's own disconnect, once per distinct pair.
+  // Round 10 (owner ruling): the pair is not kept for good. When a deletion job that read the row
+  // completes, `purgeAfter` is stamped 30 days ahead (GDPR Art. 5(1)(e), storage limitation) and the
+  // 30-minute Meta sweep deletes rows past it; a later completion re-stamps, a Disconnect or an
+  // overwrite of the pair clears the stamp (the account is in use again). A row without `purgeAfter`
+  // is kept, as before. Optional, so existing rows stay valid (additive).
+  instagramAccountIdLinks: defineTable({
+    businessAccountId: v.string(),
+    webhookAccountId: v.string(),
+    purgeAfter: v.optional(v.number()),
+  })
+    .index("by_business_account_id", ["businessAccountId"])
+    .index("by_webhook_account_id", ["webhookAccountId"])
+    .index("by_purge_after", ["purgeAfter"]),
+
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
     externalId: v.string(),

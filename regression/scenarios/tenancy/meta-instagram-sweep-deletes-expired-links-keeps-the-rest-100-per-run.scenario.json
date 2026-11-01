@@ -1,0 +1,65 @@
+{
+  "id": "meta-instagram-sweep-deletes-expired-links-keeps-the-rest-100-per-run",
+  "fingerprint": "e4d40c7100ebc29421090c68ac45da09db64b581bea6ff65d6e2072b3563cdd7",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "seed.links",
+      "input": {
+        "expired": 103,
+        "unexpired": 1,
+        "unstamped": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "cron.resume-stalled-meta-log-redaction",
+      "input": {
+        "runs": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.afterFirstRun",
+      "value": 5
+    },
+    {
+      "observable": "links.afterSecondRun",
+      "value": 2
+    },
+    {
+      "observable": "links.survivors",
+      "value": "unexpiredAndUnstamped"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "the sweep deletes the links past purgeAfter, keeps the unexpired and the unstamped, and deletes at most 100 per run"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

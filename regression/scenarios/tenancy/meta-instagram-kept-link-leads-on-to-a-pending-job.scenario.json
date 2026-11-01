@@ -1,0 +1,56 @@
+{
+  "id": "meta-instagram-kept-link-leads-on-to-a-pending-job",
+  "fingerprint": "0625dc452752eee2e569cadb5209335e12528f058c2687d4e620a9552930f050",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "linkKept": true,
+        "pendingJobHoldsWebhookAndAThirdId": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "newJob.carriesIds",
+      "value": 3
+    },
+    {
+      "observable": "thirdId.storedInWebhookLogs",
+      "value": false
+    },
+    {
+      "observable": "lateDelivery.containsThirdId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a kept link leads on to a pending job: a callback naming one id carries the linked id and the job's other id and erases all three"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

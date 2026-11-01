@@ -1,0 +1,47 @@
+{
+  "id": "meta-instagram-deauthorize-naming-the-webhook-id-disconnects-the-account",
+  "fingerprint": "87a613c2b686909d011fce73638adae5cef9ae50be8a1d2635a33a8feda4b1bf",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-webhook-account-id",
+        "businessAccountIdHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "orgSettings.instagramCredentialsCleared",
+      "value": true
+    },
+    {
+      "observable": "orgSettings.instagramAutoReplyEnabled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram deauthorize: a callback that names the webhook account id disconnects the account"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

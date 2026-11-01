@@ -1,0 +1,55 @@
+{
+  "id": "meta-instagram-data-deletion-redacts-the-webhook-account-id-too",
+  "fingerprint": "e8d9bcb6036ba4eceb6237be7be5baefc513a674f559fde164b6025c33ce5966",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "webhookAccountIdAlsoHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsBusinessId",
+      "value": false
+    },
+    {
+      "observable": "webhookLogs.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "otherAccountRows",
+      "value": "unchanged"
+    },
+    {
+      "observable": "jobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram data-deletion: the webhook account id is redacted from every stored webhook row, summary and job, not only the id the callback named"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

@@ -1,0 +1,65 @@
+{
+  "id": "meta-facebook-data-deletion-confirmation-code-is-opaque-and-names-this-platform",
+  "fingerprint": "694189331fd9c04796413c43b8c228c7cf664035deb23410d520a07be81728f0",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "confirmationCode.format",
+      "value": "hex32"
+    },
+    {
+      "observable": "confirmationCode.uniquePerRequest",
+      "value": true
+    },
+    {
+      "observable": "status.platform",
+      "value": "facebook"
+    },
+    {
+      "observable": "status.fields",
+      "value": "platform-completedAt-connectionRemoved"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Facebook data-deletion: the confirmation code is opaque, unique per request, and answers the status URL with this platform"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

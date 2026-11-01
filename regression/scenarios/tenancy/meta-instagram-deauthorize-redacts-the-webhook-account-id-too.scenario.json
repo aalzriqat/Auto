@@ -1,0 +1,55 @@
+{
+  "id": "meta-instagram-deauthorize-redacts-the-webhook-account-id-too",
+  "fingerprint": "a6675df060beedadaab7dd7ea6942ae824b758c2ef2627e0d941ae5c94bae45f",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-business-account-id",
+        "webhookAccountIdAlsoHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsBusinessId",
+      "value": false
+    },
+    {
+      "observable": "webhookLogs.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "otherAccountRows",
+      "value": "unchanged"
+    },
+    {
+      "observable": "jobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram deauthorize: the webhook account id is redacted from every stored webhook row, summary and job, not only the id the callback named"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

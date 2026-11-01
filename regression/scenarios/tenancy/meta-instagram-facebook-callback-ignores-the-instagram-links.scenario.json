@@ -1,0 +1,59 @@
+{
+  "id": "meta-instagram-facebook-callback-ignores-the-instagram-links",
+  "fingerprint": "73bee252c18b31bf40e3b60723aa2b33d56ac473bbc5a43869fefa094dcbc1a4",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "namedId": "idKeptAsInstagramBusinessId",
+        "signed": true,
+        "instagramLinkKept": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "facebookJob.otherIds",
+      "value": 0
+    },
+    {
+      "observable": "receipt.completed",
+      "value": true
+    },
+    {
+      "observable": "instagramRows.changed",
+      "value": false
+    },
+    {
+      "observable": "links.afterCallback",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a Facebook callback ignores the Instagram links: its job holds only the id it named and no Instagram row or link changes"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

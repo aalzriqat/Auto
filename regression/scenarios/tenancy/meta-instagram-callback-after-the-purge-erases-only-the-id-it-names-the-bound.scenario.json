@@ -1,0 +1,124 @@
+{
+  "id": "meta-instagram-callback-after-the-purge-erases-only-the-id-it-names-the-bound",
+  "fingerprint": "7b0432ed5e757d830ec764f2ebdca5c7da6ad6db004b7e15a806313c386dbea4",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "owner.disconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "businessOfA",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "cron.resume-stalled-meta-log-redaction",
+      "input": {
+        "linkPastPurgeAfter": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "seed.delivery",
+      "input": {
+        "entryId": "webhookOfA"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "businessOfA",
+        "signed": true,
+        "afterPurge": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "links.afterSweep",
+      "value": 0
+    },
+    {
+      "observable": "receipt.completed",
+      "value": true
+    },
+    {
+      "observable": "namedId.storedInWebhookLogs",
+      "value": false
+    },
+    {
+      "observable": "unknownWebhookId.deliveryRedacted",
+      "value": false
+    },
+    {
+      "observable": "jobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "after the 30-day purge a callback naming the surviving id erases that id only: the purged pair's other id is no longer known, which is the documented bound of the retention"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

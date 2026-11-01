@@ -1,0 +1,110 @@
+{
+  "id": "meta-instagram-callback-inside-30-days-reaches-the-first-id-and-extends-it",
+  "fingerprint": "55e435bb2b40b8ad49c12d160fe325d44495b490ca1113a77409850d848ba734",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "owner.disconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "businessOfA",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "seed.delivery",
+      "input": {
+        "entryId": "webhookOfA"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "webhookOfA",
+        "signed": true,
+        "withinRetention": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "secondJob.carriesIds",
+      "value": 2
+    },
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "lateDelivery.containsWebhookId",
+      "value": false
+    },
+    {
+      "observable": "linkOfA.purgeAfter",
+      "value": "secondCompletionPlus30d"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "inside the 30 days a later callback naming the other id still reaches the first id, and its completion extends the window"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

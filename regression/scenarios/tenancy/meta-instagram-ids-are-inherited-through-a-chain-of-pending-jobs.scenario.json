@@ -1,0 +1,66 @@
+{
+  "id": "meta-instagram-ids-are-inherited-through-a-chain-of-pending-jobs",
+  "fingerprint": "269586381ec52e2301079a64bbd5f30f45397de176598ef393dcee5a216b3761",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "db.seedPendingJob",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "db.seedPendingJob",
+      "input": {
+        "Current": null
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newJob.ids",
+      "value": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "ids are inherited through a chain of pending jobs: a job reached only through another job's id is the same user"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

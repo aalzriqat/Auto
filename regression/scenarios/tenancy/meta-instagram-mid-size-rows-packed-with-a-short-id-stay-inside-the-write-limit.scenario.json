@@ -1,0 +1,49 @@
+{
+  "id": "meta-instagram-mid-size-rows-packed-with-a-short-id-stay-inside-the-write-limit",
+  "fingerprint": "a47ee8f36ddbf47dd79373d41cfb37199f244e841dac610c08d94f6f951b6b68",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "three-character-id",
+        "rows": 60,
+        "rowBytes": 100000,
+        "signed": true,
+        "transactionLimits": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "redactionJobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: sixty 100 KB bodies packed with a 3-character id are redacted under Convex's 16 MiB write limit"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

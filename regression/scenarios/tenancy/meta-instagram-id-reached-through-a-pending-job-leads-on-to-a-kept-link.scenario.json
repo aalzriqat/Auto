@@ -1,0 +1,92 @@
+{
+  "id": "meta-instagram-id-reached-through-a-pending-job-leads-on-to-a-kept-link",
+  "fingerprint": "adbeeb9693b7dfd0a1b51c098a82f4ecd9279801c98480b295ac93b7dd49abcb",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "namedId": "business",
+        "signed": true,
+        "jobLeftPending": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameBusinessNewWebhook": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnect",
+      "input": {
+        "signedIn": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "webhook.instagram-delivery",
+      "input": {
+        "newWebhook": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "oldWebhook",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "newWebhookId.storedInWebhookLogs",
+      "value": false
+    },
+    {
+      "observable": "lateDelivery.containsWebhookId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "F1: an id reached through a pending job leads on to a link kept for another webhook id of the same business account"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

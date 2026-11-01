@@ -1,0 +1,74 @@
+{
+  "id": "meta-instagram-reconnect-new-webhook-id-old-one-erased-by-callback",
+  "fingerprint": "bd2e53ee10a634cd39267c30e508db370a5e91f778dfee121bd7ed65ccc068be",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "saveInstagramCredentials",
+      "input": {
+        "sameBusinessNewWebhook": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "webhook.instagram-delivery",
+      "input": {
+        "newWebhook": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "newWebhook",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "newWebhookId.storedInWebhookLogs",
+      "value": false
+    },
+    {
+      "observable": "links.afterCallback",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a reconnect that keeps the business id and replaces the webhook id keeps the old webhook id for a callback that names the new one"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

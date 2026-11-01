@@ -9,6 +9,8 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 import { requireFeature } from "./subscriptions";
+import { MAX_REDACTED_IDS, startMetaLogRedaction } from "./metaLogRedaction";
+import { disconnectFacebookConnectedUser } from "./facebookIntegrations";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
@@ -340,22 +342,41 @@ export const setInstagramLeadCreationConfig = mutation({
 });
 
 /**
- * Clears stored Instagram credentials by IG business account ID rather than
- * orgId — used by the deauthorize and data-deletion HTTP callbacks Meta
- * requires for every Instagram Login app, which only identify the user via
- * their signed `user_id`, not our internal orgId.
+ * Clears the Instagram connection of every organisation that holds the account a callback
+ * named, and returns that account's OTHER stored ids (SCRUM-842).
+ *
+ * An Instagram account has two ids: the business account id the callbacks carry
+ * (`instagramBusinessAccountId`) and the different id that webhook bodies carry in
+ * `entry[].id` (`instagramWebhookAccountId`; see the schema). Meta may name either, so
+ * the rows are found through BOTH indexes. A legacy duplicate (the same account on
+ * several organisations, possible before SCRUM-622) is cleared on every organisation,
+ * not only the first; the lookup is by one exact value, so the rows are the few that
+ * hold that account. The other ids are read from the rows BEFORE the fields are
+ * cleared, in this same transaction, so the caller can store them for the log redaction.
+ * `removed` is false when the id matched no connection at all.
  */
-export const disconnectByInstagramUserId = internalMutation({
-  args: { instagramBusinessAccountId: v.string() },
-  handler: async (ctx, args) => {
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_instagram_business_account_id", (q) =>
-        q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId),
-      )
-      .first();
-    if (!settings) return;
-
+export async function disconnectInstagramAccount(
+  ctx: MutationCtx,
+  calledId: string,
+): Promise<{ otherIds: string[]; removed: boolean }> {
+  const byBusiness = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_instagram_business_account_id", (q) => q.eq("instagramBusinessAccountId", calledId))
+    .collect();
+  const byWebhook = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_instagram_webhook_account_id", (q) => q.eq("instagramWebhookAccountId", calledId))
+    .collect();
+  const rows = new Map([...byBusiness, ...byWebhook].map((settings) => [settings._id, settings]));
+  const otherIds = new Set<string>();
+  for (const settings of rows.values()) {
+    for (const id of [settings.instagramBusinessAccountId, settings.instagramWebhookAccountId]) {
+      if (id !== undefined && id.trim() !== "" && id !== calledId) otherIds.add(id);
+    }
+    // The job this callback starts erases both ids from the retained rows, but a webhook body that
+    // names the account can still arrive after that job has finished, and a later callback would find
+    // no connection. Keep the pair (SCRUM-842 round 9); `idsKnownFor` reads it back.
+    await rememberInstagramIdPair(ctx, settings, {});
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
       instagramWebhookAccountId: undefined,
@@ -365,6 +386,150 @@ export const disconnectByInstagramUserId = internalMutation({
       socialAutoPostEnabled: false,
       instagramAutoReplyEnabled: false,
     });
+  }
+  return { otherIds: [...otherIds], removed: rows.size > 0 };
+}
+
+interface InstagramAccountIds {
+  instagramBusinessAccountId?: string;
+  instagramWebhookAccountId?: string;
+}
+
+const isStoredId = (id: string | undefined): id is string => id !== undefined && id.trim() !== "";
+
+/**
+ * Keeps the link between an Instagram account's two ids when the organisation that holds
+ * them is about to let go: the dealer's own Disconnect (`after` is empty) or a reconnect to a
+ * different account (`after` holds the new ids). Both clear the ids from `orgSettings`, and a
+ * Meta callback that arrives later names only one of them, finds no connection and could not
+ * learn the other, so it would complete a data-deletion receipt while retained webhook rows
+ * still carry it (SCRUM-842 round 8). `idsKnownFor` (metaLogRedaction.ts) reads the link back.
+ *
+ * The row is never deleted by a callback: the job that erases the ids finishes, a webhook body
+ * that names the account can arrive afterwards, and a later deletion request would otherwise find
+ * no connection, no link and no job (SCRUM-842 round 9). It names no organisation, token or person.
+ * It is kept for 30 days after the last completed deletion that read it, then the Meta sweep deletes
+ * it (`purgeAfter`, metaLogRedaction.ts; round 10). The rows are bounded by the distinct (business id,
+ * webhook id) pairs seen within that window, written only here.
+ *
+ * Nothing is kept when only one id was ever stored (the callback names that id itself), or when
+ * the pair is unchanged (the settings still hold it). A pair that is already linked is not written
+ * again, but a `purgeAfter` on it is cleared: the account is in use again, so its retention clock
+ * starts over at the next completed deletion.
+ */
+export async function rememberInstagramIdPair(
+  ctx: MutationCtx,
+  before: InstagramAccountIds,
+  after: InstagramAccountIds,
+): Promise<void> {
+  const business = before.instagramBusinessAccountId;
+  const webhook = before.instagramWebhookAccountId;
+  if (!isStoredId(business) || !isStoredId(webhook) || business === webhook) return;
+  if (business === after.instagramBusinessAccountId && webhook === after.instagramWebhookAccountId) return;
+  const linked = await ctx.db
+    .query("instagramAccountIdLinks")
+    .withIndex("by_business_account_id", (q) => q.eq("businessAccountId", business))
+    .take(MAX_REDACTED_IDS + 1);
+  const existing = linked.find((row) => row.webhookAccountId === webhook);
+  if (existing !== undefined) {
+    if (existing.purgeAfter !== undefined) await ctx.db.patch(existing._id, { purgeAfter: undefined });
+    return;
+  }
+  await ctx.db.insert("instagramAccountIdLinks", { businessAccountId: business, webhookAccountId: webhook });
+}
+
+/**
+ * Clears stored Instagram credentials by IG account ID rather than orgId. Kept as the
+ * single-purpose form of `disconnectInstagramAccount`; the Meta callbacks do not call it
+ * (they use `processMetaCallback`, which does this inside the same transaction as the
+ * receipt and the redaction job). Returns the account's OTHER stored ids.
+ */
+export const disconnectByInstagramUserId = internalMutation({
+  args: { instagramBusinessAccountId: v.string() },
+  returns: v.array(v.string()),
+  handler: async (ctx, args): Promise<string[]> => {
+    const { otherIds } = await disconnectInstagramAccount(ctx, args.instagramBusinessAccountId);
+    return otherIds;
+  },
+});
+/** An opaque confirmation code is 16 random bytes in lowercase hex (convex/http.ts). */
+const META_DELETION_CODE_PATTERN = /^[0-9a-f]{32}$/;
+
+/**
+ * One Meta deauthorize or data-deletion callback, applied in ONE transaction (SCRUM-842):
+ *  1. the disconnect (credentials cleared, the account's other ids read first),
+ *  2. for a data-deletion request, the receipt,
+ *  3. the first redaction page and, if the walk is longer, the job that carries it
+ *     together with EVERY captured id and its scheduled next run.
+ * Because they commit together or not at all, a failure leaves the account connected, so
+ * the retry reads the same ids again. They were once separate commits: the disconnect
+ * cleared the Instagram webhook account id, a failure in the second commit lost it, and
+ * the retry completed a receipt while a stored webhook body still held that id.
+ * Nothing is told to Meta before this returns, so the caller answers 500 on a throw.
+ *
+ * Returns nothing: the ids never leave the transaction. The user
+ * id is used for the redaction and is never stored on the receipt. `connectionRemoved`
+ * records whether the id matched a stored connection, so the public status page does not
+ * claim credentials were removed when there were none.
+ */
+export const processMetaCallback = internalMutation({
+  args: {
+    platform: v.union(v.literal("facebook"), v.literal("instagram")),
+    metaUserId: v.string(),
+    /** Present for a data-deletion request: the opaque code Meta is given. */
+    code: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    if (args.code !== undefined && !META_DELETION_CODE_PATTERN.test(args.code)) {
+      throw new ConvexError("Invalid confirmation code.");
+    }
+    let otherMetaUserIds: string[] = [];
+    let connectionRemoved: boolean;
+    if (args.platform === "instagram") {
+      // Ids an earlier Disconnect, reconnect, organisation deletion or callback already cleared from
+      // the settings are read from the kept links inside `startMetaLogRedaction`.
+      const result = await disconnectInstagramAccount(ctx, args.metaUserId);
+      otherMetaUserIds = result.otherIds;
+      connectionRemoved = result.removed;
+    } else {
+      connectionRemoved = await disconnectFacebookConnectedUser(ctx, args.metaUserId);
+    }
+    if (args.code !== undefined) {
+      await ctx.db.insert("metaDataDeletionRequests", {
+        code: args.code,
+        platform: args.platform,
+        connectionRemoved,
+      });
+    }
+    await startMetaLogRedaction(ctx, {
+      platform: args.platform,
+      metaUserId: args.metaUserId,
+      otherMetaUserIds,
+      receiptCode: args.code,
+    });
+    return null;
+  },
+});
+/**
+ * Answers the public /data-deletion-status page. Unauthenticated by design: the
+ * visitor is the end user Meta sent here and has no AutoFlow session. The
+ * 128-bit random code is the only key, and the reply carries just the platform
+ * and the time, so a wrong code learns nothing and a right one reveals no user.
+ */
+export const getMetaDataDeletionStatus = query({
+  args: { code: v.string() },
+  handler: async (ctx, args) => {
+    if (!META_DELETION_CODE_PATTERN.test(args.code)) return null;
+    const row = await ctx.db
+      .query("metaDataDeletionRequests")
+      .withIndex("by_code", (q) => q.eq("code", args.code))
+      .first();
+    // `completedAt: null` means the request is recorded but its retained-log
+    // redaction has not finished, so the page must not say it is done.
+    return row
+      ? { platform: row.platform, completedAt: row.completedAt ?? null, connectionRemoved: row.connectionRemoved !== false }
+      : null;
   },
 });
 
@@ -383,6 +548,8 @@ export const disconnect = mutation({
       .unique();
     if (!settings) return;
 
+    // The account's two ids are about to be forgotten; a later Meta callback needs the link.
+    await rememberInstagramIdPair(ctx, settings, {});
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
       instagramWebhookAccountId: undefined,
@@ -508,6 +675,8 @@ export const saveInstagramCredentials = internalMutation({
       .unique();
 
     if (existing) {
+      // A reconnect to a different account overwrites the ids this organisation held.
+      await rememberInstagramIdPair(ctx, existing, fields);
       await ctx.db.patch(existing._id, fields);
     } else {
       await ctx.db.insert("orgSettings", {
@@ -683,15 +852,19 @@ export const exchangeCodeForToken = internalAction({
           subscribeJson?.error?.message ?? subscribeRes.statusText,
         );
       }
-    } catch (err) {
+    } catch {
       // Non-fatal — the account is connected and posting/comment-viewing
       // still work; only inbound webhook delivery is affected. Logged so
       // it's visible in the admin Overview rather than silently swallowed.
+      // The row is fixed text (SCRUM-842): `igUserId` is the same id the
+      // Instagram deauthorize / data-deletion callbacks name, so it must not
+      // be copied into a retained log, and Meta's error text can echo it (or
+      // the request URL, which carries the token). Same shape as Facebook's.
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram",
         status: "error",
-        summary: `subscribed_apps failed for IG account ${igUserId}`,
-        error: err instanceof Error ? err.message : String(err),
+        summary: "subscribed_apps failed for Instagram account",
+        error: "Webhook subscription failed; provider detail withheld.",
       });
     }
   },

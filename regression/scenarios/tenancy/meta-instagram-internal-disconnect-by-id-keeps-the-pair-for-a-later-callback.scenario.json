@@ -1,0 +1,66 @@
+{
+  "id": "meta-instagram-internal-disconnect-by-id-keeps-the-pair-for-a-later-callback",
+  "fingerprint": "5f3429ebe11530d54256ca2f72acebe8b85293f7977fbd1ae5a4a60279463342",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "socialIntegrations.disconnectByInstagramUserId",
+      "input": {
+        "namedId": "business"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "webhook.instagram-delivery",
+      "input": {
+        "afterDisconnect": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "business",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    },
+    {
+      "observable": "lateDelivery.containsWebhookId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "F3: the internal disconnect by Instagram id keeps the account's pair for a later callback"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

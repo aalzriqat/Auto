@@ -1,0 +1,51 @@
+{
+  "id": "meta-instagram-completed-deletion-leaves-no-copy-in-own-webhook-rows",
+  "fingerprint": "b4319fbab7a09e3351cb3f7f111630145a64918286f390511cf5b22f35b75200",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "seededRows": "platform-source-failures",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receipt.completed",
+      "value": true
+    },
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "platformSourceRows.summary",
+      "value": "redacted-in-place"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

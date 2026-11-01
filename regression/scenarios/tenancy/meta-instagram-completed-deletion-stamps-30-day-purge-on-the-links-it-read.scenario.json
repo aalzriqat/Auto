@@ -1,0 +1,89 @@
+{
+  "id": "meta-instagram-completed-deletion-stamps-30-day-purge-on-the-links-it-read",
+  "fingerprint": "19537b60acb7f47af7518b3980b68b3ae53dc537f658c4834027e691f0371674",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "owner.disconnect",
+      "input": {
+        "account": "A"
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "seed.link",
+      "input": {
+        "account": "B",
+        "kept": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "namedId": "businessOfA",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "job.complete",
+      "input": {
+        "account": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "linkOfA.purgeAfterWhileJobPending",
+      "value": "unset"
+    },
+    {
+      "observable": "linkOfA.purgeAfterAfterCompletion",
+      "value": "completionPlus30d"
+    },
+    {
+      "observable": "linkOfB.purgeAfter",
+      "value": "unset"
+    },
+    {
+      "observable": "receipt.completedImpliesNoIdInAnyRetainedRow",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#c24305",
+      "digest": "ea7764e65c7d79637c51fc8369b84e77dd4c91f402a3fed2852b2d3d615cb880"
+    },
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a completed deletion stamps purgeAfter 30 days ahead on exactly the links its job read, and only when the job completes"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

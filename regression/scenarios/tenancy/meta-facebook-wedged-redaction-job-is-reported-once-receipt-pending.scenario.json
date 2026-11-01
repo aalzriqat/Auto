@@ -1,0 +1,65 @@
+{
+  "id": "meta-facebook-wedged-redaction-job-is-reported-once-receipt-pending",
+  "fingerprint": "567c8a09ecf96f3a1e03a01b5ff5740e88284ad9145f708cbfbd9339170e5a8f",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.facebook-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "poisonedRow": true,
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "redactionJob.sweep",
+      "input": {
+        "restarts": "threshold"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "wedgeReport.rows",
+      "value": 1
+    },
+    {
+      "observable": "wedgeReport.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "receipt.completed",
+      "value": false
+    },
+    {
+      "observable": "job.remaining",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Facebook: below the threshold nothing is reported; at it exactly one error row appears with no identifier, then none more, and the receipt stays pending"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

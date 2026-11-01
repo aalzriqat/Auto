@@ -17,6 +17,7 @@ import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 import { describeOrgMaterialization } from "./utils/materialization";
+import { maskMetaErrorForAdmin, maskMetaUserIdsForAdmin } from "./utils/metaUserIdRedaction";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -204,7 +205,24 @@ export const listWebhookLogs = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    return await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
+    const result = await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
+    // SCRUM-842: a Meta user id in a summary or error written before that fix is
+    // masked on the way out, so a row the stored redaction has not reached never
+    // leaves the backend. The stored redaction (metaLogRedaction.ts) walks the
+    // `<platform>-oauth` and `<platform>` sources for the user of a signed callback;
+    // this mask is the cover for every other user's rows and for the interval before
+    // that walk finishes. It does not mask `rawPayload` or `payloadPreview`.
+    return {
+      ...result,
+      page: result.page.map((row) => {
+        const error = maskMetaErrorForAdmin(row.source, row.error);
+        return {
+          ...row,
+          summary: maskMetaUserIdsForAdmin(row.source, row.summary),
+          ...(error === undefined ? {} : { error }),
+        };
+      }),
+    };
   },
 });
 

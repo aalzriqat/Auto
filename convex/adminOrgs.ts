@@ -12,6 +12,7 @@ import { logAdminAction } from "./adminAudit";
 import { notifyManagers } from "./utils/notifications";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { ensureRegistryState } from "./utils/supplierRegistry";
+import { rememberInstagramIdPair } from "./socialIntegrations";
 
 const ORG_DELETION_BATCH_SIZE = 50;
 
@@ -656,6 +657,9 @@ async function deleteOrgSettingsWithStorageBatch(ctx: MutationCtx, orgId: Id<"or
   const counts: DeletedCounts = {};
   for (const settings of settingsRows) {
     addStorageCount(counts, await deleteStorageIds(ctx, settings.logoStorageId ? [settings.logoStorageId] : []));
+    // `webhookLogs` has no orgId and is retained, so rows naming this Instagram account outlive the
+    // organization. Keep the link between the account's two ids for a later Meta data-deletion callback.
+    await rememberInstagramIdPair(ctx, settings, {});
     await ctx.db.delete(settings._id);
   }
   if (settingsRows.length > 0) {
