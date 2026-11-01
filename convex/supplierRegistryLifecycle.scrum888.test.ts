@@ -32,8 +32,10 @@ afterEach(() => {
   process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
 });
 
-type Harness = ReturnType<typeof convexTestWithComponents>;
-const setup = (): Harness => convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+function setup() {
+  return convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+}
+type Harness = ReturnType<typeof setup>;
 
 /** A pre-registry organization: it exists, has an owner and a platform admin, and has NO registry row. */
 async function seedOrgWithoutRegistry(t: Harness) {
@@ -117,7 +119,7 @@ describe("SCRUM-888 registry survives an organization returning to service", () 
         .query("supplierRegistryState")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .take(1);
-      await ctx.db.patch(row._id, { version: 7 });
+      await ctx.db.patch("supplierRegistryState", row._id, { version: 7 });
     });
     const asOwner = t.withIdentity({ subject: "owner_1" });
     const asAdmin = t.withIdentity({ subject: "dev_admin" });
