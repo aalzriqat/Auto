@@ -1,0 +1,74 @@
+{
+  "id": "collections-daily-list-reports-the-day-before-a-skipped-calendar-date-in-full",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentInstant": "2011-12-29T10:00:00.000Z",
+        "orgTimeZone": "Pacific.Apia"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentInstant": "2011-12-30T09:59:59.999Z",
+        "orgTimeZone": "Pacific.Apia"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2011-12-29",
+        "orgTimeZone": "Pacific.Apia"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.threw",
+      "value": false
+    },
+    {
+      "observable": "step3.rowCount",
+      "value": 2
+    },
+    {
+      "observable": "step3.incomplete",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "2011-12-29 in Apia reports its full 24 hours instead of throwing"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-2",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "77dd6da3ee7c28adde4c9949a07682a059479a91d277f26dd1431260eddc4809"
+}

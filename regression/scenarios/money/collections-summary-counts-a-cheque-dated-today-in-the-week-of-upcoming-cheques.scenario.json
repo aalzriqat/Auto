@@ -1,0 +1,93 @@
+{
+  "id": "collections-summary-counts-a-cheque-dated-today-in-the-week-of-upcoming-cheques",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.registerCheque",
+      "input": {
+        "chequeDate": "2026-10-31",
+        "amount": 70,
+        "orgTimeZone": "Asia.Amman"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.registerCheque",
+      "input": {
+        "chequeDate": "2026-11-07",
+        "amount": 5,
+        "orgTimeZone": "Asia.Amman"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.registerCheque",
+      "input": {
+        "chequeDate": "2026-11-08",
+        "amount": 900,
+        "orgTimeZone": "Asia.Amman"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.registerCheque",
+      "input": {
+        "chequeDate": "2026-10-30",
+        "amount": 900,
+        "orgTimeZone": "Asia.Amman"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.summary",
+      "input": {
+        "now": "2026-10-31T09:00:00Z"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step5.upcomingChequeCount",
+      "value": 2
+    },
+    {
+      "observable": "step5.upcomingChequeTotal",
+      "value": 75
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayKeys.scrum264.test.ts",
+    "testName": "a HELD cheque dated today is in the week, though its key (00:00Z) is before now"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-keys",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "301593f5388d964eb6582915318e85432a2d1bcb54a21d21d1c3e416bdbdeb40"
+}
