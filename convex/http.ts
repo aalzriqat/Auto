@@ -353,17 +353,12 @@ interface MetaCallbackPlatform {
   deauthorizePath: string;
   dataDeletionPath: string;
   appSecret: (env: ReturnType<typeof getValidatedEnv>) => string | undefined;
-  /**
-   * Disconnects the dealer's connection for the signed-in Meta user id and returns the
-   * account's OTHER ids, read in the disconnect's own transaction before it cleared them,
-   * so the log redaction erases those too (an Instagram account has two ids, SCRUM-842).
-   */
-  disconnect: (ctx: ActionCtx, metaUserId: string) => Promise<string[]>;
 }
 
 /**
- * The first redaction page (or the receipt insert with it) failed, so the whole
- * mutation rolled back: no receipt, no job, nothing for Meta to be told is done.
+ * The callback's one mutation failed (`socialIntegrations.processMetaCallback`: the
+ * disconnect, the receipt and the first redaction page), so the whole mutation rolled back:
+ * the account is still connected, no receipt, no job, nothing for Meta to be told is done.
  * Meta gets a 500 rather than a code. Later pages never reach this response; they
  * run as scheduled mutations (convex/metaLogRedaction.ts). Only the error class is
  * logged: a Convex error message can quote the arguments of the failed call, and
@@ -398,20 +393,25 @@ async function handleMetaCallback(
     return new Response("Invalid signature", { status: 400 });
 
   const metaUserId = String(payload.user_id);
-  const otherMetaUserIds = await config.disconnect(ctx, metaUserId);
+  const confirmationCode = kind === "data-deletion" ? newMetaDeletionConfirmationCode() : undefined;
+  try {
+    // ONE transaction: the disconnect (which reads the account's other ids before it
+    // clears them), the receipt for a data-deletion request, and the first redaction page
+    // with the job that carries the rest, every captured id included. If any part fails,
+    // none of it commits, the account stays connected and a retry reads the same ids.
+    // Rows written before SCRUM-842 still name this user: they are redacted in place, one
+    // bounded page now and a longer source in the stored job. The receipt code is only
+    // handed to Meta after this commits.
+    await ctx.runMutation(internal.socialIntegrations.processMetaCallback, {
+      platform: config.platform,
+      metaUserId,
+      ...(confirmationCode !== undefined ? { code: confirmationCode } : {}),
+    });
+  } catch (error) {
+    return metaCallbackFailure(error);
+  }
 
-  if (kind === "deauthorize") {
-    // Rows written before SCRUM-842 still name this user: redact them in place.
-    // One bounded page runs now; a longer source continues in a stored job.
-    try {
-      await ctx.runMutation(internal.metaLogRedaction.startMetaLogRedactionForUser, {
-        platform: config.platform,
-        metaUserId,
-        otherMetaUserIds,
-      });
-    } catch (error) {
-      return metaCallbackFailure(error);
-    }
+  if (confirmationCode === undefined) {
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: `${config.platform}-oauth`,
       status: "success",
@@ -420,21 +420,6 @@ async function handleMetaCallback(
     return new Response(null, { status: 200 });
   }
 
-  const confirmationCode = newMetaDeletionConfirmationCode();
-  try {
-    // The receipt and the first page commit together. If the source holds more,
-    // the continuation is committed in that same transaction, so once this returns
-    // the code is durable and the status page shows "in progress" until the last
-    // page is done. The code is only handed to Meta after that.
-    await ctx.runMutation(internal.socialIntegrations.recordMetaDataDeletion, {
-      code: confirmationCode,
-      platform: config.platform,
-      metaUserId,
-      otherMetaUserIds,
-    });
-  } catch (error) {
-    return metaCallbackFailure(error);
-  }
   await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
     source: `${config.platform}-oauth`,
     status: "success",
@@ -1149,14 +1134,10 @@ registerMetaCallbackRoutes({
   deauthorizePath: "/instagram-deauthorize",
   dataDeletionPath: "/instagram-data-deletion",
   appSecret: (env) => env.INSTAGRAM_APP_SECRET,
-  // Clears the dealer's IG business account ID, access token and display name
-  // from orgSettings, which removes the connection synchronously with no async
-  // job. That is what the status page claims, and no more (SCRUM-842).
-  disconnect: (ctx, metaUserId) =>
-    ctx.runMutation(
-      internal.socialIntegrations.disconnectByInstagramUserId,
-      { instagramBusinessAccountId: metaUserId },
-    ),
+  // `processMetaCallback` clears the dealer's IG business account ID, webhook account ID,
+  // access token and display name from orgSettings (found by either id, on every
+  // organisation that holds the account), which removes the connection synchronously with
+  // no async job. That is what the status page claims, and no more (SCRUM-842).
 });
 
 // ─── Instagram comments + DMs webhook ──────────────────────────────────────────
@@ -1551,14 +1532,7 @@ registerMetaCallbackRoutes({
   // (SCRUM-807); the status page claims only the connection (SCRUM-842).
   // No second id to read: webhook bodies carry Page ids and page-scoped sender ids,
   // and the connecting user's own id (the one the callback names, redacted anyway)
-  // practically never appears there.
-  disconnect: async (ctx, metaUserId) => {
-    await ctx.runMutation(
-      internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
-      { facebookConnectedByUserId: metaUserId },
-    );
-    return [];
-  },
+  // practically never appears there. `processMetaCallback` does the clearing.
 });
 
 // ─── Facebook Page comments + Messenger DMs webhook ────────────────────────

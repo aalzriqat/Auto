@@ -12,6 +12,20 @@
 export const REDACTED_META_USER = "[redacted Meta user]";
 
 /**
+ * The replacement for a document that the readable text would push past Convex's 1 MiB
+ * document limit. One ASCII character, so it is never longer than the id it replaces
+ * (an id is at least one character): a patch that uses it cannot grow the document.
+ */
+export const REDACTED_META_USER_COMPACT = "*";
+
+/**
+ * The largest a redacted `webhookLogs` document may become, in `getDocumentSize` bytes.
+ * Convex refuses a document above 1 MiB (https://docs.convex.dev/production/state/limits);
+ * 4 KiB below that leaves room for the system fields and for the size being an estimate.
+ */
+export const META_LOG_DOCUMENT_BUDGET_BYTES = 1024 * 1024 - 4096;
+
+/**
  * The most rows one redaction transaction asks for. Most `webhookLogs` rows are
  * one-line summaries, so this is the normal page. It is a ceiling, not a promise:
  * the delivery-inbox rows of the `instagram` and `facebook` sources also keep the
@@ -29,12 +43,21 @@ export const META_LOG_REDACTION_PAGE_SIZE = 100;
  *    page that reaches the budget can be retried at half the size until it does.
  *  - A transaction may read 16 MiB and write 16 MiB, separately. Redaction patches
  *    each row it reads, and the replacement text ("[redacted Meta user]", 20 characters)
- *    is longer than a short id, so the bytes written can exceed the bytes read. For an
- *    id of 9 characters or more that growth is below 2.3x, and 6 MiB x 2.3 stays under
- *    16 MiB. Real Meta ids are 15 digits or more.
+ *    is longer than a short id, so the bytes written can exceed the bytes read. The
+ *    readable rewrites of a page are therefore capped (`META_LOG_REDACTION_MAX_READABLE_WRITE_BYTES`),
+ *    and a row past the cap, or one that would outgrow the document limit, is rewritten
+ *    with a one-character replacement that cannot grow it.
  *  - The job and receipt rows, and the scheduler call, are a few hundred bytes.
  */
 export const META_LOG_REDACTION_MAX_BYTES_READ = 6 * 1024 * 1024;
+
+/**
+ * The most bytes of readable-text rewrites one page may write. The rest of the page is
+ * rewritten with the compact replacement, which never grows a row, so a page writes at
+ * most this plus the bytes it read (at most about 7 MiB): under the 16 MiB a transaction
+ * may write, whatever the length of the id.
+ */
+export const META_LOG_REDACTION_MAX_READABLE_WRITE_BYTES = 8 * 1024 * 1024;
 
 /**
  * The page size to ask for next, from what the last page cost. It targets half the
@@ -87,13 +110,18 @@ export const META_LOG_REDACTED_FIELDS = ["summary", "error", "rawPayload", "payl
 const regexEscape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * Replaces every occurrence of one Meta user id in `text`. A match must stand
+ * Replaces every occurrence of one Meta user id in `text` with `replacement` (readable
+ * text by default; the compact one when the document must not grow). A match must stand
  * alone: an id that merely contains this one (a different user) is left as it is.
  */
-export function redactMetaUserIdInText(text: string, metaUserId: string): string {
+export function redactMetaUserIdInText(
+  text: string,
+  metaUserId: string,
+  replacement: string = REDACTED_META_USER,
+): string {
   if (!metaUserId) return text;
   const standalone = new RegExp(`(?<![A-Za-z0-9])${regexEscape(metaUserId)}(?![A-Za-z0-9])`, "g");
-  return text.replace(standalone, () => REDACTED_META_USER);
+  return text.replace(standalone, () => replacement);
 }
 
 const META_LOG_SOURCES: ReadonlySet<string> = new Set(["instagram", "facebook", "instagram-oauth", "facebook-oauth"]);

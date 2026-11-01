@@ -6583,10 +6583,14 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // `completedAt` is absent while the retained-log redaction is still running
   // (metaLogRedaction.ts) and is set by its last page, so the status page never
   // reports a deletion as done before it is.
+  // `connectionRemoved` records whether the callback found a stored connection to
+  // clear (false: the id matched no dealer connection, so the page must not say that
+  // credentials were removed). Absent on a receipt written before the field existed.
   metaDataDeletionRequests: defineTable({
     code: v.string(),
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     completedAt: v.optional(v.number()),
+    connectionRemoved: v.optional(v.boolean()),
   }).index("by_code", ["code"]),
 
   // SCRUM-842: the unfinished remainder of a retained-log redaction. The redaction

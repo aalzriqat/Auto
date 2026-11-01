@@ -222,40 +222,50 @@ export const setFacebookLeadCreationConfig = mutation({
 export const disconnectByFacebookConnectedUserId = internalMutation({
   args: { facebookConnectedByUserId: v.string() },
   handler: async (ctx, args) => {
-    // Record the revocation first and unconditionally: a first-time connection
-    // still in flight has no row for the clear below to find, and without this
-    // its exchange would store the tokens it already fetched after we replied 200.
-    // One row per user; its time never moves backwards.
-    // Fences are retained, never deleted (SCRUM-807); stale ones are harmless.
-    const now = Date.now();
-    const fence = await findFacebookRevocation(ctx, args.facebookConnectedByUserId);
-    if (fence) await ctx.db.patch(fence._id, { revokedAt: Math.max(fence.revokedAt, now) });
-    else await ctx.db.insert("facebookRevocations", { facebookUserId: args.facebookConnectedByUserId, revokedAt: now });
-
-    // One Facebook user can connect several orgs (e.g. a dealer-group admin);
-    // Meta sends a single callback for that user, so every one must be cleared.
-    const rows = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_facebook_connected_user_id", (q) =>
-        q.eq("facebookConnectedByUserId", args.facebookConnectedByUserId)
-      )
-      .collect();
-
-    for (const settings of rows) {
-      await ctx.db.patch(settings._id, {
-        facebookPageId: undefined,
-        facebookPageAccessToken: undefined,
-        facebookTokenExpiresAt: undefined,
-        facebookPageName: undefined,
-        facebookConnectedByUserId: undefined,
-        facebookAutoReplyEnabled: false,
-        facebookAvailablePages: undefined,
-        facebookPendingCredentials: undefined,
-        facebookPendingAttemptId: undefined,
-      });
-    }
+    await disconnectFacebookConnectedUser(ctx, args.facebookConnectedByUserId);
   },
 });
+
+/**
+ * The body of `disconnectByFacebookConnectedUserId`, callable inside another mutation so the
+ * Meta callbacks can disconnect, write the receipt and capture the log-redaction ids in ONE
+ * transaction (SCRUM-842). Returns whether any organisation's connection was cleared.
+ */
+export async function disconnectFacebookConnectedUser(ctx: MutationCtx, facebookConnectedByUserId: string): Promise<boolean> {
+  // Record the revocation first and unconditionally: a first-time connection
+  // still in flight has no row for the clear below to find, and without this
+  // its exchange would store the tokens it already fetched after we replied 200.
+  // One row per user; its time never moves backwards.
+  // Fences are retained, never deleted (SCRUM-807); stale ones are harmless.
+  const now = Date.now();
+  const fence = await findFacebookRevocation(ctx, facebookConnectedByUserId);
+  if (fence) await ctx.db.patch(fence._id, { revokedAt: Math.max(fence.revokedAt, now) });
+  else await ctx.db.insert("facebookRevocations", { facebookUserId: facebookConnectedByUserId, revokedAt: now });
+
+  // One Facebook user can connect several orgs (e.g. a dealer-group admin);
+  // Meta sends a single callback for that user, so every one must be cleared.
+  const rows = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_facebook_connected_user_id", (q) =>
+      q.eq("facebookConnectedByUserId", facebookConnectedByUserId)
+    )
+    .collect();
+
+  for (const settings of rows) {
+    await ctx.db.patch(settings._id, {
+      facebookPageId: undefined,
+      facebookPageAccessToken: undefined,
+      facebookTokenExpiresAt: undefined,
+      facebookPageName: undefined,
+      facebookConnectedByUserId: undefined,
+      facebookAutoReplyEnabled: false,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
+      facebookPendingAttemptId: undefined,
+    });
+  }
+  return rows.length > 0;
+}
 
 /** Disconnects Facebook for the org. Owner-only.
  *  Intentionally NOT gated behind requireFeature — downgraded orgs must

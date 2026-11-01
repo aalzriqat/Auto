@@ -62,12 +62,16 @@ import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { recordWebhookLog } from "./utils/webhookLog";
 import {
+  META_LOG_DOCUMENT_BUDGET_BYTES,
   META_LOG_REDACTED_FIELDS,
   META_LOG_REDACTION_MAX_BYTES_READ,
+  META_LOG_REDACTION_MAX_READABLE_WRITE_BYTES,
   META_LOG_REDACTION_PAGE_SIZE,
   metaLogRedactionSources,
   metaOauthLogSource,
   nextRedactionPageSize,
+  REDACTED_META_USER,
+  REDACTED_META_USER_COMPACT,
   redactMetaUserIdInText,
   type MetaPlatform,
 } from "./utils/metaUserIdRedaction";
@@ -119,6 +123,45 @@ function distinctIds(primary: string, others: readonly string[] | undefined): st
   return ids;
 }
 
+type RedactedFields = Partial<Pick<Doc<"webhookLogs">, (typeof META_LOG_REDACTED_FIELDS)[number]>>;
+
+function redactFields(row: Doc<"webhookLogs">, metaUserIds: readonly string[], replacement: string): RedactedFields {
+  const patch: RedactedFields = {};
+  for (const field of META_LOG_REDACTED_FIELDS) {
+    const text = row[field];
+    if (text === undefined) continue;
+    let redacted = text;
+    for (const metaUserId of metaUserIds) redacted = redactMetaUserIdInText(redacted, metaUserId, replacement);
+    if (redacted !== text) patch[field] = redacted;
+  }
+  return patch;
+}
+
+/**
+ * The fields to patch on one row. The readable replacement text is longer than a short
+ * id, so a row near the 1 MiB document limit that is packed with ids would grow past it
+ * and Convex would refuse the write for ever (https://docs.convex.dev/production/state/limits;
+ * halving a page cannot help one document). When the readable result would not fit the
+ * budget, the row is redacted with a one-character replacement instead: that is never
+ * longer than the id it replaces, so the document cannot grow and the id still goes.
+ */
+function redactedFieldsOf(
+  row: Doc<"webhookLogs">,
+  metaUserIds: readonly string[],
+  readableBytesSoFar: number,
+): { patch: RedactedFields; readableBytes: number } {
+  const readable = redactFields(row, metaUserIds, REDACTED_META_USER);
+  if (Object.keys(readable).length === 0) return { patch: readable, readableBytes: 0 };
+  const size = getDocumentSize({ ...row, ...readable });
+  // Two budgets: one document must fit the document limit, and the readable rewrites of one
+  // page together must leave room, inside the 16 MiB a transaction may write, for the rows
+  // that are still to be rewritten (each of those is at most as large as the row it replaces).
+  if (size <= META_LOG_DOCUMENT_BUDGET_BYTES && readableBytesSoFar + size <= META_LOG_REDACTION_MAX_READABLE_WRITE_BYTES) {
+    return { patch: readable, readableBytes: size };
+  }
+  return { patch: redactFields(row, metaUserIds, REDACTED_META_USER_COMPACT), readableBytes: 0 };
+}
+
 /**
  * Redacts one page of one source of one platform and says where the walk goes next.
  * Never schedules, never completes. Only this function reads `webhookLogs`, with one
@@ -158,16 +201,12 @@ export async function redactOneStep(
   }
 
   let bytesRead = 0;
+  let readableBytes = 0;
   for (const row of page.page) {
     bytesRead += getDocumentSize(row);
-    const patch: Partial<Pick<Doc<"webhookLogs">, (typeof META_LOG_REDACTED_FIELDS)[number]>> = {};
-    for (const field of META_LOG_REDACTED_FIELDS) {
-      const text = row[field];
-      if (text === undefined) continue;
-      let redacted = text;
-      for (const metaUserId of metaUserIds) redacted = redactMetaUserIdInText(redacted, metaUserId);
-      if (redacted !== text) patch[field] = redacted;
-    }
+    const redaction = redactedFieldsOf(row, metaUserIds, readableBytes);
+    readableBytes += redaction.readableBytes;
+    const patch = redaction.patch;
     if (Object.keys(patch).length > 0) await ctx.db.patch(row._id, patch);
   }
 
@@ -245,20 +284,6 @@ async function advanceJob(ctx: MutationCtx, jobId: Id<"metaLogRedactionJobs">): 
   });
   await ctx.scheduler.runAfter(0, internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
 }
-
-/** The public face of the start step for the deauthorize callback (no receipt). */
-export const startMetaLogRedactionForUser = internalMutation({
-  args: {
-    platform: v.union(v.literal("facebook"), v.literal("instagram")),
-    metaUserId: v.string(),
-    otherMetaUserIds: v.optional(v.array(v.string())),
-  },
-  returns: v.null(),
-  handler: async (ctx, args): Promise<null> => {
-    await startMetaLogRedaction(ctx, args);
-    return null;
-  },
-});
 
 /** Advances one stored job by one page and schedules the next. Argument: the job's own id only. */
 export const runMetaLogRedactionJob = internalMutation({

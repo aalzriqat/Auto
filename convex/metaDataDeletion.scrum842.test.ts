@@ -227,7 +227,9 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
       const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
       expect(status?.platform).toBe(p.platform);
       expect(typeof status?.completedAt).toBe("number");
-      expect(Object.keys(status ?? {}).sort()).toEqual(["completedAt", "platform"]);
+      // Still no user id, token or anything linking the code to a person: the platform, the
+      // time, and whether a connection was found (a boolean).
+      expect(Object.keys(status ?? {}).sort()).toEqual(["completedAt", "connectionRemoved", "platform"]);
     }
     expect(second.confirmation_code).not.toBe(first.confirmation_code);
   }
@@ -682,7 +684,8 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       expect(res.status).toBe(200);
       expect((await logById(t, lastPageRow))?.summary).toContain(LEGACY_ID);
       const pending = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-      expect(pending).toEqual({ platform: p.platform, completedAt: null });
+      // No connection is seeded for this id, so the receipt says none was found.
+      expect(pending).toEqual({ platform: p.platform, completedAt: null, connectionRemoved: false });
       const jobs = await jobRows(t);
       expect(jobs).toHaveLength(1);
       expect(await scheduledJobRuns(t)).toHaveLength(1);
