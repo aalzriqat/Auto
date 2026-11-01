@@ -5,8 +5,12 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
 import type { MutationCtx } from "./_generated/server";
-import { redactOneStep } from "./metaLogRedaction";
-import { META_LOG_REDACTION_PAGE_SIZE, REDACTED_META_USER } from "./utils/metaUserIdRedaction";
+import { META_LOG_REDACTION_WEDGED_AFTER_RESTARTS, redactOneStep } from "./metaLogRedaction";
+import {
+  META_LOG_REDACTION_MAX_BYTES_READ,
+  META_LOG_REDACTION_PAGE_SIZE,
+  REDACTED_META_USER,
+} from "./utils/metaUserIdRedaction";
 
 // SCRUM-842: Meta's deauthorize and data-deletion callbacks must not copy the
 // Meta user id into anything that outlives the request (webhookLogs, the
@@ -80,6 +84,7 @@ function post(t: T, path: string, signed: string) {
 }
 
 type Platform = "facebook" | "instagram";
+type PlatformCase = (typeof PLATFORMS)[number];
 
 const PLATFORMS: Array<{
   platform: Platform;
@@ -180,25 +185,58 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
     vi.restoreAllMocks();
   });
 
+  // The four callbacks (two platforms, two routes) each have their own literal test title, so that the
+  // SCRUM-761 regression library can bind one record to each (a parameterized title cannot be bound).
+  async function theUserIdIsInNoLogResponseRequestOrConsole(p: PlatformCase, path: string) {
+    const t = newTest();
+    await seedConnectedOrg(t, p.platform);
+
+    const res = await post(t, path, await signedRequest({ user_id: META_USER_ID }, p.secret));
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(body).not.toContain(META_USER_ID);
+    expect(JSON.stringify([...res.headers])).not.toContain(META_USER_ID);
+    expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(META_USER_ID);
+    expect(JSON.stringify(await allDeletionRequests(t))).not.toContain(META_USER_ID);
+    expect(consoleOutput.join("\n")).not.toContain(META_USER_ID);
+  }
+
+  test("Facebook deauthorize: the Meta user id is in no log row, response, stored request or console output", () =>
+    theUserIdIsInNoLogResponseRequestOrConsole(PLATFORMS[0], PLATFORMS[0].deauthorize));
+  test("Facebook data-deletion: the Meta user id is in no log row, response, stored request or console output", () =>
+    theUserIdIsInNoLogResponseRequestOrConsole(PLATFORMS[0], PLATFORMS[0].deletion));
+  test("Instagram deauthorize: the Meta user id is in no log row, response, stored request or console output", () =>
+    theUserIdIsInNoLogResponseRequestOrConsole(PLATFORMS[1], PLATFORMS[1].deauthorize));
+  test("Instagram data-deletion: the Meta user id is in no log row, response, stored request or console output", () =>
+    theUserIdIsInNoLogResponseRequestOrConsole(PLATFORMS[1], PLATFORMS[1].deletion));
+
+  async function theConfirmationCodeIsOpaqueAndAnswersWithThisPlatform(p: PlatformCase) {
+    const t = newTest();
+    await seedConnectedOrg(t, p.platform);
+    const signed = await signedRequest({ user_id: META_USER_ID }, p.secret);
+
+    const first = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
+    const second = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    for (const reply of [first, second]) {
+      expect(reply.confirmation_code).toMatch(/^[0-9a-f]{32}$/);
+      expect(reply.url).toBe(`https://app.test/data-deletion-status?id=${reply.confirmation_code}`);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(status?.platform).toBe(p.platform);
+      expect(typeof status?.completedAt).toBe("number");
+      expect(Object.keys(status ?? {}).sort()).toEqual(["completedAt", "platform"]);
+    }
+    expect(second.confirmation_code).not.toBe(first.confirmation_code);
+  }
+
+  test("Facebook data-deletion: the confirmation code is opaque, unique per request, and answers the status URL with this platform", () =>
+    theConfirmationCodeIsOpaqueAndAnswersWithThisPlatform(PLATFORMS[0]));
+  test("Instagram data-deletion: the confirmation code is opaque, unique per request, and answers the status URL with this platform", () =>
+    theConfirmationCodeIsOpaqueAndAnswersWithThisPlatform(PLATFORMS[1]));
+
   describe.each(PLATFORMS)("$label", (p) => {
-    test.each([
-      ["deauthorize", p.deauthorize],
-      ["data-deletion", p.deletion],
-    ])("%s: the Meta user id is in no log row, response, stored request or console output", async (_name, path) => {
-      const t = newTest();
-      await seedConnectedOrg(t, p.platform);
-
-      const res = await post(t, path, await signedRequest({ user_id: META_USER_ID }, p.secret));
-      const body = await res.text();
-
-      expect(res.status).toBe(200);
-      expect(body).not.toContain(META_USER_ID);
-      expect(JSON.stringify([...res.headers])).not.toContain(META_USER_ID);
-      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(META_USER_ID);
-      expect(JSON.stringify(await allDeletionRequests(t))).not.toContain(META_USER_ID);
-      expect(consoleOutput.join("\n")).not.toContain(META_USER_ID);
-    });
-
     test.each([
       ["deauthorize", p.deauthorize],
       ["data-deletion", p.deletion],
@@ -232,26 +270,6 @@ describe("SCRUM-842 Meta deauthorize and data-deletion callbacks", () => {
         expect(row?.instagramBusinessAccountId).toBeUndefined();
         expect(row?.instagramAccessToken).toBeUndefined();
       }
-    });
-
-    test("data-deletion: the confirmation code is opaque, unique per request, and answers the status URL with this platform", async () => {
-      const t = newTest();
-      await seedConnectedOrg(t, p.platform);
-      const signed = await signedRequest({ user_id: META_USER_ID }, p.secret);
-
-      const first = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
-      const second = (await (await post(t, p.deletion, signed)).json()) as { url: string; confirmation_code: string };
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-      for (const reply of [first, second]) {
-        expect(reply.confirmation_code).toMatch(/^[0-9a-f]{32}$/);
-        expect(reply.url).toBe(`https://app.test/data-deletion-status?id=${reply.confirmation_code}`);
-        const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-        expect(status?.platform).toBe(p.platform);
-        expect(typeof status?.completedAt).toBe("number");
-        expect(Object.keys(status ?? {}).sort()).toEqual(["completedAt", "platform"]);
-      }
-      expect(second.confirmation_code).not.toBe(first.confirmation_code);
     });
 
     test("data-deletion for a user we hold nothing for still answers with a status code and stores no user id", async () => {
@@ -471,6 +489,47 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
     vi.restoreAllMocks();
   });
 
+  // ─── Every source that can hold the id (SCRUM-842 round 4, Seat 2 HIGH) ───────
+  //
+  // The OAuth callback source is not the only `webhookLogs` source a Meta user id
+  // was written to: the `instagram` / `facebook` sources carry the Instagram
+  // "subscribed_apps failed for IG account <id>" rows and the auto-reply
+  // failures. A receipt that reads "processed" while those rows keep the id is a
+  // false statement on the public status page.
+  async function aCompletedDeletionLeavesNoCopyInThePlatformsOwnWebhookRows(p: PlatformCase) {
+    const t = newTest();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    const subject = p.platform === "instagram" ? "IG account" : "Page";
+    const subscriptionFailure = await t.run((ctx) =>
+      ctx.db.insert("webhookLogs", {
+        source: p.platform,
+        status: "error",
+        summary: `subscribed_apps failed for ${subject} ${LEGACY_ID}`,
+        error: `Graph rejected ${subject} ${LEGACY_ID}`,
+        createdAt: Date.now(),
+      }),
+    );
+    const autoReplyFailure = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${LEGACY_ID} failed`, "error");
+
+    const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+    const reply = (await res.json()) as { confirmation_code: string };
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // The receipt says processed, so storage must be clean.
+    const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+    expect(typeof done?.completedAt).toBe("number");
+    expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+    const row = await logById(t, subscriptionFailure);
+    expect(row?.summary).toBe(`subscribed_apps failed for ${subject} ${REDACTED_META_USER}`);
+    expect(row?.error).toBe(`Graph rejected ${subject} ${REDACTED_META_USER}`);
+    expect((await logById(t, autoReplyFailure))?.summary).toBe(`Auto-reply DM to ${REDACTED_META_USER} failed`);
+  }
+
+  test("Facebook: a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows", () =>
+    aCompletedDeletionLeavesNoCopyInThePlatformsOwnWebhookRows(PLATFORMS[0]));
+  test("Instagram: a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows", () =>
+    aCompletedDeletionLeavesNoCopyInThePlatformsOwnWebhookRows(PLATFORMS[1]));
+
   describe.each(PLATFORMS)("$label", (p) => {
     test.each([
       ["deauthorize", p.deauthorize, "deauth" as const],
@@ -548,41 +607,6 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       }
     });
 
-    // ─── Every source that can hold the id (SCRUM-842 round 4, Seat 2 HIGH) ───────
-    //
-    // The OAuth callback source is not the only `webhookLogs` source a Meta user id
-    // was written to: the `instagram` / `facebook` sources carry the Instagram
-    // "subscribed_apps failed for IG account <id>" rows and the auto-reply
-    // failures. A receipt that reads "processed" while those rows keep the id is a
-    // false statement on the public status page.
-    test("a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows", async () => {
-      const t = newTest();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      const subject = p.platform === "instagram" ? "IG account" : "Page";
-      const subscriptionFailure = await t.run((ctx) =>
-        ctx.db.insert("webhookLogs", {
-          source: p.platform,
-          status: "error",
-          summary: `subscribed_apps failed for ${subject} ${LEGACY_ID}`,
-          error: `Graph rejected ${subject} ${LEGACY_ID}`,
-          createdAt: Date.now(),
-        }),
-      );
-      const autoReplyFailure = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${LEGACY_ID} failed`, "error");
-
-      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
-      const reply = (await res.json()) as { confirmation_code: string };
-      await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-      // The receipt says processed, so storage must be clean.
-      const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
-      expect(typeof done?.completedAt).toBe("number");
-      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
-      const row = await logById(t, subscriptionFailure);
-      expect(row?.summary).toBe(`subscribed_apps failed for ${subject} ${REDACTED_META_USER}`);
-      expect(row?.error).toBe(`Graph rejected ${subject} ${REDACTED_META_USER}`);
-      expect((await logById(t, autoReplyFailure))?.summary).toBe(`Auto-reply DM to ${REDACTED_META_USER} failed`);
-    });
 
     test("a request whose redaction needs more than one page completes, and no scheduler record ever holds the user id or the receipt code", async () => {
       const t = newTest();
@@ -1012,37 +1036,509 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
 });
 
 describe("SCRUM-842 redaction step guards", () => {
-  // convex-test never reports a page status, so the one Convex answer that means
-  // "this page may be incomplete" is driven through a stand-in context.
-  const contextReturning = (page: Record<string, unknown>) =>
-    ({
-      db: { query: () => ({ withIndex: () => ({ paginate: async () => page }) }) },
-    }) as unknown as MutationCtx;
+  // convex-test only reports a page status when a byte or row budget is passed, and
+  // the stand-in lets each Convex answer be driven exactly: the page, and what the
+  // step asked for.
+  const START = { sourceIndex: 0, cursor: null, pageSize: META_LOG_REDACTION_PAGE_SIZE };
+  function contextReturning(page: Record<string, unknown>) {
+    const asked: Array<Record<string, unknown>> = [];
+    const patch = vi.fn();
+    const ctx = {
+      db: {
+        query: () => ({ withIndex: () => ({ paginate: async (options: Record<string, unknown>) => (asked.push(options), page) }) }),
+        patch,
+      },
+    } as unknown as MutationCtx;
+    return { ctx, asked, patch };
+  }
+  const naming = (id: string) => ({ _id: "row-1", summary: `Auto-reply DM to ${id} failed` });
 
-  test("a page Convex says may be incomplete is never walked past: the step fails instead of moving the cursor", async () => {
-    const ctx = contextReturning({ page: [], isDone: false, continueCursor: "next", pageStatus: "SplitRequired" });
+  test("every page is asked for with a byte budget below the 16 MiB a transaction may read", async () => {
+    const { ctx, asked } = contextReturning({ page: [], isDone: true, continueCursor: "", pageStatus: null });
 
-    await expect(redactOneStep(ctx, "instagram", LEGACY_ID, { sourceIndex: 0, cursor: null })).rejects.toThrow(
-      "cut short by the read limit",
-    );
+    await redactOneStep(ctx, "instagram", [LEGACY_ID], START);
+
+    expect(asked).toEqual([
+      { numItems: META_LOG_REDACTION_PAGE_SIZE, cursor: null, maximumBytesRead: META_LOG_REDACTION_MAX_BYTES_READ },
+    ]);
+    expect(META_LOG_REDACTION_MAX_BYTES_READ).toBeLessThan(16 * 1024 * 1024);
   });
 
-  test("a page Convex only recommends splitting is complete and is walked on normally", async () => {
-    const ctx = contextReturning({ page: [], isDone: false, continueCursor: "next", pageStatus: "SplitRecommended" });
+  test("a page that reached the byte budget is not written and not walked past: the same cursor comes back at half the size", async () => {
+    const { ctx, patch } = contextReturning({
+      page: [naming(LEGACY_ID)],
+      isDone: false,
+      continueCursor: "next",
+      pageStatus: "SplitRequired",
+    });
 
-    await expect(redactOneStep(ctx, "instagram", LEGACY_ID, { sourceIndex: 1, cursor: "here" })).resolves.toEqual({
+    await expect(redactOneStep(ctx, "instagram", [LEGACY_ID], { sourceIndex: 1, cursor: "here", pageSize: 100 })).resolves.toEqual({
+      done: false,
+      next: { sourceIndex: 1, cursor: "here", pageSize: 50 },
+    });
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  test("halving stops at one row, and a one-row page that still reaches the budget fails instead of moving on", async () => {
+    const { ctx, patch } = contextReturning({ page: [], isDone: false, continueCursor: "next", pageStatus: "SplitRequired" });
+
+    await expect(redactOneStep(ctx, "instagram", [LEGACY_ID], { sourceIndex: 0, cursor: null, pageSize: 3 })).resolves.toMatchObject({
+      next: { pageSize: 1 },
+    });
+    await expect(redactOneStep(ctx, "instagram", [LEGACY_ID], { sourceIndex: 0, cursor: null, pageSize: 1 })).rejects.toThrow(
+      "cut short by the read limit even at one row",
+    );
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  test("a page Convex only recommends splitting is complete: it is redacted and walked on", async () => {
+    const { ctx, patch } = contextReturning({
+      page: [naming(LEGACY_ID)],
+      isDone: false,
+      continueCursor: "next",
+      pageStatus: "SplitRecommended",
+    });
+
+    await expect(redactOneStep(ctx, "instagram", [LEGACY_ID], { sourceIndex: 1, cursor: "here", pageSize: 100 })).resolves.toMatchObject({
       done: false,
       next: { sourceIndex: 1, cursor: "next" },
+    });
+    expect(patch).toHaveBeenCalledWith("row-1", { summary: `Auto-reply DM to ${REDACTED_META_USER} failed` });
+  });
+
+  test("every id of the account is redacted from a row, not only the first", async () => {
+    const { ctx, patch } = contextReturning({
+      page: [{ _id: "row-1", summary: `Instagram account ${OTHER_ID} and ${LEGACY_ID}`, rawPayload: `{"id":"${OTHER_ID}"}` }],
+      isDone: true,
+      continueCursor: "",
+      pageStatus: null,
+    });
+
+    await redactOneStep(ctx, "instagram", [LEGACY_ID, OTHER_ID], { sourceIndex: 1, cursor: null, pageSize: 100 });
+
+    expect(patch).toHaveBeenCalledWith("row-1", {
+      summary: `Instagram account ${REDACTED_META_USER} and ${REDACTED_META_USER}`,
+      rawPayload: `{"id":"${REDACTED_META_USER}"}`,
     });
   });
 
   test("the end of the first source moves to the second, and the end of the last source ends the walk", async () => {
-    const ended = contextReturning({ page: [], isDone: true, continueCursor: "", pageStatus: null });
+    const { ctx: ended } = contextReturning({ page: [], isDone: true, continueCursor: "", pageStatus: null });
 
-    await expect(redactOneStep(ended, "facebook", LEGACY_ID, { sourceIndex: 0, cursor: "x" })).resolves.toEqual({
+    await expect(redactOneStep(ended, "facebook", [LEGACY_ID], { sourceIndex: 0, cursor: "x", pageSize: 100 })).resolves.toEqual({
       done: false,
-      next: { sourceIndex: 1, cursor: null },
+      next: { sourceIndex: 1, cursor: null, pageSize: META_LOG_REDACTION_PAGE_SIZE },
     });
-    await expect(redactOneStep(ended, "facebook", LEGACY_ID, { sourceIndex: 1, cursor: "x" })).resolves.toEqual({ done: true });
+    await expect(redactOneStep(ended, "facebook", [LEGACY_ID], { sourceIndex: 1, cursor: "x", pageSize: 100 })).resolves.toEqual({
+      done: true,
+    });
+  });
+});
+// ─── An Instagram account has two ids (SCRUM-842 round 5, Seat 1) ─────────────────
+//
+// The deauthorize / data-deletion callbacks name the business account id
+// (`instagramBusinessAccountId`). The webhook bodies carry a DIFFERENT id in
+// `entry[].id`, stored as `instagramWebhookAccountId` and cleared by the disconnect.
+// A receipt that says "processed" must leave neither id behind.
+
+describe("SCRUM-842 an Instagram account has two ids", () => {
+  const BUSINESS_ID = "17841400000000842";
+  const WEBHOOK_ID = "17841400000099842";
+  const UNRELATED_BUSINESS_ID = "17841400000011111";
+  const UNRELATED_WEBHOOK_ID = "17841400000022222";
+  let consoleOutput: string[];
+
+  beforeEach(() => {
+    consoleOutput = captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const seedAccount = (t: T, businessId: string, webhookId: string) =>
+    t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic Org", createdAt: Date.now() });
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "JD",
+        enabledPaymentTypes: [],
+        instagramBusinessAccountId: businessId,
+        instagramWebhookAccountId: webhookId,
+        instagramAccessToken: "synthetic-ig-token-842",
+        instagramPageName: "synthetic_ig",
+      });
+      return orgId;
+    });
+
+  const webhookBody = (entryId: string) =>
+    JSON.stringify({ object: "instagram", entry: [{ id: entryId, messaging: [{ sender: { id: OTHER_ID } }] }] });
+
+  async function seedInstagramRows(t: T, businessId: string, webhookId: string) {
+    const inbox = await t.run((ctx) =>
+      ctx.db.insert("webhookLogs", {
+        source: "instagram",
+        status: "success",
+        summary: "Batch with 1 entries",
+        eventId: "synthetic-event-sha",
+        payloadSha256: "synthetic-event-sha",
+        rawPayload: webhookBody(webhookId),
+        payloadPreview: webhookBody(webhookId),
+        payloadTruncated: false,
+        createdAt: Date.now(),
+      }),
+    );
+    const ambiguous = await seedLegacyLog(
+      t,
+      "instagram",
+      `Instagram account ${webhookId} is connected to more than one org; entry skipped`,
+      "error",
+    );
+    const subscription = await seedLegacyLog(t, "instagram", `subscribed_apps failed for IG account ${businessId}`, "error");
+    const oauth = await seedLegacyLog(t, "instagram-oauth", legacyLine("Instagram", businessId, "deletion"));
+    return { inbox, ambiguous, subscription, oauth };
+  }
+
+  async function theWebhookAccountIdIsRedactedEverywhere(path: string) {
+    const t = newTest();
+    await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    await seedAccount(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+    const mine = await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+    const theirs = await seedInstagramRows(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+
+    const res = await post(t, path, await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+    expect(res.status).toBe(200);
+    const code = path.endsWith("data-deletion") ? ((await res.json()) as { confirmation_code: string }).confirmation_code : null;
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const stored = JSON.stringify(await allWebhookLogs(t));
+    expect(stored).not.toContain(BUSINESS_ID);
+    expect(stored).not.toContain(WEBHOOK_ID);
+    const inbox = await logById(t, mine.inbox);
+    expect(inbox?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    expect(inbox?.payloadPreview).toBe(webhookBody(REDACTED_META_USER));
+    expect(inbox?.eventId).toBe("synthetic-event-sha");
+    expect(inbox?.payloadSha256).toBe("synthetic-event-sha");
+    expect((await logById(t, mine.ambiguous))?.summary).toBe(
+      `Instagram account ${REDACTED_META_USER} is connected to more than one org; entry skipped`,
+    );
+    // Another dealer's account is a different person: not one byte of it moves.
+    expect((await logById(t, theirs.inbox))?.rawPayload).toBe(webhookBody(UNRELATED_WEBHOOK_ID));
+    expect((await logById(t, theirs.ambiguous))?.summary).toContain(UNRELATED_WEBHOOK_ID);
+    expect((await logById(t, theirs.oauth))?.summary).toContain(UNRELATED_BUSINESS_ID);
+
+    expect(await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect())).toEqual([]);
+    if (code !== null) {
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
+      expect(typeof status?.completedAt).toBe("number");
+    }
+    await expectSchedulerHoldsNone(t, [BUSINESS_ID, WEBHOOK_ID, ...(code ? [code] : [])]);
+    expect(JSON.stringify(await allDeletionRequests(t))).not.toContain(WEBHOOK_ID);
+    expect(consoleOutput.join("\n")).not.toContain(WEBHOOK_ID);
+    expect(consoleOutput.join("\n")).not.toContain(BUSINESS_ID);
+  }
+
+  test("Instagram deauthorize: the webhook account id is redacted from every stored webhook row, summary and job, not only the id the callback named", () =>
+    theWebhookAccountIdIsRedactedEverywhere("/instagram-deauthorize"));
+  test("Instagram data-deletion: the webhook account id is redacted from every stored webhook row, summary and job, not only the id the callback named", () =>
+    theWebhookAccountIdIsRedactedEverywhere("/instagram-data-deletion"));
+
+  test("the receipt is not complete while the webhook account id is still in a stored row", async () => {
+    const t = newTest();
+    await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const mine = await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+    const res = await post(t, "/instagram-data-deletion", await signedRequest({ user_id: BUSINESS_ID }, INSTAGRAM_SECRET));
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+
+    // The callback source is walked inline; the platform's own source is not yet.
+    expect((await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code }))?.completedAt).toBeNull();
+    expect((await logById(t, mine.inbox))?.rawPayload).toContain(WEBHOOK_ID);
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect((await logById(t, mine.inbox))?.rawPayload).not.toContain(WEBHOOK_ID);
+  });
+
+  test("a callback that names the webhook account id still erases the business account id of the same account", async () => {
+    const t = newTest();
+    await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+    const mine = await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+    const res = await post(t, "/instagram-deauthorize", await signedRequest({ user_id: WEBHOOK_ID }, INSTAGRAM_SECRET));
+    expect(res.status).toBe(200);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const stored = JSON.stringify(await allWebhookLogs(t));
+    expect(stored).not.toContain(BUSINESS_ID);
+    expect(stored).not.toContain(WEBHOOK_ID);
+    expect((await logById(t, mine.subscription))?.summary).toBe(`subscribed_apps failed for IG account ${REDACTED_META_USER}`);
+  });
+
+  test("the disconnect reads the other ids of the account before it clears them, and the account's settings are cleared", async () => {
+    const t = newTest();
+    const orgId = await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+
+    const read = await t.mutation(internal.socialIntegrations.disconnectByInstagramUserId, {
+      instagramBusinessAccountId: BUSINESS_ID,
+    });
+
+    expect(read).toEqual([WEBHOOK_ID]);
+    const settings = await settingsOf(t, orgId);
+    expect(settings?.instagramBusinessAccountId).toBeUndefined();
+    expect(settings?.instagramWebhookAccountId).toBeUndefined();
+    expect(settings?.instagramAccessToken).toBeUndefined();
+    // Nothing connected under this id any more: nothing to read, nothing to fail.
+    await expect(
+      t.mutation(internal.socialIntegrations.disconnectByInstagramUserId, { instagramBusinessAccountId: BUSINESS_ID }),
+    ).resolves.toEqual([]);
+  });
+});
+
+// ─── Pages are bounded by bytes, not only by rows (SCRUM-842 round 5, Seat 2 HIGH) ─
+//
+// A delivery-inbox row keeps the webhook body (up to 700,000 characters). A page of
+// 100 such rows reads far more than the 16 MiB a transaction may read, so the run
+// threw, the cursor never moved and the cron retried the same failing page for ever
+// while the receipt stayed pending. These tests enforce Convex's real transaction
+// limits in convex-test (`transactionLimits: true`: 16 MiB read, 16 MiB written).
+// That is the harness's model of the limits, not a deployment.
+
+describe("SCRUM-842 large webhook bodies cannot wedge the redaction", () => {
+  const BIG_BODY_CHARS = 650_000;
+  const BIG_ROWS = 30; // 30 x ~650 KB is well past 16 MiB, so a 100-row page cannot fit
+  const limitedTest = () =>
+    convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { transactionLimits: true });
+
+  beforeEach(() => {
+    captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Counts the stored bodies that name `id`, that carry the redaction text, and that name
+   * `other`, reading a few large rows per transaction (the test's own reads obey the limit too).
+   */
+  async function bodyReport(t: T, id: string) {
+    const report = { named: 0, redacted: 0, otherUser: 0, total: 0 };
+    let cursor: string | null = null;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const result: { page: Array<{ rawPayload?: string; payloadPreview?: string }>; isDone: boolean; continueCursor: string } =
+        await t.run((ctx) => ctx.db.query("webhookLogs").paginate({ numItems: 8, cursor }));
+      for (const row of result.page) {
+        const text = `${row.rawPayload ?? ""}${row.payloadPreview ?? ""}`;
+        report.total += 1;
+        if (text.includes(id)) report.named += 1;
+        if (text.includes(REDACTED_META_USER)) report.redacted += 1;
+        if (text.includes(OTHER_ID)) report.otherUser += 1;
+      }
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    }
+    return report;
+  }
+
+  /** Big webhook bodies in batches that fit one write transaction; every `plantEvery`-th names the user. */
+  async function seedBigBodies(t: T, source: string, platform: Platform, id: string, plantEvery: number) {
+    const planted: Array<Id<"webhookLogs">> = [];
+    for (let batch = 0; batch < BIG_ROWS; batch += 10) {
+      await t.run(async (ctx) => {
+        for (let i = batch; i < batch + 10; i += 1) {
+          const named = i % plantEvery === 0;
+          const head = JSON.stringify({ object: platform, entry: [{ id: named ? id : OTHER_ID }] });
+          const body = head + "x".repeat(BIG_BODY_CHARS - head.length);
+          const rowId = await ctx.db.insert("webhookLogs", {
+            source: source as never,
+            status: "success",
+            summary: `Batch ${i}`,
+            eventId: `big-event-${source}-${i}`,
+            rawPayload: body,
+            payloadPreview: head,
+            payloadTruncated: false,
+            createdAt: Date.now(),
+          });
+          if (named) planted.push(rowId);
+        }
+      });
+    }
+    return planted;
+  }
+
+  // One literal title per platform so that the SCRUM-761 regression library can bind a record to each.
+  async function aSourceOfLargeBodiesIsRedactedToTheEnd(p: PlatformCase) {
+    const t = limitedTest();
+    const planted = await seedBigBodies(t, p.platform, p.platform, LEGACY_ID, 7);
+    expect(planted.length).toBeGreaterThan(3);
+
+    const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+    expect(res.status).toBe(200);
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const report = await bodyReport(t, LEGACY_ID);
+    expect(report.named).toBe(0);
+    expect(report.redacted).toBe(planted.length);
+    // Rows of another user keep their bodies as written.
+    expect(report.otherUser).toBe(BIG_ROWS - planted.length);
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(typeof status?.completedAt).toBe("number");
+    expect(await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect())).toEqual([]);
+  }
+
+  async function aPageOfLargeBodiesIsHalvedAndTheReceiptStaysPending(p: PlatformCase) {
+    const t = limitedTest();
+    await seedBigBodies(t, p.platform, p.platform, LEGACY_ID, 1);
+    const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    const [before] = await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+    expect(before).toMatchObject({ sourceIndex: 1, cursor: null, pageSize: META_LOG_REDACTION_PAGE_SIZE });
+
+    await t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: before._id });
+
+    const [after] = await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+    expect(after).toMatchObject({ sourceIndex: 1, cursor: null, pageSize: META_LOG_REDACTION_PAGE_SIZE / 2 });
+    expect((await bodyReport(t, LEGACY_ID)).named).toBe(BIG_ROWS);
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+    expect(status?.completedAt).toBeNull();
+  }
+
+  test("Facebook: a source of large bodies is redacted to the end: the walk shrinks its page, finishes, and the receipt completes", () =>
+    aSourceOfLargeBodiesIsRedactedToTheEnd(PLATFORMS[0]));
+  test("Instagram: a source of large bodies is redacted to the end: the walk shrinks its page, finishes, and the receipt completes", () =>
+    aSourceOfLargeBodiesIsRedactedToTheEnd(PLATFORMS[1]));
+  test("Facebook: a page of large bodies is halved and nothing is written or skipped by that attempt; the job keeps its cursor and the receipt stays pending", () =>
+    aPageOfLargeBodiesIsHalvedAndTheReceiptStaysPending(PLATFORMS[0]));
+  test("Instagram: a page of large bodies is halved and nothing is written or skipped by that attempt; the job keeps its cursor and the receipt stays pending", () =>
+    aPageOfLargeBodiesIsHalvedAndTheReceiptStaysPending(PLATFORMS[1]));
+
+  describe.each(PLATFORMS)("$label", (p) => {
+    test("large bodies already in the FIRST source do not fail the callback: it answers with a code and the job finishes", async () => {
+      const t = limitedTest();
+      await seedBigBodies(t, p.logSource, p.platform, LEGACY_ID, 11);
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+
+      expect(res.status).toBe(200);
+      const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect((await bodyReport(t, LEGACY_ID)).named).toBe(0);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: confirmation_code });
+      expect(typeof status?.completedAt).toBe("number");
+    });
+  });
+});
+
+// ─── A job that cannot finish is visible (SCRUM-842 round 5, Seat 2) ──────────────
+//
+// The sweep used to restart a failing job for ever with nothing to show for it. It
+// now counts restarts that moved nothing, reports the job once as an error row in
+// the platform's webhook log, and writes an error line to the Convex logs. Neither
+// carries an identifier or the receipt code, and the receipt stays pending.
+
+describe("SCRUM-842 a wedged redaction job is reported, not retried in silence", () => {
+  let consoleOutput: string[];
+
+  beforeEach(() => {
+    consoleOutput = captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const jobs = (t: T) => t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+  const wedgeReports = async (t: T) =>
+    (await allWebhookLogs(t)).filter((row) => row.status === "error" && row.summary.includes("has not advanced"));
+
+  async function startWedgedJobFor(p: PlatformCase, t: T) {
+    await seedLegacyLog(t, p.platform, POISON_SUMMARY);
+    const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+    const { confirmation_code } = (await res.json()) as { confirmation_code: string };
+    await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
+    const [job] = await jobs(t);
+    expect(job).toBeDefined();
+    return { job, code: confirmation_code };
+  }
+
+  /** One sweep after the job went quiet, with the failing run it schedules drained. */
+  async function sweepOnce(t: T, jobId: Id<"metaLogRedactionJobs">) {
+    await t.run((ctx) => ctx.db.patch(jobId, { updatedAt: Date.now() - 60 * 60 * 1000 }));
+    await t.mutation(internal.metaLogRedaction.resumeStalledMetaLogRedactionJobs, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers).catch(() => undefined);
+  }
+
+  async function aWedgedJobIsReportedOnceAndTheReceiptStaysPending(p: PlatformCase) {
+    const t = newTest();
+    const { job, code } = await startWedgedJobFor(p, t);
+
+    for (let i = 1; i < META_LOG_REDACTION_WEDGED_AFTER_RESTARTS; i += 1) await sweepOnce(t, job._id);
+    expect(await wedgeReports(t)).toEqual([]);
+    expect((await jobs(t))[0]?.stalledRestarts).toBe(META_LOG_REDACTION_WEDGED_AFTER_RESTARTS - 1);
+
+    await sweepOnce(t, job._id);
+    const [report, ...rest] = await wedgeReports(t);
+    expect(rest).toEqual([]);
+    expect(report?.source).toBe(p.logSource);
+    expect(report?.summary).toContain(p.platform);
+    await sweepOnce(t, job._id);
+    expect(await wedgeReports(t)).toHaveLength(1);
+
+    // The logs carry a fixed line, the platform and a count: never an id or the code.
+    const lines = consoleOutput.filter((line) => line.includes("[meta-log-redaction]"));
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const text of [...lines, JSON.stringify(report), JSON.stringify(await allWebhookLogs(t))]) {
+      expect(text).not.toContain(code);
+    }
+    expect(lines.join("\n")).not.toContain(LEGACY_ID);
+    expect(JSON.stringify(report)).not.toContain(LEGACY_ID);
+    const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
+    expect(status?.completedAt).toBeNull();
+    expect(await jobs(t)).toHaveLength(1);
+  }
+
+  test("Facebook: below the threshold nothing is reported; at it exactly one error row appears with no identifier, then none more, and the receipt stays pending", () =>
+    aWedgedJobIsReportedOnceAndTheReceiptStaysPending(PLATFORMS[0]));
+  test("Instagram: below the threshold nothing is reported; at it exactly one error row appears with no identifier, then none more, and the receipt stays pending", () =>
+    aWedgedJobIsReportedOnceAndTheReceiptStaysPending(PLATFORMS[1]));
+
+  describe.each(PLATFORMS)("$label", (p) => {
+    const startWedgedJob = (t: T) => startWedgedJobFor(p, t);
+
+    test("once the fault is gone the same job finishes and the same receipt completes", async () => {
+      const t = newTest();
+      const { job, code } = await startWedgedJob(t);
+      for (let i = 0; i < META_LOG_REDACTION_WEDGED_AFTER_RESTARTS; i += 1) await sweepOnce(t, job._id);
+      const poisoned = (await allWebhookLogs(t)).find((row) => row.summary === POISON_SUMMARY);
+      await t.run((ctx) => ctx.db.patch(poisoned!._id, { summary: "Connected for org recovered" }));
+
+      await sweepOnce(t, job._id);
+
+      expect(await jobs(t)).toEqual([]);
+      const status = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
+      expect(typeof status?.completedAt).toBe("number");
+    });
+
+    test("a committed page resets the count: restarts that were followed by progress are not a wedge", async () => {
+      const t = newTest();
+      await seedFillerLogs(t, p.platform, META_LOG_REDACTION_PAGE_SIZE + 5);
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      expect(res.status).toBe(200);
+      const [job] = await jobs(t);
+      await t.run((ctx) => ctx.db.patch(job._id, { stalledRestarts: META_LOG_REDACTION_WEDGED_AFTER_RESTARTS - 1 }));
+
+      await t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId: job._id });
+
+      expect((await jobs(t))[0]?.stalledRestarts).toBe(0);
+      expect(await wedgeReports(t)).toEqual([]);
+    });
   });
 });

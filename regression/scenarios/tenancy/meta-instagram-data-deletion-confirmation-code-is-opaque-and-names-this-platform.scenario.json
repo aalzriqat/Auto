@@ -1,0 +1,65 @@
+{
+  "id": "meta-instagram-data-deletion-confirmation-code-is-opaque-and-names-this-platform",
+  "fingerprint": "249925359924886901d67ff4c8e6f08e5805d2e2b7acba8386341230db97f786",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "confirmationCode.format",
+      "value": "hex32"
+    },
+    {
+      "observable": "confirmationCode.uniquePerRequest",
+      "value": true
+    },
+    {
+      "observable": "status.platform",
+      "value": "instagram"
+    },
+    {
+      "observable": "status.fields",
+      "value": "platform-completedAt-only"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram data-deletion: the confirmation code is opaque, unique per request, and answers the status URL with this platform"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

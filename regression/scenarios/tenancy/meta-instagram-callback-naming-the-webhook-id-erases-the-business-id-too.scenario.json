@@ -1,0 +1,47 @@
+{
+  "id": "meta-instagram-callback-naming-the-webhook-id-erases-the-business-id-too",
+  "fingerprint": "0585839e4be90a9ca91472054eaeb2300fdff39b9371a7c15082378a76233032",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "instagram-webhook-account-id",
+        "businessAccountIdAlsoHeld": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsBusinessId",
+      "value": false
+    },
+    {
+      "observable": "webhookLogs.containsWebhookId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "a callback that names the webhook account id still erases the business account id of the same account"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

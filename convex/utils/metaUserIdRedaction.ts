@@ -12,16 +12,43 @@
 export const REDACTED_META_USER = "[redacted Meta user]";
 
 /**
- * Rows examined per redaction transaction. A page reads at most this many
- * `webhookLogs` documents and patches at most this many. Most rows are one-line
- * summaries, but the delivery-inbox rows of the `instagram` and `facebook` sources
- * also keep the webhook body (`rawPayload` up to 700,000 characters and a 16 KiB
- * `payloadPreview`), and Convex reads whole documents. 100 rows keeps a page inside
- * the 16 MiB read limit while the average row is below about 160 KB, and is far inside
- * the limits of 32,000 documents scanned and 16,000 written
- * (https://docs.convex.dev/production/state/limits).
+ * The most rows one redaction transaction asks for. Most `webhookLogs` rows are
+ * one-line summaries, so this is the normal page. It is a ceiling, not a promise:
+ * the delivery-inbox rows of the `instagram` and `facebook` sources also keep the
+ * webhook body (`rawPayload` up to 700,000 characters and a 16 KiB `payloadPreview`),
+ * Convex reads whole documents, and 100 such rows would exceed the 16 MiB read limit
+ * of a transaction (https://docs.convex.dev/production/state/limits). The byte budget
+ * below, not this number, is what keeps a page inside that limit.
  */
 export const META_LOG_REDACTION_PAGE_SIZE = 100;
+
+/**
+ * The most bytes one redaction page may read (`maximumBytesRead` of `paginate`,
+ * https://docs.convex.dev/api/interfaces/server.PaginationOptions). Why 6 MiB:
+ *  - A Convex document is at most 1 MiB, so a page of ONE row always fits, and a
+ *    page that reaches the budget can be retried at half the size until it does.
+ *  - A transaction may read 16 MiB and write 16 MiB, separately. Redaction patches
+ *    each row it reads, and the replacement text ("[redacted Meta user]", 20 characters)
+ *    is longer than a short id, so the bytes written can exceed the bytes read. For an
+ *    id of 9 characters or more that growth is below 2.3x, and 6 MiB x 2.3 stays under
+ *    16 MiB. Real Meta ids are 15 digits or more.
+ *  - The job and receipt rows, and the scheduler call, are a few hundred bytes.
+ */
+export const META_LOG_REDACTION_MAX_BYTES_READ = 6 * 1024 * 1024;
+
+/**
+ * The page size to ask for next, from what the last page cost. It targets half the
+ * byte budget at the average row size just seen, so a log of one-line summaries
+ * stays at the full page and a log of large webhook bodies settles at a few rows.
+ * Never below one row, never above `META_LOG_REDACTION_PAGE_SIZE`. A page that
+ * reached the budget anyway is halved by the caller instead (that page is discarded).
+ */
+export function nextRedactionPageSize(rowsRead: number, bytesRead: number): number {
+  if (rowsRead <= 0 || bytesRead <= 0) return META_LOG_REDACTION_PAGE_SIZE;
+  const averageRowBytes = bytesRead / rowsRead;
+  const fitting = Math.floor(META_LOG_REDACTION_MAX_BYTES_READ / 2 / averageRowBytes);
+  return Math.min(META_LOG_REDACTION_PAGE_SIZE, Math.max(1, fitting));
+}
 
 export type MetaPlatform = "facebook" | "instagram";
 
@@ -38,9 +65,15 @@ export function metaOauthLogSource(platform: MetaPlatform): "facebook-oauth" | "
  *  - `<platform>`: the delivery inbox and outcome rows of that platform's webhook
  *    and engagement code (`DM from <id>`, `Auto-reply DM to <id> failed`, the
  *    Instagram `subscribed_apps failed for IG account <id>` rows, the webhook body in
- *    `rawPayload`). The Instagram business account id is both the account id in
- *    `entry[].id` and the id the Instagram callbacks name.
+ *    `rawPayload`).
  * The other platform's sources are never walked.
+ *
+ * An Instagram account has TWO ids in this codebase, and they differ: the callbacks
+ * name the business account id (`instagramBusinessAccountId`, the token exchange's
+ * `user_id`), while webhook bodies carry the id in `entry[].id`, stored as
+ * `instagramWebhookAccountId` (the profile's `user_id`; see schema.ts and
+ * instagramEngagement.ts). The walk therefore redacts a list of ids, not only the id
+ * the callback named; the caller reads the list before the disconnect clears it.
  */
 export function metaLogRedactionSources(
   platform: MetaPlatform,

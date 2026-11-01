@@ -1,0 +1,57 @@
+{
+  "id": "meta-instagram-large-webhook-bodies-are-redacted-to-the-end",
+  "fingerprint": "93b6337f016d792044805da5ac48238bafa2de6d68edfe42f13f73dd04287480",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "sourceRows": 30,
+        "bodySize": "large",
+        "transactionLimits": true,
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "otherUserRows",
+      "value": "unchanged"
+    },
+    {
+      "observable": "receipt.completed",
+      "value": true
+    },
+    {
+      "observable": "jobs.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: a source of large bodies is redacted to the end: the walk shrinks its page, finishes, and the receipt completes"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

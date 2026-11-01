@@ -340,22 +340,57 @@ export const setInstagramLeadCreationConfig = mutation({
   },
 });
 
+/** Settings rows read per index when collecting an account's ids (an account on more than one org is rare, SCRUM-622). */
+const INSTAGRAM_ACCOUNT_ROWS_READ = 5;
+
+/**
+ * Every id this codebase stores for the Instagram account that a callback named,
+ * other than the id it named (SCRUM-842). An account has two: the business account
+ * id the callbacks carry (`instagramBusinessAccountId`) and the different id that
+ * webhook bodies carry in `entry[].id` (`instagramWebhookAccountId`; see the schema).
+ * Rows are found through either index, so the answer is the same whichever of the two
+ * the callback carries. Read it BEFORE the disconnect clears the fields.
+ */
+async function otherInstagramAccountIds(ctx: MutationCtx, calledId: string): Promise<string[]> {
+  const byBusiness = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_instagram_business_account_id", (q) => q.eq("instagramBusinessAccountId", calledId))
+    .take(INSTAGRAM_ACCOUNT_ROWS_READ);
+  const byWebhook = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_instagram_webhook_account_id", (q) => q.eq("instagramWebhookAccountId", calledId))
+    .take(INSTAGRAM_ACCOUNT_ROWS_READ);
+  const ids = new Set<string>();
+  for (const settings of [...byBusiness, ...byWebhook]) {
+    for (const id of [settings.instagramBusinessAccountId, settings.instagramWebhookAccountId]) {
+      if (id !== undefined && id.trim() !== "" && id !== calledId) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
 /**
  * Clears stored Instagram credentials by IG business account ID rather than
  * orgId — used by the deauthorize and data-deletion HTTP callbacks Meta
  * requires for every Instagram Login app, which only identify the user via
  * their signed `user_id`, not our internal orgId.
+ *
+ * Returns the account's OTHER stored ids, read in this same transaction before the
+ * fields are cleared, so the log redaction can erase them too (SCRUM-842: the webhook
+ * account id is not the id the callback names and would otherwise outlive the deletion).
  */
 export const disconnectByInstagramUserId = internalMutation({
   args: { instagramBusinessAccountId: v.string() },
-  handler: async (ctx, args) => {
+  returns: v.array(v.string()),
+  handler: async (ctx, args): Promise<string[]> => {
+    const otherIds = await otherInstagramAccountIds(ctx, args.instagramBusinessAccountId);
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_instagram_business_account_id", (q) =>
         q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId),
       )
       .first();
-    if (!settings) return;
+    if (!settings) return otherIds;
 
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
@@ -366,6 +401,7 @@ export const disconnectByInstagramUserId = internalMutation({
       socialAutoPostEnabled: false,
       instagramAutoReplyEnabled: false,
     });
+    return otherIds;
   },
 });
 
@@ -389,6 +425,7 @@ export const recordMetaDataDeletion = internalMutation({
     code: v.string(),
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     metaUserId: v.string(),
+    otherMetaUserIds: v.optional(v.array(v.string())),
   },
   returns: v.null(),
   handler: async (ctx, args): Promise<null> => {
@@ -402,6 +439,7 @@ export const recordMetaDataDeletion = internalMutation({
     await startMetaLogRedaction(ctx, {
       platform: args.platform,
       metaUserId: args.metaUserId,
+      otherMetaUserIds: args.otherMetaUserIds,
       receiptCode: args.code,
     });
     return null;

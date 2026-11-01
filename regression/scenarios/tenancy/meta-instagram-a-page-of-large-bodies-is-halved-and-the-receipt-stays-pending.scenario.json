@@ -1,0 +1,67 @@
+{
+  "id": "meta-instagram-a-page-of-large-bodies-is-halved-and-the-receipt-stays-pending",
+  "fingerprint": "c2181fb9cc07a5cc4f82131602ffe2b7fe645ff247436aa1e69b33842562d597",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-data-deletion",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "sourceRows": 30,
+        "bodySize": "large",
+        "transactionLimits": true,
+        "signed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "redactionJob.runOnce",
+      "input": {
+        "attempt": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "job.pageSize",
+      "value": "halved"
+    },
+    {
+      "observable": "job.cursor",
+      "value": "unchanged"
+    },
+    {
+      "observable": "rowsWrittenByThatAttempt",
+      "value": 0
+    },
+    {
+      "observable": "receipt.completed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram: a page of large bodies is halved and nothing is written or skipped by that attempt; the job keeps its cursor and the receipt stays pending"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

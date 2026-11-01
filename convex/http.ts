@@ -353,8 +353,12 @@ interface MetaCallbackPlatform {
   deauthorizePath: string;
   dataDeletionPath: string;
   appSecret: (env: ReturnType<typeof getValidatedEnv>) => string | undefined;
-  /** Disconnects the dealer's connection for the signed-in Meta user id. */
-  disconnect: (ctx: ActionCtx, metaUserId: string) => Promise<unknown>;
+  /**
+   * Disconnects the dealer's connection for the signed-in Meta user id and returns the
+   * account's OTHER ids, read in the disconnect's own transaction before it cleared them,
+   * so the log redaction erases those too (an Instagram account has two ids, SCRUM-842).
+   */
+  disconnect: (ctx: ActionCtx, metaUserId: string) => Promise<string[]>;
 }
 
 /**
@@ -394,7 +398,7 @@ async function handleMetaCallback(
     return new Response("Invalid signature", { status: 400 });
 
   const metaUserId = String(payload.user_id);
-  await config.disconnect(ctx, metaUserId);
+  const otherMetaUserIds = await config.disconnect(ctx, metaUserId);
 
   if (kind === "deauthorize") {
     // Rows written before SCRUM-842 still name this user: redact them in place.
@@ -403,6 +407,7 @@ async function handleMetaCallback(
       await ctx.runMutation(internal.metaLogRedaction.startMetaLogRedactionForUser, {
         platform: config.platform,
         metaUserId,
+        otherMetaUserIds,
       });
     } catch (error) {
       return metaCallbackFailure(error);
@@ -425,6 +430,7 @@ async function handleMetaCallback(
       code: confirmationCode,
       platform: config.platform,
       metaUserId,
+      otherMetaUserIds,
     });
   } catch (error) {
     return metaCallbackFailure(error);
@@ -1543,11 +1549,16 @@ registerMetaCallbackRoutes({
   // id from orgSettings, which removes the connection synchronously with no async
   // job. The revocation fence (`facebookRevocations`) is separate and retained
   // (SCRUM-807); the status page claims only the connection (SCRUM-842).
-  disconnect: (ctx, metaUserId) =>
-    ctx.runMutation(
+  // No second id to read: webhook bodies carry Page ids and page-scoped sender ids,
+  // and the connecting user's own id (the one the callback names, redacted anyway)
+  // practically never appears there.
+  disconnect: async (ctx, metaUserId) => {
+    await ctx.runMutation(
       internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
       { facebookConnectedByUserId: metaUserId },
-    ),
+    );
+    return [];
+  },
 });
 
 // ─── Facebook Page comments + Messenger DMs webhook ────────────────────────

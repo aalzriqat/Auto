@@ -1,0 +1,54 @@
+{
+  "id": "meta-instagram-deauthorize-leaves-no-user-id-in-log-response-request-or-console",
+  "fingerprint": "01b20bba2e9b8a907d190ea27d557f9e669be722a4d47db2dc3fed741463e3cd",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum842-pr740",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "meta-callback",
+        "org": "A"
+      },
+      "action": "http.instagram-deauthorize",
+      "input": {
+        "userId": "synthetic-meta-user",
+        "signed": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "webhookLogs.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "response.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "storedRequests.containsUserId",
+      "value": false
+    },
+    {
+      "observable": "console.containsUserId",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-842#description",
+      "digest": "b0a752a78e01529f92fed0bb6e926db161be76cc56424510cc97eb9e264a7099"
+    }
+  ],
+  "impl": {
+    "file": "convex/metaDataDeletion.scrum842.test.ts",
+    "testName": "Instagram deauthorize: the Meta user id is in no log row, response, stored request or console output"
+  },
+  "matrixRow": "SCRUM-842-meta-erasure"
+}

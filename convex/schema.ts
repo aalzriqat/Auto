@@ -6600,12 +6600,23 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
   // stalled-job sweep (metaLogRedaction.ts) restart a chain that died. The scheduled
   // function that advances it is given this row's own document id, never the Meta
   // user id or the receipt code.
+  // `metaUserId` is the id the callback named. `otherMetaUserIds` are the other ids
+  // of the same account, read in the transaction that disconnected it (an Instagram
+  // account has a business account id AND a different webhook account id, and the
+  // stored webhook bodies carry the second); at most a handful, all redacted and all
+  // erased with the row. `pageSize` is the page the next step asks for: it is halved
+  // when a page of large webhook bodies reaches the byte budget and follows the row
+  // size afterwards. `stalledRestarts` counts sweep restarts with no page committed
+  // in between; at a threshold the sweep reports the job as wedged.
   metaLogRedactionJobs: defineTable({
     platform: v.union(v.literal("facebook"), v.literal("instagram")),
     metaUserId: v.string(),
+    otherMetaUserIds: v.optional(v.array(v.string())),
     receiptCode: v.optional(v.string()),
     sourceIndex: v.number(),
     cursor: v.union(v.string(), v.null()),
+    pageSize: v.optional(v.number()),
+    stalledRestarts: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_updatedAt", ["updatedAt"]),
 

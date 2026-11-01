@@ -1,5 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { maskMetaErrorForAdmin, maskMetaUserIdsForAdmin, metaOauthLogSource, redactMetaUserIdInText, REDACTED_META_USER } from "./metaUserIdRedaction";
+import {
+  maskMetaErrorForAdmin,
+  maskMetaUserIdsForAdmin,
+  META_LOG_REDACTION_MAX_BYTES_READ,
+  META_LOG_REDACTION_PAGE_SIZE,
+  metaOauthLogSource,
+  nextRedactionPageSize,
+  redactMetaUserIdInText,
+  REDACTED_META_USER,
+} from "./metaUserIdRedaction";
 
 // SCRUM-842: the one definition of "a Meta user id in a log summary" shared by
 // the stored-row redaction and the admin reader. Ids here are synthetic.
@@ -103,5 +112,33 @@ describe("maskMetaErrorForAdmin", () => {
       "Webhook subscription failed; provider detail withheld.",
     );
     expect(maskMetaErrorForAdmin("clerk", `error ${ID}`)).toBe(`error ${ID}`);
+  });
+});
+
+describe("nextRedactionPageSize", () => {
+  const MiB = 1024 * 1024;
+
+  test("a page of one-line summaries stays at the full page", () => {
+    expect(nextRedactionPageSize(100, 100 * 300)).toBe(META_LOG_REDACTION_PAGE_SIZE);
+  });
+
+  test("an empty page, or no information, asks for the full page", () => {
+    expect(nextRedactionPageSize(0, 0)).toBe(META_LOG_REDACTION_PAGE_SIZE);
+    expect(nextRedactionPageSize(5, 0)).toBe(META_LOG_REDACTION_PAGE_SIZE);
+  });
+
+  test("large webhook bodies get a small page that fits half the byte budget", () => {
+    const next = nextRedactionPageSize(4, 4 * 700_000);
+    expect(next).toBe(Math.floor(META_LOG_REDACTION_MAX_BYTES_READ / 2 / 700_000));
+    expect(next * 700_000).toBeLessThanOrEqual(META_LOG_REDACTION_MAX_BYTES_READ / 2);
+  });
+
+  test("it never asks for fewer than one row, even if one row is as large as a document can be", () => {
+    expect(nextRedactionPageSize(1, 1 * MiB)).toBeGreaterThanOrEqual(1);
+    expect(nextRedactionPageSize(1, 100 * MiB)).toBe(1);
+  });
+
+  test("the byte budget leaves room for the rewrite: below the 16 MiB read and write limits at 2.3x growth", () => {
+    expect(META_LOG_REDACTION_MAX_BYTES_READ * 2.3).toBeLessThan(16 * MiB);
   });
 });
