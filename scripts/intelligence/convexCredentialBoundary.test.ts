@@ -187,6 +187,11 @@ function localUses(workflow: Workflow): string[] {
 
 // sha256 of each workflow that can reach a Convex credential.
 const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
+  // SCRUM-344: new default-branch workflow_run controller for pinned historical
+  // snapshots. Dispatch is secretless; preview creation/cleanup stays in the
+  // trusted controller. The coordinator must review this new credential path.
+  "trusted-oracle-catch-rate.yml":
+    "86262131268a96f8d39da23e697cc1bae3211397b6769fa87b6a0e6e317b0171",
   // SCRUM-826: re-pinned for two prepare-job steps only — the trusted
   // pre-provisioning coverage gate (`pnpm browser-swarm:coverage-gate` in
   // `trusted/`, no secrets, no candidate path) and the upload of its refusal
