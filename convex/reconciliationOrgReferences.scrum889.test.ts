@@ -63,8 +63,8 @@ afterEach(async () => {
 });
 
 /** Org A (the caller, with a chart and an open period) and org B (a second tenant). */
-async function seed(tag: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+async function seed(tag: string, options?: { transactionLimits?: boolean }) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB, options);
   seededConvexes.push(t);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S889 A ${tag}`, createdAt: Date.now() }));
   const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S889 B ${tag}`, createdAt: Date.now() }));
@@ -413,7 +413,7 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
       ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
     ))!._id;
   /** `count` A/P credit lines, each under its own same-org POSTED entry dated inside the open period. */
-  async function inPeriodApLines(s: Seed, count: number) {
+  async function inPeriodApLines(s: Seed, count: number, descriptionChars = 0) {
     const accountId = await apAccount(s);
     for (let i = 0; i < count; i += 1) {
       const entryId = await insertEntry(s, s.orgId);
@@ -421,19 +421,21 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
         ctx.db.insert("journalLines", {
           orgId: s.orgId, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
           scale: 3, accountingDate: Date.now() - 1000,
+          ...(descriptionChars > 0 ? { description: "d".repeat(descriptionChars) } : {}),
         })
       );
     }
     return accountId;
   }
   /** `count` A/P lines inside the period whose same-org parent entry is dated after the cutoff, so it is outside the period's entry set. */
-  async function apLinesWithParentOutsideTheEntrySet(s: Seed, count: number) {
+  async function apLinesWithParentOutsideTheEntrySet(s: Seed, count: number, memoChars = 0) {
     const accountId = await apAccount(s);
     for (let i = 0; i < count; i += 1) {
       const entryId = await s.t.run((ctx) =>
         ctx.db.insert("journalEntries", {
           orgId: s.orgId, journalNumber: "RAW", accountingDate: Date.now() + 30 * 86_400_000, periodId: s.periodId, sourceType: "raw",
-          sourceId: "raw", category: "SYSTEM", memo: "raw", status: "POSTED", postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+          sourceId: "raw", category: "SYSTEM", memo: memoChars > 0 ? "m".repeat(memoChars) : "raw", status: "POSTED", postedBy: s.userId,
+          postedAt: Date.now(), createdAt: Date.now(),
         })
       );
       await s.t.run((ctx) =>
@@ -445,9 +447,17 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
     }
     return accountId;
   }
-  const checked = (s: Seed, accountId: Id<"chartOfAccounts">, limit: number) =>
-    s.t.run((ctx) => getCumulativeBalancesAsOfChecked(ctx, s.orgId, asOf(), [accountId], limit));
-  const door = (s: Seed, limit: number) => s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, undefined, { readLimit: limit }));
+  // Tests of the document budget leave the byte budget unreachable; the byte tests set it explicitly.
+  const checked = (s: Seed, accountId: Id<"chartOfAccounts">, limit: number, bytes: number = Number.MAX_SAFE_INTEGER) =>
+    s.t.run((ctx) => getCumulativeBalancesAsOfChecked(ctx, s.orgId, asOf(), [accountId], limit, bytes));
+  const door = (s: Seed, limit: number, bytes?: number) =>
+    s.t.run((ctx) => computeSupplierPayablesReconciliation(ctx, s.orgId, undefined, { readLimit: limit, readBytesLimit: bytes }));
+  /** The serialized size of every line on `accountId`, summed the way the budget measures it (these fixtures are ASCII, so characters equal bytes). */
+  const lineBytes = (s: Seed, accountId: Id<"chartOfAccounts">) =>
+    s.t.run(async (ctx) =>
+      (await ctx.db.query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", s.orgId).eq("accountId", accountId)).collect())
+        .reduce((sum, line) => sum + JSON.stringify(line).length, 0)
+    );
 
   test("B4: more control-account lines than the budget is OVER_LIMIT, not a balance", async () => {
     const s = await seed("b4lines");
@@ -525,5 +535,94 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
     const r = await apRecon(s);
     expect(r.status).toBe("AVAILABLE");
     expect(r.byCurrency.JOD.glBalanceMinor).toBe(6 * AMOUNT_MINOR);
+  });
+
+  // The verification pass is also budgeted in bytes (the document budget alone let a few huge lines through).
+  // A `journalLines.description` and a `journalEntries.memo` are unbounded strings, so a handful of documents can
+  // exceed the 16 MiB a Convex function may read. Sizes below are set so that the document budget is never the
+  // reason for the refusal.
+  const LONG_DESCRIPTION = 20_000;
+  const LONG_MEMO = 30_000;
+
+  test("B4 bytes: lines whose serialized size exceeds the byte budget are OVER_LIMIT, not a balance", async () => {
+    const s = await seed("b4bytes");
+    const accountId = await inPeriodApLines(s, 3, LONG_DESCRIPTION);
+    expect(await checked(s, accountId, 100, 40_000)).toEqual({ status: "OVER_LIMIT" });
+    const r = await door(s, 100, 40_000);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OVER_LIMIT");
+    expect(r.isReconciled).toBe(false);
+    expect(r.currencies).toEqual([]);
+    expect(r.byCurrency).toEqual({});
+  });
+
+  test("B4 bytes: a parent entry read is charged to the byte budget", async () => {
+    const s = await seed("b4bytesparents");
+    // Two short lines (about 0.4 KB each) whose parents sit outside the entry set and carry a 30 KB memo.
+    const accountId = await apLinesWithParentOutsideTheEntrySet(s, 2, LONG_MEMO);
+    // One parent fits under 40,000 bytes with both lines; the second parent does not.
+    expect(await checked(s, accountId, 100, 40_000)).toEqual({ status: "OVER_LIMIT" });
+    expect((await door(s, 100, 40_000)).unavailableReason).toBe("OVER_LIMIT");
+  });
+
+  test("B4 bytes: the budget is exact - a total equal to it is read, one byte less is refused", async () => {
+    const s = await seed("b4bytesedge");
+    const accountId = await inPeriodApLines(s, 3, LONG_DESCRIPTION);
+    const total = await lineBytes(s, accountId);
+    expect(total).toBeGreaterThan(60_000);
+    expect((await checked(s, accountId, 100, total)).status).toBe("OK");
+    expect(await checked(s, accountId, 100, total - 1)).toEqual({ status: "OVER_LIMIT" });
+  });
+
+  test("B4 bytes CONTROL: the same lines under the byte budget are read and summed", async () => {
+    const s = await seed("b4bytesok");
+    const accountId = await inPeriodApLines(s, 3, LONG_DESCRIPTION);
+    const r = await checked(s, accountId, 100, 100_000);
+    expect(r).toEqual({ status: "OK", balances: [{ accountId, currency: "JOD", debitMinor: 0, creditMinor: 3 * AMOUNT_MINOR }] });
+    const door100 = await door(s, 100, 100_000);
+    expect(door100.status).toBe("AVAILABLE");
+    expect(door100.byCurrency.JOD.glBalanceMinor).toBe(3 * AMOUNT_MINOR);
+  });
+
+  test("B4 bytes CONTROL: the public supplierPayablesReconciliation still reconciles ordinary lines with the default byte budget", async () => {
+    const s = await seed("b4bytespublic");
+    await inPeriodApLines(s, 6, 200);
+    const r = await apRecon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.byCurrency.JOD.glBalanceMinor).toBe(6 * AMOUNT_MINOR);
+  });
+});
+
+/**
+ * The same refusal with convex-test's transaction limits enforced (`transactionLimits: true`, the harness
+ * convex/dealReadsBoundedUnderLimits.test.ts uses): 12 balanced journals, 24 A/P lines, each with a
+ * 400,000-character description. The entry walk reads 9.6 MB; before the byte budget the extra verification pass
+ * read the same lines again and the query threw "Read too much data in a single function execution" instead of
+ * answering. Evidence boundary: convex-test's own approximation of the 16 MiB limit, not the Convex backend
+ * (SCRUM-762 owns the real-backend measurement).
+ */
+describe("SCRUM-889 - the byte budget keeps the verification pass inside the read limit (B4, limits enforced)", () => {
+  test("B4 bytes: 12 journals with 400,000-character line descriptions answer OVER_LIMIT, they do not throw", async () => {
+    const s = await seed("b4bytesreal", { transactionLimits: true });
+    const accountId = (await s.t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
+    ))!._id;
+    for (let i = 0; i < 12; i += 1) {
+      const entryId = await insertEntry(s, s.orgId);
+      await s.t.run(async (ctx) => {
+        await ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
+          scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(400_000),
+        });
+        await ctx.db.insert("journalLines", {
+          orgId: s.orgId, journalEntryId: entryId, lineNumber: 2, accountId, debitMinor: AMOUNT_MINOR, creditMinor: 0,
+          currency: "JOD", scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(400_000),
+        });
+      });
+    }
+    const r = await apRecon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OVER_LIMIT");
+    expect(r.isReconciled).toBe(false);
   });
 });
