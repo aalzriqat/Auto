@@ -371,6 +371,8 @@ describe("Collections", () => {
         .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId))
         .unique();
       expect(payment?.method).toBe("CHEQUE");
+      // SCRUM-264: the clearing time is a real moment, even when it lands on a UTC midnight.
+      expect(payment?.paymentDateKind).toBe("instant");
       expect(payment?.status).toBe("POSTED");
       expect(payment?.canonicalPaymentId).toBeTruthy();
       expect(payment?.paymentAllocationId).toBeTruthy();

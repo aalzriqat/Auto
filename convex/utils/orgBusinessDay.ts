@@ -15,9 +15,9 @@
  *    idea: a date that belongs to no zone, carried here as the UTC midnight of that date.
  *    https://tc39.es/proposal-temporal/docs/plaindate.html
  *
- * WHICH KIND A STORED VALUE IS comes from the field and the writer that stored it, never from the
- * shape of the number. `collectionPayments.paymentDate` is the one field that holds both kinds; see
- * `paymentDateProvenance` for the writer table and the rule.
+ * WHICH KIND A STORED VALUE IS comes from the field and the writer that stored it (for payments,
+ * `paymentDateKind`), never from the shape of the number alone. `collectionPayments.paymentDate` is
+ * the one field that holds both kinds; see `paymentDateProvenance` for the writer table and the rule.
  *
  * The zone arithmetic uses `Intl.DateTimeFormat` (ECMA-402), which reads the IANA tz database for each
  * instant, so it is correct across daylight-saving changes and does not assume a fixed offset. A zone
@@ -230,36 +230,52 @@ export function isUtcMidnight(value: number): boolean {
 }
 
 /**
- * WHICH KIND OF DATE `collectionPayments.paymentDate` HOLDS, decided by the writer's stored footprint.
+ * WHICH KIND OF DATE `collectionPayments.paymentDate` HOLDS.
  *
- * Writers (every `insert("collectionPayments"` outside tests, checked 2026-11-01):
+ * A calendar date and an instant are different concepts (TC39 Temporal `PlainDate` vs `Instant`,
+ * https://tc39.es/proposal-temporal/docs/plaindate.html), and a stored number does not say which one it
+ * is. Timestamp equality in particular proves nothing: the Record Payment form stores the picked date's
+ * key in `paymentDate` and `Date.now()` in `createdAt`, and the two are equal whenever the write clock
+ * is exactly that UTC midnight (Seat 2, PR #741 round 3). So the WRITER records the answer in
+ * `paymentDateKind`, and this function trusts it over every heuristic.
  *
- *  | writer                                   | paymentDate                | createdAt       | kind |
- *  | collections.ts recordPayment :1816       | args.paymentDate           | Date.now()      | KEY from both UIs (`dateInputToUtcMs`), any integer from an API caller |
- *  | collections.ts clearCheque :2547         | clearedAt ?? Date.now()    | Date.now()      | INSTANT, and the only writer that sets `chequeId` |
- *  | collections.ts refund approval :3609     | Date.now()                 | same            | INSTANT |
- *  | paymentIntents.ts settlement :430        | Date.now() (occurredAt)    | same            | INSTANT |
- *  | utils/depositRecording.ts :190           | Date.now()                 | same            | INSTANT |
- *  | utils/depositHelpers.ts payOutDepositSlice :981   | Date.now() (deposits.ts) | same      | INSTANT |
- *  | utils/depositHelpers.ts releaseHeldDeposit :1250  | occurredAt ?? Date.now() | same      | INSTANT from deposits.ts; the sale's date from utils/saleCompletion.ts (`occurredAt: saleDate`, a UTC midnight key from SaleDialog, an instant from sales.ts completeFromQuote) |
+ * Writers (every `insert("collectionPayments"` outside tests, checked 2026-11-01), each setting
+ * `paymentDateKind` explicitly; `convex/paymentDateKindWriters.scrum264.test.ts` fails if one does not:
  *
- * So, from the row alone:
+ *  | writer                                     | paymentDate               | paymentDateKind |
+ *  | collections.ts recordPayment               | args.paymentDate          | "calendarKey" when it is a UTC midnight (both UIs send `dateInputToUtcMs`), "instant" for any other integer an API caller sends |
+ *  | collections.ts clearCheque                 | clearedAt ?? Date.now()   | "instant" (and the only writer that sets `chequeId`) |
+ *  | collections.ts refund approval             | Date.now()                | "instant" |
+ *  | paymentIntents.ts settlement               | occurredAt (Date.now())   | "instant" |
+ *  | utils/depositRecording.ts                  | Date.now()                | "instant" |
+ *  | utils/depositHelpers.ts payOutDepositSlice | occurredAt (deposits.ts passes Date.now()) | "instant" |
+ *  | utils/depositHelpers.ts releaseHeldDeposit | occurredAt ?? Date.now()  | "instant" from deposits.ts (no occurredAt); "saleDate" from utils/saleCompletion.ts (`occurredAt: saleDate`), a UTC midnight key from SaleDialog and an instant from sales.ts completeFromQuote |
+ *
+ * ROWS WITHOUT THE FIELD (written before it existed; no backfill, see below) fall back to the row's own
+ * footprint, and the footprint cannot always decide:
  *  1. `chequeId` set               -> EVENT_INSTANT (clearCheque).
  *  2. not a UTC midnight           -> EVENT_INSTANT (a calendar key is always a UTC midnight, so a
  *                                     value that is not one cannot be a key).
  *  3. UTC midnight, createdAt differs -> CALENDAR_KEY. The form stamps createdAt with the write time,
  *                                     which is not the picked date's midnight.
- *  4. UTC midnight, createdAt equal  -> system writers store one clock reading in both fields, so this
- *                                     is an EVENT_INSTANT; except an OUT/REFUND row, which the sale
- *                                     completion deposit refund also writes with the sale's date key.
- *                                     Nothing stored tells the two apart: KEY_OR_INSTANT.
+ *  4. UTC midnight, createdAt equal   -> KEY_OR_INSTANT, for every direction and method. A system writer
+ *                                     stores one clock reading in both fields, but so does the form when
+ *                                     its write lands on that midnight. Nothing stored tells them apart.
  *
  * KEY_OR_INSTANT has no truthful single answer when the key's date and the instant's date differ (a
  * zone west of UTC); `paymentOnOrgDay` reports it UNPLACEABLE then, so a report says it is incomplete
- * instead of filing the payment under a day it may not belong to. East of UTC both readings name the
- * same date and it is filed there.
+ * and a reconciliation refuses (`DATE_UNCERTAIN`) instead of filing the payment under a day it may not
+ * belong to. East of UTC both readings name the same date and it is filed there (Bloom, Asia/Amman).
+ *
+ * Schema evolution: `paymentDateKind` is optional, which Convex accepts for existing documents without
+ * a migration (https://docs.convex.dev/database/schemas). It needs no backfill for the pilot: a
+ * historical row that rule 4 cannot place is the rare collision case (about 1 write in 86.4 million),
+ * and it is reported, never guessed.
  */
 export type PaymentDateProvenance = "CALENDAR_KEY" | "EVENT_INSTANT" | "KEY_OR_INSTANT";
+
+/** What the writer recorded `paymentDate` to be (`collectionPayments.paymentDateKind`). */
+export type PaymentDateKind = "calendarKey" | "instant" | "saleDate";
 
 export interface PaymentDateFacts {
   paymentDate: number;
@@ -267,16 +283,35 @@ export interface PaymentDateFacts {
   direction: "IN" | "OUT";
   method: string;
   chequeId?: unknown;
+  /** Absent on rows written before the field existed. */
+  paymentDateKind?: PaymentDateKind;
+}
+
+/**
+ * The `paymentDateKind` a writer should store for a value it was given as a calendar date: a key only
+ * when it is a UTC midnight, otherwise the instant it can only be.
+ */
+export function paymentDateKindOfCalendarInput(paymentDate: number): PaymentDateKind {
+  return isUtcMidnight(paymentDate) ? "calendarKey" : "instant";
 }
 
 export function paymentDateProvenance(row: PaymentDateFacts): PaymentDateProvenance {
+  switch (row.paymentDateKind) {
+    case "calendarKey":
+      // A key is always a UTC midnight; one that is not cannot be a key, so it is read as the instant it is.
+      return isUtcMidnight(row.paymentDate) ? "CALENDAR_KEY" : "EVENT_INSTANT";
+    case "instant":
+      return "EVENT_INSTANT";
+    case "saleDate":
+      return isUtcMidnight(row.paymentDate) ? "KEY_OR_INSTANT" : "EVENT_INSTANT";
+    case undefined:
+      break;
+  }
   if (row.chequeId !== undefined) return "EVENT_INSTANT";
   if (!isUtcMidnight(row.paymentDate)) return "EVENT_INSTANT";
   if (row.createdAt !== row.paymentDate) return "CALENDAR_KEY";
-  if (row.direction === "OUT" && row.method === "REFUND") return "KEY_OR_INSTANT";
-  return "EVENT_INSTANT";
+  return "KEY_OR_INSTANT";
 }
-
 /**
  * Everything needed to decide, for one organization date, which `collectionPayments` rows are on it.
  *  - `ranges` are the inclusive `paymentDate` index ranges to read: the zone's real span of the date

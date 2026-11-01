@@ -196,13 +196,52 @@ describe("SCRUM-264 payment-date ranges file every payment under exactly one org
     expect(paymentDateProvenance(facts({ paymentDate: midnight + 1 }))).toBe("EVENT_INSTANT");
     // The form stamps createdAt with the write time, which is not the picked date's midnight.
     expect(paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight - 3_600_000 }))).toBe("CALENDAR_KEY");
-    // System writers store one clock reading in both fields.
-    expect(paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight }))).toBe("EVENT_INSTANT");
-    expect(paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight, direction: "OUT" }))).toBe("EVENT_INSTANT");
-    // ...except an OUT/REFUND row, which the sale-close deposit refund also writes with the sale's date key.
+    // Seat 2 round 3: createdAt === paymentDate at a UTC midnight proves nothing. System writers store one
+    // clock reading in both fields, but the Record Payment form stores the picked date's key in one and
+    // Date.now() in the other, and they are equal whenever the write lands exactly on that midnight.
+    // So a row WITHOUT paymentDateKind (written before the field existed) is undecidable, whatever its
+    // direction or method, and is placed only where both readings name the same date.
+    expect(paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight }))).toBe("KEY_OR_INSTANT");
+    expect(paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight, direction: "OUT" }))).toBe("KEY_OR_INSTANT");
     expect(
       paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight, direction: "OUT", method: "REFUND" })),
     ).toBe("KEY_OR_INSTANT");
+  });
+
+  test("paymentDateKind, when the writer stored it, overrides every footprint heuristic", () => {
+    const midnight = Date.parse("2026-11-01T00:00:00.000Z");
+    const equal = { paymentDate: midnight, createdAt: midnight };
+    expect(paymentDateProvenance(facts({ ...equal, paymentDateKind: "calendarKey" }))).toBe("CALENDAR_KEY");
+    expect(paymentDateProvenance(facts({ ...equal, paymentDateKind: "instant" }))).toBe("EVENT_INSTANT");
+    // An instant stays an instant even where the footprint would say "key" (createdAt differs)...
+    expect(
+      paymentDateProvenance(facts({ paymentDate: midnight, createdAt: midnight - 1, paymentDateKind: "instant" })),
+    ).toBe("EVENT_INSTANT");
+    // ...and a key stays a key even for an OUT/REFUND row or a row with a chequeId.
+    expect(
+      paymentDateProvenance(facts({ ...equal, direction: "OUT", method: "REFUND", paymentDateKind: "calendarKey" })),
+    ).toBe("CALENDAR_KEY");
+    // A sale date is a key from one screen and an instant from another: undecidable at a UTC midnight, an
+    // instant anywhere else (a key is always a UTC midnight).
+    expect(paymentDateProvenance(facts({ ...equal, paymentDateKind: "saleDate" }))).toBe("KEY_OR_INSTANT");
+    expect(paymentDateProvenance(facts({ paymentDate: midnight + 1, paymentDateKind: "saleDate" }))).toBe("EVENT_INSTANT");
+    // A "calendarKey" that is not a UTC midnight is not a key; it is read as the instant it is.
+    expect(paymentDateProvenance(facts({ paymentDate: midnight + 1, paymentDateKind: "calendarKey" }))).toBe("EVENT_INSTANT");
+  });
+
+  test("Seat 2 round 3: a New York form payment for 1 Nov stamped at 00:00:00.000Z stays on 1 Nov; the same row without the field is uncertain", () => {
+    const midnight = Date.parse("2026-11-01T00:00:00.000Z");
+    const oct31 = orgDayWindow("America/New_York", { year: 2026, month: 10, day: 31 });
+    const nov1 = orgDayWindow("America/New_York", { year: 2026, month: 11, day: 1 });
+    const stamped = facts({ paymentDate: midnight, createdAt: midnight, paymentDateKind: "calendarKey" });
+    expect(paymentOnOrgDay(nov1, stamped)).toBe("IN_DAY");
+    expect(paymentOnOrgDay(oct31, stamped)).toBe("NOT_IN_DAY");
+    const historical = facts({ paymentDate: midnight, createdAt: midnight });
+    expect(paymentOnOrgDay(nov1, historical)).toBe("UNPLACEABLE");
+    expect(paymentOnOrgDay(oct31, historical)).toBe("UNPLACEABLE");
+    // East of UTC both readings agree: filed once, no warning (the Bloom path).
+    expect(paymentOnOrgDay(orgDayWindow("Asia/Amman", { year: 2026, month: 11, day: 1 }), historical)).toBe("IN_DAY");
+    expect(paymentOnOrgDay(orgDayWindow("Asia/Amman", { year: 2026, month: 10, day: 31 }), historical)).toBe("NOT_IN_DAY");
   });
 
   test("New York: an instant at 00:00:00.000Z on 1 Nov is 20:00 on 31 Oct, not a 1 Nov key", () => {

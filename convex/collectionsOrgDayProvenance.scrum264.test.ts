@@ -113,12 +113,12 @@ describe("SCRUM-264 Seat 2 finding 1: an event instant at 00:00:00.000Z is not a
     const s = await seed(t, "America/New_York");
     const chequeId = await insertCheque(t, s);
     await insertPayments(t, s, [
-      // deposit receipt / payment link: createdAt is the same clock reading
-      { at: midnightInstant, amount: 1 },
+      // deposit receipt / payment link: createdAt is the same clock reading; the writer says it is an instant
+      { at: midnightInstant, amount: 1, paymentDateKind: "instant" },
       // clearCheque: chequeId is set, createdAt is its own Date.now()
       { at: midnightInstant, amount: 2, method: "CHEQUE", chequeId, createdAt: midnightInstant + 5 },
       // refund approval paid in cash
-      { at: midnightInstant, amount: 4, direction: "OUT", method: "CASH" },
+      { at: midnightInstant, amount: 4, direction: "OUT", method: "CASH", paymentDateKind: "instant" },
     ]);
     const day = (month: number, d: number) =>
       s.asFinance.query(api.collections.dailyCollectionList, { orgId: s.orgId, businessDate: key(2026, month, d) });
@@ -137,7 +137,7 @@ describe("SCRUM-264 Seat 2 finding 1: an event instant at 00:00:00.000Z is not a
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const s = await seed(t, "America/New_York");
     await insertPayments(t, s, [
-      { at: midnightInstant, amount: 8 },
+      { at: midnightInstant, amount: 8, paymentDateKind: "instant" },
       { at: key(2026, 11, 1), amount: 100, createdAt: Date.parse("2026-10-31T13:00:00.000Z") }, // form key for 1 Nov
     ]);
     const summary = await s.asFinance.query(api.collections.summary, { orgId: s.orgId });
@@ -149,7 +149,7 @@ describe("SCRUM-264 Seat 2 finding 1: an event instant at 00:00:00.000Z is not a
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
     const s = await seed(t, "America/New_York");
     await insertPayments(t, s, [
-      { at: midnightInstant, amount: 8 },
+      { at: midnightInstant, amount: 8, paymentDateKind: "instant" },
       { at: key(2026, 11, 1), amount: 100, createdAt: Date.parse("2026-10-31T13:00:00.000Z") },
     ]);
     const oct31 = await s.asFinance.query(api.collections.getReconciliationDraft, {
@@ -312,5 +312,166 @@ describe("SCRUM-264 Seat 2 finding 2: a skipped calendar date does not break the
     expect(dec30.total).toBe(9);
     expect(dec30.rows).toHaveLength(1);
     expect((await day(29)).total).toBe(2);
+  });
+});
+
+// Seat 2 round 3 (PR #741, HIGH): `createdAt === paymentDate` at a UTC midnight is NOT proof of an
+// instant. recordPayment stores the picked date's key in paymentDate and Date.now() in createdAt, and
+// the two are equal whenever the write clock is exactly that UTC midnight. The writer now records what
+// paymentDate IS (`paymentDateKind`), and the classifier trusts it over every heuristic.
+describe("SCRUM-264 Seat 2 round 3: the writer states whether paymentDate is a key or an instant", () => {
+  const nov1Midnight = Date.parse("2026-11-01T00:00:00.000Z");
+
+  async function recordFormPayment(writeClock: number) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(writeClock);
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t, "America/New_York");
+    const receivableId = await s.asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: "r3-receivable",
+      orgId: s.orgId,
+      customerId: s.customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Installment",
+      amount: 1000,
+      dueDate: key(2026, 12, 1),
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const paymentId = await s.asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: "r3-payment",
+      orgId: s.orgId,
+      receivableId,
+      amount: 10,
+      method: "CASH",
+      paymentDate: key(2026, 11, 1), // the date the cashier picked: 1 Nov
+    });
+    return { t, s, paymentId };
+  }
+
+  const dayOf = (s: Seed, month: number, d: number) =>
+    s.asFinance.query(api.collections.dailyCollectionList, { orgId: s.orgId, businessDate: key(2026, month, d) });
+  const draftOf = (s: Seed, month: number, d: number) =>
+    s.asFinance.query(api.collections.getReconciliationDraft, { orgId: s.orgId, businessDate: key(2026, month, d) });
+
+  test("Seat 2's reproduction: a form payment for 1 Nov written at exactly 2026-11-01T00:00:00.000Z is on 1 Nov, not 31 Oct", async () => {
+    const { t, s, paymentId } = await recordFormPayment(nov1Midnight);
+    const oct31 = await dayOf(s, 10, 31);
+    expect(oct31.total).toBe(0);
+    expect(oct31.rows).toHaveLength(0);
+    const nov1 = await dayOf(s, 11, 1);
+    expect(nov1.total).toBe(10);
+    expect(nov1.incomplete).toBe(false);
+    expect(await draftOf(s, 10, 31)).toMatchObject({ complete: true, expectedCash: 0, paymentCount: 0 });
+    expect(await draftOf(s, 11, 1)).toMatchObject({ complete: true, expectedCash: 10, paymentCount: 1 });
+    const row = await t.run((ctx) => ctx.db.get(paymentId));
+    expect(row).toMatchObject({ paymentDate: nov1Midnight, createdAt: nov1Midnight, paymentDateKind: "calendarKey" });
+  });
+
+  test("control: the same payment written 1 ms later is on 1 Nov too", async () => {
+    const { t, s, paymentId } = await recordFormPayment(nov1Midnight + 1);
+    expect(await t.run((ctx) => ctx.db.get(paymentId))).toMatchObject({ paymentDateKind: "calendarKey" });
+    expect((await dayOf(s, 10, 31)).total).toBe(0);
+    expect((await dayOf(s, 11, 1)).total).toBe(10);
+  });
+
+  test("a value that is not a UTC midnight is recorded as an instant, the only thing it can be", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-11-01T12:00:00.000Z"));
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const s = await seed(t, "America/New_York");
+    const receivableId = await s.asFinance.mutation(api.collections.createReceivable, {
+      idempotencyKey: "r3b-receivable",
+      orgId: s.orgId,
+      customerId: s.customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Installment",
+      amount: 1000,
+      dueDate: key(2026, 12, 1),
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+    const at = Date.parse("2026-11-01T01:30:00.000Z"); // 21:30 on 31 Oct in New York
+    const paymentId = await s.asFinance.mutation(api.collections.recordPayment, {
+      idempotencyKey: "r3b-payment",
+      orgId: s.orgId,
+      receivableId,
+      amount: 10,
+      method: "CASH",
+      paymentDate: at,
+    });
+    expect(await t.run((ctx) => ctx.db.get(paymentId))).toMatchObject({ paymentDate: at, paymentDateKind: "instant" });
+    expect((await dayOf(s, 10, 31)).total).toBe(10);
+    expect((await dayOf(s, 11, 1)).total).toBe(0);
+  });
+
+  describe("a historical row (no paymentDateKind) with createdAt === paymentDate at a UTC midnight", () => {
+    // Nothing stored says whether it is the 1 Nov key or a real event at 00:00:00.000Z (20:00 on 31 Oct).
+    test("west of UTC both days are incomplete and uncertain, and the reconciliation refuses both", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "America/New_York");
+      await insertPayments(t, s, [{ at: nov1Midnight, amount: 10 }]); // no paymentDateKind, createdAt === at
+      for (const [month, d] of [[10, 31], [11, 1]] as const) {
+        const day = await dayOf(s, month, d);
+        expect(day.total).toBe(0);
+        expect(day.incomplete).toBe(true);
+        expect(day.paymentDateUncertain).toBe(true);
+        expect(await draftOf(s, month, d)).toMatchObject({ complete: false, reason: "DATE_UNCERTAIN" });
+      }
+      const oct30 = await dayOf(s, 10, 30);
+      expect(oct30.incomplete).toBe(false);
+    });
+
+    test("east of UTC (Amman) both readings are 1 Nov, so it is filed there with no warning", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "Asia/Amman");
+      await insertPayments(t, s, [{ at: nov1Midnight, amount: 10 }]); // 03:00 on 1 Nov in Amman
+      const nov1 = await dayOf(s, 11, 1);
+      expect(nov1.total).toBe(10);
+      expect(nov1.incomplete).toBe(false);
+      expect(nov1.paymentDateUncertain).toBe(false);
+      expect((await dayOf(s, 10, 31)).total).toBe(0);
+      expect(await draftOf(s, 11, 1)).toMatchObject({ complete: true, expectedCash: 10, paymentCount: 1 });
+    });
+  });
+
+  describe("when the field is present it overrides the footprint heuristic", () => {
+    test("calendarKey at createdAt === paymentDate is the date it names", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "America/New_York");
+      await insertPayments(t, s, [{ at: nov1Midnight, amount: 10, paymentDateKind: "calendarKey" }]);
+      expect((await dayOf(s, 10, 31)).total).toBe(0);
+      const nov1 = await dayOf(s, 11, 1);
+      expect(nov1.total).toBe(10);
+      expect(nov1.incomplete).toBe(false);
+    });
+
+    test("instant at createdAt === paymentDate is the zone's wall-clock date (20:00 on 31 Oct)", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "America/New_York");
+      await insertPayments(t, s, [{ at: nov1Midnight, amount: 10, paymentDateKind: "instant" }]);
+      const oct31 = await dayOf(s, 10, 31);
+      expect(oct31.total).toBe(10);
+      expect(oct31.incomplete).toBe(false);
+      expect((await dayOf(s, 11, 1)).total).toBe(0);
+    });
+
+    test("a sale date at a UTC midnight is a key from one screen and an instant from another, so west of UTC it is uncertain", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "America/New_York");
+      await insertPayments(t, s, [{ at: nov1Midnight, amount: 10, paymentDateKind: "saleDate" }]);
+      for (const [month, d] of [[10, 31], [11, 1]] as const) {
+        const day = await dayOf(s, month, d);
+        expect(day.total).toBe(0);
+        expect(day.paymentDateUncertain).toBe(true);
+      }
+    });
+
+    test("a sale date that is not a UTC midnight can only be an instant", async () => {
+      const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+      const s = await seed(t, "America/New_York");
+      await insertPayments(t, s, [{ at: nov1Midnight + 1, amount: 10, paymentDateKind: "saleDate" }]);
+      const oct31 = await dayOf(s, 10, 31);
+      expect(oct31.total).toBe(10);
+      expect(oct31.paymentDateUncertain).toBe(false);
+    });
   });
 });
