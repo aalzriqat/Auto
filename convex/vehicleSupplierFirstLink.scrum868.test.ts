@@ -22,8 +22,8 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 import { SUPPLIER_CONCESSION_REFUSALS } from "./utils/supplierConcession";
-import { SUPPLIER_ERROR } from "./utils/supplierRegistry";
-import { SUPPLIER_LINK_FROZEN_MESSAGE } from "./utils/vehicleSupplierIdentity";
+import { SUPPLIER_ERROR, snapshotSupplier } from "./utils/supplierRegistry";
+import { SUPPLIER_LINK_FROZEN_MESSAGE, assertSupplierLinkChangeAllowed } from "./utils/vehicleSupplierIdentity";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -44,7 +44,6 @@ const EDITOR_PERMISSIONS = ["view:vehicles", "edit:vehicles", "create:vehicles"]
 const FINANCE_MANAGER_PERMISSIONS = ["view:vehicles", "edit:vehicles", "view:finance", "manage:finance"];
 
 type ThrownDomainError = { data?: { code?: string; message?: string } | string };
-type Harness = ReturnType<typeof convexTestWithComponents>;
 
 async function seedWorld(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -184,7 +183,7 @@ async function addHeldConcession(w: World, vehicleId: Id<"vehicles">) {
   });
 }
 
-const linkOnVehicle = (who: { as: Harness }, w: World, vehicleId: Id<"vehicles">, supplierId: Id<"suppliers">) =>
+const linkOnVehicle = (who: World["owner"], w: World, vehicleId: Id<"vehicles">, supplierId: Id<"suppliers">) =>
   who.as.mutation(api.vehicles.update, { orgId: w.orgId, vehicleId, sourceType: "SOURCED", sourcedSupplierId: supplierId });
 
 async function refusalOf(promise: Promise<unknown>) {
@@ -398,6 +397,21 @@ describe("first supplier link: every condition that is missing refuses, with a c
     await expectRefusedAndUnchanged(w, () => linkOnVehicle(w.finance, w, vehicleId, w.supplierId), NOT_PROVEN);
   });
 
+  test("a payable of ANOTHER organization on this vehicle id is not vouched for (fail closed)", async () => {
+    const w = await seedWorld("row_org");
+    const vehicleId = await insertUnlinkedCar(w);
+    await addReceivable(w, vehicleId);
+    const saleId = await insertSale(w, vehicleId);
+    const now = Date.now();
+    await w.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: w.otherOrgId, vehicleId, saleId, sourcedFromName: SUPPLIER_NAME, amountDue: 8_000, currency: "JOD",
+        status: "PENDING", createdBy: w.owner.userId, createdAt: now, updatedAt: now,
+      })
+    );
+    await expectRefusedAndUnchanged(w, () => linkOnVehicle(w.finance, w, vehicleId, w.supplierId), NOT_PROVEN);
+  });
+
   test("the caller holds edit:vehicles but not manage:finance", async () => {
     const w = await seedWorld("perm");
     const vehicleId = await insertUnlinkedCar(w);
@@ -447,6 +461,43 @@ describe("first supplier link: every condition that is missing refuses, with a c
     const before = await dbSnapshot(w.t, allTables);
     await expect(linkOnVehicle(w.finance, w, vehicleId, w.supplierId)).rejects.toBeTruthy();
     expect(await dbSnapshot(w.t, allTables)).toEqual(before);
+  });
+});
+
+describe("first supplier link: the shared check refuses on its own, whatever a door does before it", () => {
+  // The doors above also refuse these cases earlier (the ownership-change pilot block, the role-conflict
+  // check, the later held-terms guard). These tests call the shared check directly, so removing its own
+  // condition is caught even though another guard would still stop the door.
+  const financeRole = { name: "Finance Manager", permissions: FINANCE_MANAGER_PERMISSIONS };
+
+  async function callShared(w: World, vehicleId: Id<"vehicles">) {
+    try {
+      await w.t.run(async (ctx) => {
+        const vehicle = (await ctx.db.get(vehicleId))!;
+        const link = await snapshotSupplier(ctx, w.orgId, w.supplierId);
+        await assertSupplierLinkChangeAllowed(ctx, w.orgId, vehicle, link, { role: financeRole as never });
+      });
+    } catch (error) {
+      return (error as ThrownDomainError).data;
+    }
+    return undefined;
+  }
+
+  test("a car that is not SOURCED is frozen, not first-linked", async () => {
+    const w = await seedWorld("shared_stock");
+    const vehicleId = await insertUnlinkedCar(w);
+    await w.t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "STOCK" } as never));
+    await addPayable(w, vehicleId);
+    const refusal = await callShared(w, vehicleId);
+    expect(typeof refusal === "object" ? refusal?.code : refusal).toBe(SUPPLIER_ERROR.LINK_FROZEN);
+  });
+
+  test("a held supplier concession refuses before the money check", async () => {
+    const w = await seedWorld("shared_held");
+    const vehicleId = await insertUnlinkedCar(w);
+    await addPayable(w, vehicleId);
+    await addHeldConcession(w, vehicleId);
+    expect(await callShared(w, vehicleId)).toBe(SUPPLIER_CONCESSION_REFUSALS.HELD_BY_DEAL);
   });
 });
 
