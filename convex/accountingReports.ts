@@ -985,9 +985,10 @@ type SupplierPayablesUnavailableReason =
  * figure is needed to be true, so a truncated read is refused rather than summed. Convex allows 32,000
  * documents scanned and 4,096 index ranges per function (https://docs.convex.dev/production/state/limits);
  * this figure has not been re-derived against both (the A/R reader's budget has: see
- * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds only this function's own
- * payable, outbox and draft reads; it does not budget the GL read (computeGlBalanceByCurrency reads
- * every posted line via getPostedLines) or the rest of the period-close checklist. Fully paid rows
+ * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds this function's own payable, outbox and draft reads
+ * and, since SCRUM-889, the extra control-account line and parent-entry reads of the checked GL read
+ * (getCumulativeBalancesAsOfChecked). It does not budget that read's walk over the period's entries and lines,
+ * or the rest of the period-close checklist. Fully paid rows
  * still count toward it.
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
@@ -1317,10 +1318,12 @@ export async function computeSupplierPayablesReconciliation(
 
   // The checked read refuses a journal line that carries another organization's id and a line on a control
   // account whose parent entry is missing or foreign (SCRUM-889): neither may be summed or skipped, because
-  // dropping one could report an unreconciled ledger as reconciled. The trial balance and the other
+  // dropping one could report an unreconciled ledger as reconciled. Its extra line and parent reads are
+  // counted against `readLimit` and refused as OVER_LIMIT past it. The trial balance and the other
   // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
-  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts]);
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit);
   if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
+  if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   const glByCurrency=new Map<string,number>();
   for(const balance of glRead.balances){
     if(!controlAccounts.has(balance.accountId))continue;

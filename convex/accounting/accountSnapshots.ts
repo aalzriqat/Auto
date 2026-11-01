@@ -108,7 +108,12 @@ export type CheckedCumulativeBalances =
    * or belongs to another organization. Skipping or summing it could report an unreconciled ledger as
    * reconciled, so no balance is returned.
    */
-  | { status: "INCONSISTENT_REFERENCE" };
+  | { status: "INCONSISTENT_REFERENCE" }
+  /**
+   * The verification pass would read more documents than its budget allows (SCRUM-889). A partial verification
+   * cannot show the ledger is consistent, so no balance is returned.
+   */
+  | { status: "OVER_LIMIT" };
 
 /**
  * getCumulativeBalancesAsOf plus an organization-consistency check on the journal-line path (SCRUM-889),
@@ -124,24 +129,115 @@ export type CheckedCumulativeBalances =
  *     already read must resolve to an existing entry of this organization, else it is an inconsistency.
  * Closed-period and certified-snapshot balances are read from snapshots, as before; no line is read there.
  * The extra line read happens only for `accountIds` and only when the journal-line path runs.
+ *
+ * Budget: that extra read is counted in documents, one per control-account line read and one per parent entry
+ * fetched, against `readLimit`, and is refused with OVER_LIMIT before it would exceed it (the discipline of
+ * getControlAccountBalancesAsOf; Convex caps a function at 32,000 documents scanned and 16 MiB read,
+ * https://docs.convex.dev/production/state/limits). The budget is a document count, not a byte count. It does
+ * not cover the unchanged walk over the period's entries and lines, which getCumulativeBalancesAsOf also does.
  */
 export async function getCumulativeBalancesAsOfChecked(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
-  accountIds: ReadonlyArray<Id<"chartOfAccounts">>
+  accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
+  readLimit: number
 ): Promise<CheckedCumulativeBalances> {
-  const read = await readCumulativeBalances(ctx, orgId, asOfDate, accountIds);
-  return read.inconsistentReference ? { status: "INCONSISTENT_REFERENCE" } : { status: "OK", balances: read.balances };
+  const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit });
+  return read.outcome === "OK" ? { status: "OK", balances: read.balances } : { status: read.outcome };
+}
+
+type BalanceAdder = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => void;
+type ReadOutcome = "OK" | "INCONSISTENT_REFERENCE" | "OVER_LIMIT";
+/** The accounts whose lines and parent entries are verified, and the document budget for that verification. */
+type LedgerCheck = { accountIds: ReadonlyArray<Id<"chartOfAccounts">>; readLimit: number };
+
+async function addPeriodSnapshots(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  periodId: Id<"accountingPeriods">,
+  addTo: BalanceAdder
+): Promise<void> {
+  const snapshots = await ctx.db
+    .query("accountBalanceSnapshots")
+    .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", periodId))
+    .collect();
+  for (const s of snapshots) {
+    addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
+  }
+}
+
+/** Adds every line of `entries`. With `checkLineOrg`, returns false at the first line that carries another organization's id. */
+async function addEntryLines(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  entries: ReadonlyArray<{ _id: Id<"journalEntries"> }>,
+  addTo: BalanceAdder,
+  checkLineOrg: boolean
+): Promise<boolean> {
+  for (const entry of entries) {
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
+      .collect();
+    for (const line of lines) {
+      if (checkLineOrg && line.orgId !== orgId) return false;
+      addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
+    }
+  }
+  return true;
+}
+
+/**
+ * Line-first: the entry walk never visits a line whose parent is missing or owned by another organization, so
+ * this reads the organization's own lines on the checked accounts in the period's range and resolves each parent
+ * that is not one of `knownEntryIds`. Every line read and every parent fetched is charged to `check.readLimit`;
+ * a read that would pass it answers OVER_LIMIT first (callers `take(remaining + 1)`, as in
+ * getControlAccountBalancesAsOf).
+ */
+async function verifyControlLineParents(
+  ctx: QueryCtx,
+  request: Readonly<{
+    orgId: Id<"organizations">;
+    periodStartDate: number;
+    asOfDate: number;
+    check: LedgerCheck;
+    knownEntryIds: ReadonlySet<Id<"journalEntries">>;
+  }>
+): Promise<ReadOutcome> {
+  const { orgId, periodStartDate, asOfDate, check, knownEntryIds } = request;
+  let remaining = check.readLimit;
+  const resolvedElsewhere = new Set<Id<"journalEntries">>();
+  for (const accountId of new Set(check.accountIds)) {
+    const accountLines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account_date", (q) =>
+        q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", periodStartDate).lte("accountingDate", asOfDate)
+      )
+      .take(remaining + 1);
+    remaining -= accountLines.length;
+    if (remaining < 0) return "OVER_LIMIT";
+    for (const line of accountLines) {
+      if (knownEntryIds.has(line.journalEntryId) || resolvedElsewhere.has(line.journalEntryId)) continue;
+      // Not one of this organization's entries in the period: a same-org entry of another period or date
+      // is outside this sum (as before); a missing or foreign one is an inconsistency.
+      remaining -= 1;
+      if (remaining < 0) return "OVER_LIMIT";
+      const parent = await ctx.db.get(line.journalEntryId);
+      if (!parent || parent.orgId !== orgId) return "INCONSISTENT_REFERENCE";
+      resolvedElsewhere.add(line.journalEntryId);
+    }
+  }
+  return "OK";
 }
 
 async function readCumulativeBalances(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
-  /** When given, the journal-line path verifies line and parent ownership (see getCumulativeBalancesAsOfChecked). */
-  verifyAccountIds: ReadonlyArray<Id<"chartOfAccounts">> | undefined
-): Promise<{ balances: CumulativeBalance[]; inconsistentReference: boolean }> {
+  /** When given, the journal-line path verifies line and parent ownership within a document budget (see getCumulativeBalancesAsOfChecked). */
+  check: LedgerCheck | undefined
+): Promise<{ balances: CumulativeBalance[]; outcome: ReadOutcome }> {
   const periods = await ctx.db
     .query("accountingPeriods")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -151,7 +247,7 @@ async function readCumulativeBalances(
   const containingPeriod = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
 
   const totals = new Map<string, CumulativeBalance>();
-  const addTo = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => {
+  const addTo: BalanceAdder = (accountId, currency, debitMinor, creditMinor) => {
     const key = `${accountId}__${currency}`;
     const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
     existing.debitMinor += debitMinor;
@@ -160,13 +256,7 @@ async function readCumulativeBalances(
   };
 
   for (const period of fullyElapsedPeriods) {
-    const snapshots = await ctx.db
-      .query("accountBalanceSnapshots")
-      .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", period._id))
-      .collect();
-    for (const s of snapshots) {
-      addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
-    }
+    await addPeriodSnapshots(ctx, orgId, period._id, addTo);
   }
 
   if (containingPeriod) {
@@ -184,14 +274,8 @@ async function readCumulativeBalances(
         )
         .first();
       if (!futureEntry) {
-        const snapshots = await ctx.db
-          .query("accountBalanceSnapshots")
-          .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", containingPeriod._id))
-          .collect();
-        for (const s of snapshots) {
-          addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
-        }
-        return { balances: Array.from(totals.values()), inconsistentReference: false };
+        await addPeriodSnapshots(ctx, orgId, containingPeriod._id, addTo);
+        return { balances: Array.from(totals.values()), outcome: "OK" };
       }
     }
 
@@ -206,48 +290,24 @@ async function readCumulativeBalances(
       .collect();
     const entriesInPeriod = allEntriesInPeriod.filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
-    for (const entry of entriesInPeriod) {
-      const lines = await ctx.db
-        .query("journalLines")
-        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-        .collect();
-      for (const line of lines) {
-        if (verifyAccountIds && line.orgId !== orgId) return { balances: [], inconsistentReference: true };
-        addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
-      }
+    if (!(await addEntryLines(ctx, orgId, entriesInPeriod, addTo, check !== undefined))) {
+      return { balances: [], outcome: "INCONSISTENT_REFERENCE" };
     }
 
-    if (verifyAccountIds) {
-      // Line-first: the walk above never visits a line whose parent is missing or owned by another
-      // organization, so read the organization's own lines on the accounts the caller will use.
-      const knownEntryIds = new Set<Id<"journalEntries">>(allEntriesInPeriod.map((e) => e._id));
-      const resolvedElsewhere = new Set<Id<"journalEntries">>();
-      for (const accountId of new Set(verifyAccountIds)) {
-        const accountLines = await ctx.db
-          .query("journalLines")
-          .withIndex("by_org_account_date", (q) =>
-            q
-              .eq("orgId", orgId)
-              .eq("accountId", accountId)
-              .gte("accountingDate", containingPeriod.startDate)
-              .lte("accountingDate", asOfDate)
-          )
-          .collect();
-        for (const line of accountLines) {
-          if (knownEntryIds.has(line.journalEntryId) || resolvedElsewhere.has(line.journalEntryId)) continue;
-          // Not one of this organization's entries in the period: a same-org entry of another period or date
-          // is outside this sum (as before); a missing or foreign one is an inconsistency.
-          const parent = await ctx.db.get(line.journalEntryId);
-          if (!parent || parent.orgId !== orgId) return { balances: [], inconsistentReference: true };
-          resolvedElsewhere.add(line.journalEntryId);
-        }
-      }
+    if (check) {
+      const outcome = await verifyControlLineParents(ctx, {
+        orgId,
+        periodStartDate: containingPeriod.startDate,
+        asOfDate,
+        check,
+        knownEntryIds: new Set(allEntriesInPeriod.map((e) => e._id)),
+      });
+      if (outcome !== "OK") return { balances: [], outcome };
     }
   }
 
-  return { balances: Array.from(totals.values()), inconsistentReference: false };
+  return { balances: Array.from(totals.values()), outcome: "OK" };
 }
-
 export type BoundedControlBalances =
   | {
       status: "OK";
