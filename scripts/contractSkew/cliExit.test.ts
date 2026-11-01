@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { breakKey } from "./compare.mjs";
 import { evaluateBaseline, loadBaseline } from "./baseline.mjs";
+import { readBaselineEntries, snapshotBaseline, writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 /**
  * SCRUM-178 v2, D-24 CS-2: the exit policy, one subprocess test per table row.
@@ -91,12 +92,11 @@ const scaffold = (p: Project) => {
     fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
     fs.writeFileSync(path.join(dir, name), text);
   }
-  if (p.baseline === "unreadable") fs.writeFileSync(path.join(dir, "baseline.json"), "{ not json");
-  else if (p.baseline !== "absent") {
-    fs.writeFileSync(
-      path.join(dir, "baseline.json"),
-      JSON.stringify(p.baseline ?? { version: 1, entries: [] })
-    );
+  if (p.baseline === "unreadable") {
+    fs.mkdirSync(path.join(dir, "baseline"));
+    fs.writeFileSync(path.join(dir, "baseline", "app+uses-convex.tsx.json"), "{ not json");
+  } else if (p.baseline !== "absent") {
+    writeBaselineDirectory(path.join(dir, "baseline"), (p.baseline as Record<string, unknown>[] | undefined) ?? []);
   }
   if (p.current) fs.writeFileSync(path.join(dir, "current.json"), JSON.stringify(p.current));
   if (p.candidate) fs.writeFileSync(path.join(dir, "candidate.json"), JSON.stringify(p.candidate));
@@ -106,7 +106,7 @@ const scaffold = (p: Project) => {
 const run = (dir: string, args: string[], env: Record<string, string> = {}, committedBaseline = false) => {
   const base = { ...process.env };
   delete base.CONVEX_PROD_DEPLOYMENT;
-  const baselineArgs = committedBaseline || args.includes("--baseline") ? [] : ["--baseline", "baseline.json"];
+  const baselineArgs = committedBaseline || args.includes("--baseline") ? [] : ["--baseline", "baseline"];
   const out = spawnSync(process.execPath, [cli, ...args, ...baselineArgs], {
     cwd: dir,
     encoding: "utf8",
@@ -122,7 +122,7 @@ const run = (dir: string, args: string[], env: Record<string, string> = {}, comm
 };
 
 const production = (dir: string, extra: string[] = []) =>
-  run(dir, ["--mode", "production", "--spec", "spec.json", "--baseline", "baseline.json", "--json", "report.json", ...extra]);
+  run(dir, ["--mode", "production", "--spec", "spec.json", "--baseline", "baseline", "--json", "report.json", ...extra]);
 
 const reportOf = (dir: string) => JSON.parse(fs.readFileSync(path.join(dir, "report.json"), "utf8"));
 
@@ -133,7 +133,7 @@ const baselineFrom = (dir: string, patch: (e: Record<string, unknown>) => Record
     patch({ ...u, rationale: "reviewed in test", issue: "SCRUM-178", expires: "2999-12-31" })
   );
   expect(entries.length, `expected unproven findings to baseline (probe exit ${probe.code})`).toBeGreaterThan(0);
-  fs.writeFileSync(path.join(dir, "baseline.json"), JSON.stringify({ version: 1, entries }));
+  writeBaselineDirectory(path.join(dir, "baseline"), entries);
   return entries;
 };
 
@@ -186,7 +186,7 @@ describe("exit-code table: one subprocess test per row", () => {
       candidate: specOf(mutation("vehicles.js:update", { orgId: required({ type: "number" }) })),
     });
     baselineFrom(dir);
-    const r = run(dir, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"]);
+    const r = run(dir, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline"]);
     expect(r.code).toBe(4);
   }, 300_000);
 
@@ -220,7 +220,7 @@ describe("exit-code table: one subprocess test per row", () => {
     const deployed = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
     const candidate = specOf(mutation("vehicles.js:update", { orgId: required(str), extra: required(str) }));
     const dir = scaffold({ client: PROVEN, spec: deployed, candidate });
-    const r = run(dir, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"]);
+    const r = run(dir, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline"]);
     expect(r.code).toBe(8);
     expect(r.all).not.toMatch(/Deploy the Convex backend/);
   }, 300_000);
@@ -262,7 +262,7 @@ describe("exit-code table: one subprocess test per row", () => {
   }, 300_000);
 });
 
-const releaseArgs = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"];
+const releaseArgs = ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline"];
 const releaseArgsJ = [...releaseArgs, "--json", "report.json"];
 const DEPLOYED = specOf(mutation("vehicles.js:update", { orgId: required(str) }));
 
@@ -378,9 +378,9 @@ describe("SCRUM-178 v2 batch 3 R2 + SPEC-1: every spec role is validated, recurs
     test(`${name}: exit 3 naming the role (deployed, current, candidate)`, () => {
       const broken = specOf(entry);
       const roles: Array<[string, Project, string[]]> = [
-        ["deployed", { client: PROVEN, spec: broken }, ["--mode", "production", "--spec", "spec.json", "--baseline", "baseline.json"]],
-        ["current", { client: PROVEN, current: broken }, ["--mode", "production", "--spec", "spec.json", "--current", "current.json", "--baseline", "baseline.json"]],
-        ["candidate", { client: PROVEN, candidate: broken }, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline.json"]],
+        ["deployed", { client: PROVEN, spec: broken }, ["--mode", "production", "--spec", "spec.json", "--baseline", "baseline"]],
+        ["current", { client: PROVEN, current: broken }, ["--mode", "production", "--spec", "spec.json", "--current", "current.json", "--baseline", "baseline"]],
+        ["candidate", { client: PROVEN, candidate: broken }, ["--mode", "release", "--spec", "spec.json", "--candidate", "candidate.json", "--baseline", "baseline"]],
       ];
       for (const [role, project, args] of roles) {
         const r = run(scaffold(project), args);
@@ -496,7 +496,10 @@ describe("the needs-evidence baseline", () => {
   test("a DUPLICATED baseline entry is drift", () => {
     const dir = scaffold({ client: UNPROVEN });
     const entries = baselineFrom(dir);
-    fs.writeFileSync(path.join(dir, "baseline.json"), JSON.stringify({ version: 1, entries: [...entries, entries[0]] }));
+    // Planted as raw text: the writer refuses a duplicate, the loader must refuse one a hand edit left behind.
+    const shard = path.join(dir, "baseline", fs.readdirSync(path.join(dir, "baseline"))[0]);
+    const document = JSON.parse(fs.readFileSync(shard, "utf8"));
+    fs.writeFileSync(shard, JSON.stringify({ ...document, entries: [...document.entries, entries[0]] }, null, 2) + "\n");
     const r = production(dir);
     expect(r.code).toBe(10);
     expect(r.all).toMatch(/duplicate/i);
@@ -545,14 +548,14 @@ describe("the needs-evidence baseline", () => {
 
   test("the monitor never writes the baseline", () => {
     const dir = scaffold({ client: UNPROVEN });
+    const before = snapshotBaseline(path.join(dir, "baseline"));
     production(dir);
-    expect(JSON.parse(fs.readFileSync(path.join(dir, "baseline.json"), "utf8"))).toEqual({ version: 1, entries: [] });
+    expect(snapshotBaseline(path.join(dir, "baseline"))).toBe(before);
+    expect(readBaselineEntries(path.join(dir, "baseline"))).toEqual([]);
   }, 300_000);
 
   test("the approved committed baseline has valid metadata and unique governed identities", () => {
-    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline.json");
-    const document: unknown = JSON.parse(fs.readFileSync(baseline, "utf8"));
-    expect(document).toMatchObject({ version: 1, entries: expect.any(Array) });
+    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline");
     const committed = loadBaseline(baseline);
     if (!committed.ok) throw new Error(committed.problem);
     // Schema/identity validation only: actual expiry and source drift remain runtime gates.
@@ -567,12 +570,12 @@ describe("the needs-evidence baseline", () => {
   });
 
   test("the default baseline is repository-bound and never rewritten by a synthetic scan", () => {
-    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline.json");
-    const before = fs.readFileSync(baseline);
+    const baseline = path.resolve("scripts/contractSkew/needs-evidence-baseline");
+    const before = snapshotBaseline(baseline);
     const dir = scaffold({ client: PROVEN });
     run(dir, ["--mode", "production", "--spec", "spec.json", "--json", "report.json"], {}, true);
     expect(reportOf(dir).baseline.path).toBe(baseline);
-    expect(fs.readFileSync(baseline)).toEqual(before);
+    expect(snapshotBaseline(baseline)).toBe(before);
   }, 300_000); // Full CLI subprocess, with the same bounded budget as adjacent CLI cases.
 });
 
