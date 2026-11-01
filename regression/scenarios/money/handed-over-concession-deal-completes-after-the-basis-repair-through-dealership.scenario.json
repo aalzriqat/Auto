@@ -1,0 +1,84 @@
+{
+  "id": "handed-over-concession-deal-completes-after-the-basis-repair-through-dealership",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "THROUGH_DEALERSHIP",
+        "concessionBasis": "WITHOUT_SUPPLIER_ID",
+        "stage": "HANDED_OVER"
+      }
+    },
+    {
+      "actor": {
+        "role": "OPERATOR",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "phase": "CONCESSIONS"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "route": "THROUGH_DEALERSHIP",
+        "concessionBasis": "BOUND"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_CONCESSION_BASIS_UNBOUND"
+    },
+    {
+      "observable": "step1.writes.changed",
+      "value": false
+    },
+    {
+      "observable": "repair.repaired",
+      "value": 1
+    },
+    {
+      "observable": "obligation.supplierId",
+      "value": "VEHICLE_LINKED_SUPPLIER"
+    },
+    {
+      "observable": "obligation.amountDue",
+      "value": 9100
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-repair",
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "THROUGH_DEALERSHIP: refused with the coded refusal until the repair binds the basis, then completes against the vehicle's supplier"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-repair",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "98eebf08d6455b258d583b248fb0651275750063fb04fd1cdfdc8669d4c7f78d"
+}

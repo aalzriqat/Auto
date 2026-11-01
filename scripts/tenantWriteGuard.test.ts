@@ -783,10 +783,14 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // and takes no caller-supplied row id. The worker mutation keeps a native orgId declaration (the
   // shared remainder of its args is spread) so the analyser still covers it: sharing the whole args
   // object would have moved it to skippedNoArgsBlock, a silent loss of coverage.
+  // SCRUM-868 P3 supplier identity repair: +supplierIdentityRepair:repairPage, one internal mutation
+  // with a v.id("organizations") orgId: +1 total, +1 analysed, skipped counts unchanged. Re-measured
+  // FROM THE ANALYSER (566/382/15/169 -> 567/383/15/169). It takes no caller-supplied row id (only a
+  // pagination cursor) and reads every row it patches through a by_org index on that orgId.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 566,
-      analysed: 382,
+      totalMutations: 567,
+      analysed: 383,
       skippedNoArgsBlock: 15,
       skippedNoOrgId: 169,
     });

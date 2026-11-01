@@ -41,11 +41,25 @@ async function seedOrg(t: T, tag: string) {
 
 /** A sourced (consignment) car sold through the dealership, with its supplier payable. */
 async function seedSourcedPayable(t: T, orgId: Id<"organizations">, userId: Id<"users">) {
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Sister Dealer Co",
+      displayNameKey: "sister dealer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: "S773SOURCED00001", make: "Kia", model: "Sportage", year: 2023, mileage: 0, color: "White",
       fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000, status: "SOLD",
-      sourceType: "SOURCED", sourcedFromName: "Sister Dealer Co", sourceCost: 18000,
+      sourceType: "SOURCED", sourcedFromName: "Sister Dealer Co", sourcedSupplierId: supplierId, sourceCost: 18000,
     })
   );
   const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Doe" }));
@@ -54,7 +68,7 @@ async function seedSourcedPayable(t: T, orgId: Id<"organizations">, userId: Id<"
   );
   const payableId = await t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", amountDue: 18000, currency: "JOD",
+      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", supplierId, amountDue: 18000, currency: "JOD",
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );

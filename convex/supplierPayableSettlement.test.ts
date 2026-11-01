@@ -94,12 +94,28 @@ async function seed(tag: string) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    })
+  );
+
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINSP${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedSupplierId: supplierId,
     })
   );
 

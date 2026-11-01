@@ -1,0 +1,81 @@
+{
+  "id": "first-supplier-link-is-refused-when-a-cost-recovery-carries-another-name",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierPayable",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "storedName": "SUPPLIER_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierCostRecovery",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "storedName": "OTHER_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "FINANCE_MANAGER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_FIRST_LINK_NOT_PROVEN"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "audit.firstLinkRows",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P4-first-link",
+  "impl": {
+    "file": "convex/vehicleSupplierFirstLink.scrum868.test.ts",
+    "testName": "a recovery row with a different name refuses even when the payable matches"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4-first-link",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "67b0ce544601c4c34cdb9077785abf9bcfcc6d699c95453a1d6743237603e98a"
+}

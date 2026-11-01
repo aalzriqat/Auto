@@ -208,13 +208,30 @@ async function seedDealership(
     })
   );
   const sourceType = opts.sourceType ?? "SOURCED";
+  let supplierId: Id<"suppliers"> | undefined;
+  if (sourceType === "SOURCED") {
+    supplierId = await t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId,
+        displayName: "Amman Importer Co",
+        displayNameKey: "amman importer co",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedBy: userId,
+        updatedAt: Date.now(),
+      })
+    );
+  }
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINFIN${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
       color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
       sellingPrice: VEHICLE_PRICE, status: "AVAILABLE",
       ...(sourceType === "SOURCED"
-        ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: SUPPLIER_ENTITLEMENT }
+        ? { sourceType: "SOURCED" as const, sourcedSupplierId: supplierId, sourcedFromName: "Amman Importer Co", sourceCost: SUPPLIER_ENTITLEMENT }
         : { sourceType: "STOCK" as const, purchasePrice: SUPPLIER_ENTITLEMENT }),
     })
   );

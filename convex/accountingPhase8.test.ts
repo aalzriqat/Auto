@@ -8,6 +8,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { insertReceiptBank } from "../test-utils/financedDealFixture";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -216,11 +217,11 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
   test("cancelling a sourced sale cancels its pending supplier payable", async () => {
     const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_supplier");
-    const vehicleId = await t.run((ctx) =>
+    const vehicleId = await t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId, vin: "VIN_CANCEL_SUPPLIER", make: "Nissan", model: "Patrol", year: 2023,
         mileage: 0, color: "White", fuelType: "Petrol", transmission: "Automatic",
-        sellingPrice: 24_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer",
+        sellingPrice: 24_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Partner Dealer"),
         sourceCost: 19_000, status: "AVAILABLE",
       })
     );
@@ -284,11 +285,26 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
   test("cancelling a sourced sale is blocked after the supplier payable is paid", async () => {
     const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_supplier");
+    const supplierId = await t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId,
+        displayName: "Paid Supplier Dealer",
+        displayNameKey: "paid supplier dealer",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedBy: userId,
+        updatedAt: Date.now(),
+      })
+    );
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId, vin: "VIN_CANCEL_PAID_SUPPLIER", make: "Kia", model: "Sorento", year: 2023,
         mileage: 0, color: "Black", fuelType: "Petrol", transmission: "Automatic",
         sellingPrice: 22_000, sourceType: "SOURCED", sourcedFromName: "Paid Supplier Dealer",
+        sourcedSupplierId: supplierId,
         sourceCost: 18_000, status: "AVAILABLE",
       })
     );

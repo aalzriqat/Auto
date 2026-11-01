@@ -1,3 +1,4 @@
+import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingPayableBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
@@ -383,6 +384,11 @@ export const markPaid = mutation({
     assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
 
     await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
+    await requireResolvedSupplierId(
+      ctx,
+      args.orgId,
+      await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.")
+    );
     return await runWithIdempotency(
       ctx,
       {
@@ -395,6 +401,7 @@ export const markPaid = mutation({
       },
       async () => {
         const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
+        await requireResolvedSupplierId(ctx, args.orgId, payable);
         await assertSupplierPaymentBank(ctx, { orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency, paymentMethod });
         assertSupplierPayableSettlementStatus(payable.status, "This payable has already been marked as paid.");
         if (args.paymentAccountId) {
@@ -548,6 +555,11 @@ export const recordPartialPayment = mutation({
     assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
 
     await openingPayableBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"vehicleSupplierPayables",args.payableId,"Supplier payable not found."));
+    await requireResolvedSupplierId(
+      ctx,
+      args.orgId,
+      await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.")
+    );
     return await runWithIdempotency(
       ctx,
       {
@@ -566,6 +578,7 @@ export const recordPartialPayment = mutation({
       },
       async () => {
         const payable = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.");
+        await requireResolvedSupplierId(ctx, args.orgId, payable);
         await assertSupplierPaymentBank(ctx, { orgId: args.orgId, bankAccountId: args.bankAccountId, currency: payable.currency, paymentMethod });
         if (!Number.isFinite(args.amount) || args.amount <= 0) {
           throw new ConvexError("A payment must be greater than zero.");
@@ -701,6 +714,11 @@ export const setDisputed = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const existingPayable = await ctx.db.get(args.payableId);
+    if (!existingPayable || existingPayable.orgId !== args.orgId) {
+      throw new ConvexError("Supplier payable not found.");
+    }
+    await requireResolvedSupplierId(ctx, args.orgId, existingPayable);
     return await runWithIdempotency(
       ctx,
       {
@@ -720,6 +738,7 @@ export const setDisputed = mutation({
         if (!payable || payable.orgId !== args.orgId) {
           throw new ConvexError("Supplier payable not found.");
         }
+        await requireResolvedSupplierId(ctx, args.orgId, payable);
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }

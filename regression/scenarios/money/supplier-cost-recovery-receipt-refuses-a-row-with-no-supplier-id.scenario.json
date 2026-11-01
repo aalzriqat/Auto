@@ -1,0 +1,47 @@
+{
+  "id": "supplier-cost-recovery-receipt-refuses-a-row-with-no-supplier-id",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "recoveryId": "RECOVERY_ID",
+        "supplierId": "ABSENT",
+        "amountMinor": 300000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-settlement",
+  "impl": {
+    "file": "convex/supplierSettlementIdentity.test.ts",
+    "testName": "supplierCostRecoveries.recordReceipt fails closed when recovery has no supplierId"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-settlement",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "e649443dd1826547e2558b1f94ab282bfd47d2e454e78720d40727b7247bfdfa"
+}

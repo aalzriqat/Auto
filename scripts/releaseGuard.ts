@@ -1411,3 +1411,189 @@ export function recoverSupplierVatHolds(input: {
   }
   return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached its page cap. A re-run resumes it." };
 }
+
+// ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────
+
+/** The row kinds the repair walks, in order. Each is one paginated scan per organization. */
+export const SUPPLIER_IDENTITY_REPAIR_PHASES = ["PAYABLES", "RECEIVABLES", "RECOVERIES", "CONCESSIONS"] as const;
+/** The counts-only check walks the same rows again, plus SOURCED vehicles that carry no supplier link. */
+export const SUPPLIER_IDENTITY_COUNT_PHASES = [...SUPPLIER_IDENTITY_REPAIR_PHASES, "VEHICLES"] as const;
+
+export type SupplierIdentityRepairPhase = (typeof SUPPLIER_IDENTITY_REPAIR_PHASES)[number];
+export type SupplierIdentityCountPhase = (typeof SUPPLIER_IDENTITY_COUNT_PHASES)[number];
+
+export type SupplierIdentityRunResult = { ok: true; value: unknown } | Refusal;
+
+export type SupplierIdentityInput = {
+  orgs: { orgId: string }[];
+  /** One `supplierIdentityRepair:repairPage` call. Writes; idempotent. */
+  repair: (args: {
+    orgId: string;
+    phase: SupplierIdentityRepairPhase;
+    cursor: string | null;
+    numItems: number;
+  }) => SupplierIdentityRunResult;
+  /** One `supplierIdentityRepair:countPage` call. Read-only. */
+  count: (args: {
+    orgId: string;
+    phase: SupplierIdentityCountPhase;
+    cursor: string | null;
+    numItems: number;
+  }) => SupplierIdentityRunResult;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  /** Per organization and phase; stops a cursor that never finishes. */
+  maxPagesPerPhase: number;
+  pageSize: number;
+};
+
+export type SupplierIdentityOutcome =
+  /** Both passes ran to the end. `outstanding` is empty only when nothing is left for a door to refuse. */
+  | { ok: true; orgs: number; repaired: number; pages: number; outstanding: string[] }
+  /** The phase could not finish or could not be trusted; nothing about the counts is known. */
+  | { ok: false; reason: string };
+
+type SupplierIdentityPage = { more: boolean; cursor: string | null; repaired: number; unresolved: number };
+
+/**
+ * Reads one page result strictly. Anything this script does not recognise is a refusal, never zero:
+ * a count that cannot be read must not be mistaken for a count of nothing left to fix.
+ */
+function readSupplierIdentityPage(value: unknown, kind: "repair" | "count"): SupplierIdentityPage | null {
+  if (typeof value !== "object" || value === null) return null;
+  const page = value as Record<string, unknown>;
+  if (page.status !== "MORE" && page.status !== "READY") return null;
+  if (!isCount(page.examined) || !isCount(page.unresolved)) return null;
+  const repaired = kind === "repair" ? page.repaired : 0;
+  if (!isCount(repaired)) return null;
+  const more = page.status === "MORE";
+  if (more && (typeof page.cursor !== "string" || page.cursor === "")) return null;
+  if (!more && page.cursor !== null) return null;
+  return {
+    more,
+    cursor: more ? (page.cursor as string) : null,
+    repaired,
+    unresolved: page.unresolved,
+  };
+}
+
+type PhaseWalk =
+  | { ok: true; repaired: number; unresolved: number; pages: number }
+  | { ok: false; reason: string };
+
+const IDENTITY_STOP = "Production is DEPLOYED, but the supplier identity repair";
+
+/**
+ * Walks one organization's rows of one kind to the end. The cursor comes back from the backend and is
+ * carried only in memory, never printed. A page that returns the cursor it was given would loop forever,
+ * so that is a refusal as well as the page cap.
+ */
+function walkIdentityPhase(
+  input: SupplierIdentityInput,
+  call: (cursor: string | null) => SupplierIdentityRunResult,
+  kind: "repair" | "count",
+  ref: string,
+  label: string,
+): PhaseWalk {
+  let cursor: string | null = null;
+  let repaired = 0;
+  let unresolved = 0;
+  for (let pages = 1; pages <= input.maxPagesPerPhase; pages += 1) {
+    if (input.now() - input.startedAt > input.timeoutMs) {
+      return { ok: false, reason: `${IDENTITY_STOP} reached the rollout deadline at ${ref}. A re-run resumes it.` };
+    }
+    const result = call(cursor);
+    if (!result.ok) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} call failed at ${ref} (${label}). See backend logs; a re-run resumes it.` };
+    }
+    const page = readSupplierIdentityPage(result.value, kind);
+    if (page === null) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} returned a result this script does not recognise at ${ref} (${label}).` };
+    }
+    repaired += page.repaired;
+    unresolved += page.unresolved;
+    if (!page.more) return { ok: true, repaired, unresolved, pages };
+    if (page.cursor === cursor) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} stopped advancing at ${ref} (${label}).` };
+    }
+    cursor = page.cursor;
+  }
+  return { ok: false, reason: `${IDENTITY_STOP} ${kind} reached its page cap at ${ref} (${label}).` };
+}
+
+/**
+ * The post-deploy supplier identity phase. Two passes over every organization, serially:
+ *
+ *   1. REPAIR gives each id-less P2-era row the supplier id of its vehicle's frozen link when the row's
+ *      stored name matches that supplier (see `convex/utils/supplierIdentityRepair.ts`). Idempotent.
+ *   2. CHECK re-counts from the data, independently of what the repair reported: id-less native money
+ *      rows, held concessions whose basis has no supplier id, SOURCED vehicles with no supplier link.
+ *
+ * It fails closed. A call that fails, a result it cannot read, the deadline, or a page cap is a refusal
+ * (`ok: false`); a clean pass with leftover rows is `ok: true` with `outstanding` listing them, which the
+ * caller turns into a failed release. Output is public, so `outstanding` carries only an opaque
+ * organization ref and counts, never a name, an id or backend text.
+ */
+export function repairAndVerifySupplierIdentity(input: SupplierIdentityInput): SupplierIdentityOutcome {
+  let repaired = 0;
+  let pages = 0;
+
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    for (const phase of SUPPLIER_IDENTITY_REPAIR_PHASES) {
+      const walk = walkIdentityPhase(
+        input,
+        (cursor) => input.repair({ orgId: org.orgId, phase, cursor, numItems: input.pageSize }),
+        "repair",
+        ref,
+        phase,
+      );
+      if (!walk.ok) return walk;
+      repaired += walk.repaired;
+      pages += walk.pages;
+    }
+  }
+
+  const outstanding: string[] = [];
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    const left: string[] = [];
+    for (const phase of SUPPLIER_IDENTITY_COUNT_PHASES) {
+      const walk = walkIdentityPhase(
+        input,
+        (cursor) => input.count({ orgId: org.orgId, phase, cursor, numItems: input.pageSize }),
+        "count",
+        ref,
+        phase,
+      );
+      if (!walk.ok) return walk;
+      pages += walk.pages;
+      if (walk.unresolved > 0) left.push(`${phase}=${walk.unresolved}`);
+    }
+    if (left.length > 0) outstanding.push(`${ref}: ${left.join(", ")}`);
+  }
+
+  return { ok: true, orgs: input.orgs.length, repaired, pages, outstanding };
+}
+
+/** The "Supplier identity" job-summary text. Counts and opaque refs only. */
+export function renderSupplierIdentitySummary(outcome: SupplierIdentityOutcome): string {
+  if (!outcome.ok) return outcome.reason;
+  const base = `${outcome.repaired} rows bound to their vehicle's supplier across ${outcome.orgs} organization(s) in ${outcome.pages} page call(s).`;
+  if (outcome.outstanding.length === 0) {
+    return `${base} The counts-only check found nothing left for a settlement door to refuse.`;
+  }
+  const list = outcome.outstanding.map((line) => `- ${line}`).join("\n");
+  return `${base} The counts-only check still found rows that stay refused:\n\n${list}`;
+}
+
+/** Why a run must fail after the repair, or null when the check found nothing outstanding. */
+export function supplierIdentityRefusalMessage(outcome: SupplierIdentityOutcome): string | null {
+  if (!outcome.ok) return outcome.reason;
+  if (outcome.outstanding.length === 0) return null;
+  return (
+    `Production is DEPLOYED, but ${outcome.outstanding.length} organization(s) still hold supplier rows with no ` +
+    `supplier identity (counts in the job summary). Their settlement stays refused. Resolve them, then re-run.`
+  );
+}
