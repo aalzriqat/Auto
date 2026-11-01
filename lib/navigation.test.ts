@@ -96,6 +96,9 @@ const LEGACY_ROWS: readonly LegacyRow[] = [
   { href: "/social-inbox", permission: "view:leads" },
   { href: "/deals", permission: "view:sales" },
   { href: "/sourcing", permission: "view:finance" },
+  // SCRUM-887 added this row to the flat list with the same gate as Sourcing; the grouped sidebar
+  // must offer it to exactly the same members.
+  { href: "/suppliers", permission: "view:finance" },
   { href: "/sales", permission: "view:sales" },
   { href: "/commissions", permission: "view:commissions" },
   { href: "/payroll", permission: "view:payroll" },
@@ -171,7 +174,7 @@ describe("the grouped sidebar offers the same hrefs as before", () => {
     ).toEqual([
       ["overview", ["Dashboard", "Tasks", "Approvals"]],
       ["customersSales", ["Leads", "SocialInbox", "Customers", "DealsTitle", "Sales"]],
-      ["inventorySourcing", ["Vehicles", "Sourcing", "MarketplaceRequests"]],
+      ["inventorySourcing", ["Vehicles", "Sourcing", "Suppliers", "MarketplaceRequests"]],
       ["financeReports", ["Accounting", "Expenses", "Commissions", "Payroll", "Reports"]],
       [
         "settings",

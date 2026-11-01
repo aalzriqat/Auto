@@ -3,6 +3,8 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { makeFunctionReference } from "convex/server";
+import { getDocumentSize } from "convex/values";
+import { OPENING_CLEANUP_PAGE_BYTES, OPENING_CLEANUP_PAGE_ROWS } from "./utils/openingResetCleanup";
 import { runCleanupRehearsalCases } from "../scripts/accountingCleanupRehearsal.mjs";
 import { recordCase, unproven } from "../scripts/accountingPreviewRehearsal.mjs";
 
@@ -105,6 +107,7 @@ test("cleanup observation refuses a foreign deletion request before returning ev
 });
 
 let listPrimaryOrgNames: () => Promise<string[]> = async () => [];
+let cleanupDraftSizes: (orgName: string) => Promise<number[]> = async () => [];
 
 async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "generation" | "deletion-throws", priorOrgs = 0, rehearsalEvent?: string) {
   const { t, baseline, primary, approver } = await setup();
@@ -147,6 +150,12 @@ async function executeCallbacks(defect?: "phase" | "state" | "inventory" | "gene
   };
   if (defect === "inventory") await primary.mutation(api.organizations.create, { name: "Unexpected unrecorded QA membership" });
   listPrimaryOrgNames = async () => (await primary.query(api.organizations.listMine, {})).flatMap(org => (org ? [org.name] : []));
+  cleanupDraftSizes = async orgName => await t.run(async ctx => {
+    const org = (await ctx.db.query("organizations").collect()).find(row => row.name === orgName);
+    if (!org) throw new Error(`Missing organization ${orgName}`);
+    const drafts = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", org._id)).collect();
+    return drafts.filter(draft => draft.status === "REJECTED").map(draft => getDocumentSize(draft));
+  });
   // Earlier rehearsal cases leave their organizations behind; the 12-organization fixture bound counts them.
   const createdRehearsalOrgIds: string[] = [];
   for (let index = 0; index < priorOrgs; index += 1)
@@ -178,6 +187,18 @@ test.each(["repository_dispatch", "workflow_run"])("SCRUM-883 %s runs reference 
   } else {
     expect(names).toContain("QA TEST cleanup SPLIT-DISCOVERY");
     expect(results[1]?.detail).toMatchObject({ discovery: { phase: "DISCOVERY", stateUnchanged: true } });
+  }
+});
+
+test("SCRUM-892 the enlarged reference and discovery fixtures sit just above the page byte cap, not at 32 KiB per row", async () => {
+  const results = await executeCallbacks(undefined, 0, "repository_dispatch");
+  expect(results.map(result => result.status)).toEqual(["PASS", "PASS"]);
+  const perRow = OPENING_CLEANUP_PAGE_BYTES / OPENING_CLEANUP_PAGE_ROWS;
+  for (const label of ["SPLIT-REFERENCE", "SPLIT-DISCOVERY"]) {
+    const sizes = await cleanupDraftSizes(`QA TEST cleanup ${label}`);
+    expect(sizes, label).toHaveLength(101);
+    expect(Math.min(...sizes), label).toBeGreaterThan(perRow);
+    expect(Math.max(...sizes), label).toBeLessThan(perRow * 1.25);
   }
 });
 
