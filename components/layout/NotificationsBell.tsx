@@ -123,7 +123,16 @@ export function NotificationsBell() {
 
   return (
     <div className="relative" ref={dropdownRef}>
-      <Button variant="ghost" size="icon" className="relative" onClick={() => setOpen(!open)}>
+      {/* The bell is the only entry to Notifications now that the sidebar no
+          longer lists it (SCRUM-890), so it needs an accessible name. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="relative"
+        onClick={() => setOpen(!open)}
+        aria-label={t("Notifications")}
+        aria-expanded={open}
+      >
         <Bell className="h-5 w-5 text-muted-foreground" />
         {unreadCount > 0 && (
           <Badge
