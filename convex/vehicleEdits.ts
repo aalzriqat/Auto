@@ -5,6 +5,10 @@ import { v } from "convex/values";
 import { requireTenantAuth } from "./utils/tenancy";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import {
+  projectOptionalVehicleForRole,
+  projectVehicleEditPayloadForRole,
+} from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
@@ -414,7 +418,7 @@ export const requestUpdate = mutation({
 export const listPending = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const requests = await ctx.db
       .query("vehicleEdits")
@@ -429,8 +433,9 @@ export const listPending = query({
         const vehicle = req.vehicleId ? await ctx.db.get(req.vehicleId) : null;
         return {
           ...req,
+          payload: projectVehicleEditPayloadForRole(req.payload, role),
           user: user ? { name: user.name || "Unknown", email: user.email } : null,
-          vehicle,
+          vehicle: projectOptionalVehicleForRole(vehicle, role),
         };
       })
     );
@@ -735,7 +740,7 @@ export const getHistory = query({
   },
   handler: async (ctx, args) => {
     // We allow anyone in the org to view history
-    await requireTenantAuth(ctx, args.orgId);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
 
     const edits = await ctx.db
       .query("vehicleEdits")
@@ -751,6 +756,7 @@ export const getHistory = query({
         
         return {
           ...edit,
+          payload: projectVehicleEditPayloadForRole(edit.payload, role),
           requestedByName: requestedBy?.name || "Unknown",
           resolvedByName: resolvedBy?.name,
         };

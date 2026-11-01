@@ -6,6 +6,7 @@ import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -245,7 +246,7 @@ export const get = query({
 
     return {
       ...projectSaleRow(sale, role),
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       customer,
       salesperson: salesperson
         ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
@@ -526,7 +527,7 @@ export const getSaleTrail = query({
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
@@ -599,7 +600,7 @@ export const getSaleTrail = query({
 
     return {
       sale,
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       customer,
       salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
       lead: lead ? { _id: lead._id, stage: lead.stage } : null,

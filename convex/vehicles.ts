@@ -32,6 +32,7 @@ import {
   withServerSupplierNames,
 } from "./utils/vehicleSupplierIdentity";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { canReadVehicleCost, projectVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -418,7 +419,6 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let q;
 
@@ -449,10 +449,8 @@ export const list = query({
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
         const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
-        const { purchasePrice, ...rest } = vehicle;
         return {
-          ...rest,
-          ...(canViewCostPrice ? { purchasePrice } : {}),
+          ...projectVehicleForRole(vehicle, role),
           imageUrls,
           addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
           pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
@@ -479,7 +477,6 @@ export const listAll = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let vehicles;
 
@@ -524,17 +521,8 @@ export const listAll = query({
           (vehicle.imageIds || []).map((id) => ctx.storage.getUrl(id))
         );
 
-        let purchasePrice = vehicle.purchasePrice;
-        let sourceCost = vehicle.sourceCost;
-        if (!canViewCostPrice) {
-          purchasePrice = undefined;
-          sourceCost = undefined;
-        }
-
         return {
-          ...vehicle,
-          purchasePrice,
-          sourceCost,
+          ...projectVehicleForRole(vehicle, role),
           pendingStatusRequest: pendingMap.get(vehicle._id) || null,
           imageUrls: docUrls,
         };
@@ -558,7 +546,7 @@ export const exportData = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const canViewCostPrice = canReadVehicleCost(role);
 
     const orgVehicles = await ctx.db
       .query("vehicles")
@@ -625,7 +613,6 @@ export const get = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -642,10 +629,8 @@ export const get = query({
       .filter((q) => q.eq(q.field("status"), "PENDING"))
       .first();
 
-    const { purchasePrice, ...rest } = vehicle;
     return {
-      ...rest,
-      ...(canViewCostPrice ? { purchasePrice } : {}),
+      ...projectVehicleForRole(vehicle, role),
       imageUrls,
       addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
       pendingStatusRequest: pendingRequest?.requestedStatus ?? null,
@@ -662,14 +647,15 @@ export const getByVin = query({
     vin: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    return await ctx.db
+    const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_org_vin", (q) =>
         q.eq("orgId", args.orgId).eq("vin", args.vin.trim().toUpperCase())
       )
       .unique();
+    return vehicle ? projectVehicleForRole(vehicle, role) : null;
   },
 });
 
@@ -760,12 +746,16 @@ export const getLandedCosts = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
+
+    // The landed-cost breakdown is cost by definition: a caller who may not read vehicle cost
+    // gets the same answer as for a car with no breakdown, which the screens already handle.
+    if (!canReadVehicleCost(role)) return null;
 
     return await ctx.db
       .query("vehicleLandedCosts")

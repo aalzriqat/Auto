@@ -23,6 +23,7 @@ import {
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
@@ -1978,7 +1979,7 @@ export const get = query({
        */
       handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       customer,
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       company,
       salesperson,
       quote,

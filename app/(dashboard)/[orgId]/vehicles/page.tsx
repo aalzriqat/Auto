@@ -942,6 +942,7 @@ export default function VehiclesPage() {
         vehicle={editingVehicle}
         canCreate={canCreate}
         canEdit={canEdit}
+        canViewCost={canViewCost}
       />
 
       <VehicleHistoryDialog

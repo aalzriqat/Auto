@@ -5284,7 +5284,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:285:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:291:31",
       "functionId": "vehicles:generateUploadUrl",
       "contractPath": "mimeType",
       "kind": "TYPE_UNKNOWN",
@@ -5299,7 +5299,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:285:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:291:31",
       "functionId": "vehicles:generateUploadUrl",
       "contractPath": "sizeInBytes",
       "kind": "TYPE_UNKNOWN",
@@ -5314,7 +5314,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:378:15",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:384:15",
       "functionId": "vehicles:deleteImage",
       "contractPath": "storageId",
       "kind": "TYPE_UNKNOWN",
@@ -5329,7 +5329,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:464:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:476:17",
       "functionId": "vehicles:update",
       "contractPath": "bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -5344,7 +5344,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:464:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:476:17",
       "functionId": "vehicles:update",
       "contractPath": "imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -5359,7 +5359,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:475:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:487:17",
       "functionId": "vehicleEdits:requestUpdate",
       "contractPath": "payload.imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -5374,7 +5374,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:489:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:501:31",
       "functionId": "vehicles:create",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -5389,7 +5389,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:489:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:501:31",
       "functionId": "vehicles:create",
       "contractPath": "bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -5404,7 +5404,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:489:31",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:501:31",
       "functionId": "vehicles:create",
       "contractPath": "imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -5419,7 +5419,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:502:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:514:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -5434,7 +5434,7 @@
     {
       "surface": "web",
       "file": "components/vehicles/VehicleDialog.tsx",
-      "callSiteId": "components/vehicles/VehicleDialog.tsx:502:17",
+      "callSiteId": "components/vehicles/VehicleDialog.tsx:514:17",
       "functionId": "vehicleEdits:requestCreate",
       "contractPath": "payload.imageIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -12829,7 +12829,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:417:5",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:424:5",
       "functionId": "wizardDrafts:clearDraft",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -12844,7 +12844,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:427:7",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:434:7",
       "functionId": "wizardDrafts:saveDraft",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -12859,7 +12859,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:486:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:493:13",
       "functionId": "approvals:requestProfitApproval",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -12874,7 +12874,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:486:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:493:13",
       "functionId": "approvals:requestProfitApproval",
       "contractPath": "vehicleId",
       "kind": "TYPE_UNKNOWN",
@@ -12889,7 +12889,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:511:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:518:24",
       "functionId": "customers:create",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -12904,7 +12904,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -12919,7 +12919,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "customerId",
       "kind": "TYPE_UNKNOWN",
@@ -12934,7 +12934,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "vehicleId",
       "kind": "TYPE_UNKNOWN",
@@ -12949,7 +12949,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "companyId",
       "kind": "TYPE_UNKNOWN",
@@ -12964,7 +12964,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "customerEligibilityStatusIds[*]",
       "kind": "TYPE_UNKNOWN",
@@ -12979,7 +12979,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "totalFinancedAmount",
       "kind": "TYPE_UNKNOWN",
@@ -12994,7 +12994,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "monthlyInstallment",
       "kind": "TYPE_UNKNOWN",
@@ -13009,7 +13009,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "profitRateApplied",
       "kind": "TYPE_UNKNOWN",
@@ -13024,7 +13024,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:584:24",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:591:24",
       "functionId": "quotes:saveQuote",
       "contractPath": "totalProfit",
       "kind": "TYPE_UNKNOWN",
@@ -13039,7 +13039,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:611:7",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:618:7",
       "functionId": "wizardDrafts:clearDraft",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13054,7 +13054,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:623:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:630:13",
       "functionId": "quotes:updateQuoteStatus",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13069,7 +13069,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:623:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:630:13",
       "functionId": "quotes:updateQuoteStatus",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",
@@ -13084,7 +13084,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:665:15",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:672:15",
       "functionId": "depositRequests:request",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13099,7 +13099,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:665:15",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:672:15",
       "functionId": "depositRequests:request",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",
@@ -13114,7 +13114,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:665:15",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:672:15",
       "functionId": "depositRequests:request",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -13129,7 +13129,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:677:34",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:684:34",
       "functionId": "deposits:create",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13144,7 +13144,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:677:34",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:684:34",
       "functionId": "deposits:create",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",
@@ -13159,7 +13159,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:677:34",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:684:34",
       "functionId": "deposits:create",
       "contractPath": "method",
       "kind": "TYPE_UNKNOWN",
@@ -13174,7 +13174,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:677:34",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:684:34",
       "functionId": "deposits:create",
       "contractPath": "bankAccountId",
       "kind": "TYPE_UNKNOWN",
@@ -13189,7 +13189,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:677:34",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:684:34",
       "functionId": "deposits:create",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -13204,7 +13204,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:703:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:710:13",
       "functionId": "sales:completeFromQuote",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13219,7 +13219,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:703:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:710:13",
       "functionId": "sales:completeFromQuote",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",
@@ -13234,7 +13234,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:703:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:710:13",
       "functionId": "sales:completeFromQuote",
       "contractPath": "idempotencyKey",
       "kind": "TYPE_UNKNOWN",
@@ -13249,7 +13249,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:717:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:724:13",
       "functionId": "applications:createFromQuote",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -13264,7 +13264,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:717:13",
+      "callSiteId": "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx:724:13",
       "functionId": "applications:createFromQuote",
       "contractPath": "quoteId",
       "kind": "TYPE_UNKNOWN",
