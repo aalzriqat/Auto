@@ -142,6 +142,19 @@ export function projectOptionalVehicleForRole(
   return vehicle ? projectVehicleForRole(vehicle, role) : null;
 }
 
+/**
+ * True when an edit payload carries any field that is not classified OPEN (the same allowlist rule
+ * as `keepOpenFields`, so an unclassified key counts as cost). A caller who cannot read cost must
+ * not submit one: the server's answer to a submitted cost (a no-change refusal, a precision check
+ * against the stored value) would tell them whether it equals the stored cost. Decided by which
+ * keys are present, never by their values, so the answer carries no signal about the stored row.
+ */
+export function editPayloadCarriesCost(payload: VehicleEditPayload): boolean {
+  return Object.entries(payload).some(
+    ([key, value]) => value !== undefined && VEHICLE_EDIT_PAYLOAD_TIER[key as keyof VehicleEditPayload] !== "OPEN"
+  );
+}
+
 /** An edit request's payload as this caller may read it; same allowlist rule as the vehicle. */
 export function projectVehicleEditPayloadForRole(
   payload: VehicleEditPayload,

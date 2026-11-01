@@ -6,6 +6,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import {
+  canReadVehicleCost,
+  editPayloadCarriesCost,
   projectOptionalVehicleForRole,
   projectVehicleEditPayloadForRole,
 } from "./utils/vehicleCostVisibility";
@@ -279,6 +281,15 @@ export const requestUpdate = mutation({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found.");
+    }
+    // SCRUM-886 (OWASP API3:2023, write side): a caller who cannot read vehicle cost cannot propose a
+    // cost change either. They never saw the stored value, and every later check compares the submitted
+    // value with it (the precision check, the "No changes detected" refusal), which would let them
+    // confirm a guessed cost. Refused by which keys are present, before any comparison with the stored
+    // row, so the answer is the same whatever the value. The vehicle form sends none of these fields
+    // for such a caller.
+    if (!canReadVehicleCost(role) && editPayloadCarriesCost(args.payload)) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
     }
     const payload = normalizeVehicleEditPayload(args.payload);
     assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);

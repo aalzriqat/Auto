@@ -3699,7 +3699,8 @@ const ownershipOf = (row: { sourceType?: string }) => storedVehicleSourceType(ro
  */
 function ownershipTermsMismatch(
   existing: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number },
-  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number }
+  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number },
+  mayReadCost: boolean
 ): string | null {
   const was = ownershipOf(existing);
   const now = ownershipOf(row);
@@ -3721,6 +3722,8 @@ function ownershipTermsMismatch(
   }
   const incomingCost = row.sourceCost ?? row.purchasePrice;
   if (existing.sourceCost !== incomingCost) {
+    // SCRUM-886: see `mayReadCost` in importBulk. Null falls through to the generic collision refusal.
+    if (!mayReadCost) return null;
     return `recorded at a supplier cost of ${existing.sourceCost}, this file says ${incomingCost}`;
   }
   return null;
@@ -3863,7 +3866,13 @@ export const importBulk = mutation({
       );
     }
 
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    // SCRUM-886 (OWASP API3:2023): creating vehicles does not imply reading their cost. A stored cost is
+    // COST tier, so a caller who may not read it gets the same generic "already recorded under this VIN"
+    // refusal whether the file's figure matches or differs: no stored amount and no equality signal.
+    // Callers who may read cost keep the detailed reasons. Every refusal below that compares a row with
+    // an existing vehicle's cost, currency, payment route or creditor follows this rule.
+    const mayReadCost = canReadVehicleCost(role);
     // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
     // PROVEN REPLAY. It writes nothing now, so it must not be refused because its supplier was
     // deactivated after the original run. Only the inactive refusal is relaxed for these rows (below);
@@ -4294,7 +4303,7 @@ export const importBulk = mutation({
         // disagrees is far more useful than "this VIN exists", and where
         // everything agrees the message has to be honest that agreement is
         // exactly what cannot settle the question.
-        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row);
+        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row, mayReadCost);
         if (factsMismatch) {
           contradictions.push(`${normalized}: ${factsMismatch}`);
           continue;
@@ -4316,7 +4325,9 @@ export const importBulk = mutation({
             args.bankAccountId
           );
           if (moneyMismatch) {
-            contradictions.push(`${normalized}: ${moneyMismatch}`);
+            // SCRUM-886: see `mayReadCost` above.
+            if (mayReadCost) contradictions.push(`${normalized}: ${moneyMismatch}`);
+            else collisions.push(normalized);
             continue;
           }
           if (args.purchasePaymentMethod === "ON_ACCOUNT") {
@@ -4330,6 +4341,11 @@ export const importBulk = mutation({
                 ? payable.supplierId === row.purchaseSupplierId
                 : sameText(payable.sourcedFromName, supplier);
             if (!payables.some(sameCreditor)) {
+              // SCRUM-886: the creditor is COST tier (purchaseSupplierName); see `mayReadCost` above.
+              if (!mayReadCost) {
+                collisions.push(normalized);
+                continue;
+              }
               contradictions.push(
                 payables.length === 0
                   ? `${normalized}: recorded on account, but no supplier payable exists to compare against`

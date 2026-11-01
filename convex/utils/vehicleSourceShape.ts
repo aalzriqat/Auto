@@ -52,6 +52,8 @@ export const VEHICLE_SOURCE_SHAPE_MESSAGES = {
     "A vehicle's ownership type, consignment supplier, supplier cost, purchase price and payment method drive accounting and can't be changed in the data browser. Use the vehicle's edit screen or the cost-correction workflow.",
   VEHICLE_SOURCED_ACQUISITION_REFUSED:
     "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
+  VEHICLE_COST_EDIT_NEEDS_COST_ACCESS:
+    "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
 } as const;
 
 export type VehicleSourceShapeCode = keyof typeof VEHICLE_SOURCE_SHAPE_MESSAGES;
