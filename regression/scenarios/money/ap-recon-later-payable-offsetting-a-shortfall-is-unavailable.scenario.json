@@ -1,0 +1,73 @@
+{
+  "id": "ap-recon-later-payable-offsetting-a-shortfall-is-unavailable",
+  "fingerprint": "427d30923448f484f4f35df00b6d560cba76fdbd46986ab2c524bcaeed213df1",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr714-seat-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.insertLaterPayable",
+      "input": {
+        "offsets": "shortfall"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "earlier"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "closeChecklist.postCutoffWarning",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "REPRO 1b: a later payable offsets a real 4,000 shortfall inside the earlier period"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

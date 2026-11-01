@@ -1,0 +1,64 @@
+{
+  "id": "ap-recon-row-written-after-cutoff-for-earlier-posting-is-unavailable",
+  "fingerprint": "899badd9cca2c717d13d24c568dba8ac81a66d73faf6a7bf85c915b4ba7ed95d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr714-seat-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.insertBackdatedPayable",
+      "input": {
+        "writtenAt": "afterCutoff",
+        "postingDated": "beforeCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": "EMPTY"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "a payable written after the cutoff for a posting dated before it is UNAVAILABLE, not counted"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}
