@@ -1,0 +1,54 @@
+{
+  "id": "supplier-receivable-unlinked-bucket-counts-toward-total",
+  "fingerprint": "7c71018a3aa92989ea5fff512f1e022769c9f52dc2b3261a758c367d5276f8e2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000,
+        "supplier": "unknown"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "jod.unlinkedMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "jod.linkedMinor",
+      "value": 0
+    },
+    {
+      "observable": "jod.subledgerMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "rows with no supplier identity fall in the Unlinked bucket and still count toward the total"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}
