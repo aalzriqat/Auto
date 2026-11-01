@@ -74,6 +74,16 @@
         "role": "salesonly",
         "org": "A"
       },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "salesonly",
+        "org": "A"
+      },
       "action": "leads.get",
       "input": {
         "lead": "SENTINEL_LEAD"
@@ -178,6 +188,16 @@
         "role": "receptiononly",
         "org": "A"
       },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "receptiononly",
+        "org": "A"
+      },
       "action": "leads.get",
       "input": {
         "lead": "SENTINEL_LEAD"
@@ -282,6 +302,16 @@
         "role": "accountant",
         "org": "A"
       },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
       "action": "leads.get",
       "input": {
         "lead": "SENTINEL_LEAD"
@@ -379,6 +409,16 @@
       "action": "sales.getSaleTrail",
       "input": {
         "sale": "SENTINEL_SALE"
+      }
+    },
+    {
+      "actor": {
+        "role": "vehicleeditor",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
       }
     },
     {
@@ -448,6 +488,18 @@
     {
       "observable": "vehicle.nonCostFields",
       "value": "present"
+    },
+    {
+      "observable": "sale.consignedSupplierEntitlementMinor",
+      "value": "absent"
+    },
+    {
+      "observable": "sale.consignedMarginMinor",
+      "value": "absent"
+    },
+    {
+      "observable": "quote.vehicle.costKeys",
+      "value": "absent"
     }
   ],
   "matrixRow": "SCRUM886-vehicle-cost",
@@ -467,5 +519,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "3f998096878e1e4c38429219263debc74641ec939e3d0bd5df415846247dc56c"
+  "fingerprint": "13f4143d85abc3e357fdb63b6130509ef2336b9b06de10ec4b34bdd602c9fbd4"
 }

@@ -309,6 +309,30 @@ test("scenario vehicle-readers-serve-cost: MANAGER and OWNER still receive the c
   }
 });
 
+test("scenario sale-concession-finance-tier: only a caller with view:finance receives the supplier concession, and only a caller with view:cost_price receives the entitlement and margin", async () => {
+  const s = await seed();
+  const expected: Array<[RoleName, { concession: boolean; cost: boolean }]> = [
+    ["SALES", { concession: false, cost: false }],
+    ["RECEPTION", { concession: false, cost: false }],
+    ["EDITOR", { concession: false, cost: false }],
+    ["ACCOUNTANT", { concession: true, cost: false }],
+    ["MANAGER", { concession: false, cost: true }],
+    ["OWNER", { concession: true, cost: true }],
+  ];
+  const saleReaders = READERS.filter((reader) => reader.saleIn || reader.salesIn);
+  expect(saleReaders.map((reader) => reader.name)).toEqual(["sales.get", "sales.getSaleTrail", "customers.getRelations"]);
+  for (const [role, may] of expected) {
+    for (const reader of saleReaders) {
+      const outcome = await callOrRefusal(reader, s, role);
+      if (outcome.refused) continue;
+      const serialized = JSON.stringify(outcome.response);
+      expect(serialized.includes(String(SENTINEL.saleSupplierConcession)), `${role} concession via ${reader.name}`).toBe(may.concession);
+      expect(serialized.includes(String(SENTINEL.saleSupplierEntitlement)), `${role} entitlement via ${reader.name}`).toBe(may.cost);
+      expect(serialized.includes(String(SENTINEL.saleConsignedMargin)), `${role} margin via ${reader.name}`).toBe(may.cost);
+    }
+  }
+});
+
 describe("SCRUM-886: vehicle cost fields reach only a caller who may read cost", () => {
   describe.each(READERS)("$name", (reader) => {
     test.each(WITHOUT_COST)("%s receives no cost or margin value", async (role) => {

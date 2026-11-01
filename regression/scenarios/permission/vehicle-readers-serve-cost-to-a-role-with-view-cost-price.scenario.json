@@ -74,6 +74,16 @@
         "role": "manager",
         "org": "A"
       },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "manager",
+        "org": "A"
+      },
       "action": "leads.get",
       "input": {
         "lead": "SENTINEL_LEAD"
@@ -178,6 +188,16 @@
         "role": "owner",
         "org": "A"
       },
+      "action": "customers.getRelations",
+      "input": {
+        "customer": "SENTINEL_CUSTOMER"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
       "action": "leads.get",
       "input": {
         "lead": "SENTINEL_LEAD"
@@ -236,6 +256,18 @@
     {
       "observable": "vehicleEdit.payload.costKeys",
       "value": "present"
+    },
+    {
+      "observable": "sale.consignedSupplierEntitlementMinor",
+      "value": "present"
+    },
+    {
+      "observable": "sale.consignedMarginMinor",
+      "value": "present"
+    },
+    {
+      "observable": "quote.vehicle.costKeys",
+      "value": "present"
     }
   ],
   "matrixRow": "SCRUM886-vehicle-cost",
@@ -255,5 +287,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "77a27903cc0341d084183aedc6babda4ba042ad0cd5c49da70194e27bbb2ce76"
+  "fingerprint": "6b2d410266a587696d893fef403d57551c0699d904184af3ba3660047d9b26af"
 }
