@@ -602,27 +602,62 @@ describe("SCRUM-889 - the A/P line and parent verification is budgeted (B4)", ()
  * (SCRUM-762 owns the real-backend measurement).
  */
 describe("SCRUM-889 - the byte budget keeps the verification pass inside the read limit (B4, limits enforced)", () => {
-  test("B4 bytes: 12 journals with 400,000-character line descriptions answer OVER_LIMIT, they do not throw", async () => {
-    const s = await seed("b4bytesreal", { transactionLimits: true });
+  /** `count` balanced journals on the A/P account, two lines each, every line carrying a `descriptionChars`-character description. */
+  async function seedBalancedHeavyJournals(s: Seed, count: number, descriptionChars: number) {
     const accountId = (await s.t.run((ctx) =>
       ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
     ))!._id;
-    for (let i = 0; i < 12; i += 1) {
+    for (let i = 0; i < count; i += 1) {
       const entryId = await insertEntry(s, s.orgId);
       await s.t.run(async (ctx) => {
         await ctx.db.insert("journalLines", {
           orgId: s.orgId, journalEntryId: entryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD",
-          scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(400_000),
+          scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(descriptionChars),
         });
         await ctx.db.insert("journalLines", {
           orgId: s.orgId, journalEntryId: entryId, lineNumber: 2, accountId, debitMinor: AMOUNT_MINOR, creditMinor: 0,
-          currency: "JOD", scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(400_000),
+          currency: "JOD", scale: 3, accountingDate: Date.now() - 1000, description: "d".repeat(descriptionChars),
         });
       });
     }
+    return accountId;
+  }
+
+  test("B4 bytes: 12 journals with 400,000-character line descriptions answer OVER_LIMIT, they do not throw", async () => {
+    const s = await seed("b4bytesreal", { transactionLimits: true });
+    await seedBalancedHeavyJournals(s, 12, 400_000);
     const r = await apRecon(s);
     expect(r.status).toBe("UNAVAILABLE");
     expect(r.unavailableReason).toBe("OVER_LIMIT");
     expect(r.isReconciled).toBe(false);
+  });
+
+  // Round 5 (Seat 2 counterexample). The verification pass has a FIXED byte budget, but Convex's 16 MiB read limit is
+  // per transaction: the unchanged entry walk already read these lines, so the pass must be budgeted against what the
+  // transaction has left, not against a constant. 16 journals x 2 lines x 400,000 characters = 12.8 MB, which the
+  // unchanged reader reads in one transaction (under 16 MiB), and which leaves too little headroom for a second pass.
+  test("B4 headroom: 16 journals (12.8 MB) the unchanged reader reads answer OVER_LIMIT through the public query, they do not throw", async () => {
+    const s = await seed("b4headroom", { transactionLimits: true });
+    const accountId = await seedBalancedHeavyJournals(s, 16, 400_000);
+
+    // CONTROL: the unchanged reader succeeds on this exact fixture, and its own read is a large share of the limit.
+    const unchanged = await s.t.run(async (ctx) => {
+      const balances = await getCumulativeBalancesAsOf(ctx, s.orgId, Date.now() + 86_400_000);
+      return { balances, bytesRead: (await ctx.meta.getTransactionMetrics()).bytesRead };
+    });
+    expect(unchanged.balances.find((b) => b.accountId === accountId)).toEqual({
+      accountId, currency: "JOD", debitMinor: 16 * AMOUNT_MINOR, creditMinor: 16 * AMOUNT_MINOR,
+    });
+    expect(unchanged.bytesRead.used).toBeGreaterThan(12_800_000);
+    expect(unchanged.bytesRead.remaining).toBeGreaterThan(0);
+    // A second full pass over the same lines would not fit: this is what makes the fixture a counterexample.
+    expect(unchanged.bytesRead.used * 2).toBeGreaterThan(unchanged.bytesRead.used + unchanged.bytesRead.remaining);
+
+    const r = await apRecon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("OVER_LIMIT");
+    expect(r.isReconciled).toBe(false);
+    expect(r.currencies).toEqual([]);
+    expect(r.byCurrency).toEqual({});
   });
 });
