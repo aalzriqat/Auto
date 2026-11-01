@@ -701,3 +701,19 @@ supplier, refunds a deposit, corrects a cost, or enables an excluded door.
 The direct-route browser witness records the supplier advice and asserts no
 bank movement. G9/G10 supplier identity and settlement certification remain
 independent obligations; these rows do not stand for them.
+
+
+## SCRUM-889-RECON-ORG-REFS
+
+Finding SCRUM-889 (MEDIUM, tenancy and money integrity): the A/R and A/P reconciliation readers followed two stored references without an organization check. `ctx.db.get(id)` returns a document whatever organization owns it, so authorization is the function's job ([Convex authorization](https://docs.convex.dev/auth/functions-auth); [OWASP API1:2023, Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/)). Rule: an inconsistent reference makes the result UNAVAILABLE. A line is never skipped, because skipping one could report an unreconciled ledger as reconciled. No public writer that creates such a link is known, so every row is seeded directly and read through the real public query. Evidence is convex-test only.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Org A line on 1240 whose parent POSTED entry belongs to org B (org A's period id) | UNAVAILABLE, `INCONSISTENT_REFERENCE`, incomplete, no currencies; was AVAILABLE with the foreign amount in the GL | `a line whose parent entry belongs to another organization makes the result UNAVAILABLE, not a balance` |
+| Same, foreign parent in DRAFT | UNAVAILABLE, `INCONSISTENT_REFERENCE`; was AVAILABLE and reconciled (line skipped) | `a foreign parent in DRAFT is UNAVAILABLE too: its status cannot decide whether the line is skipped` |
+| Line whose parent entry was deleted | UNAVAILABLE, `INCONSISTENT_REFERENCE`; was silently skipped | `a line whose parent entry no longer exists is UNAVAILABLE, never silently skipped` |
+| Queued reversal of an org B event (a type that cannot touch 1240), A/R | UNAVAILABLE, `PENDING_POSTINGS` (treated like a missing original); was AVAILABLE and reconciled | `A/R: a queued reversal whose original belongs to another organization is unresolved, PENDING_POSTINGS` |
+| Same, A/P | UNAVAILABLE, `PENDING_POSTINGS`; was AVAILABLE | `A/P: a queued reversal whose original belongs to another organization is unresolved, PENDING_POSTINGS` |
+| Controls: same-org POSTED parent (GL 123,400 minor units); same-org non-affecting original (A/R and A/P); deleted original (A/R and A/P) | AVAILABLE and counted; AVAILABLE and reconciled; PENDING_POSTINGS | `CONTROL: a same-org POSTED parent counts toward the GL balance`; `A/R CONTROL: ...`; `A/P CONTROL: ...`; the two "no longer exists" tests |
+
+Bound file: `convex/reconciliationOrgReferences.scrum889.test.ts`. The five bug rows failed on ed0c4e1b and the controls passed there. The only caller of the bounded GL read is the A/R reader; the A/P reader shares the reversal-original resolver.

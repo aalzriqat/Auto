@@ -1015,13 +1015,15 @@ async function hasPendingAffectingPosting(
   }
   // A queued reversal inherits the AP effect of the event it reverses. One that cannot be
   // resolved is treated as AP-affecting: unknown must not read as safe.
-  const originalIds = new Set<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>>();
+  // `db.get` does not scope by tenant, so an original owned by another organization is unresolved too
+  // (SCRUM-889): a foreign event's type must not decide this organization's reconciliation.
+  const originalOrgs = new Map<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>, Id<"organizations">>();
   for (const event of reversals) {
     if (!event.originalEventId) return true;
-    originalIds.add(event.originalEventId);
+    originalOrgs.set(event.originalEventId, event.orgId);
   }
-  const originals = await Promise.all([...originalIds].map((id) => ctx.db.get(id)));
-  return originals.some((original) => !original || affectingEventTypes.has(original.eventType));
+  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await ctx.db.get(id) })));
+  return originals.some(({ orgId, original }) => !original || original.orgId !== orgId || affectingEventTypes.has(original.eventType));
 }
 
 /**
@@ -1229,7 +1231,9 @@ export type SupplierReceivablesUnavailableReason =
    * so the GL as of the cutoff and the subledger are not the same moment: neither "reconciled" nor a
    * difference would be true.
    */
-  | "ACTIVITY_AFTER_CUTOFF";
+  | "ACTIVITY_AFTER_CUTOFF"
+  /** A stored journal reference points at a missing entry or another organization's (SCRUM-889): the GL cannot be trusted. */
+  | "INCONSISTENT_REFERENCE";
 
 const SUPPLIER_RECEIVABLES_GL_LABEL = {
   en: "GL 1240 and declared opening supplier recovery control accounts",
@@ -1689,6 +1693,7 @@ export async function computeSupplierReceivablesReconciliation(
   // counted against `limits.gl`; past it the comparison is refused rather than summed from a partial read.
   const gl = await getControlAccountBalancesAsOf(ctx, orgId, [...controlAccounts], cutoff, limits.gl);
   if (gl.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (gl.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   // SCRUM-869 r3 H1. The subledger is the rows' current state; a sale or expense may be dated up to ten days
   // ahead, so its row can exist now while its GL line lies after the cutoff (or the reverse). Summing the
   // GL only to the cutoff would then compare two different moments and could print "reconciled" over a real
@@ -1737,6 +1742,7 @@ export const supplierReceivablesReconciliation = query({
     unavailableReason: v.optional(v.union(
       v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"),
       v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("INVALID_AS_OF_DATE"), v.literal("ACTIVITY_AFTER_CUTOFF"),
+      v.literal("INCONSISTENT_REFERENCE"),
     )),
     complete: v.boolean(),
     rowsRead: v.optional(v.object({ receivables: v.number(), recoveries: v.number() })),

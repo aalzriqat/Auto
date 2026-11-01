@@ -187,7 +187,13 @@ export type BoundedControlBalances =
        */
       accountsWithLaterLines: Array<Id<"chartOfAccounts">>;
     }
-  | { status: "OVER_LIMIT" };
+  | { status: "OVER_LIMIT" }
+  /**
+   * A line's `journalEntryId` names an entry that is missing or belongs to another organization (SCRUM-889).
+   * `ctx.db.get` does not scope by tenant, and skipping the line could report an unreconciled ledger as
+   * reconciled, so no balance is returned.
+   */
+  | { status: "INCONSISTENT_REFERENCE" };
 
 /**
  * The same answer as getCumulativeBalancesAsOf, kept to the given accounts and counted against a
@@ -297,7 +303,8 @@ export async function getControlAccountBalancesAsOf(
         if (counts === undefined) {
           if (!charge(1)) return over;
           const entry = await ctx.db.get(line.journalEntryId);
-          counts = !!entry && entry.periodId === period._id && (entry.status === "POSTED" || entry.status === "REVERSED");
+          if (!entry || entry.orgId !== orgId) return { status: "INCONSISTENT_REFERENCE" };
+          counts = entry.periodId === period._id && (entry.status === "POSTED" || entry.status === "REVERSED");
           entryStatusCache.set(line.journalEntryId, counts);
         }
         if (counts) addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
