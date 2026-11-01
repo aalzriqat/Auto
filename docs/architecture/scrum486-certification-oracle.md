@@ -695,6 +695,7 @@ and tenancy only; the registry itself is certified under SCRUM-868.
 | --- | --- | --- |
 | `SCRUM887-suppliers-management-permission` | The management reads need VIEW_FINANCE. VIEW_VEHICLES alone is refused and the picker projection (`suppliers.list`) stays narrow. VIEW_FINANCE without MANAGE_FINANCE reads, and every write (create, update, deactivate, reactivate, addAlias, retireAlias) is refused by the server, not hidden in the UI. | `convex/suppliers.management.scrum887.test.ts` |
 | `SCRUM887-suppliers-management-tenancy` | The management list never returns another organization's suppliers. | `convex/suppliers.management.scrum887.test.ts` |
+| `SCRUM887-suppliers-management-read-bound` | The management list read is bounded on the server: `paginate` receives `maximumRowsRead` (the smaller of the caller's value and 100), so a distant `endCursor` returns `SplitRequired` with a split cursor instead of an oversized page, and the halves cover the range. Resource-consumption control (OWASP API4:2023); not a money or authority obligation. | `convex/suppliers.management.scrum887.test.ts` |
 
 Not certified by these rows: relationship navigation to payables, receivables and
 recoveries (slice B), and the registry initialisation in production (SCRUM-888).

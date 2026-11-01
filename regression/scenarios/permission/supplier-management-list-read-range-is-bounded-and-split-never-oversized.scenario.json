@@ -1,0 +1,73 @@
+{
+  "id": "supplier-management-list-read-range-is-bounded-and-split-never-oversized",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "suppliers.listForManagement",
+      "input": {
+        "orgId": "ORG_A",
+        "seededSuppliers": 121,
+        "paginationOpts": {
+          "cursor": null,
+          "numItems": 1,
+          "endCursor": "DISTANT_END_CURSOR"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "suppliers.listForManagement",
+      "input": {
+        "orgId": "ORG_A",
+        "follow": "SPLIT_HALVES",
+        "paginationOpts": {
+          "numItems": 1
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.rowsReturned",
+      "value": "AT_MOST_100"
+    },
+    {
+      "observable": "step1.pageStatus",
+      "value": "SplitRequired"
+    },
+    {
+      "observable": "step1.splitCursor",
+      "value": "PRESENT"
+    },
+    {
+      "observable": "step2.rowsCoveredByBothHalves",
+      "value": 120
+    }
+  ],
+  "matrixRow": "SCRUM887-suppliers-management-read-bound",
+  "impl": {
+    "file": "convex/suppliers.management.scrum887.test.ts",
+    "testName": "a distant endCursor with numItems 1 never returns more than 100 rows, and the page is split"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum887-suppliers-screen",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "661f280fd2d7c483c238da38bb6938ac87bea38c3ea9231b2f0490d4de7deca6"
+}
