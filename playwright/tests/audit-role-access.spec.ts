@@ -41,7 +41,7 @@ async function visit(page: Page, baseURL: string | undefined, route: typeof SCRE
 test("protected role routes render actual authority across audited pages", async ({ page, baseURL }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing"] as const) {
+  for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing", "suppliers"] as const) {
     await visit(page, baseURL, route);
   }
   expect(errors).toEqual([]);

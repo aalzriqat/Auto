@@ -59,6 +59,7 @@ export const mainNavigation: NavItem[] = [
   // legacy `/applications` list stays reachable by URL (SCRUM-215).
   { name: "DealsTitle", href: "/deals", icon: ClipboardList, permission: "view:sales" },
   { name: "Sourcing", href: "/sourcing", icon: Truck, permission: "view:finance" },
+  { name: "Suppliers", href: "/suppliers", icon: Building2, permission: "view:finance" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
   { name: "Payroll", href: "/payroll", icon: Wallet, permission: "view:payroll" },

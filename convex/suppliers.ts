@@ -312,6 +312,127 @@ export const search = query({
     }),
 });
 
+// ─── Management reads (SCRUM-887 slice A) ─────────────────────────────────────────────────────
+
+/** Rows per management page, whatever the client asks for, so one read stays bounded. */
+const MANAGEMENT_PAGE_MAX = 100;
+
+const statusFilterValidator = v.optional(v.union(v.literal("ACTIVE"), v.literal("INACTIVE")));
+
+/**
+ * The management list row. A separate projection from `pickerRow` on purpose: the picker
+ * projection is what VIEW_VEHICLES roles read, so it is never widened. Contact details stay out of
+ * the list (they are in `get`); tax identity is here because finance searches and tells
+ * look-alike suppliers apart by it.
+ */
+function managementRow(supplier: Doc<"suppliers">) {
+  return {
+    _id: supplier._id,
+    displayName: supplier.displayName,
+    legalName: supplier.legalName,
+    status: supplier.status,
+    taxId: supplier.taxId,
+    taxJurisdiction: supplier.taxJurisdiction,
+    sharedLegalIdentityOf: supplier.sharedLegalIdentityOf,
+    version: supplier.version,
+    updatedAt: supplier.updatedAt,
+    deactivatedAt: supplier.deactivatedAt,
+  };
+}
+
+/**
+ * Paginated list for the Suppliers screen, inactive suppliers included. VIEW_FINANCE only: the
+ * full-record fields (tax id) are finance data. Pagination follows
+ * https://docs.convex.dev/database/pagination (indexed query, `paginate`), with the page size
+ * clamped here.
+ */
+export const listForManagement = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator, status: statusFilterValidator },
+  handler: async (ctx, args) =>
+    runGuarded(async () => {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      const numItems = Math.min(Math.max(Math.floor(args.paginationOpts.numItems), 1), MANAGEMENT_PAGE_MAX);
+      const result = await ctx.db
+        .query("suppliers")
+        .withIndex("by_org_and_status", (q) =>
+          args.status === undefined ? q.eq("orgId", args.orgId) : q.eq("orgId", args.orgId).eq("status", args.status),
+        )
+        .order("desc")
+        .paginate({ ...args.paginationOpts, numItems });
+      return { ...result, page: result.page.map(managementRow) };
+    }),
+});
+
+/**
+ * Bounded search for the Suppliers screen: exact normalized name, exact normalized active alias,
+ * exact normalized tax id, and the display-name text index. Inactive suppliers are found unless
+ * `status` narrows it. Partial alias text is not searchable (there is no alias text index); an alias
+ * is found by its full normalized form.
+ */
+export const searchForManagement = query({
+  args: {
+    orgId: v.id("organizations"),
+    query: v.string(),
+    status: statusFilterValidator,
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) =>
+    runGuarded(async () => {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      const text = args.query.trim().slice(0, MAX_SEARCH);
+      const nameKey = normalizeNameKey(text);
+      const taxKey = normalizeTaxIdKey(text);
+      if (!nameKey && !taxKey) return [];
+      const limit = Math.min(Math.max(Math.floor(args.limit ?? SEARCH_MAX), 1), SEARCH_MAX);
+
+      const hits = new Map<Id<"suppliers">, Doc<"suppliers">>();
+      const add = (supplier: Doc<"suppliers"> | null): void => {
+        if (!supplier || supplier.orgId !== args.orgId || hits.size >= limit) return;
+        if (args.status !== undefined && supplier.status !== args.status) return;
+        hits.set(supplier._id, supplier);
+      };
+
+      if (nameKey) {
+        (
+          await ctx.db
+            .query("suppliers")
+            .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", args.orgId).eq("displayNameKey", nameKey))
+            .take(limit)
+        ).forEach(add);
+        const aliasHits = await ctx.db
+          .query("supplierAliases")
+          .withIndex("by_org_and_aliasKey_and_status", (q) =>
+            q.eq("orgId", args.orgId).eq("aliasKey", nameKey).eq("status", "ACTIVE"),
+          )
+          .take(limit);
+        for (const alias of aliasHits) {
+          if (hits.size >= limit) break;
+          add(await ctx.db.get(alias.supplierId));
+        }
+      }
+      if (taxKey && hits.size < limit) {
+        (
+          await ctx.db
+            .query("suppliers")
+            .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", args.orgId).eq("taxIdKey", taxKey))
+            .take(limit)
+        ).forEach(add);
+      }
+      if (nameKey && hits.size < limit) {
+        (
+          await ctx.db
+            .query("suppliers")
+            .withSearchIndex("search_displayName", (q) => {
+              const scoped = q.search("displayName", text).eq("orgId", args.orgId);
+              return args.status === undefined ? scoped : scoped.eq("status", args.status);
+            })
+            .take(limit)
+        ).forEach(add);
+      }
+      return [...hits.values()].map(managementRow);
+    }),
+});
+
 export const get = query({
   args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
   handler: async (ctx, args) =>

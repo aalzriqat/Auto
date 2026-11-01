@@ -1,0 +1,49 @@
+{
+  "id": "supplier-management-list-never-returns-another-organizations-suppliers",
+  "domain": "tenancy",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.listForManagement",
+      "input": {
+        "orgId": "ORG_B",
+        "paginationOpts": {
+          "cursor": null,
+          "numItems": 25
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal",
+      "value": "NOT_A_MEMBER"
+    },
+    {
+      "observable": "rows.fromOtherOrganization",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM887-suppliers-management-tenancy",
+  "impl": {
+    "file": "convex/suppliers.management.scrum887.test.ts",
+    "testName": "never returns another organization's suppliers"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum887-suppliers-screen",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "a32a8b65f6e65f1ed1793fbe1612a9fc91cce888b9acbf6694f1ff4b45065a08"
+}
