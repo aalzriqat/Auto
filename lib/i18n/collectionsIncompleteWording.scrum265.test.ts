@@ -49,4 +49,9 @@ describe("Collections incomplete wording", () => {
     expect(en.CollectionMetricIncomplete).toMatch(/at least/i);
     expect(en.CollectionReportIncomplete).toMatch(/lower than/i);
   });
+
+  test("the cheque read caps every status and filters afterwards, so its hidden rows may not count: the wording says may be lower", () => {
+    expect(en.CollectionReportIncomplete).toMatch(/may be lower than/i);
+    expect(ar.CollectionReportIncomplete).toMatch(/قد تكون هذه الأرقام أقل من/);
+  });
 });
