@@ -47,6 +47,10 @@ const LEGACY_USER_PHRASE = /\b(Instagram|Facebook) user (?!\[redacted Meta user\
 // the callback sources, where the id was logged; page and account ids that
 // operators read in the webhook sources are left alone.
 const NUMERIC_ID_RUN = /(?<![A-Za-z0-9])\d{9,}(?![A-Za-z0-9])/g;
+// "IG account <id>": the wording of the pre-fix Instagram `subscribed_apps failed`
+// row. That id is the Instagram business account id, the same id the Instagram
+// deauthorize / data-deletion callbacks name (http.ts), so it is a user id.
+const IG_ACCOUNT_PHRASE = /\bIG account (?!\[redacted Meta user\])[A-Za-z0-9_-]+/g;
 
 /**
  * Defence in depth for the admin reader (OWASP: sanitize after collection and
@@ -56,7 +60,24 @@ const NUMERIC_ID_RUN = /(?<![A-Za-z0-9])\d{9,}(?![A-Za-z0-9])/g;
  */
 export function maskMetaUserIdsForAdmin(source: string, summary: string): string {
   if (!META_LOG_SOURCES.has(source)) return summary;
-  let masked = summary.replace(LEGACY_USER_PHRASE, (_match, label: string) => `${label} user ${REDACTED_META_USER}`);
+  let masked = summary
+    .replace(LEGACY_USER_PHRASE, (_match, label: string) => `${label} user ${REDACTED_META_USER}`)
+    .replace(IG_ACCOUNT_PHRASE, () => `IG account ${REDACTED_META_USER}`);
   if (META_OAUTH_LOG_SOURCES.has(source)) masked = masked.replace(NUMERIC_ID_RUN, () => REDACTED_META_USER);
   return masked;
+}
+
+/**
+ * The same read-time mask for a row's `error` field. The error text of a Meta
+ * source is provider-sourced (a Graph error can quote the object id it rejected),
+ * so every id-shaped run is masked in all four Meta sources, not only the
+ * callback ones. Returns `undefined` for a row with no error. The stored row is
+ * not changed.
+ */
+export function maskMetaErrorForAdmin(source: string, error: string | undefined): string | undefined {
+  if (error === undefined || !META_LOG_SOURCES.has(source)) return error;
+  return error
+    .replace(LEGACY_USER_PHRASE, (_match, label: string) => `${label} user ${REDACTED_META_USER}`)
+    .replace(IG_ACCOUNT_PHRASE, () => `IG account ${REDACTED_META_USER}`)
+    .replace(NUMERIC_ID_RUN, () => REDACTED_META_USER);
 }

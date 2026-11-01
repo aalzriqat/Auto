@@ -17,7 +17,7 @@ import { logAdminAction } from "./adminAudit";
 import { internal } from "./_generated/api";
 import { CRON_HEARTBEAT_JOBS } from "./constants";
 import { describeOrgMaterialization } from "./utils/materialization";
-import { maskMetaUserIdsForAdmin } from "./utils/metaUserIdRedaction";
+import { maskMetaErrorForAdmin, maskMetaUserIdsForAdmin } from "./utils/metaUserIdRedaction";
 
 const OVERVIEW_TABLES = [
   "organizations",
@@ -206,11 +206,21 @@ export const listWebhookLogs = query({
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
     const result = await ctx.db.query("webhookLogs").withIndex("by_createdAt").order("desc").paginate(args.paginationOpts);
-    // SCRUM-842: a Meta user id in a summary written before that fix is masked on
-    // the way out, so a row the stored redaction has not reached never leaves the backend.
+    // SCRUM-842: a Meta user id in a summary or error written before that fix is
+    // masked on the way out, so a row the stored redaction has not reached never
+    // leaves the backend. This is also the only cover for stored `instagram`-source
+    // rows (the `IG account <id>` subscription failures), which the bounded
+    // redaction deliberately does not page through.
     return {
       ...result,
-      page: result.page.map((row) => ({ ...row, summary: maskMetaUserIdsForAdmin(row.source, row.summary) })),
+      page: result.page.map((row) => {
+        const error = maskMetaErrorForAdmin(row.source, row.error);
+        return {
+          ...row,
+          summary: maskMetaUserIdsForAdmin(row.source, row.summary),
+          ...(error === undefined ? {} : { error }),
+        };
+      }),
     };
   },
 });

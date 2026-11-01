@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { maskMetaUserIdsForAdmin, metaOauthLogSource, redactMetaUserIdInText, REDACTED_META_USER } from "./metaUserIdRedaction";
+import { maskMetaErrorForAdmin, maskMetaUserIdsForAdmin, metaOauthLogSource, redactMetaUserIdInText, REDACTED_META_USER } from "./metaUserIdRedaction";
 
 // SCRUM-842: the one definition of "a Meta user id in a log summary" shared by
 // the stored-row redaction and the admin reader. Ids here are synthetic.
@@ -64,4 +64,44 @@ describe("maskMetaUserIdsForAdmin", () => {
 test("the callback log source is named per platform", () => {
   expect(metaOauthLogSource("facebook")).toBe("facebook-oauth");
   expect(metaOauthLogSource("instagram")).toBe("instagram-oauth");
+});
+
+describe("the Instagram account id in a subscribed_apps failure row", () => {
+  const LINE = "subscribed_apps failed for IG account 17841400000000001";
+
+  test("the summary mask covers the 'IG account <id>' wording on the instagram source", () => {
+    expect(maskMetaUserIdsForAdmin("instagram", LINE)).toBe(`subscribed_apps failed for IG account ${REDACTED_META_USER}`);
+  });
+
+  test("it does not touch the same wording on a source that is not Meta's, or an id already redacted", () => {
+    expect(maskMetaUserIdsForAdmin("clerk", LINE)).toBe(LINE);
+    const redacted = `subscribed_apps failed for IG account ${REDACTED_META_USER}`;
+    expect(maskMetaUserIdsForAdmin("instagram", redacted)).toBe(redacted);
+  });
+
+  test("a Facebook Page id in the facebook source is still left alone", () => {
+    expect(maskMetaUserIdsForAdmin("facebook", "subscribed_apps failed for Page 123456789012")).toBe(
+      "subscribed_apps failed for Page 123456789012",
+    );
+  });
+});
+
+describe("maskMetaErrorForAdmin", () => {
+  test("masks an id-shaped run, the legacy user wording and the IG account wording in the error of every Meta source", () => {
+    for (const source of ["facebook-oauth", "instagram-oauth", "facebook", "instagram"]) {
+      expect(
+        maskMetaErrorForAdmin(source, `Unsupported post request. Object with ID '${ID}' does not exist; IG account ${ID}; Instagram user ${ID}`),
+      ).toBe(
+        `Unsupported post request. Object with ID '${REDACTED_META_USER}' does not exist; IG account ${REDACTED_META_USER}; Instagram user ${REDACTED_META_USER}`,
+      );
+    }
+  });
+
+  test("passes an absent error, ordinary text and a non-Meta source through unchanged", () => {
+    expect(maskMetaErrorForAdmin("instagram", undefined)).toBeUndefined();
+    expect(maskMetaErrorForAdmin("instagram", "Webhook subscription failed; provider detail withheld.")).toBe(
+      "Webhook subscription failed; provider detail withheld.",
+    );
+    expect(maskMetaErrorForAdmin("clerk", `error ${ID}`)).toBe(`error ${ID}`);
+  });
 });

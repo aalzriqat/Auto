@@ -745,15 +745,19 @@ export const exchangeCodeForToken = internalAction({
           subscribeJson?.error?.message ?? subscribeRes.statusText,
         );
       }
-    } catch (err) {
+    } catch {
       // Non-fatal — the account is connected and posting/comment-viewing
       // still work; only inbound webhook delivery is affected. Logged so
       // it's visible in the admin Overview rather than silently swallowed.
+      // The row is fixed text (SCRUM-842): `igUserId` is the same id the
+      // Instagram deauthorize / data-deletion callbacks name, so it must not
+      // be copied into a retained log, and Meta's error text can echo it (or
+      // the request URL, which carries the token). Same shape as Facebook's.
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram",
         status: "error",
-        summary: `subscribed_apps failed for IG account ${igUserId}`,
-        error: err instanceof Error ? err.message : String(err),
+        summary: "subscribed_apps failed for Instagram account",
+        error: "Webhook subscription failed; provider detail withheld.",
       });
     }
   },

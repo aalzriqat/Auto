@@ -699,3 +699,45 @@ describe("socialIntegrations: an Instagram account belongs to one org", () => {
     }
   });
 });
+
+// SCRUM-842: the Instagram account id that the exchange saves is the same id the
+// deauthorize / data-deletion callbacks name, so a failed webhook subscription
+// must not copy it, or Meta's raw error text, into a retained webhookLogs row.
+describe("socialIntegrations.exchangeCodeForToken: a failed webhook subscription", () => {
+  test("logs fixed text only: no Instagram account id and no raw Graph error", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Instagram Org", createdAt: Date.now() }));
+    const instagramUserId = "17841409999999998";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (url === "https://api.instagram.com/oauth/access_token") {
+          return rawTextResponse(`{"access_token":"short_token","user_id":${instagramUserId}}`);
+        }
+        if (url.startsWith("https://graph.instagram.com/access_token")) {
+          return jsonTextResponse({ access_token: "long_token", expires_in: 5184000 });
+        }
+        if (url.includes(`/${instagramUserId}/subscribed_apps`) && method === "POST") {
+          return jsonResponse({ error: { message: `Unsupported post request for object ${instagramUserId}` } }, false, 400);
+        }
+        if (url.includes(`/v21.0/${instagramUserId}`) && method === "GET") {
+          return jsonTextResponse({ username: "dealer_ig", user_id: "webhook_123" });
+        }
+        throw new Error(`Unexpected fetch: ${method} ${url}`);
+      }),
+    );
+
+    await t.action(internal.socialIntegrations.exchangeCodeForToken, { orgId, code: "auth_code" });
+    vi.unstubAllGlobals();
+
+    const logs = await t.run((ctx) => ctx.db.query("webhookLogs").collect());
+    expect(logs).toHaveLength(1);
+    expect(logs[0].source).toBe("instagram");
+    expect(logs[0].status).toBe("error");
+    expect(JSON.stringify(logs)).not.toContain(instagramUserId);
+    expect(JSON.stringify(logs)).not.toContain("Unsupported post request");
+  });
+});
