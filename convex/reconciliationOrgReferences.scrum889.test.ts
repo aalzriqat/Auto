@@ -21,6 +21,11 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getControlAccountBalancesAsOf } from "./accounting/accountSnapshots";
+import {
+  SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+} from "./utils/closeWarnings";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -257,6 +262,82 @@ describe("SCRUM-889 - the A/P GL read refuses an inconsistent journal link (publ
     await insertApLine(s, entryId, s.orgId);
     await s.t.run((ctx) => ctx.db.delete(entryId));
     expectRefused(await apRecon(s));
+  });
+
+  const closeChecklist = (s: Seed) => s.asUser.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId: s.periodId });
+  const supplierPayablesWarnings = (warnings: string[]) => warnings.filter((w) => /supplier payables/i.test(w));
+
+  /**
+   * Period close reads the A/P ledger as of the closed period's `endDate`. Journal lines are read only when that
+   * instant lies strictly inside a period, and `accountingPeriods.create` refuses periods that overlap or touch,
+   * so the later period's start is moved onto the cutoff directly here (rows are seeded, as above).
+   */
+  async function journalPathAtTheCloseCutoff(s: Seed) {
+    const first = (await s.t.run((ctx) => ctx.db.get(s.periodId)))!;
+    const nextYear = first.fiscalYear + 1;
+    await s.asUser.mutation(api.accountingPeriods.create, {
+      orgId: s.orgId, startDate: Date.UTC(nextYear, 0, 1), endDate: Date.UTC(nextYear, 11, 31, 23, 59, 59, 999), fiscalYear: nextYear, periodNumber: 1,
+    });
+    const next = (await s.asUser.query(api.accountingPeriods.list, { orgId: s.orgId })).find((p: { _id: Id<"accountingPeriods"> }) => p._id !== s.periodId)!;
+    await s.t.run((ctx) => ctx.db.patch(next._id, { startDate: first.endDate, snapshotFastPathEligible: false }));
+    return { cutoff: first.endDate, nextPeriodId: next._id };
+  }
+  /** An A/P credit line owned by org A, dated at the cutoff, whose parent entry belongs to `entryOwner`. */
+  async function apLineAtCutoff(s: Seed, at: { cutoff: number; nextPeriodId: Id<"accountingPeriods"> }, entryOwner: Id<"organizations">) {
+    const accountId = await apAccountId(s);
+    await s.t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId: entryOwner, journalNumber: "RAW", accountingDate: at.cutoff, periodId: at.nextPeriodId, sourceType: "raw", sourceId: "raw",
+        category: "SYSTEM", memo: "raw", status: "POSTED", postedBy: s.userId, postedAt: at.cutoff, createdAt: at.cutoff,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId, lineNumber: 1, accountId, debitMinor: 0, creditMinor: AMOUNT_MINOR, currency: "JOD", scale: 3,
+        accountingDate: at.cutoff,
+      });
+    });
+  }
+
+  test("M1: period close names the inconsistent journal link, not 'too many records'", async () => {
+    const s = await seed("apm1ref");
+    await apLineAtCutoff(s, await journalPathAtTheCloseCutoff(s), s.otherOrgId);
+    const c = await closeChecklist(s);
+    expect(supplierPayablesWarnings(c.warnings)).toEqual([SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING]);
+    expect(c.warnings).not.toContain(SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING);
+    expect(SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING).toBeTruthy();
+  });
+
+  test("M1 control: the same cutoff with a same-organization parent entry raises no 'could not be completed' warning", async () => {
+    const s = await seed("apm1refctl");
+    await apLineAtCutoff(s, await journalPathAtTheCloseCutoff(s), s.orgId);
+    const c = await closeChecklist(s);
+    expect(supplierPayablesWarnings(c.warnings).filter((w) => /could not be completed/i.test(w))).toEqual([]);
+  });
+  test("M1: period close names an unverifiable opening-balance source, not 'too many records'", async () => {
+    const s = await seed("apm1opening");
+    // An OPENING payable whose opening-balance draft no longer exists: its source proof cannot be read.
+    const draftId = await s.t.run((ctx) =>
+      ctx.db.insert("openingBalanceDrafts", {
+        orgId: s.orgId, status: "POSTED", lines: [], asOfDate: Date.now() - 86_400_000, createdBy: s.userId, createdAt: Date.now(),
+      } as never)
+    );
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, sourcedFromName: "Opening Supplier", amountDue: 100, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "row-1", openingKind: "SUPPLIER_PAYABLE", title: "Opening payable",
+      } as never);
+      await ctx.db.delete(draftId);
+    });
+    const c = await closeChecklist(s);
+    expect(supplierPayablesWarnings(c.warnings)).toEqual([SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]);
+    expect(c.warnings).not.toContain(SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING);
+    expect(SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING).toBeTruthy();
+  });
+
+  test("M1 control: a healthy A/P ledger raises no supplier payables warning at period close", async () => {
+    const s = await seed("apm1ctl");
+    await insertApLine(s, await insertEntry(s, s.orgId), s.orgId);
+    const c = await closeChecklist(s);
+    expect(supplierPayablesWarnings(c.warnings).filter((w) => /could not be completed/i.test(w))).toEqual([]);
   });
 });
 

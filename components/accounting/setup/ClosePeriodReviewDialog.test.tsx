@@ -10,6 +10,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import {
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
+  SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
   SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
@@ -179,5 +181,54 @@ describe("ClosePeriodReviewDialog customer deposits warning (SCRUM-858 F2)", () 
     fireEvent.click(screen.getByRole("button", { name: ar.ClosePeriod }));
     await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
     expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual([CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]);
+  });
+});
+/**
+ * SCRUM-889 (round-3 M1). An INCONSISTENT_REFERENCE or OPENING_SOURCE_UNAVAILABLE supplier-payables result
+ * used to reach this dialog as the "too many records" text, so the signed close record named the wrong cause.
+ * Each now has its own server text (the acknowledgement key) and its own EN and AR display key, and neither
+ * renders as the "too many records" message.
+ */
+describe.each([
+  {
+    name: "inconsistent journal reference",
+    warning: SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
+    key: "ClosePeriodWarnSupplierPayablesReconInconsistentReference",
+  },
+  {
+    name: "opening-balance source unavailable",
+    warning: SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+    key: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
+  },
+])("ClosePeriodReviewDialog supplier payables $name warning (SCRUM-889)", ({ warning, key }) => {
+  beforeEach(() => {
+    mocks.close.mockReset();
+    mocks.close.mockResolvedValue(undefined);
+    mocks.checklist = { canClose: true, blockers: [], warnings: [warning] };
+  });
+  afterEach(cleanup);
+
+  test("has its own text, is not the too-many-records text, renders in EN and AR, and acknowledges the raw server text", async () => {
+    const ar = dictionaries.ar as Record<string, string>;
+    const en = dictionaries.en as Record<string, string>;
+    expect(warning).toBeTruthy();
+    expect(warning).not.toBe(SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING);
+    expect(en[key]).toBe(warning);
+    expect(ar[key]).toBeTruthy();
+    expect(ar[key]).not.toBe(en[key]);
+    expect(ar[key]).not.toBe(ar.ClosePeriodWarnSupplierPayablesReconTooMany);
+
+    renderDialog("en");
+    expect(screen.getByText(warning)).toBeTruthy();
+    cleanup();
+
+    renderDialog("ar");
+    expect(screen.getByText(ar[key])).toBeTruthy();
+    expect(screen.queryByText(warning)).toBeNull();
+    expect(screen.queryByText(ar.ClosePeriodWarnSupplierPayablesReconTooMany)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: ar.ClosePeriod }));
+    await waitFor(() => expect(mocks.close).toHaveBeenCalledTimes(1));
+    expect(mocks.close.mock.calls[0][0].acknowledgedWarnings).toEqual([warning]);
   });
 });
