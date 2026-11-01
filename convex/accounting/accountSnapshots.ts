@@ -110,8 +110,8 @@ export type CheckedCumulativeBalances =
    */
   | { status: "INCONSISTENT_REFERENCE" }
   /**
-   * The verification pass would read more documents than its budget allows (SCRUM-889). A partial verification
-   * cannot show the ledger is consistent, so no balance is returned.
+   * The verification pass would read more documents, or more serialized bytes, than its budgets allow (SCRUM-889).
+   * A partial verification cannot show the ledger is consistent, so no balance is returned.
    */
   | { status: "OVER_LIMIT" };
 
@@ -130,27 +130,51 @@ export type CheckedCumulativeBalances =
  * Closed-period and certified-snapshot balances are read from snapshots, as before; no line is read there.
  * The extra line read happens only for `accountIds` and only when the journal-line path runs.
  *
- * Budget: that extra read is counted in documents, one per control-account line read and one per parent entry
- * fetched, against `readLimit`, and is refused with OVER_LIMIT before it would exceed it (the discipline of
- * getControlAccountBalancesAsOf; Convex caps a function at 32,000 documents scanned and 16 MiB read,
- * https://docs.convex.dev/production/state/limits). The budget is a document count, not a byte count. It does
- * not cover the unchanged walk over the period's entries and lines, which getCumulativeBalancesAsOf also does.
+ * Budget: that extra read is charged against two budgets, and is refused with OVER_LIMIT before it would exceed
+ * either (the discipline of getControlAccountBalancesAsOf). Convex caps one function at 32,000 documents scanned
+ * and 16 MiB read, https://docs.convex.dev/production/state/limits, and meters both, so both are budgeted:
+ *   - `readLimit` counts documents: one per control-account line read and one per parent entry fetched;
+ *   - `readBytesLimit` counts the serialized size (see `serializedSize`) of those same documents. A document
+ *     count alone does not bound bytes: `journalLines.description` and `journalEntries.memo` are unbounded
+ *     strings, so a few documents can pass the document budget and still carry megabytes (SCRUM-889 round 4:
+ *     12 balanced journals with 400,000-character descriptions made the pass read the lines the entry walk had
+ *     already read, and the query threw "Read too much data in a single function execution" instead of answering).
+ * The lines are read as a stream (`for await`) and each document is charged as it arrives, so a refusal stops the
+ * read at the budget plus one document; a single `take(n)` page cannot stop part-way. The caller chooses
+ * `readBytesLimit` well under 16 MiB because the budget does not cover the unchanged walk over the period's
+ * entries and lines, which getCumulativeBalancesAsOf also does, and that walk plus this pass share the one limit.
+ *
+ * Evidence boundary: the byte budget is proven against convex-test's emulation of the 16 MiB limit
+ * (`transactionLimits: true`), not against the Convex backend. The real-backend measurement, which also fixes
+ * whether `serializedSize` over- or under-counts what Convex meters, cannot be produced before merge and is
+ * deferred to the release rehearsal (SCRUM-762).
  */
 export async function getCumulativeBalancesAsOfChecked(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
-  readLimit: number
+  readLimit: number,
+  readBytesLimit: number
 ): Promise<CheckedCumulativeBalances> {
-  const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit });
+  const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit, readBytesLimit });
   return read.outcome === "OK" ? { status: "OK", balances: read.balances } : { status: read.outcome };
 }
 
 type BalanceAdder = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => void;
 type ReadOutcome = "OK" | "INCONSISTENT_REFERENCE" | "OVER_LIMIT";
-/** The accounts whose lines and parent entries are verified, and the document budget for that verification. */
-type LedgerCheck = { accountIds: ReadonlyArray<Id<"chartOfAccounts">>; readLimit: number };
+/** The accounts whose lines and parent entries are verified, and the document and byte budgets for that verification. */
+type LedgerCheck = { accountIds: ReadonlyArray<Id<"chartOfAccounts">>; readLimit: number; readBytesLimit: number };
+
+/**
+ * The UTF-8 size of a document's JSON form, which the byte budget charges. An approximation of what Convex meters
+ * (its accounting is internal and not documented to the byte), chosen to be on the conservative side: JSON text
+ * repeats every field name, so it is at least as large as the stored value for the string-heavy documents that
+ * matter here. Journal documents hold no bigint, which JSON.stringify would reject.
+ */
+function serializedSize(doc: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(doc)).length;
+}
 
 async function addPeriodSnapshots(
   ctx: QueryCtx,
@@ -191,9 +215,11 @@ async function addEntryLines(
 /**
  * Line-first: the entry walk never visits a line whose parent is missing or owned by another organization, so
  * this reads the organization's own lines on the checked accounts in the period's range and resolves each parent
- * that is not one of `knownEntryIds`. Every line read and every parent fetched is charged to `check.readLimit`;
- * a read that would pass it answers OVER_LIMIT first (callers `take(remaining + 1)`, as in
- * getControlAccountBalancesAsOf).
+ * that is not one of `knownEntryIds`. Every line read and every parent fetched is charged to `check.readLimit`
+ * (one document each) and to `check.readBytesLimit` (its `serializedSize`); the first document that takes either
+ * budget below zero answers OVER_LIMIT and nothing further is read. Lines arrive as a stream so the read stops
+ * there; a parent is charged one document before it is fetched and its bytes once it is, so the bytes can pass
+ * the budget by at most that one parent (a document is at most 1 MiB, far under the 16 MiB function limit).
  */
 async function verifyControlLineParents(
   ctx: QueryCtx,
@@ -206,25 +232,28 @@ async function verifyControlLineParents(
   }>
 ): Promise<ReadOutcome> {
   const { orgId, periodStartDate, asOfDate, check, knownEntryIds } = request;
-  let remaining = check.readLimit;
+  let remainingDocs = check.readLimit;
+  let remainingBytes = check.readBytesLimit;
   const resolvedElsewhere = new Set<Id<"journalEntries">>();
   for (const accountId of new Set(check.accountIds)) {
-    const accountLines = await ctx.db
+    const accountLines = ctx.db
       .query("journalLines")
       .withIndex("by_org_account_date", (q) =>
         q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", periodStartDate).lte("accountingDate", asOfDate)
-      )
-      .take(remaining + 1);
-    remaining -= accountLines.length;
-    if (remaining < 0) return "OVER_LIMIT";
-    for (const line of accountLines) {
+      );
+    for await (const line of accountLines) {
+      remainingDocs -= 1;
+      remainingBytes -= serializedSize(line);
+      if (remainingDocs < 0 || remainingBytes < 0) return "OVER_LIMIT";
       if (knownEntryIds.has(line.journalEntryId) || resolvedElsewhere.has(line.journalEntryId)) continue;
       // Not one of this organization's entries in the period: a same-org entry of another period or date
       // is outside this sum (as before); a missing or foreign one is an inconsistency.
-      remaining -= 1;
-      if (remaining < 0) return "OVER_LIMIT";
+      remainingDocs -= 1;
+      if (remainingDocs < 0) return "OVER_LIMIT";
       const parent = await ctx.db.get(line.journalEntryId);
       if (!parent || parent.orgId !== orgId) return "INCONSISTENT_REFERENCE";
+      remainingBytes -= serializedSize(parent);
+      if (remainingBytes < 0) return "OVER_LIMIT";
       resolvedElsewhere.add(line.journalEntryId);
     }
   }
@@ -235,7 +264,7 @@ async function readCumulativeBalances(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
-  /** When given, the journal-line path verifies line and parent ownership within a document budget (see getCumulativeBalancesAsOfChecked). */
+  /** When given, the journal-line path verifies line and parent ownership within a document and a byte budget (see getCumulativeBalancesAsOfChecked). */
   check: LedgerCheck | undefined
 ): Promise<{ balances: CumulativeBalance[]; outcome: ReadOutcome }> {
   const periods = await ctx.db

@@ -987,11 +987,21 @@ type SupplierPayablesUnavailableReason =
  * this figure has not been re-derived against both (the A/R reader's budget has: see
  * SUPPLIER_RECEIVABLES_RECON_LIMITS). The limit bounds this function's own payable, outbox and draft reads
  * and, since SCRUM-889, the extra control-account line and parent-entry reads of the checked GL read
- * (getCumulativeBalancesAsOfChecked). It does not budget that read's walk over the period's entries and lines,
+ * (getCumulativeBalancesAsOfChecked), which also has a byte budget (SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT). It does not budget that read's walk over the period's entries and lines,
  * or the rest of the period-close checklist. Fully paid rows
  * still count toward it.
  */
 const SUPPLIER_PAYABLES_RECON_READ_LIMIT = 4000;
+
+/**
+ * The serialized-byte budget of the checked GL read's extra verification pass (SCRUM-889 round 4), beside the
+ * document budget above: Convex caps one function at 16 MiB read as well as 32,000 documents
+ * (https://docs.convex.dev/production/state/limits), and a journal line's description or an entry's memo is an
+ * unbounded string. The verification bytes plus the unchanged entry walk, which this budget does not cover and which
+ * reads the same lines once, must stay under 16 MiB; 4 MiB is one quarter of it, which leaves the other 12 MiB
+ * for the walk and the rest of the query.
+ */
+const SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT = 4 * 1024 * 1024;
 
 /**
  * How many AP-control lines dated after the cutoff are attributed one by one (one journal-entry read each)
@@ -1207,11 +1217,14 @@ export async function computeSupplierPayablesReconciliation(
   toDate: number | undefined,
   opts: {
     readLimit?: number;
+    /** Serialized-byte budget of the checked GL read's verification pass (tests); defaults to SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT. */
+    readBytesLimit?: number;
     /** PENDING + FAILED outbox rows the caller already read (period close shares them); read here if omitted. */
     outboxEvents?: Array<Doc<"pendingAccountingEvents">>;
   } = {}
 ): Promise<SupplierPayablesReconciliationResult> {
   const readLimit = opts.readLimit ?? SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const readBytesLimit = opts.readBytesLimit ?? SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT;
   const unavailable = (unavailableReason: SupplierPayablesUnavailableReason): SupplierPayablesReconciliationResult => ({
     currencies: [],
     byCurrency: {},
@@ -1319,9 +1332,9 @@ export async function computeSupplierPayablesReconciliation(
   // The checked read refuses a journal line that carries another organization's id and a line on a control
   // account whose parent entry is missing or foreign (SCRUM-889): neither may be summed or skipped, because
   // dropping one could report an unreconciled ledger as reconciled. Its extra line and parent reads are
-  // counted against `readLimit` and refused as OVER_LIMIT past it. The trial balance and the other
+  // counted against `readLimit` (documents) and `readBytesLimit` (bytes) and refused as OVER_LIMIT past either. The trial balance and the other
   // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
-  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit);
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit);
   if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   const glByCurrency=new Map<string,number>();
