@@ -5245,6 +5245,15 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     ),
     amount: v.number(),
     paymentDate: v.number(),
+    // SCRUM-264: what `paymentDate` IS, written by the writer that stored it. "calendarKey" is the UTC
+    // midnight of a picked calendar date (TC39 PlainDate idea), "instant" is a real moment, "saleDate"
+    // is a sale's date passed in by sale completion, which is a key from one screen and an instant from
+    // another. Optional: rows written before this field exist have none, and are classified from the
+    // row's own footprint (utils/orgBusinessDay.ts paymentDateProvenance). Never inferred from
+    // createdAt when this is present.
+    paymentDateKind: v.optional(
+      v.union(v.literal("calendarKey"), v.literal("instant"), v.literal("saleDate"))
+    ),
     status: v.union(
       v.literal("POSTED"),
       v.literal("PENDING_CLEARANCE"),

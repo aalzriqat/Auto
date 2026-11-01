@@ -1,0 +1,70 @@
+{
+  "id": "collections-summary-flags-a-capped-net-total-that-hides-a-refund",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentCount": 500,
+        "amount": 1,
+        "businessDate": "2026-10-31"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.requestApproval",
+      "input": {
+        "kind": "REFUND",
+        "amount": 400,
+        "businessDate": "2026-10-31"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.summary",
+      "input": {
+        "now": "2026-10-31T09:00:00Z"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.collectedToday",
+      "value": 500
+    },
+    {
+      "observable": "step3.incomplete.collectedToday",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM265-capped-reports",
+  "impl": {
+    "file": "convex/collectionsOrgDayKeys.scrum264.test.ts",
+    "testName": "summary and the daily report overstate the net and say they are incomplete"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-keys",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "2d32f53873ab643420f39da3351ad3a5a54dfc22e57fe15293723dee7cb2c79e"
+}
