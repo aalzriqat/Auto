@@ -7,6 +7,7 @@ import { compareContracts } from "./compare.mjs";
 import { CLASSIFICATION, classifyBreaking } from "./classify.mjs";
 import { clientNode } from "./contractTree.mjs";
 import { specProblems } from "./specIndex.mjs";
+import { writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 // registration_impl.ts exportArgs serializes asObjectValidator(args).json.
 // cli/lib/functionSpec.ts wraps the server's _system/cli/modules:apiSpec output.
@@ -60,10 +61,10 @@ export function run() {
 }`);
     fs.writeFileSync(path.join(dir, "old.json"), JSON.stringify(oldSpec));
     fs.writeFileSync(path.join(dir, "new.json"), JSON.stringify(newSpec));
-    fs.writeFileSync(path.join(dir, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
+    writeBaselineDirectory(path.join(dir, "baseline"), []);
     const cli = path.resolve("scripts/contractSkew/cli.mjs");
     const runCli = (spec: string) => spawnSync(process.execPath, [cli, "--mode", "production", "--spec", spec,
-      "--current", "old.json", "--baseline", "baseline.json", "--json", "report.json"], {
+      "--current", "old.json", "--baseline", "baseline", "--json", "report.json"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
     });
     const oldCli = runCli("old.json");
