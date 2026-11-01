@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 import { contractFingerprint, evaluateBaseline, identityOf, loadBaseline, unprovenFrom } from "./baseline.mjs";
+import { writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 const spec = (fields: Record<string, unknown> = { x: { fieldType: { type: "string" }, optional: false } }) => ({
   functions: [
@@ -102,33 +103,50 @@ describe("unprovenFrom", () => {
 });
 
 describe("loadBaseline", () => {
-  test("an absent file is a problem, not an empty baseline", () => {
-    const result = loadBaseline(path.join(tmp, "missing.json"));
+  // The exhaustive fail-closed cases (stray file, duplicate, wrong shard, ...) are in baselineShards.test.ts.
+  const baselineDir = (name: string, shards: Record<string, string>) => {
+    const dir = path.join(tmp, name);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [shard, text] of Object.entries(shards)) fs.writeFileSync(path.join(dir, shard), text);
+    return dir;
+  };
+
+  test("an absent directory is a problem, not an empty baseline", () => {
+    const result = loadBaseline(path.join(tmp, "missing"));
     expect(result).toMatchObject({ ok: false });
     expect((result as { problem: string }).problem).toContain("is absent");
   });
 
-  test("an unreadable path (a directory) is reported as unreadable", () => {
-    const result = loadBaseline(tmp);
+  test("the old single file is refused with a pointer to the shard layout", () => {
+    const result = loadBaseline(write("single.json", '{"entries":[]}'));
     expect(result).toMatchObject({ ok: false });
-    expect((result as { problem: string }).problem).toContain("could not be read");
+    expect((result as { problem: string }).problem).toContain("not a directory of shards");
   });
 
-  test("invalid JSON is a problem", () => {
-    const result = loadBaseline(write("bad.json", "{nope"));
+  test("an empty directory is a problem, not an empty baseline", () => {
+    const result = loadBaseline(baselineDir("empty-dir", {}));
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { problem: string }).problem).toContain("holds no shards");
+  });
+
+  test("invalid JSON in a shard is a problem", () => {
+    const result = loadBaseline(baselineDir("bad", { "app+page.tsx.json": "{nope" }));
     expect((result as { problem: string }).problem).toContain("is not valid JSON");
   });
 
-  test.each([["null", "null"], ["a string", '"x"'], ["no entries array", '{"entries": 3}']])(
-    "%s has no entries array",
-    (_name, text) => {
-      const result = loadBaseline(write("shape.json", text));
-      expect((result as { problem: string }).problem).toContain("no `entries` array");
+  test.each([["null", "null"], ["a string", '"x"'], ["no entries array", '{"version":1,"file":"app/page.tsx","entries":3}']])(
+    "a shard that is %s is refused",
+    (name, text) => {
+      const result = loadBaseline(baselineDir(`shape-${name.replace(/\W/g, "")}`, { "app+page.tsx.json": text }));
+      expect(result).toMatchObject({ ok: false });
     },
   );
 
-  test("a well-formed file loads its entries", () => {
-    expect(loadBaseline(write("ok.json", '{"entries":[{"a":1}]}'))).toEqual({ ok: true, entries: [{ a: 1 }] });
+  test("a well-formed shard loads its entries", () => {
+    const entry = { surface: "web", file: "app/page.tsx", callSiteId: "app/page.tsx:1:1", functionId: "a:b", contractPath: "x", kind: "SHAPE_UNKNOWN" };
+    const dir = path.join(tmp, "ok");
+    writeBaselineDirectory(dir, [entry]);
+    expect(loadBaseline(dir)).toMatchObject({ ok: true, entries: [entry] });
   });
 });
 
