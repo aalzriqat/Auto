@@ -1,14 +1,12 @@
 /**
- * Reading and rewriting needs-evidence-baseline.json without disturbing it.
+ * JSON text and path-containment helpers for the needs-evidence baseline.
  *
- * Shared by the two author tools that edit the baseline (`renewBaselineReviewed`,
- * `relocateBaseline`) so both keep the diff limited to the fields they change:
- * 2-space JSON, key order as parsed, the file's existing line endings (a Windows
- * `core.autocrlf=true` checkout holds it as CRLF), and an atomic replace.
+ * `serializeBaseline` / `parseCanonicalBaseline` fix the text form (2-space JSON, key order as parsed, the
+ * file's existing line endings: a Windows `core.autocrlf=true` checkout holds it as CRLF) so an author tool's
+ * diff is limited to the fields it changes. The files are written by `baselineShards.mjs`, the one writer.
  */
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 /**
  * @param {unknown} document
@@ -71,27 +69,4 @@ export function resolveInside(root, candidate, role = "path") {
   }
   if (!isWithin(realRoot, real)) throw new Error(`${role} ${candidate} resolves outside the repository root ${lexicalRoot}; refusing`);
   return resolved;
-}
-
-/**
- * Replace `file` with `text` through a temporary file in the same directory, so a
- * failure never leaves a half-written baseline. Refuses if the file changed since
- * `expectedBefore` was read, or if `file` is outside `root`.
- *
- * @param {string} file
- * @param {string} text
- * @param {string} expectedBefore
- * @param {string} [root]  defaults to the working directory
- */
-export function writeBaselineAtomically(file, text, expectedBefore, root = process.cwd()) {
-  const target = resolveInside(root, file, "baseline");
-  if (fs.readFileSync(target, "utf8") !== expectedBefore) throw new Error("Baseline changed while checking; refusing write");
-  const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`);
-  try {
-    fs.writeFileSync(temporary, text, { flag: "wx", mode: fs.statSync(target).mode });
-    fs.renameSync(temporary, target);
-  } finally {
-    // Created by this call; the original is never removed on failure.
-    fs.rmSync(temporary, { force: true });
-  }
 }

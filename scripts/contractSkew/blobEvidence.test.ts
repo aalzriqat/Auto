@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, test, vi, type TestContext } from "vitest";
 import { main } from "./renewBaselineReviewed.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
+import { readBaselineEntries, writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 // Each test builds a real git fixture and runs the checker, which takes over 5s under CI coverage.
 // The same budget as the in-process CLI suites in authorToolsCli.test.ts.
@@ -15,7 +16,7 @@ vi.setConfig({ testTimeout: 60_000 });
 beforeEach(() => vi.stubEnv("GITHUB_EVENT_NAME", undefined));
 afterEach(() => vi.unstubAllEnvs());
 
-const baseline = "scripts/contractSkew/needs-evidence-baseline.json";
+const baseline = "scripts/contractSkew/needs-evidence-baseline";
 const client = "app/page.tsx";
 const backend = "convex/definition.ts";
 const trailer = "Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>";
@@ -33,8 +34,8 @@ function fixture(t: TestContext) {
   const entry = { surface: "web", file: client, callSiteId: `${client}:1:1`, functionId: "vehicles:update",
     contractPath: "orgId", kind: "TYPE_UNKNOWN", cause: "cause", fingerprint: "fingerprint", multiplicity: 1,
     rationale: "Reviewed fixture", issue: "SCRUM-866", expires: "2026-11-01" };
-  const save = (renewal?: string, overrides: Record<string, unknown> = {}) => write(baseline, JSON.stringify({ version: 1, entries: [{ ...entry, ...overrides,
-    ...(renewal === undefined ? {} : { renewal }) }] }, null, 2) + "\n");
+  const save = (renewal?: string, overrides: Record<string, unknown> = {}) => writeBaselineDirectory(path.join(root, baseline), [{ ...entry, ...overrides,
+    ...(renewal === undefined ? {} : { renewal }) }]);
   const commit = (message: string) => {
     run("add", "--", client, "convex", "tsconfig.json", "package.json", "pnpm-lock.yaml", baseline);
     run("commit", "-q", "-m", message, "-m", trailer);
@@ -233,7 +234,7 @@ test("writer mechanically emits blobs for client and resolved declaration after 
   const status = main(["--reviewed", f.base, "--expires", "2026-12-01", "--renewal", "Reviewed fixture", "--blob-evidence", "--write"],
     { log: (s) => lines.push(s), error: (s) => lines.push(s) }, f.root);
   assert.equal(status, 0, lines.join("\n"));
-  const renewed = JSON.parse(fs.readFileSync(path.join(f.root, baseline), "utf8")).entries[0];
+  const renewed = readBaselineEntries(path.join(f.root, baseline))[0];
   assert.equal(renewed.renewal, f.reference().replace("reviewed fixture", "Reviewed fixture"));
   f.commit("test(SCRUM-866): generated renewal");
   const result = f.check(["--pr-base", f.base]);
