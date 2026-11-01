@@ -105,7 +105,7 @@ function SupplierSelectBody({
     .map((row) => ({ value: row._id as string, label: row.displayName }));
 
   const flow = useSupplierCreateFlow(orgId);
-  const { creating, candidates, reset: resetCreate } = flow
+  const { creating, candidates, reset: resetCreate } = flow;
   const createError = flow.error === null ? null : getLocalizedErrorMessage(flow.error, translate);
 
   // A new search is a new intent: drop the previous create attempt, its error and its key.

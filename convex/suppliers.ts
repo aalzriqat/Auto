@@ -153,6 +153,17 @@ async function requireSupplierReadAccess(
   return { canViewFull };
 }
 
+/**
+ * The token `update` compares with `expectedVersion`. It is raised by every successful update, so a
+ * change to any field (contact included) makes a stale form refuse. It is not the snapshot
+ * `version`, which money records copy and which only snapshot fields move. `Math.max` keeps the
+ * token from ever falling behind `version`, whatever wrote the row. A row never updated since
+ * `editRevision` existed has no revision, and its token is `version`.
+ */
+function editToken(supplier: Doc<"suppliers">): number {
+  return Math.max(supplier.editRevision ?? 0, supplier.version);
+}
+
 function pickerRow(supplier: Doc<"suppliers">) {
   return { _id: supplier._id, displayName: supplier.displayName, status: supplier.status };
 }
@@ -170,6 +181,7 @@ function fullRecord(supplier: Doc<"suppliers">, aliases: Doc<"supplierAliases">[
     sharedLegalIdentityOf: supplier.sharedLegalIdentityOf,
     sharedLegalIdentityReason: supplier.sharedLegalIdentityReason,
     version: supplier.version,
+    revision: editToken(supplier),
     origin: supplier.origin,
     createdAt: supplier.createdAt,
     updatedAt: supplier.updatedAt,
@@ -335,6 +347,7 @@ function managementRow(supplier: Doc<"suppliers">) {
     taxJurisdiction: supplier.taxJurisdiction,
     sharedLegalIdentityOf: supplier.sharedLegalIdentityOf,
     version: supplier.version,
+    revision: editToken(supplier),
     updatedAt: supplier.updatedAt,
     deactivatedAt: supplier.deactivatedAt,
   };
@@ -357,7 +370,9 @@ export const listForManagement = query({
         .withIndex("by_org_and_status", (q) =>
           args.status === undefined ? q.eq("orgId", args.orgId) : q.eq("orgId", args.orgId).eq("status", args.status),
         )
-        .order("desc")
+        // "All" reads the status index in ascending order, so ACTIVE suppliers come before INACTIVE.
+        // A single-status filter is newest first.
+        .order(args.status === undefined ? "asc" : "desc")
         .paginate({ ...args.paginationOpts, numItems });
       return { ...result, page: result.page.map(managementRow) };
     }),
@@ -382,54 +397,62 @@ export const searchForManagement = query({
       const text = args.query.trim().slice(0, MAX_SEARCH);
       const nameKey = normalizeNameKey(text);
       const taxKey = normalizeTaxIdKey(text);
-      if (!nameKey && !taxKey) return [];
+      if (!nameKey && !taxKey) return { rows: [], truncated: false };
       const limit = Math.min(Math.max(Math.floor(args.limit ?? SEARCH_MAX), 1), SEARCH_MAX);
+      // Each source is read one row past the limit: a full probe is how the screen learns that more
+      // suppliers match than it is showing. Continuation across four different sources is not a
+      // simple bounded cursor, so the answer says "more exist" and the user refines the search.
+      const probe = limit + 1;
 
       const hits = new Map<Id<"suppliers">, Doc<"suppliers">>();
+      let sourceOverflowed = false;
       const add = (supplier: Doc<"suppliers"> | null): void => {
-        if (!supplier || supplier.orgId !== args.orgId || hits.size >= limit) return;
+        if (!supplier || supplier.orgId !== args.orgId) return;
         if (args.status !== undefined && supplier.status !== args.status) return;
         hits.set(supplier._id, supplier);
       };
+      const addSource = (suppliers: Doc<"suppliers">[]): void => {
+        if (suppliers.length > limit) sourceOverflowed = true;
+        suppliers.forEach(add);
+      };
 
       if (nameKey) {
-        (
+        addSource(
           await ctx.db
             .query("suppliers")
             .withIndex("by_org_and_displayNameKey", (q) => q.eq("orgId", args.orgId).eq("displayNameKey", nameKey))
-            .take(limit)
-        ).forEach(add);
+            .take(probe),
+        );
         const aliasHits = await ctx.db
           .query("supplierAliases")
           .withIndex("by_org_and_aliasKey_and_status", (q) =>
             q.eq("orgId", args.orgId).eq("aliasKey", nameKey).eq("status", "ACTIVE"),
           )
-          .take(limit);
-        for (const alias of aliasHits) {
-          if (hits.size >= limit) break;
-          add(await ctx.db.get(alias.supplierId));
-        }
+          .take(probe);
+        if (aliasHits.length > limit) sourceOverflowed = true;
+        for (const alias of aliasHits) add(await ctx.db.get(alias.supplierId));
       }
-      if (taxKey && hits.size < limit) {
-        (
+      if (taxKey) {
+        addSource(
           await ctx.db
             .query("suppliers")
             .withIndex("by_org_and_taxIdKey", (q) => q.eq("orgId", args.orgId).eq("taxIdKey", taxKey))
-            .take(limit)
-        ).forEach(add);
+            .take(probe),
+        );
       }
-      if (nameKey && hits.size < limit) {
-        (
+      if (nameKey) {
+        addSource(
           await ctx.db
             .query("suppliers")
             .withSearchIndex("search_displayName", (q) => {
               const scoped = q.search("displayName", text).eq("orgId", args.orgId);
               return args.status === undefined ? scoped : scoped.eq("status", args.status);
             })
-            .take(limit)
-        ).forEach(add);
+            .take(probe),
+        );
       }
-      return [...hits.values()].map(managementRow);
+      const all = [...hits.values()];
+      return { rows: all.slice(0, limit).map(managementRow), truncated: all.length > limit || sourceOverflowed };
     }),
 });
 
@@ -665,13 +688,17 @@ async function applySupplierUpdate(
   lock: RegistryLock,
   user: Doc<"users">,
   args: UpdateSupplierInput,
-): Promise<{ version: number }> {
+): Promise<{ version: number; revision: number }> {
   const current = await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
-  if (current.version !== args.expectedVersion) {
+  // `expectedVersion` is the edit token the reader got as `revision`. The check and the write share
+  // one Convex transaction, so a second editor holding a stale token is refused rather than
+  // overwriting (https://docs.convex.dev/database/advanced/occ).
+  const token = editToken(current);
+  if (token !== args.expectedVersion) {
     throwSupplierError(
       SUPPLIER_ERROR.VERSION_CONFLICT,
       "This supplier was changed by someone else. Reload it and try again.",
-      { currentVersion: current.version },
+      { currentVersion: token },
     );
   }
 
@@ -720,6 +747,7 @@ async function applySupplierUpdate(
     sharedLegalIdentityOf: sharedOf,
     sharedLegalIdentityReason: sharedReason,
     version,
+    editRevision: token + 1,
     updatedBy: user._id,
     updatedAt: Date.now(),
   };
@@ -732,10 +760,13 @@ async function applySupplierUpdate(
     before: auditView(current),
     after: { ...auditView({ ...current, ...patch }), reason },
   });
-  return { version };
+  return { version, revision: token + 1 };
 }
 
-/** Nullable fields: undefined keeps the stored value, null clears it. */
+/**
+ * Nullable fields: undefined keeps the stored value, null clears it. `expectedVersion` is the edit
+ * token (`revision` on `get` and in the result of the last `update`), which every update raises.
+ */
 export const update = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -751,7 +782,7 @@ export const update = mutation({
     reason: v.optional(v.string()),
     confirmDistinctFrom: v.optional(v.array(v.id("suppliers"))),
   },
-  handler: async (ctx, args): Promise<{ version: number }> =>
+  handler: async (ctx, args): Promise<{ version: number; revision: number }> =>
     runGuarded(async () => {
       const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
       checkConfirmList(args.confirmDistinctFrom);

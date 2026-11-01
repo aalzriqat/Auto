@@ -693,7 +693,7 @@ and tenancy only; the registry itself is certified under SCRUM-868.
 
 | Row | Obligation | Executable check |
 | --- | --- | --- |
-| `SCRUM887-suppliers-management-permission` | The management reads need VIEW_FINANCE. VIEW_VEHICLES alone is refused and the picker projection (`suppliers.list`) stays narrow. VIEW_FINANCE without MANAGE_FINANCE reads, and every write (create, update, deactivate, reactivate, addAlias) is refused by the server, not hidden in the UI. | `convex/suppliers.management.scrum887.test.ts` |
+| `SCRUM887-suppliers-management-permission` | The management reads need VIEW_FINANCE. VIEW_VEHICLES alone is refused and the picker projection (`suppliers.list`) stays narrow. VIEW_FINANCE without MANAGE_FINANCE reads, and every write (create, update, deactivate, reactivate, addAlias, retireAlias) is refused by the server, not hidden in the UI. | `convex/suppliers.management.scrum887.test.ts` |
 | `SCRUM887-suppliers-management-tenancy` | The management list never returns another organization's suppliers. | `convex/suppliers.management.scrum887.test.ts` |
 
 Not certified by these rows: relationship navigation to payables, receivables and

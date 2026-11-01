@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { usePermissions } from "@/hooks/use-permissions";
+import { interpolate } from "@/lib/i18n/interpolate";
 import { SupplierCreateDialog } from "./SupplierCreateDialog";
 import { loadErrorMessage, QueryErrorBoundary, supplierHref, SupplierStatusBadge, useTranslate } from "./shared";
 
@@ -111,7 +112,10 @@ function SupplierListBody({
   const found = useQuery(api.suppliers.searchForManagement, searching ? { orgId, query: search, ...(status ? { status } : {}) } : "skip");
 
   const loading = searching ? found === undefined : paged.status === "LoadingFirstPage";
-  const rows: ManagementRow[] = (searching ? found : paged.results) ?? [];
+  const rows: ManagementRow[] = (searching ? found?.rows : paged.results) ?? [];
+  // The search is capped (no continuation across its four sources), so the screen says when the cap
+  // hid matches instead of presenting a partial list as the whole answer.
+  const truncated = searching && found?.truncated === true;
 
   if (loading) {
     return (
@@ -143,6 +147,11 @@ function SupplierListBody({
   return (
     <div className="space-y-3">
       <SupplierRows orgId={orgId} rows={rows} />
+      {truncated && (
+        <p role="status" className="text-center text-sm text-muted-foreground">
+          {interpolate(translate("SuppliersSearchTruncated"), { count: rows.length })}
+        </p>
+      )}
       {!searching && paged.status === "CanLoadMore" && (
         <div className="flex justify-center">
           <Button variant="outline" onClick={() => paged.loadMore(PAGE_SIZE)}>

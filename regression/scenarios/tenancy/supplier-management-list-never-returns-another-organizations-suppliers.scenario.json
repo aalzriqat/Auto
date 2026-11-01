@@ -21,7 +21,7 @@
   "expected": [
     {
       "observable": "refusal",
-      "value": "NOT_A_MEMBER"
+      "value": "UNAUTHORIZED"
     },
     {
       "observable": "rows.fromOtherOrganization",
@@ -45,5 +45,5 @@
       "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
     }
   ],
-  "fingerprint": "a32a8b65f6e65f1ed1793fbe1612a9fc91cce888b9acbf6694f1ff4b45065a08"
+  "fingerprint": "ecb264a64a5aaad772b58c9661bd7cd2e739d38dbf029d179e6276469989667b"
 }

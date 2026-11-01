@@ -41,6 +41,33 @@ export interface SupplierCreateOptions {
   sharedLegalIdentityReason?: string;
 }
 
+/** The explicit answers a user gave for one exact payload. */
+export interface ConfirmationMemory {
+  signature: string;
+  options: SupplierCreateOptions;
+}
+
+/**
+ * Keeps the user's explicit answers for an unchanged payload (SCRUM-887). A payload can need two
+ * answers: a similar-name confirmation AND a declared shared legal identity. The server asks for
+ * one at a time, so an answer that is not carried into the next request makes the two refusals
+ * alternate forever.
+ *
+ * Rules, all from the user's own clicks: a newer answer replaces an older one of the same kind; a
+ * different payload (`signature`) starts empty, so an answer never follows an edited name or
+ * identity field; a submit that carries no answer starts empty too, so nothing is confirmed on
+ * the user's behalf.
+ */
+export function mergeConfirmations(
+  memory: ConfirmationMemory | null,
+  signature: string,
+  next: SupplierCreateOptions,
+): ConfirmationMemory {
+  const answered = Object.keys(next).length > 0;
+  const kept = memory?.signature === signature && answered ? memory.options : {};
+  return { signature, options: { ...kept, ...next } };
+}
+
 export const DUPLICATE_CODE = "SUPPLIER_DUPLICATE_CANDIDATES";
 export const LEGAL_IDENTITY_CODE = "SUPPLIER_LEGAL_IDENTITY_EXISTS";
 export const VERSION_CONFLICT_CODE = "SUPPLIER_VERSION_CONFLICT";
@@ -94,6 +121,7 @@ export function useSupplierCreateFlow(orgId: Id<"organizations"> | null | undefi
   const [candidates, setCandidates] = useState<SupplierCandidate[] | null>(null);
   const [legalConflict, setLegalConflict] = useState<{ existingSupplierId: Id<"suppliers"> } | null>(null);
   const keyRef = useRef<string | null>(null);
+  const memoryRef = useRef<ConfirmationMemory | null>(null);
   const inFlight = useRef(false);
 
   /** A new intent: forget the previous attempt, its answers and its key. */
@@ -102,6 +130,7 @@ export function useSupplierCreateFlow(orgId: Id<"organizations"> | null | undefi
     setLegalConflict(null);
     setError(null);
     keyRef.current = null;
+    memoryRef.current = null;
   }, []);
 
   /** Resolves to the new supplier's id, or null when the server did not create one. */
@@ -112,20 +141,23 @@ export function useSupplierCreateFlow(orgId: Id<"organizations"> | null | undefi
       setCreating(true);
       setError(null);
       keyRef.current ??= newIdempotencyKey();
+      memoryRef.current = mergeConfirmations(memoryRef.current, JSON.stringify(fields), options);
+      const answers = memoryRef.current.options;
       try {
         const { supplierId } = await createSupplier({
           orgId,
           idempotencyKey: keyRef.current,
           ...fields,
-          ...(options.confirmDistinctFrom ? { confirmDistinctFrom: options.confirmDistinctFrom } : {}),
-          ...(options.sharedLegalIdentityOf
+          ...(answers.confirmDistinctFrom ? { confirmDistinctFrom: answers.confirmDistinctFrom } : {}),
+          ...(answers.sharedLegalIdentityOf
             ? {
-                sharedLegalIdentityOf: options.sharedLegalIdentityOf,
-                sharedLegalIdentityReason: options.sharedLegalIdentityReason,
+                sharedLegalIdentityOf: answers.sharedLegalIdentityOf,
+                sharedLegalIdentityReason: answers.sharedLegalIdentityReason,
               }
             : {}),
         });
         keyRef.current = null;
+        memoryRef.current = null;
         setCandidates(null);
         setLegalConflict(null);
         return supplierId;

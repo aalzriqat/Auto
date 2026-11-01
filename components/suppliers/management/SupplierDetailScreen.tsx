@@ -3,13 +3,17 @@
 /**
  * One supplier: details, edit, aliases, deactivate / reactivate (SCRUM-887 slice A).
  *
- * Edits use optimistic concurrency: the form remembers the version it was loaded at and sends that
- * as `expectedVersion`, not the live one, so another user's change is reported (SUPPLIER_VERSION_
- * CONFLICT) instead of silently overwritten. Only the fields that changed are sent. A name change
- * needs a reason. Relationship navigation (payables, receivables, recoveries) is not here: it
+ * Edits use optimistic concurrency: the form remembers the edit revision it was loaded at and sends
+ * that as `expectedVersion`, not the live one. Every successful update raises the revision, contact
+ * fields included, so another user's change to ANY field is reported (SUPPLIER_VERSION_CONFLICT)
+ * instead of silently overwritten (RFC 9110 section 13: a validator must change when the
+ * representation does). The snapshot `version` that money records copy is a different number and
+ * is not used here. Only the fields that changed are sent. A name change needs a reason. The
+ * answers to a similar-name or shared-legal-identity prompt are kept for as long as the name and
+ * identity fields stay as they were, so the two prompts cannot alternate forever. Relationship navigation (payables, receivables, recoveries) is not here: it
  * needs supplier ids on those rows (SCRUM-868 P3) and is a later slice.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { ArrowLeft } from "lucide-react";
@@ -26,9 +30,12 @@ import {
   describeSupplierError,
   duplicateCandidates,
   legalIdentityConflict,
+  mergeConfirmations,
   refusalCode,
   VERSION_CONFLICT_CODE,
+  type ConfirmationMemory,
   type SupplierCandidate,
+  type SupplierCreateOptions,
 } from "../useSupplierCreateFlow";
 import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
@@ -54,6 +61,8 @@ export interface FullSupplier {
   taxJurisdiction?: string;
   sharedLegalIdentityOf?: Id<"suppliers">;
   version: number;
+  /** The edit token: what `expectedVersion` must carry. Raised by every update. */
+  revision: number;
   deactivatedReason?: string;
   aliases: AliasRow[];
 }
@@ -84,36 +93,45 @@ export function formFromSupplier(supplier: FullSupplier): SupplierFormValues {
 /** Only what differs from the loaded record. null clears a field, undefined leaves it. */
 export function buildUpdate(base: FullSupplier, values: SupplierFormValues, reason: string): UpdateArgs {
   const was = formFromSupplier(base);
-  const args: UpdateArgs = {};
+  return { ...nameChange(was, values, reason), ...legalNameChange(was, values), ...contactChange(was, values), ...taxChange(was, values) };
+}
+
+const clearable = (value: string): string | null => (value === "" ? null : value);
+
+function nameChange(was: SupplierFormValues, values: SupplierFormValues, reason: string): UpdateArgs {
   const name = values.displayName.trim();
-  if (name !== was.displayName) {
-    args.displayName = name;
-    args.reason = reason.trim();
-  }
+  return name === was.displayName ? {} : { displayName: name, reason: reason.trim() };
+}
+
+function legalNameChange(was: SupplierFormValues, values: SupplierFormValues): UpdateArgs {
   const legal = values.legalName.trim();
-  if (legal !== was.legalName) args.legalName = legal === "" ? null : legal;
+  return legal === was.legalName ? {} : { legalName: clearable(legal) };
+}
 
-  const contactChanged =
-    trimmed(values.phone) !== was.phone || trimmed(values.email) !== was.email || trimmed(values.address) !== was.address;
-  if (contactChanged) {
-    const phone = trimmed(values.phone);
-    const email = trimmed(values.email);
-    const address = trimmed(values.address);
-    args.contact =
-      phone || email || address
-        ? { ...(phone ? { phone } : {}), ...(email ? { email } : {}), ...(address ? { address } : {}) }
-        : null;
-  }
+function contactChange(was: SupplierFormValues, values: SupplierFormValues): UpdateArgs {
+  const phone = trimmed(values.phone);
+  const email = trimmed(values.email);
+  const address = trimmed(values.address);
+  if (phone === was.phone && email === was.email && address === was.address) return {};
+  const any = phone || email || address;
+  return {
+    contact: any ? { ...(phone ? { phone } : {}), ...(email ? { email } : {}), ...(address ? { address } : {}) } : null,
+  };
+}
 
+function taxChange(was: SupplierFormValues, values: SupplierFormValues): UpdateArgs {
   const taxId = values.taxId.trim();
   const jurisdiction = values.taxJurisdiction.trim().toUpperCase();
-  if (taxId !== was.taxId) args.taxId = taxId === "" ? null : taxId;
-  if (jurisdiction !== was.taxJurisdiction.toUpperCase()) args.taxJurisdiction = jurisdiction === "" ? null : jurisdiction;
-  return args;
+  return {
+    ...(taxId === was.taxId ? {} : { taxId: clearable(taxId) }),
+    ...(jurisdiction === was.taxJurisdiction.toUpperCase() ? {} : { taxJurisdiction: clearable(jurisdiction) }),
+  };
 }
 
 function isFullSupplier(record: unknown): record is FullSupplier {
-  return typeof record === "object" && record !== null && "version" in record && "aliases" in record;
+  return (
+    typeof record === "object" && record !== null && "version" in record && "revision" in record && "aliases" in record
+  );
 }
 
 function SupplierSummary({ supplier }: Readonly<{ supplier: FullSupplier }>) {
@@ -163,6 +181,9 @@ function SupplierEditForm({
   const changed = Object.keys(args).filter((key) => key !== "reason").length > 0;
   const nameChanged = args.displayName !== undefined;
 
+  // The user's explicit answers for the current name and identity fields (see mergeConfirmations).
+  const memory = useRef<ConfirmationMemory | null>(null);
+
   function clearAnswers() {
     setError(null);
     setCandidates(null);
@@ -174,10 +195,11 @@ function SupplierEditForm({
     setBase(supplier);
     setValues(formFromSupplier(supplier));
     setReason("");
+    memory.current = null;
     clearAnswers();
   }
 
-  async function save(extra: { confirmDistinctFrom?: Id<"suppliers">[]; sharedLegalIdentityOf?: Id<"suppliers">; sharedLegalIdentityReason?: string } = {}) {
+  async function save(answer: SupplierCreateOptions = {}) {
     if (busy || !changed) return;
     setNameError(null);
     setReasonError(null);
@@ -190,10 +212,21 @@ function SupplierEditForm({
       return;
     }
     clearAnswers();
+    // Only the name and identity fields decide what the server asked about, so only they end the
+    // memory; the reason and the contact fields do not.
+    const asked = JSON.stringify({
+      displayName: args.displayName,
+      legalName: args.legalName,
+      taxId: args.taxId,
+      taxJurisdiction: args.taxJurisdiction,
+    });
+    memory.current = mergeConfirmations(memory.current, asked, answer);
+    const extra = memory.current.options;
     setBusy(true);
     try {
-      const result = await update({ orgId, supplierId: base._id, expectedVersion: base.version, ...args, ...extra });
+      const result = await update({ orgId, supplierId: base._id, expectedVersion: base.revision, ...args, ...extra });
       toast.success(translate("SuppliersUpdated"));
+      memory.current = null;
       setReason("");
       // The live record reflects the save; measure the next edit against what was just written.
       setBase({
@@ -203,8 +236,9 @@ function SupplierEditForm({
         contact: args.contact === undefined ? base.contact : (args.contact ?? undefined),
         taxId: args.taxId === undefined ? base.taxId : (args.taxId ?? undefined),
         taxJurisdiction: args.taxJurisdiction === undefined ? base.taxJurisdiction : (args.taxJurisdiction ?? undefined),
-        // The server returns the version it wrote.
+        // The server returns the snapshot version and the edit revision it wrote.
         version: result.version,
+        revision: result.revision,
       });
     } catch (caught) {
       const found = duplicateCandidates(caught);

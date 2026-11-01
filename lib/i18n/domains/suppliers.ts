@@ -60,6 +60,10 @@ const suppliersMessages = defineBilingualMessages({
   ],
   SuppliersNoMatch: ["No supplier matches this search and filter.", "لا يوجد مورّد يطابق هذا البحث والتصفية."],
   SuppliersLoadMore: ["Load more", "تحميل المزيد"],
+  SuppliersSearchTruncated: [
+    "Showing the first {count} matches. More suppliers match. Refine your search.",
+    "تُعرض أول {count} نتائج فقط. هناك مورّدون آخرون مطابقون، فحدّد البحث أكثر.",
+  ],
   SuppliersOpen: ["Open {name}", "فتح {name}"],
 
   // Form fields (create and edit)

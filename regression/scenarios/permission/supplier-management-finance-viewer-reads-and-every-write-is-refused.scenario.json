@@ -74,6 +74,17 @@
         "alias": "ALIAS",
         "supplierId": "SUPPLIER_ID"
       }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.retireAlias",
+      "input": {
+        "orgId": "ORG_A",
+        "aliasId": "ALIAS_ID"
+      }
     }
   ],
   "expected": [
@@ -82,7 +93,7 @@
       "value": "ROWS_RETURNED"
     },
     {
-      "observable": "steps2to6.refusal",
+      "observable": "steps2to7.refusal",
       "value": "FORBIDDEN"
     },
     {
@@ -107,5 +118,5 @@
       "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
     }
   ],
-  "fingerprint": "ba99f41660c84f0b60db5acfc5197de521de6068052a1d165b18debd8fb770c6"
+  "fingerprint": "583c9de31fed0aadd07d460b9e7a965e60c5d7120e0c063fac67d3c9e4c2a371"
 }
