@@ -117,6 +117,33 @@ describe("data-deletion status page", () => {
     expect(pageText()).not.toMatch(/nothing to remove/i);
   });
 
+  test("a processed Instagram request says a minimal id-pair record is kept for up to 30 days then deleted, in English and Arabic, in both outcomes; Facebook and an unfinished request say nothing of it", () => {
+    for (const connectionRemoved of [true, false]) {
+      stubs.locale = "en";
+      stubs.result = { platform: "instagram", completedAt: 1, connectionRemoved };
+      render(<DataDeletionStatusPage />);
+      expect(pageText()).toMatch(/minimal record of the two identifiers Instagram uses for your account for up to 30 days after this deletion completes/);
+      expect(pageText()).toMatch(/that record is deleted/);
+      cleanup();
+
+      stubs.locale = "ar";
+      render(<DataDeletionStatusPage />);
+      expect(pageText()).toContain("لمدة تصل إلى 30 يومًا بعد اكتمال هذا الحذف");
+      expect(pageText()).toContain("يُحذف هذا السجل");
+      cleanup();
+    }
+
+    stubs.locale = "en";
+    stubs.result = { platform: "facebook", completedAt: 1, connectionRemoved: true };
+    render(<DataDeletionStatusPage />);
+    expect(pageText()).not.toMatch(/30 days|minimal record/i);
+    cleanup();
+
+    stubs.result = { platform: "instagram", completedAt: null };
+    render(<DataDeletionStatusPage />);
+    expect(pageText()).not.toMatch(/30 days|minimal record/i);
+  });
+
   test("while the lookup is loading it asserts nothing about deletion", () => {
     stubs.result = undefined;
     render(<DataDeletionStatusPage />);

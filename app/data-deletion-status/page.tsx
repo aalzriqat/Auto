@@ -13,7 +13,8 @@ type Platform = "facebook" | "instagram";
 // The page states only what the callback does: it clears the stored access
 // credentials and connection details for the account. It does not claim a
 // complete erasure, and when the callback found no connection it says nothing was
-// removed (SCRUM-842).
+// removed (SCRUM-842). For Instagram it also says that a minimal record of the
+// account's id pair is kept for up to 30 days, then deleted (owner ruling, round 10).
 const PLATFORM_NAME: Record<"en" | "ar", Record<Platform, string>> = {
   en: { facebook: "Facebook", instagram: "Instagram" },
   ar: { facebook: "فيسبوك", instagram: "إنستغرام" },
@@ -100,6 +101,15 @@ function DataDeletionStatusContent() {
             ? `أزلنا بيانات الوصول إلى ${platform} وتفاصيل الربط التي كنا نحتفظ بها لحسابك. لا يلزم اتخاذ أي إجراء آخر.`
             : `We removed the ${platform} access credentials and connection details we held for your account. No further action is needed.`}
       </p>
+      {status.platform === "instagram" && (
+        // Only Instagram keeps the pair (`instagramAccountIdLinks`, SCRUM-842): up to 30 days after a
+        // completed deletion, then the Meta sweep deletes it. Facebook keeps nothing, so says nothing.
+        <p className="text-sm text-white/65 leading-relaxed mb-6">
+          {isAr
+            ? `نحتفظ أيضًا بسجل محدود يضم المعرّفَين اللذين يستخدمهما ${platform} لحسابك، لمدة تصل إلى 30 يومًا بعد اكتمال هذا الحذف، حتى يزيل أي طلب حذف لاحق المعرّفات نفسها من سجلاتنا المحتفظ بها. بعد ذلك يُحذف هذا السجل.`
+            : `We also keep a minimal record of the two identifiers ${platform} uses for your account for up to 30 days after this deletion completes, so that a later deletion request removes the same identifiers from our retained logs. Then that record is deleted.`}
+        </p>
+      )}
       <p className="text-xs text-white/40 tracking-wider">
         {isAr ? "رمز التأكيد:" : "Confirmation code:"}{" "}
         <bdi dir="ltr" className="font-mono">
