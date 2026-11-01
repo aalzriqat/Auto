@@ -344,6 +344,8 @@ describe("deposits.release", () => {
         .filter((q) => q.eq(q.field("direction"), "OUT"))
         .first();
       expect(refundPayment?.canonicalPaymentId).toBeTruthy();
+      // SCRUM-264: deposits.ts passes no date, so this is a real moment.
+      expect(refundPayment?.paymentDateKind).toBe("instant");
       const canonicalRefund = refundPayment?.canonicalPaymentId
         ? await ctx.db.get(refundPayment.canonicalPaymentId)
         : null;
@@ -625,6 +627,8 @@ describe("deposits.voidDeposit", () => {
         .filter((q) => q.eq(q.field("reference"), `Deposit ${depositId}`))
         .unique();
       expect(mirrorPayment?.status).toBe("VOIDED");
+      // SCRUM-264: the deposit receipt is a real moment, not a calendar date.
+      expect(mirrorPayment?.paymentDateKind).toBe("instant");
       expect(mirrorPayment?.voidedBy).toBeTruthy();
     });
 

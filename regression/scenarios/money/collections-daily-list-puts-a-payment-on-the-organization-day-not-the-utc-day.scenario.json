@@ -1,0 +1,79 @@
+{
+  "id": "collections-daily-list-puts-a-payment-on-the-organization-day-not-the-utc-day",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentAt": "OCT30-2359-AMMAN"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentAt": "OCT31-0100-AMMAN"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "Asia.Amman"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-30",
+        "orgTimeZone": "Asia.Amman"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "step4.rowCount",
+      "value": 1
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDay.scrum264.test.ts",
+    "testName": "a payment at 01:00 Amman time belongs to the Jordan day, not the UTC day"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-org-day",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "4f5c991bc5d8b62ef6ea59a4d2335afa65cb992a8367e3b51c3d798288761168"
+}
