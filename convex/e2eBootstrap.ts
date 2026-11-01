@@ -157,6 +157,7 @@ import { DEFAULT_CHART } from "./utils/defaultChart";
 import { toPublicOrgSettings } from "./utils/orgSettingsProjection";
 import { requireOwnedRow } from "./utils/tenancy";
 import { beginResetGenerationPatch, orgResetState } from "./utils/orgResetGeneration";
+import { OPENING_CLEANUP_PAGE_BYTES, OPENING_CLEANUP_PAGE_ROWS } from "./utils/openingResetCleanup";
 
 /** Prefix on every error this module throws, so a CI log names the subsystem. */
 const ERR = "E2E_BOOTSTRAP";
@@ -251,6 +252,13 @@ async function requireAuthenticCleanupOpening(ctx: MutationCtx, orgId: Id<"organ
   return drafts;
 }
 
+/**
+ * Memo length of an enlarged rejected header (SCRUM-892). Every row is the same size, so any OPENING_CLEANUP_PAGE_ROWS-row
+ * window, wherever the scan cursor sits, exceeds OPENING_CLEANUP_PAGE_BYTES with a 10 percent margin. Convex bills database
+ * I/O per byte and every observation and reset call re-reads these rows, so do not enlarge beyond what the cap needs.
+ */
+const CLEANUP_FIXTURE_LARGE_MEMO = "x".repeat(Math.ceil((OPENING_CLEANUP_PAGE_BYTES / OPENING_CLEANUP_PAGE_ROWS) * 1.1));
+
 /** Fixed historical preconditions only; never a general database editing surface. */
 export const prepareOpeningCleanupFixture = internalMutation({
   args: { orgId: v.id("organizations"), knownOrgIds: v.array(v.id("organizations")),
@@ -263,14 +271,14 @@ export const prepareOpeningCleanupFixture = internalMutation({
       if ((await cleanupFixtureDrafts(ctx, org._id)).length || org.deletionRequestId || orgResetState(org).inProgress) throw new ConvexError(`${ERR}: cleanup fixture cannot be reused.`);
       for (let index = 0; index < 101; index += 1) await ctx.db.insert("openingBalanceDrafts", {
         orgId: org._id, status: "REJECTED", lines: [], asOfDate: Date.now(), createdBy: primary._id, createdAt: Date.now(),
-        memo: args.large ? "x".repeat(32 * 1024) : "Synthetic retained rejected header",
+        memo: args.large ? CLEANUP_FIXTURE_LARGE_MEMO : "Synthetic retained rejected header",
       });
       return { seededRejectedHeaders: 101 };
     }
     const drafts = await requireAuthenticCleanupOpening(ctx, org._id, primary._id);
     if (args.stage === "ENLARGE_REFERENCE") {
       if (!org.suspended || !orgResetState(org).inProgress || !org.openingCleanupReferenceScan || org.openingCleanupReferenceScan.complete || org.openingCleanupPayableScan?.complete !== true) throw new ConvexError(`${ERR}: cleanup reference scan is not ready.`);
-      for (const draft of drafts.filter(draft => draft.status === "REJECTED")) await ctx.db.patch(draft._id, { memo: "x".repeat(32 * 1024) });
+      for (const draft of drafts.filter(draft => draft.status === "REJECTED")) await ctx.db.patch(draft._id, { memo: CLEANUP_FIXTURE_LARGE_MEMO });
       return { enlargedRejectedHeaders: 101 };
     }
     if (org.deletionRequestId || orgResetState(org).inProgress) throw new ConvexError(`${ERR}: cleanup fixture already has a lifecycle owner.`);
