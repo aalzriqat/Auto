@@ -526,6 +526,42 @@ describe("SCRUM-842 retained webhookLogs redaction", () => {
       }
     });
 
+    // ─── Every source that can hold the id (SCRUM-842 round 4, Seat 2 HIGH) ───────
+    //
+    // The OAuth callback source is not the only `webhookLogs` source a Meta user id
+    // was written to: the `instagram` / `facebook` sources carry the Instagram
+    // "subscribed_apps failed for IG account <id>" rows and the auto-reply
+    // failures. A receipt that reads "processed" while those rows keep the id is a
+    // false statement on the public status page.
+    test("a completed signed deletion leaves no copy of the id in the platform's own webhook-source rows", async () => {
+      const t = newTest();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      const subject = p.platform === "instagram" ? "IG account" : "Page";
+      const subscriptionFailure = await t.run((ctx) =>
+        ctx.db.insert("webhookLogs", {
+          source: p.platform,
+          status: "error",
+          summary: `subscribed_apps failed for ${subject} ${LEGACY_ID}`,
+          error: `Graph rejected ${subject} ${LEGACY_ID}`,
+          createdAt: Date.now(),
+        }),
+      );
+      const autoReplyFailure = await seedLegacyLog(t, p.platform, `Auto-reply DM to ${LEGACY_ID} failed`, "error");
+
+      const res = await post(t, p.deletion, await signedRequest({ user_id: LEGACY_ID }, p.secret));
+      const reply = (await res.json()) as { confirmation_code: string };
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      // The receipt says processed, so storage must be clean.
+      const done = await t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code: reply.confirmation_code });
+      expect(typeof done?.completedAt).toBe("number");
+      expect(JSON.stringify(await allWebhookLogs(t))).not.toContain(LEGACY_ID);
+      const row = await logById(t, subscriptionFailure);
+      expect(row?.summary).toBe(`subscribed_apps failed for ${subject} ${REDACTED_META_USER}`);
+      expect(row?.error).toBe(`Graph rejected ${subject} ${REDACTED_META_USER}`);
+      expect((await logById(t, autoReplyFailure))?.summary).toBe(`Auto-reply DM to ${REDACTED_META_USER} failed`);
+    });
+
     test("a request whose redaction needs more than one page completes, and no scheduler record ever holds the user id or the receipt code", async () => {
       const t = newTest();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
