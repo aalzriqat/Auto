@@ -14,7 +14,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { assertSafeRevision, isAncestor, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
-import { resolveInside, writeBaselineAtomically } from "./baselineFile.mjs";
+import { resolveInside } from "./baselineFile.mjs";
+import { readBaselineEntries, snapshotBaseline, writeBaselineDirectory } from "./baselineTestSupport.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 import { main as checkMain } from "./checkBaselineIdentity.mjs";
 import { main as relocateMain } from "./relocateBaseline.mjs";
@@ -121,20 +122,6 @@ describe("CLI paths stay inside the repository (path traversal, S8707)", () => {
     fs.symlinkSync(elsewhere, path.join(root, "link"), "junction");
     expect(() => resolveInside(root, "link/secret.json")).toThrow(/resolves outside the repository root/);
   });
-
-  test("writeBaselineAtomically refuses a target outside the root and leaves it untouched", () => {
-    const root = tempDir("cs-root-");
-    const elsewhere = tempDir("cs-else-");
-    const outside = path.join(elsewhere, "baseline.json");
-    fs.writeFileSync(outside, "old");
-    expect(() => writeBaselineAtomically(outside, "new", "old", root)).toThrow(/outside the repository root/);
-    expect(fs.readFileSync(outside, "utf8")).toBe("old");
-    const inside = path.join(root, "baseline.json");
-    fs.writeFileSync(inside, "old");
-    writeBaselineAtomically(inside, "new", "old", root);
-    expect(fs.readFileSync(inside, "utf8")).toBe("new");
-    expect(() => writeBaselineAtomically(inside, "newer", "stale", root)).toThrow(/changed while checking/);
-  });
 });
 
 // ---------------------------------------------------------------------------------------------------------
@@ -156,23 +143,23 @@ function identityFixture(head = source(156)) {
     surface: "web", file, callSiteId: oldSite, functionId: "sourcingPayables:markPaid", contractPath, kind: "TYPE_UNKNOWN",
     cause: "reviewed cause", fingerprint: "reviewed fingerprint", multiplicity: 1, rationale: "reviewed rationale", issue: "SCRUM-866", expires: "2026-11-01",
   }));
-  const baseline = JSON.stringify({ version: 1, entries }, null, 2) + "\n";
-  fs.writeFileSync(path.join(root, "baseline.json"), baseline);
+  writeBaselineDirectory(path.join(root, "baseline"), entries);
+  const baseline = snapshotBaseline(path.join(root, "baseline"));
   runGit(root, "init", "-q");
-  runGit(root, "add", "--", file, "baseline.json", "tsconfig.json");
+  runGit(root, "add", "--", file, "baseline", "tsconfig.json");
   runGit(root, "commit", "-q", "-m", "base fixture");
   const base = runGit(root, "rev-parse", "HEAD");
   fs.writeFileSync(path.join(root, file), head);
   process.chdir(root);
   return { root, baseline, base, entries };
 }
-const baselineText = (root: string) => fs.readFileSync(path.join(root, "baseline.json"), "utf8");
+const baselineText = (root: string) => snapshotBaseline(path.join(root, "baseline"));
 
 describe("checkBaselineIdentity main (in process)", { timeout: 60_000 }, () => {
   test("passes when every baseline entry still names a live call", () => {
     const { root } = identityFixture(source(150));
     const out = sink();
-    expect(checkMain(["--baseline", "baseline.json"], out.io)).toBe(0);
+    expect(checkMain(["--baseline", "baseline"], out.io)).toBe(0);
     expect(out.all()).toContain("2 baseline entries matched");
     expect(baselineText(root)).toContain(oldSite);
   });
@@ -180,7 +167,7 @@ describe("checkBaselineIdentity main (in process)", { timeout: 60_000 }, () => {
   test("a shifted call is drift (exit 10) naming the replacement; the baseline is not touched", () => {
     const { root, baseline } = identityFixture();
     const out = sink();
-    expect(checkMain(["--baseline", "baseline.json"], out.io)).toBe(10);
+    expect(checkMain(["--baseline", "baseline"], out.io)).toBe(10);
     expect(out.all()).toContain(oldSite);
     expect(out.all()).toContain(newSite);
     expect(out.all()).toContain("relocateBaseline.mjs");
@@ -189,15 +176,15 @@ describe("checkBaselineIdentity main (in process)", { timeout: 60_000 }, () => {
 
   test("an empty baseline is refused unless --allow-empty, which never excuses drift", () => {
     const { root } = identityFixture();
-    fs.writeFileSync(path.join(root, "empty.json"), JSON.stringify({ version: 1, entries: [] }, null, 2) + "\n");
+    writeBaselineDirectory(path.join(root, "empty"), []);
     const refused = sink();
-    expect(checkMain(["--baseline", "empty.json"], refused.io)).toBe(3);
+    expect(checkMain(["--baseline", "empty"], refused.io)).toBe(3);
     expect(refused.all()).toMatch(/no baseline entries/);
     const allowed = sink();
-    expect(checkMain(["--baseline", "empty.json", "--allow-empty"], allowed.io)).toBe(0);
+    expect(checkMain(["--baseline", "empty", "--allow-empty"], allowed.io)).toBe(0);
     expect(allowed.all()).toMatch(/empty baseline allowed/);
     const drift = sink();
-    expect(checkMain(["--baseline", "baseline.json", "--allow-empty"], drift.io)).toBe(10);
+    expect(checkMain(["--baseline", "baseline", "--allow-empty"], drift.io)).toBe(10);
   });
 
   test.each(["../baseline.json", "..", path.join(os.tmpdir(), "elsewhere.json")])("refuses --baseline %s outside the repository (exit 3)", (baseline) => {
@@ -209,9 +196,10 @@ describe("checkBaselineIdentity main (in process)", { timeout: 60_000 }, () => {
 
   test("an unreadable baseline and an unknown option are UNAVAILABLE, never a pass", () => {
     const { root } = identityFixture(source(150));
-    fs.writeFileSync(path.join(root, "broken.json"), "broken json");
+    fs.mkdirSync(path.join(root, "broken"));
+    fs.writeFileSync(path.join(root, "broken", "app+page.tsx.json"), "broken json");
     const broken = sink();
-    expect(checkMain(["--baseline", "broken.json"], broken.io)).toBe(3);
+    expect(checkMain(["--baseline", "broken"], broken.io)).toBe(3);
     expect(broken.all()).toMatch(/UNAVAILABLE.*JSON/s);
     const unknown = sink();
     expect(checkMain(["--nope"], unknown.io)).toBe(3);
@@ -222,21 +210,21 @@ describe("relocateBaseline main (in process)", { timeout: 60_000 }, () => {
   test("dry run proposes and leaves the baseline byte-identical; --write relocates then the check passes", () => {
     const { root, baseline, base, entries } = identityFixture();
     const dry = sink();
-    expect(relocateMain(["--baseline", "baseline.json", "--base", base], dry.io)).toBe(0);
+    expect(relocateMain(["--baseline", "baseline", "--base", base], dry.io)).toBe(0);
     expect(dry.all()).toContain(`PROPOSE: ${oldSite} -> ${newSite}`);
     expect(dry.all()).toContain("Dry run; baseline unchanged.");
     expect(baselineText(root)).toBe(baseline);
     const written = sink();
-    expect(relocateMain(["--baseline", "baseline.json", "--base", base, "--write"], written.io)).toBe(0);
+    expect(relocateMain(["--baseline", "baseline", "--base", base, "--write"], written.io)).toBe(0);
     expect(written.all()).toContain("RELOCATE:");
-    expect(JSON.parse(baselineText(root)).entries).toEqual(entries.map((e) => ({ ...e, callSiteId: newSite })));
-    expect(checkMain(["--baseline", "baseline.json"], sink().io)).toBe(0);
+    expect(readBaselineEntries(path.join(root, "baseline"))).toEqual(entries.map((e) => ({ ...e, callSiteId: newSite })));
+    expect(checkMain(["--baseline", "baseline"], sink().io)).toBe(0);
   });
 
   test("a changed call needs human review (exit 10) and --write leaves the baseline untouched", () => {
     const { root, baseline, base } = identityFixture(source(156, expression.replace("amount", "0")));
     const out = sink();
-    expect(relocateMain(["--baseline", "baseline.json", "--base", base, "--write"], out.io)).toBe(10);
+    expect(relocateMain(["--baseline", "baseline", "--base", base, "--write"], out.io)).toBe(10);
     expect(out.all()).toMatch(/NEEDS HUMAN REVIEW/);
     expect(baselineText(root)).toBe(baseline);
   });
@@ -244,15 +232,15 @@ describe("relocateBaseline main (in process)", { timeout: 60_000 }, () => {
   test("requires --base, refuses an option-shaped revision before git sees it, and an unknown commit", () => {
     const { root, baseline } = identityFixture();
     const none = sink();
-    expect(relocateMain(["--baseline", "baseline.json"], none.io)).toBe(3);
+    expect(relocateMain(["--baseline", "baseline"], none.io)).toBe(3);
     expect(none.all()).toMatch(/Required: --base/);
     const marker = path.join(root, "owned.txt");
     const injected = sink();
-    expect(relocateMain(["--baseline", "baseline.json", `--base=--output=${marker}`], injected.io)).toBe(3);
+    expect(relocateMain(["--baseline", "baseline", `--base=--output=${marker}`], injected.io)).toBe(3);
     expect(injected.all()).toMatch(/not a plain revision name/);
     expect(fs.existsSync(marker)).toBe(false);
     const unknown = sink();
-    expect(relocateMain(["--baseline", "baseline.json", "--base", "no-such-rev", "--write"], unknown.io)).toBe(3);
+    expect(relocateMain(["--baseline", "baseline", "--base", "no-such-rev", "--write"], unknown.io)).toBe(3);
     expect(baselineText(root)).toBe(baseline);
   });
 
@@ -272,8 +260,7 @@ const renewalEntry = (over: Record<string, unknown> = {}) => ({
   kind: "TYPE_UNKNOWN", cause: "cause", fingerprint: "0123456789abcdef", multiplicity: 1, rationale: "Reviewed rationale with no file reference.",
   issue: "SCRUM-711", expires: "2026-11-01", ...over,
 });
-const serialize = (entries: unknown[]) => JSON.stringify({ version: 1, entries }, null, 2) + "\n";
-const BASELINE = "scripts/contractSkew/needs-evidence-baseline.json";
+const BASELINE = "scripts/contractSkew/needs-evidence-baseline";
 
 describe("renewBaselineReviewed main (in process)", { timeout: 90_000 }, () => {
   let root: string;
@@ -297,39 +284,40 @@ describe("renewBaselineReviewed main (in process)", { timeout: 90_000 }, () => {
     write("convex/definition.ts", 'declare function mutation(options: unknown): unknown; export const update = mutation({ args: { orgId: "string" } });');
     write("convex/vehicles.ts", 'export { update } from "./definition";');
     write("app/page.tsx", "export const payload: unknown = {};");
-    write(BASELINE, serialize([renewalEntry()]));
+    writeBaselineDirectory(baselinePath(), [renewalEntry()]);
     runGit(root, "init", "-q");
     runGit(root, "add", "--", ".");
     runGit(root, "commit", "-q", "-m", "reviewed fixture");
     reviewed = runGit(root, "rev-parse", "HEAD");
   });
-  const renewedText = (sha: string) => serialize([renewalEntry({
+  const setRenewed = (sha: string) => writeBaselineDirectory(baselinePath(), [renewalEntry({
     expires: RENEWED, renewal: `SCRUM-866 round 12 review against origin/main ${sha}: app/page.tsx and convex/definition.ts reviewed.`,
   })]);
 
   test("mechanical renewal: dry run changes nothing, --write renews the provably unchanged entry", () => {
-    const before = fs.readFileSync(baselinePath(), "utf8");
+    const before = snapshotBaseline(baselinePath());
     const dry = run("--reviewed", reviewed, "--expires", RENEWED, "--renewal", "SCRUM-866 unchanged since reviewed");
     expect(dry.code, dry.out.all()).toBe(0);
     expect(dry.out.all()).toContain("renewed 1, already current 0, refused 0");
     expect(dry.out.all()).toContain("dry run; pass --write to apply");
-    expect(fs.readFileSync(baselinePath(), "utf8")).toBe(before);
+    expect(snapshotBaseline(baselinePath())).toBe(before);
     const applied = run("--reviewed", reviewed, "--expires", RENEWED, "--renewal", "SCRUM-866 unchanged since reviewed", "--write");
     expect(applied.code, applied.out.all()).toBe(0);
     expect(applied.out.all()).toContain("wrote ");
-    expect(JSON.parse(fs.readFileSync(baselinePath(), "utf8")).entries[0]).toMatchObject({ expires: RENEWED, renewal: "SCRUM-866 unchanged since reviewed" });
-    fs.writeFileSync(baselinePath(), before);
+    expect(readBaselineEntries(baselinePath())[0]).toMatchObject({ expires: RENEWED, renewal: "SCRUM-866 unchanged since reviewed" });
+    writeBaselineDirectory(baselinePath(), [renewalEntry()]);
+    expect(snapshotBaseline(baselinePath())).toBe(before);
   });
 
   test("evidence check passes for an entry whose renewal names the reviewed head", () => {
-    fs.writeFileSync(baselinePath(), renewedText(reviewed));
+    setRenewed(reviewed);
     const result = run("--reviewed", reviewed, "--check-evidence");
     expect(result.code, result.out.all()).toBe(0);
     expect(result.out.all()).toContain("1 renewed entries checked, 0 unrenewed, 0 stale");
   });
 
   test("evidence check reports a file changed after the recorded review as STALE (exit 10)", () => {
-    fs.writeFileSync(baselinePath(), renewedText(reviewed));
+    setRenewed(reviewed);
     write("convex/definition.ts", fs.readFileSync(path.join(root, "convex/definition.ts"), "utf8") + "\n// changed after review\n");
     runGit(root, "add", "--", "convex/definition.ts");
     runGit(root, "commit", "-q", "-m", "definition changed");
