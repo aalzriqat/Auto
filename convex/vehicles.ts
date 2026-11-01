@@ -10,7 +10,7 @@ import {
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, QueryCtx, query } from "./_generated/server";
 import { internalMutation, mutation } from "./functions";
-import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
+import { LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
@@ -37,7 +37,7 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
 import { assertVehicleCostPrecision, requireSupplierAmountMinor } from "./utils/supplierPaymentAmounts";
@@ -155,6 +155,20 @@ function agingKey(sourcedFlag: number, createdAt: number): [number, number, stri
   return [LIVE, sourcedFlag, "AVAILABLE", createdAt];
 }
 
+type AgingBound = { key: ReturnType<typeof agingKey>; inclusive: boolean };
+
+// @convex-dev/aggregate 0.2.2's countBatch and sumBatch each invoke the same
+// aggregateBetweenBatch component query, which already returns both values.
+// Encode this query's tuple-key bounds exactly as the package's
+// boundsToPositions/boundToPosition do, so the aging read needs one batch call.
+function agingBoundPosition(direction: "lower" | "upper", bound: AgingBound) {
+  const key: Array<string | number> = [""];
+  for (const part of bound.key) key.push(part, "");
+  const sentinel = direction === "lower"
+    ? (bound.inclusive ? null : [])
+    : (bound.inclusive ? [] : null);
+  return [key, sentinel, sentinel];
+}
 
 /**
  * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
@@ -680,15 +694,10 @@ export const getAgingBuckets = query({
 
     const now = Date.now();
 
-    // Each bucket is a contiguous createdAt range *per stock kind*, so it is a
-    // bounded count and a bounded sum against the B-tree — four buckets × two
-    // kinds × (count + sum) = sixteen O(log n) reads in total, no vehicle
-    // documents touched. Iterating every AVAILABLE vehicle to build this
-    // histogram was 1.19 GB of database I/O.
-    //
-    // The kinds double the range count but not the round-trips: `countBatch`
-    // and `sumBatch` each walk the tree once no matter how many bound pairs
-    // they are handed, which is why they are used instead of per-bucket calls.
+    // Each bucket is a contiguous createdAt range per stock kind: four buckets
+    // times two kinds, with both count and sum from one B-tree batch query.
+    // No vehicle documents are read. Iterating every AVAILABLE vehicle to
+    // build this histogram previously used 1.19 GB of database I/O.
     //
     // Boundaries are derived from the row-scan's `ageDays <= 30 | 60 | 90`,
     // where ageDays = floor((now - createdAt) / DAY_MS):
@@ -717,22 +726,24 @@ export const getAgingBuckets = query({
       })),
     );
 
-    // Batched: `count` and `sum` each issue their own component round-trip, so
-    // asking per bucket would be eight traversals of the same tree — enough to
-    // read more than the row scan this replaces on a mid-sized org. Two batched
-    // calls walk it twice regardless of how many buckets there are.
-    const [counts, sums] = await Promise.all([
-      vehiclesByOrg.countBatch(ctx, queries),
-      vehiclesByOrg.sumBatch(ctx, queries),
-    ]);
+    // Both public batch helpers call aggregateBetweenBatch and discard half of
+    // its result. One component call preserves the same tenant and bounds while
+    // retaining both values. The boundary and tenant tests pin this encoding.
+    const aggregates = await ctx.runQuery(components.vehiclesByOrg.btree.aggregateBetweenBatch, {
+      queries: queries.map(({ namespace, bounds }) => ({
+        namespace,
+        k1: agingBoundPosition("lower", bounds.lower),
+        k2: agingBoundPosition("upper", bounds.upper),
+      })),
+    });
 
     return AGE_BUCKETS.map(({ bucket }, i) => {
       // Each bucket produced one query per stock kind, laid out contiguously by
       // the flatMap above, so bucket i owns [i * STOCK_KINDS.length, +len).
       const from = i * STOCK_KINDS.length;
       const slice = STOCK_KINDS.map((_, k) => from + k);
-      const count = slice.reduce((acc, j) => acc + counts[j], 0);
-      const sum = slice.reduce((acc, j) => acc + sums[j], 0);
+      const count = slice.reduce((acc, j) => acc + aggregates[j].count, 0);
+      const sum = slice.reduce((acc, j) => acc + aggregates[j].sum, 0);
       // Mean age from the mean createdAt (sums are stored offset by SUM_EPOCH,
       // so add it back). The row scan averaged already-floored ages and this
       // floors once at the end, so on a mixed bucket the two can differ by at
