@@ -3,7 +3,7 @@ import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, requireOrgMember } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -149,6 +149,49 @@ async function assertCostBearerAllowed(
   return vehicle;
 }
 
+/**
+ * SCRUM-811. Proves a vehicle id is a live car of `orgId`: it exists, belongs to
+ * this org and is not deleted. The ONE definition of that refusal, used where a
+ * vehicle id is accepted as an argument (create, update) and again at the
+ * payment boundary, where the id comes from the STORED expense row instead.
+ * Object-level authorization per OWASP API1:2023 (BOLA) and Convex's guidance to
+ * check ownership inside every function that takes a document id.
+ */
+async function assertLiveOrgVehicle(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  const vehicle = await ctx.db.get(vehicleId);
+  if (!vehicle || vehicle.isDeleted || vehicle.orgId !== orgId) {
+    throw new ConvexError("Vehicle not found in this organization.");
+  }
+}
+
+/**
+ * SCRUM-811. A payer must be an ACTIVE member of the org AND still exist as a
+ * user. `requireOrgMember` proves only the membership row, so a membership that
+ * outlived its user would otherwise be accepted and later hydrate as a payer.
+ * Kept local to expenses on purpose: the shared helper has many callers and is
+ * not changed here.
+ */
+async function requireExistingOrgPayer(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  payerId: Id<"users">
+): Promise<void> {
+  await requireOrgMember(
+    ctx,
+    orgId,
+    payerId,
+    AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
+    "The selected payer is not a member of this organization."
+  );
+  if (!(await ctx.db.get(payerId))) {
+    throwAppError(AppErrorCode.ASSIGNED_USER_NOT_MEMBER, "The selected payer is not a member of this organization.");
+  }
+}
+
 async function recordPaidExpenseSideEffects(
   ctx: MutationCtx,
   args: {
@@ -157,6 +200,16 @@ async function recordPaidExpenseSideEffects(
     idempotencyKey?: string;
   }
 ) {
+  // SCRUM-811: the payment boundary. Every route that creates a NEW payment effect
+  // (create as PAID, PENDING to PAID) lands here and posts against the vehicle
+  // STORED on the expense, which no argument check has seen. Prove it is a live
+  // car of this org before any write. Only a new payment reaches this function:
+  // replaying, editing or reversing an already-paid expense never does, so a car
+  // deleted after the payment cannot block that history from being corrected.
+  if (args.expense.vehicleId) {
+    await assertLiveOrgVehicle(ctx, args.expense.orgId, args.expense.vehicleId);
+  }
+
   // Before ANY write — see assertCostBearerAllowed.
   const supplierVehicle = await assertCostBearerAllowed(ctx, {
     orgId: args.expense.orgId,
@@ -327,16 +380,18 @@ export const list = query({
         .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
     }
 
-    // Hydrate vehicle info
+    // Hydrate vehicle info. SCRUM-811: the vehicle and payer ids are STORED on the row, so each
+    // joined document must be proven to belong to this org before any field of it is returned.
+    const readOrgUser = createOrgUserReader(ctx, args.orgId);
     const page = await Promise.all(
       pageResult.page.map(async (exp) => {
         let vehicle = null;
         if (exp.vehicleId) {
-          vehicle = await ctx.db.get(exp.vehicleId);
+          vehicle = sameOrgOrNull(await ctx.db.get(exp.vehicleId), args.orgId);
         }
         let payerName = null;
         if (exp.payerId) {
-          const payer = await ctx.db.get(exp.payerId);
+          const payer = await readOrgUser(exp.payerId);
           if (payer && "name" in payer) {
             payerName = payer.name;
           }
@@ -443,13 +498,7 @@ export const create = mutation({
     // the expense list — so an unvalidated one discloses a foreign user's
     // identity inside the caller's own org.
     if (args.payerId) {
-      await requireOrgMember(
-        ctx,
-        args.orgId,
-        args.payerId,
-        AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
-        "The selected payer is not a member of this organization."
-      );
+      await requireExistingOrgPayer(ctx, args.orgId, args.payerId);
     }
     const status = args.status ?? "PAID";
     const paymentMethod = status === "PAID" ? normalizePaymentMethod(args.paymentMethod) : args.paymentMethod;
@@ -514,10 +563,7 @@ export const create = mutation({
         }
 
         if (args.vehicleId) {
-          const vehicle = await ctx.db.get(args.vehicleId);
-          if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-            throw new ConvexError("Vehicle not found in this organization.");
-          }
+          await assertLiveOrgVehicle(ctx, args.orgId, args.vehicleId);
         }
         // Refused before the insert, so a PENDING supplier cost that could
         // never be paid as one is never recorded. A PAID one is re-proved
@@ -739,15 +785,22 @@ export const update = mutation({
       amount: effectiveAmount,
     });
 
+    // SCRUM-811: a PENDING to PAID transition posts against the EFFECTIVE vehicle, which is
+    // the stored one when this call does not name another. Refuse a foreign, missing or
+    // deleted car here, before the first patch, as the argument check below does for a
+    // named car. recordPaidExpenseSideEffects proves it again as the boundary of last
+    // resort. An update that is not a new payment is deliberately not re-validated.
+    if (willMarkPaid) {
+      const payingVehicleId = args.vehicleId === null ? undefined : (args.vehicleId ?? expense.vehicleId);
+      if (payingVehicleId) await assertLiveOrgVehicle(ctx, args.orgId, payingVehicleId);
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.costBearer !== undefined) patch.costBearer = args.costBearer;
 
     if (args.vehicleId !== undefined) {
       if (args.vehicleId !== null) {
-        const vehicle = await ctx.db.get(args.vehicleId);
-        if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-          throw new ConvexError("Vehicle not found in this organization.");
-        }
+        await assertLiveOrgVehicle(ctx, args.orgId, args.vehicleId);
       }
       patch.vehicleId = args.vehicleId === null ? undefined : args.vehicleId;
     }
@@ -763,13 +816,7 @@ export const update = mutation({
     if (args.bankAccountId !== undefined) patch.bankAccountId = effectiveBankAccountId;
     if (args.payerId !== undefined) {
       if (args.payerId !== null) {
-        await requireOrgMember(
-          ctx,
-          args.orgId,
-          args.payerId,
-          AppErrorCode.ASSIGNED_USER_NOT_MEMBER,
-          "The selected payer is not a member of this organization."
-        );
+        await requireExistingOrgPayer(ctx, args.orgId, args.payerId);
       }
       patch.payerId = args.payerId === null ? undefined : args.payerId;
     }

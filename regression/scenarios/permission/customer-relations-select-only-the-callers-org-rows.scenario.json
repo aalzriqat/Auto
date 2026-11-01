@@ -1,0 +1,63 @@
+{
+  "id": "customer-relations-select-only-the-callers-org-rows",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "READER",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "OTHER_ORG_CUSTOMER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "READER",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "SAME_ORG_CUSTOMER_WITH_FOREIGN_ROWS_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "foreignCustomer.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "missingCustomer.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "foreignRows.leaked",
+      "value": false
+    },
+    {
+      "observable": "positiveControl.sameOrgOneRowOfEachKind",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-customer-relations-id",
+  "impl": {
+    "file": "convex/referenceReadOwnership.test.ts",
+    "testName": "customers.getRelations customerId: a foreign or missing customer returns nothing, and another org's rows never join a same-org customer"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "390b8b6b1cf2cf796e93d4343d1702c9f2ec9523c2b18f0d9d0245909dd0aa82"
+}

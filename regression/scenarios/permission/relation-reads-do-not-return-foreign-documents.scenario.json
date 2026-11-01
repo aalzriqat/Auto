@@ -1,0 +1,73 @@
+{
+  "id": "relation-reads-do-not-return-foreign-documents",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "READER",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "CUSTOMER_WITH_CROSS_ORG_LINKS_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "READER",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {
+        "orgId": "ORG_A_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "READER",
+        "org": "A"
+      },
+      "action": "customers.list",
+      "input": {
+        "orgId": "ORG_A_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "allReads.noForeignDocumentReturned",
+      "value": true
+    },
+    {
+      "observable": "fallbacks.neutralWhenLinkForeign",
+      "value": true
+    },
+    {
+      "observable": "positiveControl.sameOrgJoinsReturned",
+      "value": true
+    },
+    {
+      "observable": "attribution.offboardingMemberKeptAndNonMemberHidden",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-relation-read-ownership",
+  "impl": {
+    "file": "convex/referenceReadOwnership.test.ts",
+    "testName": "an org A reader never receives an org B document through a stored cross-org link"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "0873b9e12e6a5b9c8de4df19afcfe614443a95745f8dec6eee5364d3d69a6dc8"
+}
