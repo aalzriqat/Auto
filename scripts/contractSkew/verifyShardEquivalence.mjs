@@ -20,6 +20,7 @@ import { parseArgs } from "node:util";
 import { assertSafeRevision, resolveCommit, resolveGit, runGitText } from "./gitExecutable.mjs";
 import { resolveInside } from "./baselineFile.mjs";
 import { BASELINE_DIRECTORY, LEGACY_BASELINE_FILE, buildShardFiles, canonicalJson, entrySetDifferences, identityOf, shardNameFor } from "./baselineShards.mjs";
+import { compareCodeUnits } from "./compareCodeUnits.mjs";
 import { loadBaseline } from "./baseline.mjs";
 import { entriesOfLegacyText } from "./shardBaseline.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
@@ -75,12 +76,15 @@ function compare(legacy, directory, origin, io, label) {
   ];
   const misplaced = loaded.entries.filter((entry) => !onDisk.has(shardNameFor(entry.file))).map((entry) => identityOf(entry).replaceAll("\u0001", " "));
   const surfaces = (/** @type {Array<Record<string, any>>} */ entries) => canonicalJson(Object.fromEntries(
-    [...new Set(entries.map((e) => e.surface))].sort().map((s) => [s, entries.filter((e) => e.surface === s).length])));
+    [...new Set(entries.map((e) => e.surface))].sort(compareCodeUnits).map((s) => [s, entries.filter((e) => e.surface === s).length])));
 
   io.log(`legacy ${origin}: ${legacy.length} entries ${surfaces(legacy)}`);
   io.log(`shards ${label}:${loaded.entries.length} entries in ${onDisk.size} shards ${surfaces(loaded.entries)}`);
   io.log(`entry sets: ${difference.equal ? "EQUAL" : "DIFFERENT"} (only in legacy ${difference.onlyBefore.length}, only in shards ${difference.onlyAfter.length}, value differences ${difference.different.length}, duplicates ${difference.duplicates.length})`);
-  io.log(`byte-stable regeneration: ${regenerationDiffers.length === 0 ? "every shard reproduced exactly" : `${regenerationDiffers.length} shard(s) differ: ${regenerationDiffers.slice(0, 5).join(", ")}`}`);
+  const regeneration = regenerationDiffers.length === 0
+    ? "every shard reproduced exactly"
+    : `${regenerationDiffers.length} shard(s) differ: ${regenerationDiffers.slice(0, 5).join(", ")}`;
+  io.log(`byte-stable regeneration: ${regeneration}`);
   io.log(`entries in the wrong shard: ${misplaced.length}`);
 
   if (!difference.equal || regenerationDiffers.length || misplaced.length) {

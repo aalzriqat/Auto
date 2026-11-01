@@ -60,41 +60,60 @@ export function entriesOfLegacyText(text) {
  * @param {Array<Record<string, any>>} ours
  */
 export function mergeEntryChanges(base, theirs, ours) {
-  const index = (/** @type {Array<Record<string, any>>} */ entries, /** @type {string} */ role) => {
-    /** @type {Map<string, Record<string, any>>} */
-    const map = new Map();
-    for (const entry of entries) {
-      const key = identityOf(entry);
-      if (map.has(key)) throw new Error(`duplicate baseline identity in the ${role} set: ${key.replaceAll("\u0001", " ")}`);
-      map.set(key, entry);
-    }
-    return map;
-  };
-  const b = index(base, "merge base");
-  const t = index(theirs, "branch");
-  const o = index(ours, "current");
-  const same = (/** @type {Record<string, any> | undefined} */ x, /** @type {Record<string, any> | undefined} */ y) =>
-    (x === undefined && y === undefined) || (x !== undefined && y !== undefined && canonicalJson(x) === canonicalJson(y));
+  const b = indexByIdentity(base, "merge base");
+  const t = indexByIdentity(theirs, "branch");
+  const o = indexByIdentity(ours, "current");
   const result = new Map(o);
   const counts = { added: 0, removed: 0, changed: 0, alreadyApplied: 0 };
   /** @type {string[]} */
   const conflicts = [];
   for (const key of new Set([...b.keys(), ...t.keys()])) {
     const [base1, their, our] = [b.get(key), t.get(key), o.get(key)];
-    if (same(base1, their)) continue;
-    if (same(our, their)) counts.alreadyApplied++;
-    else if (same(our, base1)) {
-      if (their === undefined) {
-        result.delete(key);
-        counts.removed++;
-      } else {
-        result.set(key, their);
-        if (base1 === undefined) counts.added++;
-        else counts.changed++;
-      }
-    } else conflicts.push(key.replaceAll("\u0001", " "));
+    if (sameEntry(base1, their)) continue;
+    if (sameEntry(our, their)) counts.alreadyApplied++;
+    else if (sameEntry(our, base1)) counts[applyBranchChange(result, key, base1, their)]++;
+    else conflicts.push(key.replaceAll("\u0001", " "));
   }
   return { entries: [...result.values()], ...counts, conflicts };
+}
+
+/**
+ * @param {Array<Record<string, any>>} entries
+ * @param {string} role  named in the refusal
+ * @returns {Map<string, Record<string, any>>}
+ */
+function indexByIdentity(entries, role) {
+  /** @type {Map<string, Record<string, any>>} */
+  const map = new Map();
+  for (const entry of entries) {
+    const key = identityOf(entry);
+    if (map.has(key)) throw new Error(`duplicate baseline identity in the ${role} set: ${key.replaceAll("\u0001", " ")}`);
+    map.set(key, entry);
+  }
+  return map;
+}
+
+/** Both absent, or both present with the same canonical JSON. @param {Record<string, any> | undefined} x @param {Record<string, any> | undefined} y */
+function sameEntry(x, y) {
+  if (x === undefined || y === undefined) return x === y;
+  return canonicalJson(x) === canonicalJson(y);
+}
+
+/**
+ * Apply the branch's change to one identity of `result`.
+ * @param {Map<string, Record<string, any>>} result
+ * @param {string} key
+ * @param {Record<string, any> | undefined} base1  the entry at the merge base
+ * @param {Record<string, any> | undefined} their  the entry on the branch
+ * @returns {"added" | "removed" | "changed"} which counter the change belongs to
+ */
+function applyBranchChange(result, key, base1, their) {
+  if (their === undefined) {
+    result.delete(key);
+    return "removed";
+  }
+  result.set(key, their);
+  return base1 === undefined ? "added" : "changed";
 }
 
 /**

@@ -5,6 +5,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { compareCodeUnits } from "./compareCodeUnits.mjs";
 import { buildShardFiles, loadShardedBaseline, readShardFiles } from "./baselineShards.mjs";
 
 /**
@@ -41,5 +42,5 @@ export function readBaselineEntries(directory) {
 export function snapshotBaseline(directory) {
   const read = readShardFiles(directory);
   if (!read.ok) throw new Error(read.problem);
-  return [...read.files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, text]) => `${name}\n${text}`).join("\n----\n");
+  return [...read.files].sort(([a], [b]) => compareCodeUnits(a, b)).map(([name, text]) => `${name}\n${text}`).join("\n----\n");
 }

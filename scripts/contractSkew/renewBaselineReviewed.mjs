@@ -68,10 +68,9 @@ import { DEFAULT_BASELINE, EXIT_UNAVAILABLE } from "./baselineIdentity.mjs";
 import { parseCanonicalBaseline, resolveInside, serializeBaseline } from "./baselineFile.mjs";
 import { baselineAtRevision } from "./baselineRevision.mjs";
 import { documentTextOf, writeShardedBaseline } from "./baselineShards.mjs";
-import { loadBaseline } from "./baseline.mjs";
+import { identityOf, loadBaseline } from "./baseline.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 import { createImportClosure } from "./importClosure.mjs";
-import { identityOf } from "./baseline.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 
 const DEFAULT_IO = Object.freeze({ log: console.log, error: console.error });

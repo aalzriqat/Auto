@@ -73,7 +73,7 @@ export function encodeFilePath(file) {
     else if (char === "/") out += "+";
     // A-Z (0x41-0x5A) plus 0x20 is a-z. This is spelled out because fetchSpec.test.ts allows exactly one
     // case-folding call in this folder (the path normalizer), and this is an encoding, not path normalization.
-    else if (/^[A-Z]$/.test(char)) out += `=${String.fromCharCode(char.charCodeAt(0) + 0x20)}`;
+    else if (/^[A-Z]$/.test(char)) out += `=${String.fromCodePoint(/** @type {number} */ (char.codePointAt(0)) + 0x20)}`;
     else for (const byte of new TextEncoder().encode(char)) out += `~${byte.toString(16).padStart(2, "0")}`;
   }
   return out;
@@ -99,39 +99,78 @@ export function shardNameFor(file) {
  */
 export function decodeShardName(name) {
   if (typeof name !== "string" || !SHARD_NAME.test(name)) return null;
-  const body = name.slice(0, -".json".length);
+  const tokens = tokenizeShardBody(name.slice(0, -".json".length));
+  return tokens === null ? null : joinShardTokens(tokens);
+}
+
+const HEX_PAIR = /^[0-9a-f]{2}$/;
+const LOWER_LETTER = /^[a-z]$/;
+
+/**
+ * The token that starts at `index`: a UTF-8 byte (`~xx`), or text (`+` is `/`, `=x` is `X`, anything else is itself).
+ * `null` when the escape is incomplete or malformed. `slice` yields "" past the end of the string (never `undefined`),
+ * so a trailing `=` or `~` fails the pattern instead of depending on how `undefined` is coerced.
+ * @param {string} body
+ * @param {number} index
+ * @returns {{ byte: number, width: number } | { text: string, width: number } | null}
+ */
+function readShardToken(body, index) {
+  const char = body.charAt(index);
+  if (char === "~") {
+    const hex = body.slice(index + 1, index + 3);
+    return HEX_PAIR.test(hex) ? { byte: Number.parseInt(hex, 16), width: 3 } : null;
+  }
+  if (char === "+") return { text: "/", width: 1 };
+  if (char === "=") {
+    const letter = body.slice(index + 1, index + 2);
+    return LOWER_LETTER.test(letter) ? { text: letter.toUpperCase(), width: 2 } : null;
+  }
+  return { text: char, width: 1 };
+}
+
+/** @param {string} body @returns {Array<{ byte: number } | { text: string }> | null} */
+function tokenizeShardBody(body) {
+  /** @type {Array<{ byte: number } | { text: string }>} */
+  const tokens = [];
+  for (let index = 0; index < body.length;) {
+    const token = readShardToken(body, index);
+    if (token === null) return null;
+    tokens.push(token);
+    index += token.width;
+  }
+  return tokens;
+}
+
+/** @param {number[]} bytes @returns {string | null} `null` when the bytes are not well-formed UTF-8 */
+function decodeUtf8(bytes) {
+  try {
+    return strictUtf8.decode(Uint8Array.from(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Join the tokens; each run of consecutive bytes must be well-formed UTF-8 on its own.
+ * @param {Array<{ byte: number } | { text: string }>} tokens
+ * @returns {string | null}
+ */
+function joinShardTokens(tokens) {
   let text = "";
   /** @type {number[]} */
-  let pending = [];
-  const flush = () => {
-    if (pending.length === 0) return true;
-    try {
-      text += strictUtf8.decode(Uint8Array.from(pending));
-    } catch {
-      return false;
-    }
-    pending = [];
-    return true;
-  };
-  for (let i = 0; i < body.length; i++) {
-    const char = body[i];
-    if (char === "~") {
-      const hex = body.slice(i + 1, i + 3);
-      if (!/^[0-9a-f]{2}$/.test(hex)) return null;
-      pending.push(Number.parseInt(hex, 16));
-      i += 2;
+  let run = [];
+  for (const token of tokens) {
+    if ("byte" in token) {
+      run.push(token.byte);
       continue;
     }
-    if (!flush()) return null;
-    if (char === "+") text += "/";
-    else if (char === "=") {
-      const letter = body[i + 1];
-      if (letter === undefined || !/^[a-z]$/.test(letter)) return null;
-      text += letter.toUpperCase();
-      i += 1;
-    } else text += char;
+    const decoded = decodeUtf8(run);
+    if (decoded === null) return null;
+    text += decoded + token.text;
+    run = [];
   }
-  return flush() ? text : null;
+  const tail = decodeUtf8(run);
+  return tail === null ? null : text + tail;
 }
 
 /** @param {unknown} callSiteId */
@@ -159,7 +198,8 @@ export function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   if (value && typeof value === "object") {
     const record = /** @type {Record<string, unknown>} */ (value);
-    return `{${Object.keys(record).sort(compareCodeUnits).map((k) => `${JSON.stringify(k)}:${canonicalJson(record[k])}`).join(",")}}`;
+    const member = (/** @type {string} */ key) => JSON.stringify(key) + ":" + canonicalJson(record[key]);
+    return "{" + Object.keys(record).sort(compareCodeUnits).map(member).join(",") + "}";
   }
   return JSON.stringify(value) ?? "null";
 }
@@ -235,7 +275,7 @@ function parseShard(name, text) {
   /** @type {any} */
   let document;
   try {
-    document = JSON.parse(text.replace(/\r\n/g, "\n"));
+    document = JSON.parse(text.replaceAll("\r\n", "\n"));
   } catch (error) {
     return { problems: [`shard ${name} is not valid JSON (${String(/** @type {Error} */ (error)?.message ?? error)})`], entries: [] };
   }
@@ -280,40 +320,71 @@ export function parseShardSet(files) {
   /** @type {Map<string, string>} identity -> shard name */
   const seen = new Map();
   const names = [...files.keys()].sort(compareCodeUnits);
-  const hasMarker = files.has(EMPTY_MARKER_NAME);
   if (names.length === 0) {
     return refuse(["the needs-evidence baseline directory holds no shards; an empty directory is not an empty baseline"]);
   }
   for (const name of names) {
     const text = /** @type {string} */ (files.get(name));
     if (name === EMPTY_MARKER_NAME) {
-      if (text !== serializeEmptyMarker(text)) problems.push(`${name} is not the canonical empty-baseline marker`);
-      else if (names.length > 1) problems.push(`${name} declares an empty baseline but shards are present; remove one or the other`);
+      const problem = emptyMarkerProblem(name, text, names.length);
+      if (problem !== null) problems.push(problem);
       continue;
     }
-    const decoded = decodeShardName(name);
-    if (decoded === null || `${encodeFilePath(decoded)}.json` !== name) {
-      problems.push(`stray or unknown file ${JSON.stringify(name)} in the baseline directory (a shard is named by its client file, see baselineShards.mjs)`);
-      continue;
-    }
-    const shard = parseShard(name, text);
-    problems.push(...shard.problems);
-    if (shard.file !== undefined && shard.file !== decoded) {
-      problems.push(`shard ${name} declares client file ${shard.file}, but its name is the encoding of ${decoded}`);
-    }
-    for (const entry of shard.entries) {
-      if (entry.file !== decoded) {
-        problems.push(`entry in the wrong shard: ${describeIdentity(entry)} belongs in ${shardNameSafe(entry.file)}, found in ${name}`);
-      }
-      const key = identityOf(entry);
-      const first = seen.get(key);
-      if (first !== undefined) problems.push(`duplicate baseline entry: ${describeIdentity(entry)} (in ${first} and ${name})`);
-      else seen.set(key, name);
-      entries.push(entry);
-    }
+    const checked = checkShardFile(name, text, seen);
+    problems.push(...checked.problems);
+    entries.push(...checked.entries);
   }
-  if (hasMarker && names.length === 1 && problems.length === 0) return { ok: true, entries: [], files };
+  if (files.has(EMPTY_MARKER_NAME) && names.length === 1 && problems.length === 0) return { ok: true, entries: [], files };
   return problems.length ? refuse(problems) : { ok: true, entries, files };
+}
+
+/** @param {string} name @param {string} text @param {number} fileCount @returns {string | null} */
+function emptyMarkerProblem(name, text, fileCount) {
+  if (text !== serializeEmptyMarker(text)) return `${name} is not the canonical empty-baseline marker`;
+  return fileCount > 1 ? `${name} declares an empty baseline but shards are present; remove one or the other` : null;
+}
+
+/**
+ * Everything wrong with one shard file, and the entries it holds. `seen` (identity -> shard name) is shared across the
+ * whole set so a duplicate in a second shard is found.
+ * @param {string} name
+ * @param {string} text
+ * @param {Map<string, string>} seen
+ * @returns {{ problems: string[], entries: Array<Record<string, any>> }}
+ */
+function checkShardFile(name, text, seen) {
+  const decoded = decodeShardName(name);
+  if (decoded === null || `${encodeFilePath(decoded)}.json` !== name) {
+    return {
+      problems: [`stray or unknown file ${JSON.stringify(name)} in the baseline directory (a shard is named by its client file, see baselineShards.mjs)`],
+      entries: [],
+    };
+  }
+  const shard = parseShard(name, text);
+  const problems = [...shard.problems];
+  if (shard.file !== undefined && shard.file !== decoded) {
+    problems.push(`shard ${name} declares client file ${shard.file}, but its name is the encoding of ${decoded}`);
+  }
+  for (const entry of shard.entries) problems.push(...entryPlacementProblems(entry, decoded, name, seen));
+  return { problems, entries: shard.entries };
+}
+
+/**
+ * The entry sits in a shard that is not its file's, and/or repeats an identity already seen in another.
+ * @param {Record<string, any>} entry @param {string} decoded @param {string} name @param {Map<string, string>} seen
+ * @returns {string[]}
+ */
+function entryPlacementProblems(entry, decoded, name, seen) {
+  /** @type {string[]} */
+  const problems = [];
+  if (entry.file !== decoded) {
+    problems.push(`entry in the wrong shard: ${describeIdentity(entry)} belongs in ${shardNameSafe(entry.file)}, found in ${name}`);
+  }
+  const key = identityOf(entry);
+  const first = seen.get(key);
+  if (first === undefined) seen.set(key, name);
+  else problems.push(`duplicate baseline entry: ${describeIdentity(entry)} (in ${first} and ${name})`);
+  return problems;
 }
 
 /** @param {unknown} file */

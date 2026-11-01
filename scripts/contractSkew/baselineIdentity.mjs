@@ -2,11 +2,10 @@
 import path from "node:path";
 import ts from "typescript";
 import { loadBaseline } from "./baseline.mjs";
-import { BASELINE_DIRECTORY } from "./baselineShards.mjs";
 import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
 import { CLIENT_SURFACES, listSurfaceFiles, toPosixRel } from "./clientFiles.mjs";
 
-export const DEFAULT_BASELINE = BASELINE_DIRECTORY;
+export { BASELINE_DIRECTORY as DEFAULT_BASELINE } from "./baselineShards.mjs";
 
 /** Exit codes shared by the identity check and the relocation helper. */
 export const EXIT_IDENTITY_DRIFT = 10;
