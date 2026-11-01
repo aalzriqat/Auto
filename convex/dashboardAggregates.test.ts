@@ -70,7 +70,7 @@ async function seedDealer(
     ctx.db.insert("roles", { orgId, name: "Owner", permissions: DASHBOARD_PERMISSIONS }),
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
-  return { orgId, roleId, asUser: t.withIdentity({ subject: clerkId, clerkId }) };
+  return { orgId, roleId, userId, asUser: t.withIdentity({ subject: clerkId, clerkId }) };
 }
 
 async function insertVehicle(
@@ -201,6 +201,49 @@ test("active leads excludes WON, LOST and soft-deleted leads", async () => {
 
   const stats = await statsFor(t, orgId, asUser);
   expect(stats.activeLeads).toBe(2);
+});
+
+test("a created lead reaches list, workspace, dashboard, activity and notifications in its own org", async () => {
+  const t = setup();
+  const { orgId, roleId, userId, asUser } = await seedDealer(t);
+  const other = await seedDealer(t, { clerkId: "other_lead_user", name: "Other Motors" });
+  await t.run((ctx) => ctx.db.patch(roleId, {
+    permissions: [...DASHBOARD_PERMISSIONS, "create:leads", "manage:users"],
+  }));
+  const customerId = await t.run((ctx) => ctx.db.insert("customers", {
+    orgId, firstName: "Pilot", lastName: "Customer",
+  }));
+
+  const leadId = await asUser.mutation(api.leads.create, {
+    orgId, customerId, assignedUserId: userId, source: "Walk-in",
+  });
+  const firstPage = await asUser.query(api.leads.list, {
+    orgId, paginationOpts: { numItems: 25, cursor: null },
+  });
+  const workspace = await asUser.query(api.leads.get, { orgId, leadId });
+  const dashboard = await statsFor(t, orgId, asUser);
+  const activity = await asUser.query(api.leadActivities.listForLead, { orgId, leadId });
+  const notifications = await asUser.query(api.notifications.list, { orgId });
+
+  expect(firstPage.page.map((lead) => lead._id)).toContain(leadId);
+  expect(workspace.customer?._id).toBe(customerId);
+  expect(workspace.assignedUser?._id).toBe(userId);
+  expect(dashboard.totalLeads).toBe(1);
+  expect(dashboard.activeLeads).toBe(1);
+  expect(dashboard.leadsByStage.NEW).toBe(1);
+  expect(activity.map((entry) => entry.action)).toContain("CREATED");
+  expect(notifications.map((entry) => entry.type)).toEqual(
+    expect.arrayContaining(["lead.created", "lead.assigned"]),
+  );
+
+  const otherDashboard = await statsFor(t, other.orgId, other.asUser);
+  const otherPage = await other.asUser.query(api.leads.list, {
+    orgId: other.orgId, paginationOpts: { numItems: 25, cursor: null },
+  });
+  expect(otherDashboard.totalLeads).toBe(0);
+  expect(otherPage.page).toHaveLength(0);
+  await expect(other.asUser.query(api.leads.get, { orgId: other.orgId, leadId }))
+    .rejects.toThrow();
 });
 
 test("team members counts this org's memberships only", async () => {
