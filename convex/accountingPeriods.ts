@@ -11,8 +11,7 @@ import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
-  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
-  SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  supplierPayablesUnavailableWarning,
 } from "./utils/closeWarnings";
 import {
   computeSubledgerReconciliation,
@@ -525,11 +524,7 @@ async function computeCloseChecklist(
     // Could not see everything (too many rows to read, or AP-affecting postings
     // still in flight): never report that as reconciled, and never as a
     // difference in an empty list of currencies either.
-    warnings.push(
-      supplierPayablesRecon.unavailableReason === "PENDING_POSTINGS"
-        ? SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING
-        : SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING
-    );
+    warnings.push(supplierPayablesUnavailableWarning(supplierPayablesRecon.unavailableReason));
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);

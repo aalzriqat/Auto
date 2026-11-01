@@ -1,0 +1,94 @@
+{
+  "id": "ap-recon-opening-payable-paid-after-cutoff-stays-reconciled",
+  "fingerprint": "5cfc205534a0919a52cff26d3d96256cb6b3d9da951169c721b30ba0993e01c3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "creditMinor": 100000,
+        "kind": "SUPPLIER_PAYABLE",
+        "asOf": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postOpeningPayment",
+      "input": {
+        "amountMinor": 40000,
+        "dated": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "laterPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": true
+    },
+    {
+      "observable": "earlier.glBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "earlier.subledgerBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "later.glBalanceMinor",
+      "value": 60000
+    },
+    {
+      "observable": "later.subledgerBalanceMinor",
+      "value": 60000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.opening.test.ts",
+    "testName": "CONTROL: a payment of the opening payable made after the cutoff does not make the earlier period unavailable"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}
