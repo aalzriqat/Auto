@@ -95,6 +95,28 @@ describe("data-deletion status page", () => {
     expect(pageText()).not.toContain("لا يلزم اتخاذ أي إجراء");
   });
 
+  test("a processed request that found no stored connection says there was nothing to remove, in English and Arabic, and does not claim credentials were removed", () => {
+    stubs.result = { platform: "instagram", completedAt: 1, connectionRemoved: false };
+    render(<DataDeletionStatusPage />);
+    expect(pageText()).toMatch(/nothing to remove/i);
+    expect(pageText()).not.toMatch(/We removed/i);
+    expect(pageText()).not.toMatch(/Facebook/i);
+    cleanup();
+
+    stubs.locale = "ar";
+    render(<DataDeletionStatusPage />);
+    expect(pageText()).toContain("لم يكن هناك ما نزيله");
+    expect(pageText()).not.toContain("أزلنا");
+    expect(pageText()).toContain("إنستغرام");
+  });
+
+  test("a processed request that cleared a connection says it removed the credentials", () => {
+    stubs.result = { platform: "instagram", completedAt: 1, connectionRemoved: true };
+    render(<DataDeletionStatusPage />);
+    expect(pageText()).toMatch(/We removed the Instagram access credentials/);
+    expect(pageText()).not.toMatch(/nothing to remove/i);
+  });
+
   test("while the lookup is loading it asserts nothing about deletion", () => {
     stubs.result = undefined;
     render(<DataDeletionStatusPage />);

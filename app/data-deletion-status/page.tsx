@@ -12,7 +12,8 @@ type Platform = "facebook" | "instagram";
 
 // The page states only what the callback does: it clears the stored access
 // credentials and connection details for the account. It does not claim a
-// complete erasure (SCRUM-842).
+// complete erasure, and when the callback found no connection it says nothing was
+// removed (SCRUM-842).
 const PLATFORM_NAME: Record<"en" | "ar", Record<Platform, string>> = {
   en: { facebook: "Facebook", instagram: "Instagram" },
   ar: { facebook: "فيسبوك", instagram: "إنستغرام" },
@@ -89,9 +90,15 @@ function DataDeletionStatusContent() {
         {isAr ? "تمت معالجة طلب الحذف الخاص بك" : "Your deletion request was processed"}
       </h1>
       <p className="text-sm text-white/65 leading-relaxed mb-6">
-        {isAr
-          ? `أزلنا بيانات الوصول إلى ${platform} وتفاصيل الربط التي كنا نحتفظ بها لحسابك. لا يلزم اتخاذ أي إجراء آخر.`
-          : `We removed the ${platform} access credentials and connection details we held for your account. No further action is needed.`}
+        {status.connectionRemoved === false
+          ? // The callback matched no stored connection (already removed, or never held here).
+            // Claim nothing was removed now (SCRUM-842).
+            isAr
+            ? `لم نجد أي بيانات وصول إلى ${platform} أو تفاصيل ربط محفوظة لحسابك، لذلك لم يكن هناك ما نزيله. لا يلزم اتخاذ أي إجراء آخر.`
+            : `We held no ${platform} access credentials or connection details for your account, so there was nothing to remove. No further action is needed.`
+          : isAr
+            ? `أزلنا بيانات الوصول إلى ${platform} وتفاصيل الربط التي كنا نحتفظ بها لحسابك. لا يلزم اتخاذ أي إجراء آخر.`
+            : `We removed the ${platform} access credentials and connection details we held for your account. No further action is needed.`}
       </p>
       <p className="text-xs text-white/40 tracking-wider">
         {isAr ? "رمز التأكيد:" : "Confirmation code:"}{" "}

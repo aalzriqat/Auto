@@ -1861,3 +1861,54 @@ describe("SCRUM-842 round 5: a redacted document never outgrows Convex's 1 MiB l
     expect((await logById(t, rowId))?.summary).toBe(`DM from ${REDACTED_META_USER}`);
   });
 });
+
+describe("SCRUM-842 round 5: a page of mid-size rows packed with a short id stays inside the write limit", () => {
+  const SHORT_ID = "abc";
+
+  beforeEach(() => {
+    captureConsole();
+    useScheduledTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("Instagram: sixty 100 KB bodies packed with a 3-character id are redacted under Convex's 16 MiB write limit", async () => {
+    const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), { transactionLimits: true });
+    const body = `${SHORT_ID} `.repeat(25_000);
+    for (let batch = 0; batch < 60; batch += 10) {
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 10; i += 1) {
+          await ctx.db.insert("webhookLogs", {
+            source: "instagram",
+            status: "success",
+            summary: `Batch ${batch + i}`,
+            eventId: `mid-event-${batch + i}`,
+            rawPayload: body,
+            payloadTruncated: false,
+            createdAt: Date.now(),
+          });
+        }
+      });
+    }
+
+    const res = await post(t, "/instagram-deauthorize", await signedRequest({ user_id: SHORT_ID }, INSTAGRAM_SECRET));
+    expect(res.status).toBe(200);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect())).toEqual([]);
+    let remaining = 0;
+    let cursor: string | null = null;
+    for (let guard = 0; guard < 100; guard += 1) {
+      const result: { page: Array<{ rawPayload?: string }>; isDone: boolean; continueCursor: string } = await t.run((ctx) =>
+        ctx.db.query("webhookLogs").paginate({ numItems: 8, cursor }),
+      );
+      remaining += result.page.filter((row) => /(?<![A-Za-z0-9])abc(?![A-Za-z0-9])/.test(row.rawPayload ?? "")).length;
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    }
+    expect(remaining).toBe(0);
+  });
+});
