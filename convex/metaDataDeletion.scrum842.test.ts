@@ -1310,27 +1310,27 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
   // account's other id from the settings. Each test lets the SECOND job finish while the
   // FIRST is still pending and asks the one question the receipt makes: when it reads
   // "complete", does any stored row still hold an id this user was known by?
+  const callback = async (t: T, path: string, id: string): Promise<string | null> => {
+    const res = await post(t, path, await signedRequest({ user_id: id }, INSTAGRAM_SECRET));
+    expect(res.status).toBe(200);
+    return path.endsWith("data-deletion") ? ((await res.json()) as { confirmation_code: string }).confirmation_code : null;
+  };
+  const jobs = (t: T) => t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
+  const statusOf = (t: T, code: string) => t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
+  const jobOf = async (t: T, code: string) => (await jobs(t)).find((job) => job.receiptCode === code);
+  const runOnce = (t: T, jobId: Id<"metaLogRedactionJobs">) =>
+    t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
+
+  /** The invariant: a receipt that reads complete leaves no id of this user in any retained row. */
+  async function expectCompleteMeansErased(t: T, code: string): Promise<void> {
+    const status = await statusOf(t, code);
+    expect(typeof status?.completedAt).toBe("number");
+    const stored = JSON.stringify(await allWebhookLogs(t));
+    expect(stored).not.toContain(BUSINESS_ID);
+    expect(stored).not.toContain(WEBHOOK_ID);
+  }
+
   describe("overlapping callbacks for one user", () => {
-    const callback = async (t: T, path: string, id: string): Promise<string | null> => {
-      const res = await post(t, path, await signedRequest({ user_id: id }, INSTAGRAM_SECRET));
-      expect(res.status).toBe(200);
-      return path.endsWith("data-deletion") ? ((await res.json()) as { confirmation_code: string }).confirmation_code : null;
-    };
-    const jobs = (t: T) => t.run((ctx) => ctx.db.query("metaLogRedactionJobs").collect());
-    const statusOf = (t: T, code: string) => t.query(api.socialIntegrations.getMetaDataDeletionStatus, { code });
-    const jobOf = async (t: T, code: string) => (await jobs(t)).find((job) => job.receiptCode === code);
-    const runOnce = (t: T, jobId: Id<"metaLogRedactionJobs">) =>
-      t.mutation(internal.metaLogRedaction.runMetaLogRedactionJob, { jobId });
-
-    /** The invariant: a receipt that reads complete leaves no id of this user in any retained row. */
-    async function expectCompleteMeansErased(t: T, code: string): Promise<void> {
-      const status = await statusOf(t, code);
-      expect(typeof status?.completedAt).toBe("number");
-      const stored = JSON.stringify(await allWebhookLogs(t));
-      expect(stored).not.toContain(BUSINESS_ID);
-      expect(stored).not.toContain(WEBHOOK_ID);
-    }
-
     test("a replayed data-deletion request that names the same id cannot complete while the earlier job still holds the webhook account id", async () => {
       const t = newTest();
       await seedAccount(t, BUSINESS_ID, WEBHOOK_ID);
@@ -1481,6 +1481,146 @@ describe("SCRUM-842 an Instagram account has two ids", () => {
       expect(res.status).toBe(500);
       expect((await settingsOf(t, orgId))?.instagramBusinessAccountId).toBe(BUSINESS_ID);
       expect(await jobs(t)).toHaveLength(META_LOG_REDACTION_MAX_PENDING_JOBS + 1);
+    });
+  });
+
+  // ─── The dealer's own Disconnect or reconnect must not hide the account's other id (round 8, Seat 1 HIGH) ─
+  //
+  // `socialIntegrations.disconnect` (owner-only) and a reconnect that replaces the account both
+  // clear the two Instagram ids from `orgSettings` and, before round 8, remembered neither. A Meta
+  // callback that arrived later found no connection, learned only the id it named, and its receipt
+  // read "complete" while the other id (the webhook id that bodies carry in `entry[].id`) was still
+  // stored. Each test lets the dealer forget the account first and then asks the one question the
+  // receipt makes: when it reads "complete", does any stored row still hold an id of this account?
+  describe("a dealer's own disconnect or reconnect does not hide the account's other id from a later callback", () => {
+    let ownerSeq = 0;
+    async function seedOwnedAccount(t: T, businessId: string, webhookId: string) {
+      ownerSeq += 1;
+      const clerkId = `owner_842_${ownerSeq}`;
+      const orgId = await seedAccount(t, businessId, webhookId);
+      await t.run(async (ctx) => {
+        await ctx.db.insert("subscriptions", {
+          orgId,
+          plan: "professional",
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        const userId = await ctx.db.insert("users", { clerkId, email: `owner${ownerSeq}@test.com`, name: "Owner" });
+        const roleId = await ctx.db.insert("roles", {
+          orgId,
+          name: "OWNER",
+          permissions: ["view:settings", "edit:settings"],
+          isSystemOwnerRole: true,
+        });
+        await ctx.db.insert("memberships", { orgId, userId, roleId });
+      });
+      return { orgId, asOwner: t.withIdentity({ subject: clerkId }) };
+    }
+
+    /** A webhook delivery that arrives after the dealer disconnected: Meta keeps delivering until the app is removed. */
+    const seedLateDelivery = (t: T, webhookId: string) =>
+      t.run((ctx) =>
+        ctx.db.insert("webhookLogs", {
+          source: "instagram",
+          status: "success",
+          summary: "Batch with 1 entries",
+          eventId: "synthetic-late-event-sha",
+          payloadSha256: "synthetic-late-event-sha",
+          rawPayload: webhookBody(webhookId),
+          payloadPreview: webhookBody(webhookId),
+          payloadTruncated: false,
+          createdAt: Date.now(),
+        }),
+      );
+
+    test("a data-deletion request that names the business id after the dealer's own disconnect still erases the webhook id before the receipt completes", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      expect((await settingsOf(t, orgId))?.instagramWebhookAccountId).toBeUndefined();
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      // Truthful: the dealer had already removed the connection, so this callback removed nothing.
+      expect((await statusOf(t, code!))?.connectionRemoved).toBe(false);
+      expect(await jobs(t)).toEqual([]);
+      await expectSchedulerHoldsNone(t, [BUSINESS_ID, WEBHOOK_ID, code!]);
+      expect(consoleOutput.join("\n")).not.toContain(WEBHOOK_ID);
+    });
+
+    test("a data-deletion request that names the webhook id after the dealer's own disconnect still erases the business id before the receipt completes", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const code = await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+    });
+
+    test("a webhook delivery stored after the dealer's own disconnect is redacted by the later data-deletion request", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+      const late = await seedLateDelivery(t, WEBHOOK_ID);
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      expect((await logById(t, late))?.rawPayload).toBe(webhookBody(REDACTED_META_USER));
+    });
+
+    test("a data-deletion request that names the old business id after a reconnect to another account still erases the old webhook id and leaves the new account alone", async () => {
+      const t = newTest();
+      const { orgId } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      const theirs = await seedInstagramRows(t, UNRELATED_BUSINESS_ID, UNRELATED_WEBHOOK_ID);
+
+      // The reconnect (the OAuth exchange's final write) replaces the account this organisation holds.
+      await t.mutation(internal.socialIntegrations.saveInstagramCredentials, {
+        orgId,
+        instagramBusinessAccountId: UNRELATED_BUSINESS_ID,
+        instagramWebhookAccountId: UNRELATED_WEBHOOK_ID,
+        instagramAccessToken: "synthetic-ig-token-842-new",
+      });
+
+      const code = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+      await expectCompleteMeansErased(t, code!);
+      // The new account was not the one named: still connected, and its rows are byte-for-byte as written.
+      const settings = await settingsOf(t, orgId);
+      expect(settings?.instagramBusinessAccountId).toBe(UNRELATED_BUSINESS_ID);
+      expect(settings?.instagramWebhookAccountId).toBe(UNRELATED_WEBHOOK_ID);
+      expect((await logById(t, theirs.inbox))?.rawPayload).toBe(webhookBody(UNRELATED_WEBHOOK_ID));
+    });
+
+    test("a second callback for the account, naming the other id, cannot complete while the first callback's job after an owner disconnect still holds an id", async () => {
+      const t = newTest();
+      const { orgId, asOwner } = await seedOwnedAccount(t, BUSINESS_ID, WEBHOOK_ID);
+      await seedInstagramRows(t, BUSINESS_ID, WEBHOOK_ID);
+      await asOwner.mutation(api.socialIntegrations.disconnect, { orgId });
+
+      const first = await callback(t, "/instagram-data-deletion", BUSINESS_ID);
+      const second = await callback(t, "/instagram-data-deletion", WEBHOOK_ID);
+      const secondJob = await jobOf(t, second!);
+      expect(secondJob).toBeDefined();
+
+      // Only the second job runs; the first is still pending, as it is when Meta retries.
+      await runOnce(t, secondJob!._id);
+      await expectCompleteMeansErased(t, second!);
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      await expectCompleteMeansErased(t, first!);
+      expect(await jobs(t)).toEqual([]);
     });
   });
 });
