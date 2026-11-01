@@ -127,7 +127,20 @@ describe("SCRUM-888 supplier registry rollout", () => {
 
   test("a cursor that stops advancing refuses instead of paging forever", () => {
     const stuck = () => ({ ok: true as const, value: { migrated: 0, isDone: false, continueCursor: "same" } });
-    expect(run(fakeDeployment({ live: ["a"] }), { backfillPage: stuck })).toMatchObject({ ok: false });
+    expect(run(fakeDeployment({ live: ["a"] }), { backfillPage: stuck })).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining("cursor stopped advancing"),
+    });
+  });
+
+  test("a cursor that stops advancing on the verification walk refuses with that reason, not the page cap", () => {
+    const stuck = () => ({
+      ok: true as const,
+      value: { checked: 0, deleting: 0, missing: [], isDone: false, continueCursor: "same" },
+    });
+    const d = fakeDeployment({ live: ["a"] });
+    const result = run(d, { verifyPage: stuck, maxPages: 10 });
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("cursor stopped advancing") });
   });
 
   test("the page cap stops a walk that never finishes", () => {
@@ -152,6 +165,46 @@ describe("SCRUM-888 supplier registry rollout", () => {
     });
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
     expect(d.calls.backfill).toHaveLength(1);
+  });
+
+  // Seat 2 finding at 100e9d84: the deadline was only checked BEFORE a call, so a terminal page that
+  // returned after the budget was spent was accepted and the run went on to verify the Social Inbox.
+  test.each(["backfillPage", "verifyPage"] as const)(
+    "a terminal %s call that finishes after the deadline is refused, not accepted",
+    (phase) => {
+      const d = fakeDeployment({ live: ["a"] });
+      let now = 0;
+      const late = (cursor: string | null): Step => {
+        const result = d[phase](cursor);
+        now = 1001; // budget is 1000 ms: this call finished 1 ms late
+        return result;
+      };
+      const result = run(d, { now: () => now, [phase]: late });
+      expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
+    },
+  );
+
+  test("a terminal verification call that finishes exactly on the deadline is still accepted", () => {
+    const d = fakeDeployment({ live: ["a"] });
+    let now = 0;
+    const onTime = (cursor: string | null): Step => {
+      const result = d.verifyPage(cursor);
+      now = 1000;
+      return result;
+    };
+    expect(run(d, { now: () => now, verifyPage: onTime })).toEqual({ ok: true, created: 1, checked: 1, deleting: 0 });
+  });
+
+  test("the refusal counts every missing org but lists a bounded number of opaque refs", () => {
+    const live = Array.from({ length: 40 }, (_, index) => `secret-org-${index}`);
+    const d = fakeDeployment({ live, backfillBroken: true, pageSize: 10 });
+    const result = run(d, { maxPages: 10 });
+    expect(result.ok).toBe(false);
+    const reason = (result as { reason: string }).reason;
+    expect(reason).toContain("40 organization(s)");
+    expect(reason.match(/org-[0-9a-f]{10}/g)?.length).toBe(10);
+    expect(reason).toContain("and 30 more");
+    expect(reason).not.toContain("secret-org");
   });
 
   test("rollout wiring: runs before Social Inbox verification, refuses before any success path, uses continueAutomatically false", () => {

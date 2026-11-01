@@ -139,10 +139,10 @@ function isOrgBeingDeleted(org: Doc<"organizations">): boolean {
  * (https://docs.convex.dev/database/advanced/occ).
  *
  * An organization that had a deletion request pending when the backfill ran is skipped. If that
- * request is later rejected, the organization has no registry, and every supplier write refuses with
- * REGISTRY_NOT_INITIALISED (fail-closed) until an operator runs `internal.suppliers.initialiseRegistry`
- * for it. The reactivation path is deliberately not changed: it is a guarded, ratcheted function
- * (`scripts/organizationReactivationGuard.test.ts`) and this is a rare, operator-visible state.
+ * request is later rejected the organization returns to service, and `reactivateOrganization` in
+ * `adminOrgs.ts` — the only function that does that — calls this in the same mutation, so a live
+ * organization is never left without its registry row (SCRUM-888; the rollout's coverage check
+ * skips deleting organizations and would otherwise have declared the registry complete).
  */
 export async function ensureRegistryState(
   ctx: MutationCtx,

@@ -1260,6 +1260,8 @@ export function bankRefusalMessage(result: BankRebuildResult): string | null {
 
 export type RegistryStep = { ok: true; value: unknown } | Refusal;
 const REGISTRY_DEPLOYED = "Production is DEPLOYED, but the supplier registry initialisation";
+/** The refusal names at most this many organizations by opaque ref; the count always covers all of them. */
+const MAX_LISTED_MISSING_REFS = 10;
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -1270,7 +1272,8 @@ type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; max
 
 /**
  * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`.
- * Stops with a refusal on the deadline, the page cap, a failed call, an unrecognised page, or a
+ * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
+ * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
  * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
  */
 function walkRegistryPages<T extends CursorPage>(
@@ -1280,11 +1283,17 @@ function walkRegistryPages<T extends CursorPage>(
   onPage: (page: T) => void,
 ): { ok: true } | Refusal {
   let cursor: string | null = null;
+  const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
+  const deadlineRefusal: Refusal = {
+    ok: false,
+    reason: `${REGISTRY_DEPLOYED} reached the rollout deadline. A re-run resumes it.`,
+  };
   for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
-    if (limits.now() - limits.startedAt > limits.timeoutMs) {
-      return { ok: false, reason: `${REGISTRY_DEPLOYED} reached the rollout deadline. A re-run resumes it.` };
-    }
+    if (pastDeadline()) return deadlineRefusal;
     const result = runPage(cursor);
+    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
+    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
+    if (pastDeadline()) return deadlineRefusal;
     if (!result.ok) {
       return { ok: false, reason: `${REGISTRY_DEPLOYED} call failed. See backend logs; a re-run resumes it.` };
     }
@@ -1358,11 +1367,14 @@ export function initialiseSupplierRegistry(
   if (!verify.ok) return verify;
 
   if (missing.length > 0) {
+    // Every missing org is counted; only the first few refs are listed so the public log stays readable.
+    const listed = missing.slice(0, MAX_LISTED_MISSING_REFS).join(", ");
+    const more = missing.length - MAX_LISTED_MISSING_REFS;
     return {
       ok: false,
       reason:
         `${REGISTRY_DEPLOYED} is INCOMPLETE: ${missing.length} organization(s) still have no supplier registry ` +
-        `(${missing.join(", ")}). Consigned intake stays blocked for them. A re-run retries.`,
+        `(${listed}${more > 0 ? `, and ${more} more` : ""}). Consigned intake stays blocked for them. A re-run retries.`,
     };
   }
   return { ok: true, created, checked, deleting };
