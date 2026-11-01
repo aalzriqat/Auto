@@ -1,0 +1,101 @@
+{
+  "id": "ap-recon-later-line-attribution-over-budget-is-unavailable",
+  "fingerprint": "549572bc568f95ca4dbfadaca5ac36aec7c729c39a057523d62b100fa5a8cf0d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "creditMinor": 100000,
+        "kind": "SUPPLIER_PAYABLE",
+        "asOf": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postOpeningPayment",
+      "input": {
+        "amountMinor": 40000,
+        "dated": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApDebit",
+      "input": {
+        "debitMinor": 1000,
+        "dated": "laterPeriod",
+        "category": "SYSTEM",
+        "source": "openingPayable"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd",
+        "readLimit": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd",
+        "readLimit": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "withinBudget.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "overBudget.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "overBudget.unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.opening.test.ts",
+    "testName": "a later line is attributed one entry at a time and an over-budget attribution is refused, not assumed explained"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

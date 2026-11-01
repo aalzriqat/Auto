@@ -1,0 +1,49 @@
+{
+  "id": "supplier-receivable-post-dated-activity-is-unavailable",
+  "fingerprint": "1790715ff7abe9c085e5b2a566ad766944e65a86f2857d7284cb2cc0068109a8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-r3",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "Current": null
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "ACTIVITY_AFTER_CUTOFF"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a post-dated sale cannot hide a lost row behind it"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

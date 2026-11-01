@@ -1,0 +1,54 @@
+{
+  "id": "supplier-concession-stored-without-a-current-plan-refuses-finalize",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "storedSupplierShareMinor": 400000,
+        "financier": "none"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refused",
+      "value": true
+    },
+    {
+      "observable": "finalize.refusalCode",
+      "value": "SUPPLIER_CONCESSION_PLAN_REFUSED"
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c23812",
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierConcession.scrum766c.test.ts",
+    "testName": "a stored concession is not applied when the deal builds no current-plan sale: finalize refuses and writes nothing"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "b0c20af2d3ac95d8bd50c4772df0fa4854925e84d552fb69110cf1df605255f4",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum766-nonv3-concession-guard",
+    "firstSeen": "2026-10-31"
+  }
+}

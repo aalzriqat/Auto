@@ -1,0 +1,54 @@
+{
+  "id": "supplier-receivable-unrelated-history-still-reconciles",
+  "fingerprint": "75c52bd33c0e0992fd5524f6a6cca93b997d0acb3e1229e555f90f135f72a727",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-round5-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "realCostRecoveryReceipt": true,
+        "unrelatedBalancedJournalLines": 27000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.complete",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.documentsRead",
+      "value": "below_2000"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "r5 M1(a): more than 26,700 unrelated journal lines still reconcile once a recovery-family journal exists"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

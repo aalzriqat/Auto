@@ -22,6 +22,7 @@ import {
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
 } from "@/convex/utils/closeWarnings";
 import type { PeriodSummary, Translate } from "./types";
 import { periodLabel } from "./types";
@@ -35,6 +36,7 @@ import { periodLabel } from "./types";
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  [SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING]: "ClosePeriodWarnSupplierPayablesReconPostCutoff",
   [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
 };
 
