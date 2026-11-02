@@ -28,6 +28,30 @@ User-invoked `to-spec` and `to-tickets` use this project's existing Jira workflo
 
 Use one shared AutoFlow glossary and root ADR directory (single-context). See `docs/agents/domain.md`.
 
+## Money and permission change process (owner standard, 2026-11-02)
+
+Adopted by the owner on 2026-11-02 (SCRUM-760 comment 24361) after seven review
+rounds on PR #746 each found one more door of the same class. These four practices
+apply to every lane. They add to the review gates above and below; they weaken none.
+
+1. **Grill before code.** Before an implementer starts a money or permission
+   change, the coordinator writes the invariant and the role policy (which roles
+   may cause the decision and which may not) as a one-paragraph ADR in `docs/adr/`,
+   and puts every open policy question to the owner first. The ADR travels with
+   the Invariant Closure Packet in the implementer's brief.
+2. **Retro into checks.** When a lane ends, a repeated mistake becomes a lint,
+   type, test, hook or CI check, or a reviewer rule in this file. A memory note or
+   an oracle-document chapter is not the fix.
+3. **Class table before the first fix.** When a reviewer's first finding names one
+   door of a class, the seats and the implementer enumerate the whole class in a
+   table (file and line, what it discloses or breaks, who can reach it, verdict)
+   before any fix is dispatched. The fix closes the class by mechanism, not the
+   line.
+4. **Tracer-bullet slicing.** A large change ships as thin end-to-end slices, each
+   tested and reviewed in a fresh context, instead of one PR that grows over rounds.
+
+First application: the SCRUM-886 cost-access rule (SCRUM-886 comment 24358), whose
+ADR is written in PR #746 round 13.
 ## Pilot release gate (owner standard, 2026-10-07)
 
 The pilot release, which happens before the repository transfer, is gated by Jira epic
