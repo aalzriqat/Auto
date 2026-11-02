@@ -46,8 +46,8 @@ was read from comments, PRs and runs.
 | CERTIFIED COMPLETE | 2 |
 | DEPLOYED/NOT VERIFIED | 23 |
 | MERGED/NOT DEPLOYED | 8 (one of them also BLOCKED) |
-| IN REVIEW | 13 |
-| IN PROGRESS | 28 |
+| IN REVIEW | 11 |
+| IN PROGRESS | 30 |
 | NOT STARTED | 32 |
 | BLOCKED | 4 (plus the blocked merged row) |
 | OWNER DECISION | 10 |
@@ -144,7 +144,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
-| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (41d1222c4, round 9) | IN REVIEW `[Seat 1 Opus, Seat 2 Codex]` | Round 9 at 41d1222c4 pushed 04:02Z (SCRUM-886 c24351): round-8 Seat 2 oracle closed at the mechanism, `runWithIdempotency` refuses a replay whose stored `createdBy` is not the calling actor before the fingerprint comparison (new coded `COMMAND_IDENTITY_FOREIGN_ACTOR` EN/AR), covering all 65 callers; 13-test suite 7 red pre-fix (coordinator-run), 12 scenarios, 3 mutants killed, baseline 938/0. One 413b assertion tightened; pre-`createdBy` production rows now refuse a user retry (seats asked). Body r9 published, checker fails only on Seat 1 session. CI running; seats armed (fresh Seat 1 id) behind the waiter. Rendered EN/AR checks owed (F9). |
+| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (41d1222c4 → round 10) | IN PROGRESS `[Sonnet]` | Round 9 at 41d1222c4: CI fully green (swarm 66/66); BOTH seats CHANGES_REQUESTED with the same new finding (Seat 1 6569496040, Seat 2 6569496219; SCRUM-886 c24352): `saleCompletion.ts:1966` shortfall refusal is a ConvexError that prints the stored supplier entitlement to a `create:sales` caller without `view:cost_price` (pre-existing on main, inside the PR claim). Round-9 actor binding confirmed by both seats. Accepted; round 10 dispatched 05:20Z (coded no-amount refusal for non-readers + class sweep of mutation responses). Fourth sibling finding. Rendered EN/AR checks owed (F9). |
 | E1.1 | Remaining finance-editor variants without `view:cost_price`. | SCRUM-886#c24247 | OWNER DECISION `[OWNER]` | ACCOUNTANT ruled; other variants open. |
 | E2 | Sidebar role visibility (SCRUM-890) deployable only after a green Pilot Role Audit. | SCRUM-890, PR #749 (89ccd15a) | MERGED/NOT DEPLOYED, BLOCKED `[Coord]` | Hold ruling c24239. |
 | E3 | Pilot Role Audit green on main (six roles, 136 cells each). | SCRUM-891, PR #751 (5284d625), `pilot-role-audit.yml` | BLOCKED `[Coord]` | Run 41297986256 at 5284d625 FAILED (5/6 roles) after the fixture fix; cause unknown, evidence GPG-encrypted. |
@@ -192,7 +192,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
 | G1 | Serial merge train completed: #746 → #737 re-seat → #740 last. | SCRUM-886, 811, 842 | IN REVIEW `[Coord]` | #746 at e5b90ddc CI running; #737 and #740 CONFLICTING, re-seat after remerge. |
-| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN REVIEW `[Seat 1 Opus, Seat 2 Codex]` | Round 9 head 41d1222c4 pushed; body r9 with fenced round-9 red run published; seats armed, not yet run; seat lines pending at 41d1222c. |
+| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN PROGRESS `[Sonnet]` | Round 9 seats both CHANGES_REQUESTED (c24352); round 10 in progress; body seat lines pending at the next head. |
 | G1.2 | #737 remerge, fresh seats at the new head, merge. | PR #737 | NOT STARTED `[Coord]` | After #746. |
 | G1.3 | #740 remerge, fresh seats, merge (last). | PR #740 | NOT STARTED `[Coord]` | After #737. |
 | G2 | Convex preview I/O quota managed (40.45/50 GB on 2026-11-01, about 6 GB/day). | SCRUM-892 (#752 c186c640), 807, 809 | OWNER DECISION `[OWNER]` | Spending limit question open; serial train in force; quota exhaustion stops every preview-backed check. |
@@ -288,3 +288,4 @@ Inputs: serial train throughput 4 to 6 h per PR with two seats; release cycle 3 
 | 2026-11-02 02:56 | #746 round 8 pushed at a38cdb865 (c24349): mode-and-role gate in importBulk, red run 3/15, typechecks 0, baseline 938/0. Body republished; seat waiter armed with a fresh Seat 1 id. E1 and G1.1 to IN REVIEW (13 / 28). Main 9139d164 unchanged. |
 | 2026-11-02 03:47 | #746 round 8 at a38cdb865: CI fully green, Seat 1 CERTIFY, Seat 2 CHANGES_REQUESTED (vehicles.create idempotency replay oracle, c24350). Round 9 dispatched to close the class by mechanism. E1 and G1.1 back to IN PROGRESS (11 / 30). Critical path slips a third fix round; earliest launch window now unlikely. |
 | 2026-11-02 04:23 | #746 round 9 at 41d1222c4 pushed 04:02Z: actor-bound idempotency replay (mechanism fix for the round-8 oracle), red run 7/13 coordinator-run, body r9 published, SCRUM-886 c24351, seats armed behind CI; E1 and G1.1 → IN REVIEW. Counts IN REVIEW 13, IN PROGRESS 28. Critical path: #746 round 9 seats → merge → #737 re-seat → #740. |
+| 2026-11-02 05:20 | #746 round 9 at 41d1222c4: CI fully green; both seats CHANGES_REQUESTED on the same new door, saleCompletion shortfall refusal prints the stored entitlement to a create:sales non-reader (pre-existing on main; c24352). Round-9 fix confirmed. Round 10 dispatched (coded refusal + class sweep). E1 and G1.1 back to IN PROGRESS; counts IN REVIEW 11, IN PROGRESS 30. |
