@@ -6,16 +6,21 @@ import { backfillAccountantCostPriceAccessRollout } from "./releaseGuard";
 type Input = Parameters<typeof backfillAccountantCostPriceAccessRollout>[0];
 type RunPage = Input["runPage"];
 
-/** One page as `migrateRoles:backfillAccountantCostPriceAccess` returns it. `updates` holds role identifiers in production. */
+// The backend's `updates` array holds one line per patched role: the role name and the organization id. The repository is
+// public, so none of it may reach a result, on the success path or on any refusal path.
+const SECRET = "org_secret";
+
+/** One page as `migrateRoles:backfillAccountantCostPriceAccess` returns it. */
 const page = (updatedCount: number, isDone: boolean, continueCursor: string) => ({
   updatedCount,
-  updates: Array.from({ length: updatedCount }, (_, i) => `Role:ACCOUNTANT:org_secret_${i}`),
+  updates: Array.from({ length: updatedCount }, (_, i) => `Role:ACCOUNTANT:${SECRET}_${i}`),
   isDone,
   continueCursor,
 });
 
-const run = (runPage: RunPage, overrides: Partial<Input> = {}) =>
-  backfillAccountantCostPriceAccessRollout({
+/** Every call through here asserts the no-leak rule, so every test below covers it, success and refusal alike. */
+const run = (runPage: RunPage, overrides: Partial<Input> = {}) => {
+  const result = backfillAccountantCostPriceAccessRollout({
     runPage,
     now: () => 0,
     startedAt: 0,
@@ -24,6 +29,9 @@ const run = (runPage: RunPage, overrides: Partial<Input> = {}) =>
     pageSize: 100,
     ...overrides,
   });
+  expect(JSON.stringify(result)).not.toContain(SECRET);
+  return result;
+};
 
 describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
   test("serially pages from a null cursor, passing continueCursor back until isDone, summing updatedCount", () => {
@@ -48,19 +56,22 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     expect(seen).toEqual([null]);
   });
 
+  // Each malformed value starts from a valid page that carries a secret, so a refusal also proves it does not echo it.
+  const base = page(1, true, "c");
   test.each([
     ["null", null],
     ["an empty object", {}],
-    ["missing isDone", { updatedCount: 0, updates: [], continueCursor: "c" }],
-    ["missing continueCursor", { updatedCount: 0, updates: [], isDone: true }],
-    ["continueCursor not a string", { updatedCount: 0, updates: [], isDone: true, continueCursor: null }],
-    ["negative updatedCount", { updatedCount: -1, updates: [], isDone: true, continueCursor: "c" }],
-    ["NaN updatedCount", { updatedCount: NaN, updates: [], isDone: true, continueCursor: "c" }],
-    ["non-integer updatedCount", { updatedCount: 1.5, updates: ["x"], isDone: true, continueCursor: "c" }],
-    ["updatedCount above the page size", { ...page(101, true, "c") }],
-    ["isDone not a boolean", { updatedCount: 0, updates: [], isDone: "true", continueCursor: "c" }],
-    ["updates not an array", { updatedCount: 0, updates: "none", isDone: true, continueCursor: "c" }],
-    ["updates shorter than updatedCount", { updatedCount: 1, updates: [], isDone: true, continueCursor: "c" }],
+    ["missing isDone", { ...base, isDone: undefined }],
+    ["missing continueCursor", { ...base, continueCursor: undefined }],
+    ["continueCursor not a string", { ...base, continueCursor: null }],
+    ["negative updatedCount", { ...base, updatedCount: -1 }],
+    ["NaN updatedCount", { ...base, updatedCount: NaN }],
+    ["non-integer updatedCount", { ...base, updatedCount: 1.5 }],
+    ["updatedCount above the page size", page(101, true, "c")],
+    ["isDone not a boolean", { ...base, isDone: "true" }],
+    ["updates not an array", { ...base, updates: "none" }],
+    ["updates shorter than updatedCount", { ...base, updates: [] }],
+    ["updates longer than updatedCount", { ...base, updatedCount: 0 }],
   ])("malformed evidence refuses: %s", (_label, value) => {
     expect(run(() => ({ ok: true, value }))).toMatchObject({
       ok: false,
@@ -69,16 +80,15 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
   });
 
   test("a failed call refuses without leaking backend output", () => {
-    const result = run(() => ({ ok: false, reason: "private backend payload" }));
+    const result = run(() => ({ ok: false, reason: `Role:ACCOUNTANT:${SECRET}` }));
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("call failed") });
-    expect(JSON.stringify(result)).not.toContain("private backend payload");
   });
 
   test("a cursor that comes back unchanged refuses instead of paging forever", () => {
     let calls = 0;
     const result = run(() => {
       calls += 1;
-      return { ok: true, value: page(0, false, "same") };
+      return { ok: true, value: page(1, false, "same") };
     });
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("cursor stopped advancing") });
     // Call 1 sends null and gets "same"; call 2 sends "same" and gets "same" again.
@@ -89,7 +99,7 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     let calls = 0;
     const result = run(() => {
       calls += 1;
-      return { ok: true, value: page(0, false, `c${calls}`) };
+      return { ok: true, value: page(1, false, `c${calls}`) };
     });
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("page cap") });
     expect(calls).toBe(3);
@@ -102,7 +112,7 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
       () => {
         calls += 1;
         now = 1001;
-        return { ok: true, value: page(0, false, `c${calls}`) };
+        return { ok: true, value: page(1, false, `c${calls}`) };
       },
       { now: () => now },
     );
@@ -125,7 +135,6 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
       { now: () => now },
     );
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
-    expect(JSON.stringify(result)).not.toContain("org_secret");
   });
 
   test("a terminal call that finishes exactly on the deadline is still accepted", () => {
@@ -138,41 +147,6 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
       { now: () => now },
     );
     expect(result).toEqual({ ok: true, pages: 1, updated: 0 });
-  });
-
-  // The backend's `updates` array holds one line per patched role: the role name and the organization id.
-  // The repository is public, so none of it may reach a reason, on the success path or on any refusal path.
-  test("no result ever contains an element of updates, on success or on any refusal path", () => {
-    const leaky = { updatedCount: 1, updates: ["Role:ACCOUNTANT:org_secret"], isDone: false, continueCursor: "c1" };
-    const results = [
-      run(() => ({ ok: true, value: { ...leaky, isDone: true } })),
-      // malformed, with the secret still present in the same value
-      run(() => ({ ok: true, value: { ...leaky, updatedCount: NaN } })),
-      run(() => ({ ok: true, value: { ...leaky, isDone: "no" } })),
-      run(() => ({ ok: true, value: { ...leaky, updatedCount: 2 } })),
-      // a cursor that does not advance
-      run(() => ({ ok: true, value: { ...leaky, continueCursor: "c1" } })),
-      // the page cap
-      (() => {
-        let n = 0;
-        return run(() => ({ ok: true, value: { ...leaky, continueCursor: `c${(n += 1)}` } }));
-      })(),
-      // the shared deadline, after a page that carried the secret
-      (() => {
-        let now = 0;
-        return run(
-          () => {
-            now = 1001;
-            return { ok: true, value: leaky };
-          },
-          { now: () => now },
-        );
-      })(),
-      // a failed call whose backend text carries the secret
-      run(() => ({ ok: false, reason: "Role:ACCOUNTANT:org_secret" })),
-    ];
-    for (const result of results) expect(JSON.stringify(result)).not.toContain("org_secret");
-    expect(results.filter((r) => r.ok)).toHaveLength(1);
   });
 
   test("rollout wiring: runs after the supplier identity repair, refuses before the verification, counts only", () => {
