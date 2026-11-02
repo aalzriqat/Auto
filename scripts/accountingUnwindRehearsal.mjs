@@ -252,7 +252,9 @@ export async function runUnwindRehearsalCases(ctx) {
     if (!ctx.config?.salesEmail || !ctx.config?.approverEmail) return ctx.unproven("U-RET actual two-identity native context unavailable");
     const must = ctx.salesMust, f = await prepare(ctx), roles = [];
     assertBooks(await books(must, f), f, PAID, 10925000, 875000, PAID_TRIAL);
-    const args = startArgs(f), basePermissions = ["view:sales", "view:finance_applications"];
+    // SCRUM-886 round 13: roles:create refuses a role holding confirm:finance_disbursement without view:cost_price, so every probe role
+    // holds it; no door under probe depends on it.
+    const args = startArgs(f), basePermissions = ["view:sales", "view:finance_applications", "view:cost_price"];
     for (const [granted, missing] of [["cancel:closed_deal", "confirm:finance_disbursement"], ["confirm:finance_disbursement", "cancel:closed_deal"]])
       roles.push(await deniedAuthority(ctx, f, [...basePermissions, granted], missing,
         () => ctx.asApprover("mutation", "dealUnwind:startDealUnwind", { ...args, idempotencyKey: key() })));

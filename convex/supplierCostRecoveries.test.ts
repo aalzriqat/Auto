@@ -39,6 +39,8 @@ const PERMS = [
   "view:customers", "view:users",
   "manage:finance", "view:finance", "view:reports",
   "view:expenses", "create:expenses", "edit:expenses", "delete:expenses",
+  // SCRUM-886: requestUpdate refuses a cost field from a caller who cannot read cost.
+  "view:cost_price",
 ];
 
 const SCALE = 1000; // JOD

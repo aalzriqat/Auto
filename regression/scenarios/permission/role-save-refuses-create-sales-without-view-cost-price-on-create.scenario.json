@@ -1,0 +1,49 @@
+{
+  "id": "role-save-refuses-create-sales-without-view-cost-price-on-create",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "permissions": "create:sales"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "roles.stored",
+      "value": "nothing"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "roles.create refuses create:sales without view:cost_price with a coded refusal, and stores nothing"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "42816e818143eb369e90e24dad20d0dc40d30d187c7f41a07f4d4a51b3ea793e"
+}

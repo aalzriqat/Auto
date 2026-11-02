@@ -90,6 +90,10 @@ export function VehicleDetailsDialog({
     !permissionsLoading &&
     hasPermission(PERMISSIONS.MANAGE_FINANCE) &&
     hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  // SCRUM-886: the landed-cost breakdown is cost by definition. The server returns none to a caller who
+  // cannot read cost and refuses their writes, so the section is not rendered for them: an empty editor
+  // would claim "no landed costs" and offer a save that is always refused.
+  const canViewCost = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
   const showCorrectCostAction = canCorrectCost && !!vehicle && vehicle.status !== "SOLD" && vehicle.sourceType !== "SOURCED";
   const [costCorrectionOpen, setCostCorrectionOpen] = useState(false);
 
@@ -104,10 +108,10 @@ export function VehicleDetailsDialog({
   );
   const landedCosts = useQuery(
     api.vehicles.getLandedCosts,
-    activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+    activeOrgId && vehicle && canViewCost ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
   const landedCostBanks = useQuery(api.vehicles.listAcquisitionBankOptions,
-    open && activeOrgId && vehicle && canEditVehicles && vehicle.sourceType !== "SOURCED"
+    open && activeOrgId && vehicle && canViewCost && canEditVehicles && vehicle.sourceType !== "SOURCED"
       ? { orgId: activeOrgId, purpose: "EDIT" } : "skip");
   const pricingHistory = useQuery(
     api.vehicles.getPricingHistory,
@@ -921,6 +925,7 @@ export function VehicleDetailsDialog({
               <h2 className="text-base font-semibold mb-4">{t("Valuations")}</h2>
               <VehicleValuationsTab vehicleId={vehicle._id} />
             </section>
+            {canViewCost && (
             <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none space-y-4">
               <h2 className="text-base font-semibold">{t("LandedCost")}</h2>
               {hasLegacyUnattributedBank && (
@@ -1033,6 +1038,7 @@ export function VehicleDetailsDialog({
                 </div>
               )}
             </section>
+            )}
             <section hidden={activeGroup !== "financials"} className="m-0 mb-4 rounded-lg border p-4 focus-visible:outline-none">
               <h2 className="text-base font-semibold mb-4">{t("PricingHistory")}</h2>
               <h3 className="font-semibold text-sm mb-3">{t("PricingHistory" as any)}</h3>

@@ -1,0 +1,67 @@
+{
+  "id": "sale-at-the-supplier-entitlement-is-refused-for-a-non-reader",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "AT_ENTITLEMENT"
+      }
+    },
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "AT_ENTITLEMENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.atEntitlement.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.refusal.identicalToBelowEntitlement",
+      "value": "true"
+    },
+    {
+      "observable": "reader.sales.count",
+      "value": "1"
+    },
+    {
+      "observable": "reader.vehicle.status",
+      "value": "SOLD"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionCostDisclosure.scrum886.test.ts",
+    "testName": "control: a sale at the entitlement is refused for a non-reader with the same coded response and completes for a reader"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round10",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "fingerprint": "67218702014eff8b9c7e321f8063f747b5fcff2fe603dd57467c3dc8751ea60c"
+}

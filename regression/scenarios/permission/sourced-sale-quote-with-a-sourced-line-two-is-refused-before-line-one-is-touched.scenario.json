@@ -1,0 +1,53 @@
+{
+  "id": "sourced-sale-quote-with-a-sourced-line-two-is-refused-before-line-one-is-touched",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "quote": "TWO_LINES_SOURCED_ON_LINE_2_ONLY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "line1.vehicleStatus",
+      "value": "unchanged"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "a two-line quote with a SOURCED car on line 2 only is refused before line 1 is touched"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "321423be8939232a9e9043d9ed5dfa245e3f821798d08d76e51d8f6ea2a5b75b"
+}

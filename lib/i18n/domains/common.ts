@@ -173,6 +173,17 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
   ],
+  // SCRUM-886. The English text must equal the server message in convex/utils/idempotency.ts.
+  ServerError_COMMAND_IDENTITY_FOREIGN_ACTOR: [
+    "This request was started by a different user and cannot be repeated from this account. Start a new operation.",
+    "بدأ هذا الطلب مستخدم آخر ولا يمكن إعادة إرساله من هذا الحساب. يرجى بدء عملية جديدة.",
+  ],
+  // SCRUM-886 round 10. The English text must equal CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE in
+  // convex/utils/saleCompletion.ts. It names no amount: the sender may not read vehicle cost.
+  ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS: [
+    "This sale cannot be completed as entered because of the supplier terms recorded on the car. Ask someone who can see vehicle costs to review them. Nothing has been changed.",
+    "لا يمكن إتمام هذا البيع بالشكل المُدخل بسبب شروط المورّد المسجّلة على السيارة. اطلب من شخص يملك صلاحية الاطلاع على تكلفة السيارات مراجعتها. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
   // and convex/collections.ts respectively.
   ServerError_PAYMENT_LINK_TARGET_REQUIRED: [
@@ -660,8 +671,19 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
     "هذه المركبة برسم البيع، لذلك لا يمكن ترحيل شراء لها. لم يتم ترحيل أي مبلغ.",
   ],
+  // SCRUM-886. `vehicleEdits.requestUpdate` and `vehicles.update` refuse a cost field from a caller without
+  // view:cost_price; `vehicles.upsertLandedCosts` and an opening-stock `vehicles.importBulk` refuse the call.
+  ServerError_VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: [
+    "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
+    "تغيير تكلفة المركبة أو تفاصيل شرائها أو الحد الأدنى للربح يتطلب صلاحية الاطلاع على التكلفة. اطلب من المدير إجراء هذا التغيير.",
+  ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
+  // SCRUM-886 round 13. The English text must equal SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE in convex/roles.ts.
+  ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS: [
+    "A role that can create sales or confirm finance disbursements must also be able to see vehicle costs, because completing the sale of a sourced car depends on them. Add \"View Cost Price\" to this role, or remove the sales permission.",
+    "الدور الذي يستطيع إنشاء المبيعات أو تأكيد صرف التمويل يجب أن يملك أيضاً صلاحية الاطلاع على تكلفة السيارات، لأن إتمام بيع سيارة المورّد يعتمد عليها. أضف صلاحية \"عرض سعر التكلفة\" إلى هذا الدور، أو أزل صلاحية المبيعات.",
+  ],
   ServerError_PERMISSION_RETIRED: [
     "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
     "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",

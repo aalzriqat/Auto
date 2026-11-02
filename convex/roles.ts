@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import {
   PERMISSIONS,
+  completesSalesWithoutCostAccess,
   dedupePermissions,
   getInvalidPermissions,
   isReservedRoleName,
@@ -19,6 +20,10 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 // Translated under ServerError_PERMISSION_RETIRED; the EN dictionary text equals this string.
 const RETIRED_PERMISSION_MESSAGE =
   'The "Finalize financed deal" permission is no longer used. Grant "Record the supplier payment route" or "Cancel a closed financed deal" instead.';
+
+// SCRUM-886 round 13. Translated under ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS; the EN dictionary text equals this string.
+const SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE =
+  'A role that can create sales or confirm finance disbursements must also be able to see vehicle costs, because completing the sale of a sourced car depends on them. Add "View Cost Price" to this role, or remove the sales permission.';
 
 const OWNER_NAMED_ROLE_LOCKED_MESSAGE =
   "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.";
@@ -97,6 +102,10 @@ export const create = mutation({
     // role has no reason to start carrying it.
     if (newlyAddedLegacyPermissions(args.permissions, []).length > 0) {
       throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
+    }
+    // SCRUM-886 round 13: a role that completes sales must be able to read vehicle cost (completing a SOURCED car's sale needs it).
+    if (completesSalesWithoutCostAccess(args.permissions)) {
+      throwAppError(AppErrorCode.SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS, SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE);
     }
 
     // Prevent duplicate role names within the same org
@@ -204,6 +213,11 @@ export const update = mutation({
       // renaming a role never grants anything the caller did not send.
       if (newlyAddedLegacyPermissions(args.permissions, role.permissions).length > 0) {
         throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
+      }
+      // SCRUM-886 round 13: as `create`. Applies to a submitted permission set only, so a stored role that already holds the
+      // combination can still be renamed (stored roles are not migrated; their completions are refused at the door).
+      if (completesSalesWithoutCostAccess(args.permissions)) {
+        throwAppError(AppErrorCode.SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS, SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE);
       }
       patch.permissions = dedupePermissions(args.permissions);
     }

@@ -35,7 +35,7 @@ import {
   isCashCompletion,
 } from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
-import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
+import { assertNoSaleLinkedLegacyReceivable, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import { assertOperatedDealMode, FINANCED_SALE_REQUIRES_DEAL_MESSAGE } from "./dealModes";
@@ -71,6 +71,7 @@ import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { actorMayReadVehicleCost } from "./vehicleCostVisibility";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
 import {
@@ -374,6 +375,16 @@ type PreparedSaleCompletion = {
  * a plain sale. Shared so the refusal reads identically wherever it fires, and
  * so the two places that enforce it cannot drift into describing it differently.
  */
+/**
+ * SCRUM-886 round 10: what a caller WITHOUT `view:cost_price` is told when a consigned sale is refused
+ * because of the supplier terms recorded on the car (no supplier amount, or the supplier would be paid
+ * less than his entitlement). It names no amount and does not say which reason applied, so the answer
+ * is the same whatever the stored cost or the submitted price. English text equal to
+ * `ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS` in lib/i18n/domains/common.ts.
+ */
+export const CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE =
+  "This sale cannot be completed as entered because of the supplier terms recorded on the car. Ask someone who can see vehicle costs to review them. Nothing has been changed.";
+
 export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
   "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
 
@@ -1076,6 +1087,12 @@ type ResolvedReservationDeposits = {
    * open net of it or the subledger and the ledger disagree from the outset.
    */
   appliedToSupplierSettlement: number;
+  /**
+   * SCRUM-886 round 12: the text of a COST-derived refusal of `planDepositSettlementApplication` (no recorded supplier cost, or a
+   * deposit larger than the margin). Recorded instead of thrown, and thrown by `passSupplierCostGate` once every caller-controlled
+   * refusal of the whole command has been decided. Never set on a path that completes: the gate always throws it.
+   */
+  deferredCostRefusal?: string;
 };
 
 /**
@@ -1295,9 +1312,17 @@ async function resolveQuoteReservationDeposits(
         customerBillableMinor,
         marginMinor: opts.marginMinor,
       });
-      if (!plan.ok) throw new ConvexError(plan.reason);
-
-      if (plan.destination === "CUSTOMER_RECEIVABLE") {
+      // SCRUM-886 round 10: a refusal built from the stored supplier cost (its absence, or the margin) confirms a
+      // COST-tier value, so a caller without view:cost_price gets the same coded, amount-free refusal as the shortfall.
+      // Round 12: that decision is a COST-tier decision, so it is not made here. It is recorded, the deposit is applied exactly as
+      // the supplier-settlement destination would (a cost-derived refusal only exists on that destination), and
+      // `passSupplierCostGate` throws it after every line's caller-controlled refusals. The mutation rolls back, so the
+      // application is never committed; what matters is that every later step sees the state it would see at any price.
+      let deferredCostRefusal: string | undefined;
+      if (!plan.ok) {
+        if (!plan.costDerived) throw new ConvexError(plan.reason);
+        deferredCostRefusal = plan.reason;
+      } else if (plan.destination === "CUSTOMER_RECEIVABLE") {
         // THROUGH_DEALERSHIP: the dealership collected the gross, so the
         // supplier's entitlement is already credited to AP-Suppliers in full
         // and crediting it again would inflate the debt by the deposit. What
@@ -1371,6 +1396,7 @@ async function resolveQuoteReservationDeposits(
       return {
         ...empty,
         appliedToSupplierSettlement: fromMinorUnits(appliedMinor, currency),
+        ...(deferredCostRefusal !== undefined ? { deferredCostRefusal } : {}),
       };
     }
 
@@ -1581,12 +1607,135 @@ async function applyHeldDeposits(
   };
 }
 
+/**
+ * SCRUM-886 round 11 (OWASP API3:2023), STAGE 1 of the order in which `applySaleCompletionSideEffects` may refuse.
+ *
+ * The consigned cost gate further down (the shortfall / no-cost refusal and the cost-derived deposit refusal) compares the
+ * caller's price with the stored supplier entitlement, a COST-tier value. A caller without `view:cost_price` gets the same
+ * coded, amount-free refusal for both (round 10), but that only hides the AMOUNT: whether the gate fires at all is still a
+ * response, and every refusal that can come before or after it tells the caller which side of the entitlement the price is
+ * on. Binary search recovers the entitlement to the fils in about 25 refused calls, each of which writes nothing.
+ *
+ * The closing rule is an order, not a text: every refusal the caller can trigger at will, from the arguments alone, is
+ * decided here, BEFORE the gate, so the response does not depend on the price. After the gate the only refusals left are
+ * server-state or invariant refusals the caller cannot aim (see the table in docs/architecture/scrum486-certification-oracle.md,
+ * "(8) Round 11"). Run as the first statement, so it precedes the gate on every entry path (`completeSale`,
+ * `completeExistingSale`), and so it also precedes the deposit-plan refusal inside `resolveReservationDeposits`.
+ *
+ * Trade-in is the only caller-aimable family: `sales.create` and a draft carry it, `finalizeDeal` and the quote door pass none,
+ * and a FINANCED or LEASE sale cannot reach it. The texts are unchanged and the checks are in their original order.
+ */
+async function refuseUnacceptableTradeIn(
+  ctx: MutationCtx,
+  args: SaleCompletionArgs,
+  prepared: PreparedSaleCompletion
+): Promise<void> {
+  if (!(args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0)) return;
+  if (args.tradeInVehicleId === args.vehicleId) {
+    throw new ConvexError("A vehicle cannot be traded in against its own sale.");
+  }
+  const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
+  // `isDeleted` is the only term this second check owns that the guard in
+  // `prepareSaleCompletion` does not — that one already refused a missing or
+  // foreign trade-in long before the side effects run. Keep it.
+  if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
+    throw new ConvexError("Trade-in vehicle not found in this organization.");
+  }
+  if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
+    throw new ConvexError(`This trade-in vehicle is ${tradeInVehicle.status.toLowerCase()} and cannot be accepted as a trade-in.`);
+  }
+  // Sourced/drop-ship vehicles cost-basis from sourceCost, not purchasePrice
+  // (see computeVehicleCapitalizedCost) — patching purchasePrice below would
+  // silently never establish a cost basis for this vehicle if it's later resold.
+  if (tradeInVehicle.sourceType === "SOURCED") {
+    throw new ConvexError("A sourced/drop-ship vehicle record cannot be used as a trade-in.");
+  }
+  // A trade-in vehicle must be brand new to inventory — if it already has a
+  // purchase price, it was already capitalized via the normal acquisition
+  // flow (postVehicleAcquisitionIfOwned), and capitalizing it again here
+  // would double-count Vehicle Inventory.
+  if (tradeInVehicle.purchasePrice && tradeInVehicle.purchasePrice > 0) {
+    throw new ConvexError(
+      "This trade-in vehicle already has a purchase price recorded. Clear it before completing this sale, or the trade-in value won't be capitalized correctly."
+    );
+  }
+  const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
+  // While the SCRUM-802 pay-first containment is on, a CASH sale reaches its trade-in with the invoice already settled to
+  // nil by deposits (the pre-write check refuses it otherwise, and a trade-in never counts), so the trade-in allocation
+  // below always fails with the allocation overflow. That refusal used to be the LAST thing a consigned sale could say, after
+  // the cost gate, which made it the other half of the price oracle. It is stated here, with the same text, for a consigned
+  // car (the only car with a cost gate in front of it). Lifting the containment removes this line with it.
+  if (CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED && prepared.vehicle.sourceType === "SOURCED" && isCashCompletion(args)) {
+    throw new ConvexError(`Allocation amount ${tradeInValueMinor} exceeds receivable outstanding balance 0.`);
+  }
+}
+
+/**
+ * SCRUM-886 round 12 (OWASP API3:2023): what the first stage of a completion's side effects hands to the cost gate and to the
+ * last stage. A completion is three stages, always in this order:
+ *
+ *   1. `beginSaleCompletionSideEffects`: everything that decides from the arguments and from server state that does not
+ *      depend on a vehicle's stored COST (the trade-in refusals, the deposit stage, the sale and receivable bookkeeping).
+ *   2. `passSupplierCostGate`: the ONLY place a consigned car's stored supplier entitlement is compared with the caller's
+ *      price, and the cost-derived deposit refusal that stage 1 recorded instead of throwing.
+ *   3. `finishSaleCompletionSideEffects`: the journal hook, the receivable, the payments, the supplier documents.
+ *
+ * A single sale runs the three back to back (`applySaleCompletionSideEffects`), which is the order the code always had. A
+ * multi-line completion (`completeSalesForLineItems`) runs stage 1 for EVERY line, then stage 2 for every line, then stage 3 for
+ * every line. So no line's cost gate runs before every caller-controlled refusal of every line has been decided, and the
+ * response a caller who cannot read cost sees does not depend on the price of any line. See "(9) Round 12" in
+ * docs/architecture/scrum486-certification-oracle.md.
+ */
+type SaleCompletionPreGate = {
+  isSourced: boolean;
+  settlementRoute: ConsignedSettlementRoute;
+  customerBillableMinor: number;
+  dealerFeesMinor: number | undefined;
+  warrantySoldMinor: number | undefined;
+  warrantyCostMinor: number | undefined;
+  gapSoldMinor: number | undefined;
+  gapCostMinor: number | undefined;
+  costAmount: number;
+  costMinor: number | undefined;
+  marginMinor: number | null;
+  supplierGrossReceiptMinor: number;
+  appliedDeposits: ResolvedReservationDeposits["appliedDeposits"];
+  appliedToSupplierSettlement: number;
+  /** A cost-derived deposit refusal, recorded by the deposit stage and thrown by the cost gate (see `passSupplierCostGate`). */
+  deferredDepositCostRefusal: string | undefined;
+  financedByConfiguredCompany: boolean;
+};
+
+/** A completion whose first stage has run: its sale row exists and its cost gate has not been judged. */
+type StagedSaleCompletion = {
+  args: SaleCompletionArgs;
+  prepared: PreparedSaleCompletion;
+  saleId: Id<"sales">;
+  pre: SaleCompletionPreGate;
+};
+
 async function applySaleCompletionSideEffects(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
   prepared: PreparedSaleCompletion,
   saleId: Id<"sales">
 ) {
+  const staged: StagedSaleCompletion = {
+    args, prepared, saleId, pre: await beginSaleCompletionSideEffects(ctx, args, prepared, saleId),
+  };
+  const consignment = await passSupplierCostGate(ctx, staged);
+  await finishSaleCompletionSideEffects(ctx, staged, consignment);
+}
+
+async function beginSaleCompletionSideEffects(
+  ctx: MutationCtx,
+  args: SaleCompletionArgs,
+  prepared: PreparedSaleCompletion,
+  saleId: Id<"sales">
+): Promise<SaleCompletionPreGate> {
+  // SCRUM-886 round 11, Stage 1: the refusals the caller aims with its own arguments, before anything that depends on the price.
+  await refuseUnacceptableTradeIn(ctx, args, prepared);
+
   // SCRUM-195 M3 — OPEN -> CONSUMED, beside the vehicle status change it
   // belongs with. This function has exactly two callers, `completeSale` and
   // `completeExistingSale`, and they are the only two ways a sale becomes
@@ -1797,7 +1946,7 @@ async function applySaleCompletionSideEffects(
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }
 
-  const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement } =
+  const { previouslyCollected, appliedDeposits, appliedToSupplierSettlement, deferredCostRefusal } =
     await resolveReservationDeposits(ctx, {
     args,
     prepared,
@@ -1913,11 +2062,105 @@ async function applySaleCompletionSideEffects(
       })()
     : false;
 
+  return {
+    isSourced,
+    settlementRoute,
+    customerBillableMinor,
+    dealerFeesMinor,
+    warrantySoldMinor,
+    warrantyCostMinor,
+    gapSoldMinor,
+    gapCostMinor,
+    costAmount,
+    costMinor,
+    marginMinor,
+    supplierGrossReceiptMinor,
+    appliedDeposits,
+    appliedToSupplierSettlement,
+    deferredDepositCostRefusal: deferredCostRefusal,
+    financedByConfiguredCompany,
+  };
+}
+
+/**
+ * SCRUM-886 round 13 (owner ruling SCRUM-886 comment 24358, OWASP API3:2023 and API5:2023): completing or finalizing a sale of a
+ * SOURCED (consigned) vehicle needs `view:cost_price`, on every completion door.
+ *
+ * Rounds 10-12 closed the cost oracle channel by channel (refusal text, refusal order, order across quote lines). The class is closed
+ * here by PERMISSION: an actor who cannot read vehicle cost is refused before any decision that could depend on it, so there is no
+ * channel left to close. Each door (`sales.create`, `sales.completeDraft`, `sales.completeFromQuote`, `applications.finalizeDeal`)
+ * calls this as its FIRST decision after authentication, ahead of every refusal that reads server state and ahead of the begin stage.
+ *
+ * The decision depends only on the vehicle's `sourceType` (an OPEN-tier field) and the actor's role, never on a cost value, and it
+ * reuses `actorMayReadVehicleCost`, which fails closed (no actor, no membership, offboarding, a role from another org). A vehicle
+ * that does not exist, or that belongs to another organization, is left to the door's own refusal: this function must not say
+ * anything about another tenant's rows. The refusal is the existing coded `CONSIGNED_SALE_NEEDS_COST_ACCESS`, whose EN/AR text names
+ * no amount.
+ */
+export async function assertActorMayCompleteConsignedSale(
+  ctx: QueryCtx,
+  args: { orgId: Id<"organizations">; actorId: Id<"users"> | undefined; vehicleIds: ReadonlyArray<Id<"vehicles">> }
+): Promise<void> {
+  let carriesConsignedCar = false;
+  for (const vehicleId of args.vehicleIds) {
+    const vehicle = await ctx.db.get(vehicleId);
+    if (vehicle && vehicle.orgId === args.orgId && vehicle.sourceType === "SOURCED") {
+      carriesConsignedCar = true;
+      break;
+    }
+  }
+  if (!carriesConsignedCar) return;
+  if (await actorMayReadVehicleCost(ctx, args.orgId, args.actorId)) return;
+  throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+}
+
+/**
+ * SCRUM-886 round 12, STAGE 2 of a completion's side effects: the consigned cost gate.
+ *
+ * This is the only place a consigned car's stored supplier entitlement (a COST-tier value) is compared with the caller's price,
+ * and the only place the cost-derived deposit refusal is thrown. Both used to fire in the middle of a line's side effects, so in a
+ * multi-line completion line 1's gate ran before line 2 had been prepared. The deposit refusal is therefore recorded by stage 1
+ * (`deferredDepositCostRefusal`, with the deposit applied as the supplier-settlement path would have applied it, because the
+ * mutation rolls back anyway) and thrown here, in its original place ahead of the shortfall / no-cost / agency refusals.
+ *
+ * A caller without `view:cost_price` gets one coded, amount-free refusal for every reason in this function (round 10).
+ */
+async function passSupplierCostGate(ctx: MutationCtx, staged: StagedSaleCompletion) {
+  const { args, prepared, pre } = staged;
+  const { isSourced, costMinor, supplierGrossReceiptMinor, settlementRoute, financedByConfiguredCompany } = pre;
+
+  // SCRUM-886 round 10: the two refusals below state, or depend on, the supplier's entitlement (the
+  // vehicle's frozen COST-tier `sourceCost`), and a ConvexError reaches the client unredacted. Who may
+  // read it is decided here from the authenticated actor's membership (never a client argument), once,
+  // and only for a consigned car. A caller who may not read vehicle cost gets one amount-free coded
+  // refusal for both reasons; a reader and the system owner keep the specific sentence.
+  const callerMayReadCost = isSourced
+    ? await actorMayReadVehicleCost(ctx, args.orgId, args.actorId)
+    : true;
+  const refuseConsignedTerms = (specificSentence: () => string): never => {
+    if (callerMayReadCost) throw new ConvexError(specificSentence());
+    throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+  };
+
+  // SCRUM-886 round 13: backstop behind the door check (`assertActorMayCompleteConsignedSale`). A completion of a consigned car by an
+  // actor who cannot read vehicle cost never gets past the doors; if a future caller of `completeSale` forgets that check, this
+  // refuses the same way, before any cost-derived decision, instead of committing a sale the actor could probe.
+  if (isSourced && !callerMayReadCost) {
+    throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+  }
+
+  // The deposit stage's cost-derived refusal (the missing cost or the margin built from it), first, as it always was.
+  if (pre.deferredDepositCostRefusal !== undefined) {
+    const reason = pre.deferredDepositCostRefusal;
+    refuseConsignedTerms(() => reason);
+  }
+
   const consignment = isSourced
     ? (() => {
         if (costMinor === undefined || costMinor <= 0) {
-          throw new ConvexError(
-            "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
+          return refuseConsignedTerms(
+            () =>
+              "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
           );
         }
         // Both agency refusals are made HERE, not only in the posting rule.
@@ -1963,8 +2206,9 @@ async function applySaleCompletionSideEffects(
           // they have no reason to suspect.
           console.error(error);
           const paidLabel = fromMinorUnits(supplierGrossReceiptMinor, prepared.currency);
-          throw new ConvexError(
-            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${fromMinorUnits(costMinor, prepared.currency)} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+          return refuseConsignedTerms(
+            () =>
+              `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${fromMinorUnits(costMinor, prepared.currency)} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
         // A financed deal settled directly with the supplier used to be refused
@@ -2020,6 +2264,25 @@ async function applySaleCompletionSideEffects(
         };
       })()
     : undefined;
+  return consignment;
+}
+
+/**
+ * SCRUM-886 round 12, STAGE 3 of a completion's side effects: everything after the cost gate. The refusals left here are
+ * server-state or invariant refusals a caller cannot aim with its own arguments (see the table in
+ * docs/architecture/scrum486-certification-oracle.md, "(8) Round 11" and "(9) Round 12"). Unchanged except that its inputs
+ * arrive in `staged` and `consignment`.
+ */
+async function finishSaleCompletionSideEffects(
+  ctx: MutationCtx,
+  staged: StagedSaleCompletion,
+  consignment: Awaited<ReturnType<typeof passSupplierCostGate>>
+) {
+  const { args, prepared, saleId, pre } = staged;
+  const {
+    isSourced, settlementRoute, customerBillableMinor, dealerFeesMinor, warrantySoldMinor, warrantyCostMinor, gapSoldMinor,
+    gapCostMinor, costAmount, costMinor, marginMinor, supplierGrossReceiptMinor, appliedDeposits, appliedToSupplierSettlement,
+  } = pre;
 
   // SCRUM-571 (D-48): snapshot, BEFORE the hook runs, whether the books were owed this
   // sale. The chart only, not the open period: a chart-ready org whose sale-date period
@@ -2150,35 +2413,8 @@ async function applySaleCompletionSideEffects(
   // What a trade-in allocated to the invoice in this completion; the pay-first rule reads it (owner: deposit only).
   let tradeInAppliedMinor = 0;
   if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
-    if (args.tradeInVehicleId === args.vehicleId) {
-      throw new ConvexError("A vehicle cannot be traded in against its own sale.");
-    }
-    const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    // `isDeleted` is the only term this second check owns that the guard in
-    // `prepareSaleCompletion` does not — that one already refused a missing or
-    // foreign trade-in long before the side effects run. Keep it.
-    if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
-      throw new ConvexError("Trade-in vehicle not found in this organization.");
-    }
-    if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
-      throw new ConvexError(`This trade-in vehicle is ${tradeInVehicle.status.toLowerCase()} and cannot be accepted as a trade-in.`);
-    }
-    // Sourced/drop-ship vehicles cost-basis from sourceCost, not purchasePrice
-    // (see computeVehicleCapitalizedCost) — patching purchasePrice below would
-    // silently never establish a cost basis for this vehicle if it's later resold.
-    if (tradeInVehicle.sourceType === "SOURCED") {
-      throw new ConvexError("A sourced/drop-ship vehicle record cannot be used as a trade-in.");
-    }
-    // A trade-in vehicle must be brand new to inventory — if it already has a
-    // purchase price, it was already capitalized via the normal acquisition
-    // flow (postVehicleAcquisitionIfOwned), and capitalizing it again here
-    // would double-count Vehicle Inventory.
-    if (tradeInVehicle.purchasePrice && tradeInVehicle.purchasePrice > 0) {
-      throw new ConvexError(
-        "This trade-in vehicle already has a purchase price recorded. Clear it before completing this sale, or the trade-in value won't be capitalized correctly."
-      );
-    }
-
+    // Every refusal about WHICH vehicle is traded in, and its value's precision, was made in Stage 1
+    // (`refuseUnacceptableTradeIn`, first statement of this function) before the cost gate. Pure; it cannot throw again.
     const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
     tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {
@@ -2473,11 +2709,16 @@ async function assertCashPayFirstBeforeWrites(
   });
 }
 
-export async function completeSale(
+/**
+ * Runs a completion up to, and not including, its consigned cost gate: every check that depends on the arguments or on server
+ * state, the sale row, and the side effects that precede the gate (`beginSaleCompletionSideEffects`). The caller must follow it
+ * with `passSupplierCostGate` and `finishSaleCompletionSideEffects` (see `completeSale` and `completeSalesForLineItems`).
+ */
+async function beginSaleCompletion(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
   door?: CompletionDoor
-): Promise<Id<"sales">> {
+): Promise<StagedSaleCompletion> {
   if (args.status !== "COMPLETED") {
     throwAppError(
       AppErrorCode.VALIDATION_FAILED,
@@ -2499,9 +2740,18 @@ export async function completeSale(
   // SCRUM-802: still no write has happened; refuse an unpayable cash sale here (trade-in does not count).
   await assertCashPayFirstBeforeWrites(ctx, args);
   const saleId = await insertSaleRecord(ctx, args, prepared, "COMPLETED", prepared.commissionAmount);
-  await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
+  return { args, prepared, saleId, pre: await beginSaleCompletionSideEffects(ctx, args, prepared, saleId) };
+}
 
-  return saleId;
+export async function completeSale(
+  ctx: MutationCtx,
+  args: SaleCompletionArgs,
+  door?: CompletionDoor
+): Promise<Id<"sales">> {
+  const staged = await beginSaleCompletion(ctx, args, door);
+  const consignment = await passSupplierCostGate(ctx, staged);
+  await finishSaleCompletionSideEffects(ctx, staged, consignment);
+  return staged.saleId;
 }
 
 /**
@@ -2585,8 +2835,29 @@ export async function completeSalesForLineItems(
     }
   }
 
+  // SCRUM-886 round 12 (OWASP API3:2023): three phases over ALL lines, never one line after another.
+  //
+  // A line's consigned cost gate compares the caller's price with a stored supplier entitlement, a COST-tier value. If line 1
+  // were completed in full before line 2 began, every refusal line 2 can raise (archived, in inspection, deleted, the same car
+  // twice, held by another deal, the deposit stage) would come back only when line 1's price cleared its gate, so a caller
+  // without `view:cost_price` could read the entitlement off which of the two answers came back. So:
+  //   1. begin every line: all checks that depend on the arguments or on server state, the sale row, the deposit stage;
+  //   2. judge every line's cost gate;
+  //   3. finish every line.
+  // The mutation is one transaction, so a refusal in any phase rolls all of it back, and a line's begin sees exactly the writes
+  // the lines before it made (the car marked sold, the deposit slices consumed), which is what makes a repeated car or a shared
+  // deposit refuse the same way it did when the lines ran one after another.
+  const staged: StagedSaleCompletion[] = [];
   for (const item of args.vehicleItems) {
-    saleIds.push(await completeSale(ctx, completionArgsFor(item)));
+    staged.push(await beginSaleCompletion(ctx, completionArgsFor(item)));
+  }
+  const consignments: Array<Awaited<ReturnType<typeof passSupplierCostGate>>> = [];
+  for (const line of staged) {
+    consignments.push(await passSupplierCostGate(ctx, line));
+  }
+  for (const [index, line] of staged.entries()) {
+    await finishSaleCompletionSideEffects(ctx, line, consignments[index]);
+    saleIds.push(line.saleId);
   }
 
   return saleIds;

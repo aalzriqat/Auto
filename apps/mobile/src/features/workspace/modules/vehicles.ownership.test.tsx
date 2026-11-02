@@ -279,7 +279,7 @@ test("editing an unpriced owned vehicle posts its first acquisition against the 
       status: "AVAILABLE", sourceType: "STOCK" }],
     status: "Exhausted", loadMore: jest.fn(), isLoading: false,
   } as unknown as ReturnType<typeof usePaginatedQuery>);
-  const view = await render(<ThemeProvider><LocaleProvider><VehiclesModule orgId="org_1" permissions={["edit:vehicles"]} /></LocaleProvider></ThemeProvider>);
+  const view = await render(<ThemeProvider><LocaleProvider><VehiclesModule orgId="org_1" permissions={["edit:vehicles", "view:cost_price"]} /></LocaleProvider></ThemeProvider>);
   await fireEvent.press(view.getByRole("button", { name: "More options" }));
   const buttons = menu.mock.calls.at(-1)![2] as Array<{ text: string; onPress?: () => void }>;
   buttons.find((button) => button.text === "Edit")!.onPress!();
@@ -311,7 +311,7 @@ describe("editing an existing vehicle", () => {
     const view = await render(
       <ThemeProvider>
         <LocaleProvider>
-          <VehiclesModule orgId="org_1" permissions={["edit:vehicles"]} />
+          <VehiclesModule orgId="org_1" permissions={["edit:vehicles", "view:cost_price"]} />
         </LocaleProvider>
       </ThemeProvider>,
     );
@@ -330,5 +330,49 @@ describe("editing an existing vehicle", () => {
     expect(createVehicle).not.toHaveBeenCalled();
     expect(updateVehicle).toHaveBeenCalledTimes(1);
     expect(updateVehicle.mock.calls[0]![0]).toMatchObject({ vehicleId: "veh_1", purchasePrice: 15000, sellingPrice: 20000 });
+  });
+});
+
+describe("SCRUM-886: editing without view:cost_price", () => {
+  test("offers no purchase-price or settlement field and sends no cost key", async () => {
+    const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
+    // The vehicle reader withholds purchasePrice from this caller, so the car reads as unpriced.
+    mockUsePaginatedQuery.mockReturnValue({
+      results: [
+        {
+          _id: "veh_1", vin: VALID_VIN, make: "Honda", model: "Accord", year: 2022, mileage: 12000,
+          color: "Black", fuelType: "Petrol", transmission: "Automatic", sellingPrice: 20000,
+          status: "AVAILABLE", sourceType: "STOCK",
+        },
+      ],
+      status: "Exhausted",
+      loadMore: jest.fn(),
+      isLoading: false,
+    } as unknown as ReturnType<typeof usePaginatedQuery>);
+    const view = await render(
+      <ThemeProvider>
+        <LocaleProvider>
+          <VehiclesModule orgId="org_1" permissions={["edit:vehicles"]} />
+        </LocaleProvider>
+      </ThemeProvider>,
+    );
+
+    await fireEvent.press(await view.findByRole("button", { name: "More options" }));
+    const buttons = alertSpy.mock.calls.at(-1)![2] as Array<{ text?: string; onPress?: () => void }>;
+    await act(async () => buttons.find((button) => button.text === "Edit")!.onPress!());
+
+    await next(view);
+    expect(view.queryByLabelText("Purchase price")).toBeNull();
+    expect(view.queryByTestId("select-Payment method")).toBeNull();
+    await next(view);
+    await fireEvent.press(await view.findByRole("button", { name: "Save vehicle" }));
+    await settle();
+
+    expect(updateVehicle).toHaveBeenCalledTimes(1);
+    const args = updateVehicle.mock.calls[0]![0] as Record<string, unknown>;
+    expect(args).toMatchObject({ vehicleId: "veh_1", sellingPrice: 20000 });
+    for (const key of ["purchasePrice", "purchasePaymentMethod", "purchaseSupplierName", "bankAccountId"]) {
+      expect(args).not.toHaveProperty(key);
+    }
   });
 });

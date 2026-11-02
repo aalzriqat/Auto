@@ -1,0 +1,59 @@
+{
+  "id": "default-accountant-corrects-an-acquisition-cost-as-a-prior-period-restatement",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round14b",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "default-accountant",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "correctionType": "PRIOR_PERIOD_RESTATEMENT",
+        "vehicle": "CASH_ACQUIRED_IN_A_CLOSED_PERIOD",
+        "newCost": "9800"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "correction.refusal",
+      "value": "absent"
+    },
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": "9800"
+    },
+    {
+      "observable": "vehicleCostCorrections.count",
+      "value": "1"
+    },
+    {
+      "observable": "correction.correctedBy",
+      "value": "the-accountant"
+    },
+    {
+      "observable": "journalEntries.fromCorrection.count",
+      "value": "1"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24368",
+      "digest": "6e07fd3b7bf70820e53084687b713ec53d0ff1c928f685d4afc843d7cb7a7eb8"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the default ACCOUNTANT template runs vehicles.correctAcquisitionCost as PRIOR_PERIOD_RESTATEMENT and the vehicle cost changes"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "fingerprint": "3c5a6bbd47fd77c2fee1c8837fc64041a7c70002db1cf7a1003d991b5c23d405"
+}

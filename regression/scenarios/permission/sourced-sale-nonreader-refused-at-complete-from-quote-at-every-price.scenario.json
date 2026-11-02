@@ -1,0 +1,59 @@
+{
+  "id": "sourced-sale-nonreader-refused-at-complete-from-quote-at-every-price",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "quote": "SOURCED_LINE",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "EVERY_PRICE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.completeFromQuote.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.completeFromQuote.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "nonReader.completeFromQuote.entitlementInMessage",
+      "value": "absent"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "sales.completeFromQuote refuses a sale-completing role without view:cost_price with one byte-identical coded response at every price and writes nothing"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "95ae41b0279dc9b251b38da4ef9589b4f0af5997cc72e4b48c07babed2add706"
+}

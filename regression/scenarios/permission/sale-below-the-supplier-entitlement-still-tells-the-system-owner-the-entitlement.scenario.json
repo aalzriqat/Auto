@@ -1,0 +1,47 @@
+{
+  "id": "sale-below-the-supplier-entitlement-still-tells-the-system-owner-the-entitlement",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "system-owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "BELOW_ENTITLEMENT_A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "present"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionCostDisclosure.scrum886.test.ts",
+    "testName": "control: the system owner still gets the detailed sentence, with the entitlement"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round10",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "255055a82cd4af7e50d913cf13336fc0a3885b80e260ba9677fe8adb97ebce81"
+}

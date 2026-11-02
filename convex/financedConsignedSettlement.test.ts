@@ -81,6 +81,8 @@ const PERMS = [
   "verify:finance_documents", "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance", "view:finance",
+  // SCRUM-886: correcting a supplier cost through vehicles.update needs the right to read cost.
+  "view:cost_price",
   "view:commissions", "manage:commissions",
   // The sales reports read the same deals this file completes, and SCRUM-30
   // requires them to agree with the ledger about what one earned.

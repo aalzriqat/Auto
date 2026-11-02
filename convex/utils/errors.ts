@@ -175,6 +175,13 @@ export const AppErrorCode = {
   // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
   // ServerError_<code>.
   COMMAND_RECORDED_BEFORE_RESET: "COMMAND_RECORDED_BEFORE_RESET",
+  // SCRUM-886. A command identity is replayed only by the actor that minted it. Message in
+  // convex/utils/idempotency.ts; translated under ServerError_<code>.
+  COMMAND_IDENTITY_FOREIGN_ACTOR: "COMMAND_IDENTITY_FOREIGN_ACTOR",
+  // SCRUM-886 round 10. A consigned sale refused because of the supplier terms recorded on the car, as
+  // seen by a caller who may not read vehicle cost: the same amount-free text whatever the reason or
+  // the price. Message in convex/utils/saleCompletion.ts; translated under ServerError_<code>.
+  CONSIGNED_SALE_NEEDS_COST_ACCESS: "CONSIGNED_SALE_NEEDS_COST_ACCESS",
   ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
   // SCRUM-571 S1 (c21732). Receipt containment: a payment link is created only against a debt
   // and never for more than that debt still owes, and its money arrives only through intent
@@ -282,10 +289,16 @@ export const AppErrorCode = {
   VEHICLE_BUYOUT_SOURCED_LANDED_COSTS: "VEHICLE_BUYOUT_SOURCED_LANDED_COSTS",
   VEHICLE_OWNERSHIP_FIELDS_LOCKED: "VEHICLE_OWNERSHIP_FIELDS_LOCKED",
   VEHICLE_SOURCED_ACQUISITION_REFUSED: "VEHICLE_SOURCED_ACQUISITION_REFUSED",
+  // SCRUM-886. `vehicleEdits.requestUpdate` refuses a cost-tier field from a caller who cannot read vehicle cost.
+  VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS",
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
   // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
   // ServerError_<code>.
   PERMISSION_RETIRED: "PERMISSION_RETIRED",
+  // SCRUM-886 round 13 (owner ruling comment 24358). `roles.create` / `roles.update` refuse to save a role that holds a
+  // sale-completing permission (`create:sales`, `confirm:finance_disbursement`) without `view:cost_price`. Message in
+  // convex/roles.ts; translated under ServerError_<code>.
+  SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS: "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS",
   // SCRUM-413 D-37. `cancelApplication` / `sales.cancelSale` refuse to cancel a CLOSED v2 deal
   // while the payment to the finance company is unsettled (`forwardCancelRefusal`). One code per
   // distinct reason; the EN dictionary text equals the server message. Translated under

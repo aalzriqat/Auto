@@ -60,6 +60,9 @@ const PERMISSIONS = [
   "register:vehicle_handover",
   "register:expected_payment",
   "manage:finance",
+  // SCRUM-886 round 13: the sale-completing doors refuse a SOURCED sale first when the actor cannot read cost, which would hide the
+  // refusal under test, so this actor is a cost reader.
+  "view:cost_price",
 ];
 
 type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";

@@ -56,7 +56,16 @@ export type DepositSettlementPlan =
       customerReceivableAfterMinor: number;
       supplierReceivableAfterMinor: number;
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /**
+       * SCRUM-886 round 10: true when the refusal is derived from the vehicle's stored supplier cost (its absence, or the
+       * margin built from it). The wording of such a refusal confirms a COST-tier value, so a door that throws it to a
+       * caller must withhold it from one without `view:cost_price`.
+       */
+      costDerived?: true;
+    };
 
 export interface DepositSettlementInput {
   /** SOURCED (consigned/agent) stock. Owned stock has no supplier settlement. */
@@ -135,6 +144,7 @@ export function planDepositSettlementApplication(
   if (marginMinor === null) {
     return {
       ok: false,
+      costDerived: true,
       reason:
         "This vehicle has no recorded supplier cost, so the dealership's margin cannot be determined and a deposit cannot be applied against it.",
     };
@@ -150,6 +160,7 @@ export function planDepositSettlementApplication(
   if (depositMinor > marginMinor) {
     return {
       ok: false,
+      costDerived: true,
       reason:
         "The reservation deposit exceeds the dealership's margin on this consigned sale, so it cannot all be applied to the supplier settlement — the excess is the supplier's money, not the dealership's. Refund the excess to the customer before completing.",
     };

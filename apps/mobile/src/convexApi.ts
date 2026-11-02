@@ -929,6 +929,18 @@ export interface MobileProfitApprovalCheck {
   minimumProfit?: number;
 }
 
+/**
+ * The server's verdict on selling a vehicle at a price (approvals:profitApprovalStatus). SCRUM-886:
+ * the vehicle readers no longer carry `minimumProfit` for a role without `view:cost_price`, so the
+ * wizard reads the minimum price uplift from this verdict, which the server computes for any
+ * caller who may view vehicles. `minimumProfit` is absent on VEHICLE_DELETED and INVALID.
+ */
+export interface MobileProfitApprovalVerdict {
+  status: "VEHICLE_DELETED" | "INVALID" | "NOT_REQUIRED" | "APPROVED" | "PENDING" | "REJECTED" | "REQUIRED";
+  margin?: number;
+  minimumProfit?: number;
+}
+
 export interface MobileQuote {
   _id: string;
   orgId: string;
@@ -2714,6 +2726,11 @@ export const api = {
       OrgScopedArgs & { vehicleId: string },
       MobileProfitApprovalCheck | null
     >("approvals:checkPendingApproval"),
+    profitApprovalStatus: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { vehicleId: string; salePrice: number },
+      MobileProfitApprovalVerdict | null
+    >("approvals:profitApprovalStatus"),
     requestProfitApproval: makeFunctionReference<
       "mutation",
       OrgScopedArgs & {
@@ -3406,6 +3423,12 @@ export const api = {
       "public",
       OrgScopedArgs & { vehicleId: string },
       MobileProfitApprovalCheck | null
+    >;
+    profitApprovalStatus: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs & { vehicleId: string; salePrice: number },
+      MobileProfitApprovalVerdict | null
     >;
     requestProfitApproval: FunctionReference<
       "mutation",

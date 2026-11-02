@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
@@ -732,7 +733,9 @@ export const getRelations = query({
         const createdByUser = await ctx.db.get(quote.createdBy);
         return {
           ...quote,
-          vehicle: vehicle ?? null,
+          // SCRUM-886: the quote screens read this vehicle for label fields only (print preview,
+          // description). Project it so a caller without view:cost_price never receives cost.
+          vehicle: projectOptionalVehicleForRole(vehicle, role),
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           companyName: company ? company.name : "Cash Deal",
           createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",

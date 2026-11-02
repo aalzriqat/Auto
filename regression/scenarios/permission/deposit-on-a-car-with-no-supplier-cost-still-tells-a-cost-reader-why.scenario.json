@@ -1,0 +1,49 @@
+{
+  "id": "deposit-on-a-car-with-no-supplier-cost-still-tells-a-cost-reader-why",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "quote": "QUOTE_WITH_HELD_DEPOSIT",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT",
+        "supplierCost": "NOT_RECORDED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.message.noRecordedSupplierCost",
+      "value": "present"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "control: a view:cost_price holder still gets the no-recorded-cost sentence"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round10",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "19d2b5cc9f460f92c82c83f2cf0a8b349e94d47e1a0a78347c61229541a93e68"
+}

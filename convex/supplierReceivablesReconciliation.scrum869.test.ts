@@ -54,6 +54,8 @@ const PERMS = [
   "view:commissions", "manage:commissions",
   "approve:requests",
   "view:expenses", "create:expenses",
+  // SCRUM-886 round 13: completing a SOURCED sale needs cost access, and this fixture completes SOURCED sales.
+  "view:cost_price",
 ];
 
 const SCALE = 1000; // JOD has three decimals

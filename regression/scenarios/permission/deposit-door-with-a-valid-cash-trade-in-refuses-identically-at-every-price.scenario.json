@@ -1,0 +1,62 @@
+{
+  "id": "deposit-door-with-a-valid-cash-trade-in-refuses-identically-at-every-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "tradeIn": "VALID_VEHICLE",
+        "salePrice": "PRICES_1_SHORT_AT_E_PLUS_D_20000",
+        "quote": "QUOTE_WITH_HELD_DEPOSIT",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.kind",
+      "value": "allocationOverflowOnNilInvoice"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "absent"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionRefusalPrecedence.scrum886.test.ts",
+    "testName": "a valid trade-in with a deposit applied to the supplier settlement is refused identically at every price"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round11",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "524875333f47677171fe77780ff9b6a0a9343e15"
+  },
+  "fingerprint": "10897c47ef79e8da4176cf24a1beab466c015b9ec21ed32c96597e8dd8dbcbc5"
+}

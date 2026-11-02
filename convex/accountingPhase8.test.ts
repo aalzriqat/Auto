@@ -61,6 +61,8 @@ async function seedDealer(tag = "p8") {
         "review:finance_application", "approve:finance_application",
         "finalize:financed_deal", "confirm:finance_disbursement",
         "verify:finance_documents",
+        // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+        "view:cost_price",
       ],
     })
   );

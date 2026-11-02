@@ -1,0 +1,52 @@
+{
+  "id": "non-reader-with-a-bill-below-the-deposit-is-refused-at-the-door-with-the-code",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "THROUGH_DEALERSHIP",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT",
+        "salePrice": "BELOW_DEPOSIT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.refusal.message.billComparison",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "round 13: the same request from a non-reader is refused at the door with the coded message, before the bill comparison"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "cb7261429bb5f6b25fe4fd770160eb428a935d4bf33f4bc399d19edb362c51dd"
+}
