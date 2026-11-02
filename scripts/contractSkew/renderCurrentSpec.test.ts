@@ -579,7 +579,8 @@ a({ label: "new" }); b({}); }`);
     );
     if (current === "partial.json") expect(run.stderr).toContain("Current spec unavailable");
   }
-});
+  // Three sequential CLI spawns, each bounded at 30 s; the 5 s default timed out under CI load (SCRUM-140 c24394).
+}, 120_000);
 
 test("CLI refuses an output outside its repository without changing that file", () => {
   const cache = path.resolve("node_modules/.cache");
