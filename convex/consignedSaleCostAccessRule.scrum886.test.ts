@@ -24,7 +24,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import {
-  payForwardBeforeFinalize, readyDeal, refusalDataOf, seedFinancedDealership,
+  payForwardBeforeFinalize, readyDeal, seedFinancedDealership,
 } from "../test-utils/financedDealFixture";
 import { supplierIdInCtx } from "../test-utils/supplierFixture";
 import { dictionaries } from "../lib/i18n/dictionaries";

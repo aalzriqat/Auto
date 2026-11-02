@@ -18,6 +18,14 @@
  *
  * Every test goes through a public mutation. Expected values are literals from the seeded rows: a supplier
  * entitlement of 8,765.432 JOD (8765432 fils) and, for the deposit door, a held deposit of 1,000 JOD.
+ *
+ * ROUND 13 (owner ruling SCRUM-886 comment 24358): the doors now refuse a caller who cannot read vehicle cost, for any SOURCED
+ * car, as their first decision (convex/consignedSaleCostAccessRule.scrum886.test.ts). A non-reader therefore never reaches the code
+ * these tests are about. They are kept as DEFENCE IN DEPTH: the non-reader calls below run the shared completion code
+ * (`completeSale` / `completeExistingSale`) directly, as the same non-reader actor and without the door check, which is what a
+ * future caller that forgot the door check would do. Reader and owner calls still go through the public doors unchanged. The
+ * ordering of refusals inside the shared code is unchanged and still proved; what changed is that a non-reader's sale at or above
+ * the entitlement no longer commits (the shared gate refuses a non-reader of a consigned car at every price).
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
@@ -27,6 +35,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { completeExistingSale, completeSale } from "./utils/saleCompletion";
 
 const NEEDS_COST_ACCESS_CODE = "CONSIGNED_SALE_NEEDS_COST_ACCESS";
 const ENTITLEMENT = 8_765.432;
@@ -108,12 +117,20 @@ type TradeIn = { tradeInVehicleId: Id<"vehicles">; tradeInValue: number };
 
 /** A CASH completion on the DIRECT_TO_SUPPLIER route (the buyer pays the supplier, so the dealership bills the car at nil). */
 const create = (s: Seeded, who: Who, vehicleId: Id<"vehicles">, salePrice: number, tradeIn?: TradeIn) =>
-  s.actors[who].mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId, customerId: s.customerId,
-    salespersonId: s.userIds[who], salePrice, saleDate: Date.now(), status: "COMPLETED" as const,
-    supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
-    ...(tradeIn ?? {}),
-  });
+  who === "nonReader"
+    ? s.t.run((ctx) =>
+        completeSale(ctx, {
+          orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userIds.nonReader, salePrice,
+          saleDate: Date.now(), status: "COMPLETED", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          actorId: s.userIds.nonReader, ...(tradeIn ?? {}),
+        })
+      )
+    : s.actors[who].mutation(api.sales.create, {
+        idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId, customerId: s.customerId,
+        salespersonId: s.userIds[who], salePrice, saleDate: Date.now(), status: "COMPLETED" as const,
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+        ...(tradeIn ?? {}),
+      });
 
 async function worldOf(s: Seeded, vehicleId: Id<"vehicles">) {
   return s.t.run(async (ctx) => ({
@@ -293,7 +310,7 @@ describe("SCRUM-886 round 11: the draft door (sales.completeDraft) carries the s
       drafts.push(saleId);
       refusals.push(
         await refusalDataOf(
-          s.actors.nonReader.mutation(api.sales.completeDraft, { orgId: s.orgId, saleId, idempotencyKey: crypto.randomUUID() })
+          s.t.run((ctx) => completeExistingSale(ctx, { orgId: s.orgId, saleId, actorId: s.userIds.nonReader }))
         )
       );
     }
@@ -324,13 +341,21 @@ describe("SCRUM-886 round 11: the deposit door (cost-derived deposit refusal) ca
   }
 
   const settle = (s: Seeded, who: Who, car: Id<"vehicles">, quoteId: Id<"quotes">, price: number, tradeIn?: TradeIn) =>
-    s.actors[who].mutation(api.sales.create, {
-      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: car, customerId: s.customerId,
-      salespersonId: s.userIds[who], salePrice: price, saleDate: Date.now(), status: "COMPLETED" as const,
-      quoteId, supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
-      depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const },
-      ...(tradeIn ?? {}),
-    });
+    who === "nonReader"
+      ? s.t.run((ctx) =>
+          completeSale(ctx, {
+            orgId: s.orgId, vehicleId: car, customerId: s.customerId, salespersonId: s.userIds.nonReader, salePrice: price,
+            saleDate: Date.now(), status: "COMPLETED", quoteId, supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+            depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" }, actorId: s.userIds.nonReader, ...(tradeIn ?? {}),
+          })
+        )
+      : s.actors[who].mutation(api.sales.create, {
+          idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: car, customerId: s.customerId,
+          salespersonId: s.userIds[who], salePrice: price, saleDate: Date.now(), status: "COMPLETED" as const,
+          quoteId, supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+          depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const },
+          ...(tradeIn ?? {}),
+        });
 
   test("an invalid trade-in with a deposit applied to the supplier settlement is refused identically at every price", async () => {
     const s = await seed();
@@ -353,30 +378,34 @@ describe("SCRUM-886 round 11: the deposit door (cost-derived deposit refusal) ca
     expectOneRefusalAtEveryPrice(refusals, /Allocation amount 1000 exceeds receivable outstanding balance 0\./, "deposit door valid trade-in");
   });
 
-  test("control: with no trade-in the only divergence is the coded refusal versus a committed sale", async () => {
+  test("control: with no trade-in a non-reader gets the same coded refusal at every price, the threshold included, and a reader's sale at the threshold commits", async () => {
     const s = await seed();
     const car = await consignedCar(s);
     const quoteId = await withDeposit(s, car);
-    const refusals = await refusalsAcrossPrices(DEPOSIT_DOOR_PRICES.slice(0, 2), (price) => settle(s, "nonReader", car, quoteId, price));
+    const refusals = await refusalsAcrossPrices(DEPOSIT_DOOR_PRICES, (price) => settle(s, "nonReader", car, quoteId, price));
     expect(refusals[0]?.code).toBe(NEEDS_COST_ACCESS_CODE);
-    expect(refusals[1]).toEqual(refusals[0]);
+    expect(refusals, "the shared gate refuses a non-reader at every price, the threshold included").toEqual(Array(refusals.length).fill(refusals[0]));
     expect(refusals[0]?.message).not.toMatch(ENTITLEMENT_LEAK);
-    const saleId = await settle(s, "nonReader", car, quoteId, DEPOSIT_DOOR_PRICES[2]);
+    expect((await worldOf(s, car)).vehicle?.status).toBe("AVAILABLE");
+    const saleId = await settle(s, "reader", car, quoteId, DEPOSIT_DOOR_PRICES[2]);
     expect(saleId).toBeTruthy();
     expect((await worldOf(s, car)).vehicle?.status).toBe("SOLD");
   });
 });
 
 describe("SCRUM-886 round 11: controls that must hold before and after the reorder", () => {
-  test("a non-reader with no trade-in still gets the coded refusal below the entitlement and a committed sale at it", async () => {
+  test("a non-reader with no trade-in gets the same coded refusal at every price including the entitlement, and a reader's sale at the entitlement commits", async () => {
     const s = await seed();
     const car = await consignedCar(s);
     const far = await refusalDataOf(create(s, "nonReader", car, 1));
     const oneFilsShort = await refusalDataOf(create(s, "nonReader", car, ONE_FILS_SHORT));
+    const atEntitlement = await refusalDataOf(create(s, "nonReader", car, ENTITLEMENT));
     expect(far?.code).toBe(NEEDS_COST_ACCESS_CODE);
     expect(oneFilsShort).toEqual(far);
+    expect(atEntitlement, "the shared gate refuses a non-reader at the entitlement too").toEqual(far);
     expect(far?.message).not.toMatch(ENTITLEMENT_LEAK);
-    const saleId = await create(s, "nonReader", car, ENTITLEMENT);
+    expect((await worldOf(s, car)).vehicle?.status).toBe("AVAILABLE");
+    const saleId = await create(s, "reader", car, ENTITLEMENT);
     expect(saleId).toBeTruthy();
     expect((await worldOf(s, car)).vehicle?.status).toBe("SOLD");
   });

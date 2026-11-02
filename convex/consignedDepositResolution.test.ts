@@ -473,15 +473,26 @@ describe("SCRUM-886 round 10: a deposit refusal derived from the supplier cost n
     expect((await s.t.run((ctx) => ctx.db.query("sales").take(10))).length).toBe(0);
   });
 
-  test("control: a deposit refusal that is not derived from the supplier cost keeps its own sentence for a non-reader", async () => {
+  test("control: a deposit refusal that is not derived from the supplier cost keeps its own sentence for a cost reader", async () => {
     // THROUGH_DEALERSHIP, a 500 price against a 1,000 deposit and a 100 supplier cost: the deposit exceeds the customer's
-    // bill, which says nothing about the stored cost, so the specific sentence is kept.
-    const s = await seed("r10Bill", { sourceCost: 100, managerPermissions: NON_READER });
+    // bill, which says nothing about the stored cost, so the specific sentence is kept. SCRUM-886 round 13: a caller
+    // without view:cost_price no longer reaches this refusal at all (the door refuses a SOURCED sale first, keyed on
+    // sourceType only), so the control runs as a reader; the non-reader half is the next test.
+    const s = await seed("r10Bill", { sourceCost: 100, managerPermissions: READER });
     const refusal = await refusalOf(
       completeAs(s.asManager, s, "THROUGH_DEALERSHIP", { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" }, { salePrice: BELOW_DEPOSIT })
     );
     expect(refusal?.code).toBeUndefined();
     expect(refusal?.message).toMatch(/exceeds what the dealership billed/i);
+  });
+
+  test("round 13: the same request from a non-reader is refused at the door with the coded message, before the bill comparison", async () => {
+    const s = await seed("r10BillNR", { sourceCost: 100, managerPermissions: NON_READER });
+    const refusal = await refusalOf(
+      completeAs(s.asManager, s, "THROUGH_DEALERSHIP", { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" }, { salePrice: BELOW_DEPOSIT })
+    );
+    expect(refusal?.code).toBe(COST_ACCESS_CODE);
+    expect(refusal?.message).not.toMatch(/billed/i);
   });
 
   test("control: a view:cost_price holder still gets the margin sentence", async () => {

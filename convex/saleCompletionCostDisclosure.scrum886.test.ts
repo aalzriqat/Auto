@@ -238,10 +238,17 @@ describe("SCRUM-886 round 10: a sale refused below the supplier's entitlement di
     }
   });
 
-  test("control: a sale at the entitlement completes for a non-reader (the refusal is not widened)", async () => {
+  // Round 13 (owner ruling comment 24358): a sale of a consigned car needs view:cost_price at every price, so a sale at the
+  // entitlement no longer completes for a non-reader. The reader control keeps the refusal from being widened to readers.
+  test("control: a sale at the entitlement is refused for a non-reader with the same coded response and completes for a reader", async () => {
     const s = await seed();
     const car = await consignedCar(s);
-    const saleId = await create(s, "nonReader", car, PRICE_AT_ENTITLEMENT);
+    const below = await refusalDataOf(create(s, "nonReader", car, PRICE_BELOW_A));
+    const atEntitlement = await refusalDataOf(create(s, "nonReader", car, PRICE_AT_ENTITLEMENT));
+    expect(atEntitlement?.code).toBe("CONSIGNED_SALE_NEEDS_COST_ACCESS");
+    expect(atEntitlement).toEqual(below);
+    expect((await worldOf(s, car)).sales).toBe(0);
+    const saleId = await create(s, "reader", car, PRICE_AT_ENTITLEMENT);
     const world = await worldOf(s, car);
     expect(saleId).toBeTruthy();
     expect(world.sales).toBe(1);

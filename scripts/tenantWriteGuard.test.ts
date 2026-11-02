@@ -787,12 +787,16 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // with a v.id("organizations") orgId: +1 total, +1 analysed, skipped counts unchanged. Re-measured
   // FROM THE ANALYSER (566/382/15/169 -> 567/383/15/169). It takes no caller-supplied row id (only a
   // pagination cursor) and reads every row it patches through a by_org index on that orgId.
+  // SCRUM-886 round 13: +migrateRoles:backfillAccountantCostPriceAccess, one internal mutation (run by hand, in no workflow)
+  // that pages through ALL roles with a cursor and takes no orgId, like the other migrateRoles backfills: +1 total, +1 skippedNoOrgId,
+  // other counts unchanged. Re-measured FROM THE ANALYSER (567/383/15/169 -> 568/383/15/170). It writes only the `permissions` of a
+  // role row it has just read in the same page, and only for a non-deleted role whose normalized name is ACCOUNTANT.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 567,
+      totalMutations: 568,
       analysed: 383,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 169,
+      skippedNoOrgId: 170,
     });
   });
 });

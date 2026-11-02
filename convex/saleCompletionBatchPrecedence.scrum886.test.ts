@@ -17,6 +17,14 @@
  *
  * Every test goes through public mutations (`quotes.saveQuote`, `sales.completeFromQuote`, `vehicles.update`, `sales.create`).
  * Expected values are literals from the seeded rows: a supplier entitlement of 8,765.432 JOD (8765432 fils) on the first line.
+ *
+ * ROUND 13 (owner ruling SCRUM-886 comment 24358): the doors now refuse a caller who cannot read vehicle cost, for any SOURCED
+ * car, as their first decision (convex/consignedSaleCostAccessRule.scrum886.test.ts). A non-reader therefore never reaches the code
+ * these tests are about. They are kept as DEFENCE IN DEPTH: the non-reader completions below run the shared completion code
+ * (`completeSalesForLineItems` / `completeSale`) directly, as the same non-reader actor and without the door check, which is what
+ * a future caller that forgot the door check would do. Reader and owner calls still go through the public doors unchanged. The
+ * three-phase ordering inside the shared code is unchanged and still proved; what changed is that a non-reader's sale at or above
+ * the entitlement no longer commits (the shared gate refuses a non-reader of a consigned car at every price).
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
@@ -26,6 +34,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { completeSale, completeSalesForLineItems } from "./utils/saleCompletion";
 
 const NEEDS_COST_ACCESS_CODE = "CONSIGNED_SALE_NEEDS_COST_ACCESS";
 const ENTITLEMENT = 8_765.432;
@@ -129,11 +138,23 @@ const archive = (s: Seeded, vehicleId: Id<"vehicles">) =>
   });
 
 const completeQuote = (s: Seeded, who: Who, quoteId: Id<"quotes">, depositTreatment = false) =>
-  s.actors[who].mutation(api.sales.completeFromQuote, {
-    orgId: s.orgId, quoteId, idempotencyKey: crypto.randomUUID(),
-    supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
-    ...(depositTreatment ? { depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const } } : {}),
-  });
+  who === "nonReader"
+    ? s.t.run(async (ctx) => {
+        const quote = await ctx.db.get(quoteId);
+        if (!quote) throw new Error("quote missing");
+        return await completeSalesForLineItems(ctx, {
+          orgId: s.orgId, quoteId, vehicleItems: quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }],
+          customerId: quote.customerId, salespersonId: s.userIds.nonReader, saleDate: Date.now(), downPayment: quote.downPayment,
+          financingType: "CASH", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          ...(depositTreatment ? { depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const } } : {}),
+          actorId: s.userIds.nonReader,
+        });
+      })
+    : s.actors[who].mutation(api.sales.completeFromQuote, {
+        orgId: s.orgId, quoteId, idempotencyKey: crypto.randomUUID(),
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+        ...(depositTreatment ? { depositResolution: { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" as const } } : {}),
+      });
 
 /** Everything a refused command must leave alone. */
 async function worldOf(s: Seeded) {
@@ -318,11 +339,13 @@ describe("SCRUM-886 round 12: sales.completeFromQuote, a caller-aimed refusal on
     await archive(s, second);
     const batch = await refusalDataOf(completeQuote(s, "nonReader", quoteId));
     const single = await refusalDataOf(
-      s.actors.nonReader.mutation(api.sales.create, {
-        idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: second, customerId: s.customerId,
-        salespersonId: s.userIds.nonReader, salePrice: SECOND_LINE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
-        supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
-      })
+      s.t.run((ctx) =>
+        completeSale(ctx, {
+          orgId: s.orgId, vehicleId: second, customerId: s.customerId, salespersonId: s.userIds.nonReader,
+          salePrice: SECOND_LINE_PRICE, saleDate: Date.now(), status: "COMPLETED", supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+          actorId: s.userIds.nonReader,
+        })
+      )
     );
     expect(batch).toEqual(single);
   });
@@ -378,35 +401,38 @@ describe("SCRUM-886 round 12: the deposit stage of a later line is decided befor
     }, /Cannot sell an archived vehicle/i, "deposit door with a later archived line", DEPOSIT_DOOR_PRICES);
   });
 
-  test("control: the same deposit door with nothing wrong on the second line gives the coded refusal below the threshold and two sales at it", async () => {
-    const below = await refusalsAcrossPrices(DEPOSIT_DOOR_PRICES.slice(0, 1), async (s, price) => {
+  test("control: the same deposit door with nothing wrong on the second line gives a non-reader the same coded refusal at and below the threshold, and a reader two sales at it", async () => {
+    const refused = await refusalsAcrossPrices(DEPOSIT_DOOR_PRICES.slice(0, 2), async (s, price) => {
       const { quoteId } = await depositQuote(s, price, [DEPOSIT * 1000, 0]);
       return { quoteId, depositTreatment: true };
     });
-    expect(below.refusals[0]?.code).toBe(NEEDS_COST_ACCESS_CODE);
-    expect(below.refusals[0]?.message).not.toMatch(ENTITLEMENT_LEAK);
+    expect(refused.refusals[0]?.code).toBe(NEEDS_COST_ACCESS_CODE);
+    expect(refused.refusals[1], "the shared gate refuses a non-reader at the threshold too").toEqual(refused.refusals[0]);
+    expect(refused.refusals[0]?.message).not.toMatch(ENTITLEMENT_LEAK);
+    expect(refused.after).toEqual(refused.before);
     const s = await seed();
     const { quoteId, first, second } = await depositQuote(s, DEPOSIT_DOOR_PRICES[1], [DEPOSIT * 1000, 0]);
-    expect(await completeQuote(s, "nonReader", quoteId, true)).toHaveLength(2);
+    expect(await completeQuote(s, "reader", quoteId, true)).toHaveLength(2);
     const sold = await s.t.run(async (ctx) => [(await ctx.db.get(first))?.status, (await ctx.db.get(second))?.status]);
     expect(sold).toEqual(["SOLD", "SOLD"]);
   });
 });
 
 describe("SCRUM-886 round 12: controls that must hold before and after the restructure", () => {
-  test("a non-reader with nothing wrong on the later line still gets the coded refusal below the entitlement and two sales at it", async () => {
-    const belowRefusals = await refusalsAcrossPrices([ONE_FILS_SHORT, 1], async (s, price) => {
+  test("a non-reader with nothing wrong on the later line gets the same coded refusal at every price including the entitlement, and a reader gets two sales at it", async () => {
+    const belowRefusals = await refusalsAcrossPrices([ONE_FILS_SHORT, 1, ENTITLEMENT], async (s, price) => {
       const { items } = await twoLines(s, price);
       return { quoteId: await saveQuote(s, items) };
     });
     expect(belowRefusals.refusals[0]?.code).toBe(NEEDS_COST_ACCESS_CODE);
     expect(belowRefusals.refusals[1]).toEqual(belowRefusals.refusals[0]);
+    expect(belowRefusals.refusals[2], "the shared gate refuses a non-reader at the entitlement too").toEqual(belowRefusals.refusals[0]);
     expect(belowRefusals.refusals[0]?.message).not.toMatch(ENTITLEMENT_LEAK);
     expect(belowRefusals.after).toEqual(belowRefusals.before);
 
     const s = await seed();
     const { first, second, items } = await twoLines(s, ENTITLEMENT);
-    const saleIds = await completeQuote(s, "nonReader", await saveQuote(s, items));
+    const saleIds = await completeQuote(s, "reader", await saveQuote(s, items));
     expect(saleIds).toHaveLength(2);
     const state = await s.t.run(async (ctx) => ({
       cars: [(await ctx.db.get(first))?.status, (await ctx.db.get(second))?.status],
@@ -473,12 +499,13 @@ describe("SCRUM-886 round 12 (round 11 fifth mutant): sales.create, a valid trad
       const { s, car, tradeIn, quoteId } = await throughDealershipWorld(price);
       refusals.push(
         await refusalDataOf(
-          s.actors.nonReader.mutation(api.sales.create, {
-            idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId: car, customerId: s.customerId,
-            salespersonId: s.userIds.nonReader, salePrice: price, saleDate: Date.now(), status: "COMPLETED" as const,
-            quoteId, supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
-            tradeInVehicleId: tradeIn, tradeInValue: 1,
-          })
+          s.t.run((ctx) =>
+            completeSale(ctx, {
+              orgId: s.orgId, vehicleId: car, customerId: s.customerId, salespersonId: s.userIds.nonReader, salePrice: price,
+              saleDate: Date.now(), status: "COMPLETED", quoteId, supplierSettlementRoute: "THROUGH_DEALERSHIP",
+              tradeInVehicleId: tradeIn, tradeInValue: 1, actorId: s.userIds.nonReader,
+            })
+          )
         )
       );
     }
