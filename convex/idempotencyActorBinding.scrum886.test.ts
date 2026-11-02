@@ -208,6 +208,22 @@ describe("SCRUM-886 round 9: the rule lives in runWithIdempotency, so every econ
     await expect(run("fp-2", work)).rejects.toThrow(CONFLICT_MESSAGE);
   });
 
+  test("a non-economic command is bound to the actor that minted it too", async () => {
+    const s = await seed();
+    const run = (actorId: Id<"users">, fingerprint: string) =>
+      s.t.run((ctx) =>
+        runWithIdempotency(ctx, {
+          orgId: s.orgId, operation: "test.harmless", economic: false, idempotencyKey: "act-886-soft", fingerprint, actorId,
+        }, async () => "stored")
+      );
+    expect(await run(s.userIds.clerkA, "fp-1")).toBe("stored");
+    expect(await run(s.userIds.clerkA, "fp-1")).toBe("stored");
+    const equal = await refusalDataOf(run(s.userIds.clerkB, "fp-1"));
+    const different = await refusalDataOf(run(s.userIds.clerkB, "fp-2"));
+    expect(equal?.code).toBe(FOREIGN_ACTOR_CODE);
+    expect(different).toEqual(equal);
+  });
+
   test("a user cannot replay or probe a command minted with no actor", async () => {
     const s = await seed();
     await s.t.run((ctx) =>
