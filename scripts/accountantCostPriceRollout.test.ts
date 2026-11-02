@@ -252,7 +252,7 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
     expect(result).toEqual({
       failed: [],
       summary:
-        "3 stored ACCOUNTANT roles granted view:cost_price in 3 page call(s). Roles that cannot complete sales, custom roles and renamed roles are untouched.",
+        "3 stored ACCOUNTANT roles granted view:cost_price in 3 page call(s). Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.",
     });
   });
 
@@ -261,7 +261,7 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
     expect(result).toEqual({
       failed: [],
       summary:
-        "0 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Roles that cannot complete sales, custom roles and renamed roles are untouched.",
+        "0 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.",
     });
   });
 
@@ -276,7 +276,7 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
     });
     expect(typeof summary).toBe("string");
     expect(summary).toBe(
-      "2 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Roles that cannot complete sales, custom roles and renamed roles are untouched.",
+      "2 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.",
     );
     expect(fail).not.toHaveBeenCalled();
   });

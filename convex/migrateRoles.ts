@@ -264,7 +264,7 @@ export const backfillAccountantExpensePermissions = internalMutation({
  *
  * Bounded and idempotent: one page of roles per call (`numItems`, default 100, at most 500; pass the returned `continueCursor`
  * back until `isDone`), and a role that already holds the grant is not written, so a re-run resumes. Matches the ROLE NAME (normalized, so `ACCOUNTANT`
- * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every custom role are left
+ * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every other custom role are left
  * alone, and a deleted row is never written. A custom role that holds a sale-completing permission without `view:cost_price` is
  * NOT changed here: it is refused at the completion door and surfaced to its owner through the role-save rule.
  *
