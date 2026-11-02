@@ -1,0 +1,75 @@
+{
+  "id": "import-bulk-opening-stock-replay-refuses-without-view-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "posting": "OPENING_STOCK",
+        "importId": "IMPORT_1",
+        "price": "STORED_PRICE"
+      }
+    },
+    {
+      "actor": {
+        "role": "createonly",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "posting": "OPENING_STOCK",
+        "importId": "IMPORT_1",
+        "price": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "createonly",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "posting": "OPENING_STOCK",
+        "importId": "IMPORT_1",
+        "price": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "importBulk.refusal.code",
+      "value": "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "importBulk.refusal.sameForEqualAndDifferent",
+      "value": "true"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostOracles.scrum886.test.ts",
+    "testName": "a create-only caller replaying a known import row is refused for the stored price and for a different one, identically"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round7",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "4afb41b695479adf1fcdda55b5b8decc2a537708"
+  },
+  "fingerprint": "64cb745f64b5e62bf626fab614a88f2044181a3e755aedded13539463fd41a40"
+}

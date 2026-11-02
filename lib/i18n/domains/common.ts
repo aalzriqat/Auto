@@ -660,7 +660,8 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
     "هذه المركبة برسم البيع، لذلك لا يمكن ترحيل شراء لها. لم يتم ترحيل أي مبلغ.",
   ],
-  // SCRUM-886. `vehicleEdits.requestUpdate` refuses a cost field from a caller without view:cost_price.
+  // SCRUM-886. `vehicleEdits.requestUpdate` and `vehicles.update` refuse a cost field from a caller without
+  // view:cost_price; `vehicles.upsertLandedCosts` and an opening-stock `vehicles.importBulk` refuse the call.
   ServerError_VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: [
     "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
     "تغيير تكلفة المركبة أو تفاصيل شرائها أو الحد الأدنى للربح يتطلب صلاحية الاطلاع على التكلفة. اطلب من المدير إجراء هذا التغيير.",

@@ -23,6 +23,9 @@ const state = vi.hoisted(() => ({
   landedCosts: null as null | { items: Array<{ label: string; amount: number; paymentMethod: string; bankAccountId?: string }>; total: number },
   bankOptions: { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false },
   landedCostCalls: [] as Array<Record<string, unknown>>,
+  /** SCRUM-886: whether the caller holds view:cost_price. */
+  canViewCost: true,
+  queriedNames: [] as string[],
 }));
 
 vi.mock("@/components/ui/select", async () => {
@@ -48,6 +51,7 @@ vi.mock("convex/react", async () => {
     useQuery: (reference: never, args: unknown) => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
+      state.queriedNames.push(name);
       if (name === "deposits:listByVehicle") return state.deposits;
       if (name === "customers:list") return { page: [{ _id: "cust_1", firstName: "Dana", lastName: "K" }] };
       if (name === "vehicles:getRelations") return { testDrives: [], workOrders: [], leads: [], sales: [], tasks: [], expenses: [] };
@@ -88,7 +92,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 vi.mock("@/hooks/useOrgSettings", () => ({ useOrgSettings: () => ({}) }));
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ hasPermission: () => true, isLoading: false }),
+  usePermissions: () => ({ hasPermission: (permission: string) => permission !== "view:cost_price" || state.canViewCost, isLoading: false }),
 }));
 vi.mock("@/hooks/useCommandIdentity", async () => {
   // The REAL lifecycle: minted once per intent, held until retired.
@@ -181,12 +185,34 @@ beforeEach(() => {
   state.landedCosts = null;
   state.bankOptions = { banks: [{ _id: "bank_1", name: "Operating", currency: "JOD" }], truncated: false };
   state.landedCostCalls = [];
+  state.canViewCost = true;
+  state.queriedNames = [];
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => {};
   Element.prototype.releasePointerCapture = () => {};
   Element.prototype.scrollIntoView = () => {};
 });
 afterEach(cleanup);
+
+describe("SCRUM-886 landed-cost section is cost, so it is withheld from a caller without view:cost_price", () => {
+  test("the section, its editor and its save are not rendered, and no landed-cost query is made", () => {
+    state.canViewCost = false;
+    state.landedCosts = { items: [{ label: "Transport", amount: 100, paymentMethod: "CASH" }], total: 100 };
+    render(ui());
+    expect(screen.queryByText("LandedCost")).toBeNull();
+    expect(screen.queryByRole("button", { name: "AddCostItem", hidden: true })).toBeNull();
+    expect(screen.queryByRole("button", { name: "SaveLandedCost", hidden: true })).toBeNull();
+    expect(screen.queryByDisplayValue("Transport")).toBeNull();
+    expect(state.queriedNames).not.toContain("vehicles:getLandedCosts");
+    expect(state.queriedNames).not.toContain("vehicles:listAcquisitionBankOptions");
+  });
+
+  test("control: a caller with view:cost_price still sees the section and queries it", () => {
+    render(ui());
+    expect(screen.getByText("LandedCost")).toBeTruthy();
+    expect(state.queriedNames).toContain("vehicles:getLandedCosts");
+  });
+});
 
 describe("vehicle landed-cost bank choice", () => {
   test("RT11 a new owned landed cost keeps its last nonnegative amount", async () => {

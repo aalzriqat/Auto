@@ -1753,7 +1753,16 @@ export const upsertLandedCosts = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // SCRUM-886 (OWASP API3:2023): the landed-cost breakdown is cost by definition (`getLandedCosts`
+    // returns null to a caller who cannot read cost, for every source type), so a caller who cannot
+    // read it may not write it. Every later check compares the submitted items with the stored ones
+    // (the paid-item door, the bank identity check), so their outcomes would confirm a guessed
+    // amount. Refused before any read of the vehicle or the stored items, and by role alone, so the
+    // answer carries no signal about the stored row. No exemption: every item carries an amount.
+    if (!canReadVehicleCost(role)) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
 
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
     if (vehicle.isDeleted) {
@@ -3907,6 +3916,16 @@ export const importBulk = mutation({
     // Callers who may read cost keep the detailed reasons. Every refusal below that compares a row with
     // an existing vehicle's cost, currency, payment route or creditor follows this rule.
     const mayReadCost = canReadVehicleCost(role);
+    // SCRUM-886: an opening-stock import's retry proof COMPARES cost by design. The import and row ids
+    // are OPEN fields on the vehicle, so a caller who can see the vehicle can replay its row; the proof
+    // then succeeds when the submitted price equals the stored one and throws IDEMPOTENCY_CONFLICT (or
+    // "retry proof conflicts") when it differs. Neutralising that would weaken the idempotency proof,
+    // which readers rely on, so a caller who cannot read cost may not run an opening-stock import at
+    // all. Decided by role alone, before any evidence lookup, fingerprint or comparison. Every
+    // opening-stock row must carry a positive price, so no key-presence exemption exists.
+    if (tracksOpeningStock && !mayReadCost) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
     // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
     // PROVEN REPLAY. It writes nothing now, so it must not be refused because its supplier was
     // deactivated after the original run. Only the inactive refusal is relaxed for these rows (below);
