@@ -1,0 +1,72 @@
+{
+  "id": "command-replay-by-a-cost-reader-of-another-actors-key-is-refused",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "STORED_PRICE"
+      }
+    },
+    {
+      "actor": {
+        "role": "costreader",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "costreader",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.refusal.code",
+      "value": "COMMAND_IDENTITY_FOREIGN_ACTOR"
+    },
+    {
+      "observable": "create.refusal.sameForEqualAndDifferent",
+      "value": "true"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/idempotencyActorBinding.scrum886.test.ts",
+    "testName": "a holder of view:cost_price replaying ANOTHER user's key is refused too: the rule is the actor, not the role"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round9",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "7277feae3746c6d468ff07092de3ddb0bd464ccf"
+  },
+  "fingerprint": "b7a31bdf2c6926a58354ec2ad12e2630be94b68384705ef3a97bce835ed055d5"
+}
