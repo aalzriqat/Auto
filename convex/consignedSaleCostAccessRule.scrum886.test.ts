@@ -804,15 +804,21 @@ describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutati
 /**
  * SCRUM-886 round 14b rule 4 (owner ruling SCRUM-886 comment 24368, option A, 2026-11-02). The default ACCOUNTANT template holds
  * `manage:finance` and, since round 13, `view:cost_price`, so it passes the `vehicles.correctAcquisitionCost` gate, which needs both
- * together (COST_CORRECTION_PERMISSIONS). That mutation posts GL corrections. Before this PR only SENIOR_ACCOUNTANT, MANAGER and the
- * system owner could run it. The owner allowed it and recorded it in the ADR role policy; these two tests prove it end to end through
- * the public mutation. The template is read from the exported DEFAULT_ROLE_TEMPLATES, never copied.
+ * together (COST_CORRECTION_PERMISSIONS). That mutation posts GL corrections. Before this PR only SENIOR_ACCOUNTANT and the system
+ * owner could run it: the default MANAGER template holds `view:cost_price` but not `manage:finance`, so MANAGER stays refused. The
+ * owner allowed the ACCOUNTANT widening and recorded it in the ADR role policy; these tests prove it end to end through the public
+ * mutation, including that the `manage:finance` half of the gate still refuses MANAGER. The templates are read from the exported
+ * DEFAULT_ROLE_TEMPLATES, never copied.
  */
 const ORIGINAL_COST = 12_500;
 const CORRECTED_COST = 9_800;
 const FORBIDDEN_MISSING_COST_ACCESS = {
   code: "FORBIDDEN",
   message: "Forbidden: Missing required permissions: view:cost_price",
+};
+const FORBIDDEN_MISSING_FINANCE_MANAGEMENT = {
+  code: "FORBIDDEN",
+  message: "Forbidden: Missing required permissions: manage:finance",
 };
 
 async function seedCostCorrectionDealer() {
@@ -863,16 +869,20 @@ async function seedCostCorrectionDealer() {
 }
 type CostCorrectionDealer = Awaited<ReturnType<typeof seedCostCorrectionDealer>>;
 
-/** A member whose stored role holds the default ACCOUNTANT template permissions, less any named, as a role saved before round 13 would. */
-async function accountantFromTemplate(d: CostCorrectionDealer, clerkId: string, without: readonly string[]) {
-  const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT");
-  if (!template) throw new Error("no ACCOUNTANT role template");
-  const userId = await d.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Accountant" }));
+/** A member whose stored role holds a default role template's permissions, less any named, as a role saved before round 13 would. */
+async function memberFromTemplate(d: CostCorrectionDealer, templateName: string, clerkId: string, without: readonly string[]) {
+  const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === templateName);
+  if (!template) throw new Error(`no ${templateName} role template`);
+  const userId = await d.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: templateName }));
   const roleId = await d.t.run((ctx) =>
-    ctx.db.insert("roles", { orgId: d.orgId, name: `ACCOUNTANT ${clerkId}`, permissions: template.permissions.filter((p) => !without.includes(p)) })
+    ctx.db.insert("roles", { orgId: d.orgId, name: `${templateName} ${clerkId}`, permissions: template.permissions.filter((p) => !without.includes(p)) })
   );
   await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId, roleId }));
   return { userId, actor: d.t.withIdentity({ subject: clerkId, clerkId }) };
+}
+
+function accountantFromTemplate(d: CostCorrectionDealer, clerkId: string, without: readonly string[]) {
+  return memberFromTemplate(d, "ACCOUNTANT", clerkId, without);
 }
 
 async function costCorrectionWorld(d: CostCorrectionDealer) {
@@ -927,6 +937,24 @@ describe("SCRUM-886 round 14b rule 4: acquisition-cost correction by the default
     })));
 
     expect(refusal).toEqual(FORBIDDEN_MISSING_COST_ACCESS);
+    expect(await costCorrectionWorld(d)).toEqual(before);
+    expect(before.purchasePrice).toBe(ORIGINAL_COST);
+  });
+
+  test("the default MANAGER template holds view:cost_price but not manage:finance, is refused FORBIDDEN at vehicles.correctAcquisitionCost and nothing is written", async () => {
+    const d = await seedCostCorrectionDealer();
+    const manager = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "MANAGER");
+    expect(manager?.permissions).toContain("view:cost_price");
+    expect(manager?.permissions).not.toContain("manage:finance");
+    const { actor } = await memberFromTemplate(d, "MANAGER", "scrum886r15_manager", []);
+    const before = await costCorrectionWorld(d);
+
+    const refusal = parsed(await payloadOf(actor.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: d.vehicleId, newCost: CORRECTED_COST, reason: "Purchase price was recorded wrong",
+      correctionType: "PRIOR_PERIOD_RESTATEMENT" as const,
+    })));
+
+    expect(refusal).toEqual(FORBIDDEN_MISSING_FINANCE_MANAGEMENT);
     expect(await costCorrectionWorld(d)).toEqual(before);
     expect(before.purchasePrice).toBe(ORIGINAL_COST);
   });
