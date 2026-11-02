@@ -46,8 +46,8 @@ was read from comments, PRs and runs.
 | CERTIFIED COMPLETE | 2 |
 | DEPLOYED/NOT VERIFIED | 23 |
 | MERGED/NOT DEPLOYED | 8 (one of them also BLOCKED) |
-| IN REVIEW | 13 |
-| IN PROGRESS | 28 |
+| IN REVIEW | 11 |
+| IN PROGRESS | 30 |
 | NOT STARTED | 32 |
 | BLOCKED | 4 (plus the blocked merged row) |
 | OWNER DECISION | 10 |
@@ -144,7 +144,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
-| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (e5b90ddc) | IN REVIEW `[Seats]` | CI running at e5b90ddc; seats armed (Seat 1 GUID 803b0c66); body Skill evidence to rewrite at this head. |
+| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (e5b90ddc → round 7) | IN PROGRESS `[Sonnet]` | Round 6 at e5b90ddc: CI green, Seat 1 CERTIFY, Seat 2 CHANGES_REQUESTED (two MEDIUM privacy equality oracles: upsertLandedCosts paid-item comparison, importBulk opening-stock replay; SCRUM-886 c24346). Both reproduced on the file; fix round 7 dispatched 00:50Z; new head needs both seats again. |
 | E1.1 | Remaining finance-editor variants without `view:cost_price`. | SCRUM-886#c24247 | OWNER DECISION `[OWNER]` | ACCOUNTANT ruled; other variants open. |
 | E2 | Sidebar role visibility (SCRUM-890) deployable only after a green Pilot Role Audit. | SCRUM-890, PR #749 (89ccd15a) | MERGED/NOT DEPLOYED, BLOCKED `[Coord]` | Hold ruling c24239. |
 | E3 | Pilot Role Audit green on main (six roles, 136 cells each). | SCRUM-891, PR #751 (5284d625), `pilot-role-audit.yml` | BLOCKED `[Coord]` | Run 41297986256 at 5284d625 FAILED (5/6 roles) after the fixture fix; cause unknown, evidence GPG-encrypted. |
@@ -192,7 +192,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
 | G1 | Serial merge train completed: #746 → #737 re-seat → #740 last. | SCRUM-886, 811, 842 | IN REVIEW `[Coord]` | #746 at e5b90ddc CI running; #737 and #740 CONFLICTING, re-seat after remerge. |
-| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN REVIEW `[Seats]` | Waiter armed 2026-11-01 23:55Z. |
+| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN PROGRESS `[Sonnet]` | Round 6 seats split (c24346); round 7 in progress; body seat lines pending at the next head. |
 | G1.2 | #737 remerge, fresh seats at the new head, merge. | PR #737 | NOT STARTED `[Coord]` | After #746. |
 | G1.3 | #740 remerge, fresh seats, merge (last). | PR #740 | NOT STARTED `[Coord]` | After #737. |
 | G2 | Convex preview I/O quota managed (40.45/50 GB on 2026-11-01, about 6 GB/day). | SCRUM-892 (#752 c186c640), 807, 809 | OWNER DECISION `[OWNER]` | Spending limit question open; serial train in force; quota exhaustion stops every preview-backed check. |
@@ -282,3 +282,4 @@ Inputs: serial train throughput 4 to 6 h per PR with two seats; release cycle 3 
 | --- | --- |
 | 2026-11-02 00:10 | Version 1 reconciled; 120 mandatory items (90 parents, 30 subtasks); 2 certified complete; 14 rows wait on the owner or a blocked gate. |
 | 2026-11-02 00:30 | Main 9139d164 fully landed (Sonar Main success; Trusted Main E2E, Tests green; Contract skew exit 7 only; no Pilot Role Audit run at this tip). G4 evidence updated; counts unchanged. #746 e5b90ddc Tests still in progress, swarm run 41364984802 started. |
+| 2026-11-02 00:55 | #746 round 6 at e5b90ddc: Seat 1 CERTIFY, Seat 2 CHANGES_REQUESTED (two MEDIUM privacy oracles, SCRUM-886 c24346). E1 and G1.1 back to IN PROGRESS (Sonnet round 7). Counts: IN REVIEW 13 → 11, IN PROGRESS 28 → 30. Critical path slips by one fix round (~3-5 h). |
