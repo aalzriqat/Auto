@@ -1,0 +1,64 @@
+{
+  "id": "rename-only-save-of-an-invalid-legacy-role-to-accountant-is-refused",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round5",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-03"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "rename": "ACCOUNTANT",
+        "storedPermissions": "create:sales"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "run": "NEXT_DEPLOY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusal",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "role.name",
+      "value": "unchanged"
+    },
+    {
+      "observable": "deployRun.updatedCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "(d) a rename-only roles.update of an invalid legacy role to ACCOUNTANT is refused, so it never becomes a backfill target"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "dbb09a7cb8343dc43099356ea56c5394dabb9cbd"
+  },
+  "fingerprint": "b32e6d10945d6e7666c67e005eb61bc121a66971f5317d797d77668eccc4a39e"
+}

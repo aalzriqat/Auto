@@ -14,13 +14,14 @@
  *      value), reuses `actorMayReadVehicleCost`, and refuses with the existing coded `CONSIGNED_SALE_NEEDS_COST_ACCESS`.
  *   3. Saving a role that holds a sale-completing permission (`create:sales`, `confirm:finance_disbursement`) without
  *      `view:cost_price` is refused with a coded EN/AR error. Stored roles are not migrated.
- *   4. A bounded, idempotent internal backfill gives the grant to the stored ACCOUNTANT roles. It is run by hand, never from a
- *      deploy workflow.
+ *   4. A bounded, idempotent internal backfill gives the grant to the stored ACCOUNTANT roles that hold a sale-completing
+ *      permission without it. The Deploy production rollout runs it on every deploy (SCRUM-896, owner ruling c24372), so it never
+ *      overrides a role the owner has already restricted.
  *
  * Every test goes through a public mutation unless it says otherwise. Expected values are literals from the seeded rows: a supplier
  * entitlement of 8,765.432 JOD (8765432 fils).
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import {
@@ -720,11 +721,16 @@ describe("SCRUM-886 round 13 rule 3: saving a role", () => {
     expect((await s.t.run((ctx) => ctx.db.get(roleId)))?.name).toBe("Reader only renamed");
   });
 
-  test("a stored role that already holds create:sales without view:cost_price can be renamed (existing roles are not migrated)", async () => {
+  // SCRUM-896 R4-F1 supersedes the earlier "a legacy role can still be renamed": the saved role is validated as a whole (its
+  // stored permissions when none are submitted), so a rename-only save of the invalid combination is refused until it is repaired.
+  test("a stored role that already holds create:sales without view:cost_price is refused a rename-only save (R4-F1), and can be renamed once view:cost_price is granted", async () => {
     const s = await seed();
     const legacy = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "Legacy cashier", permissions: ["view:sales", "create:sales"] }));
-    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: legacy, name: "Legacy cashier 2" });
-    expect((await s.t.run((ctx) => ctx.db.get(legacy)))?.permissions).toEqual(["view:sales", "create:sales"]);
+    const refusal = parsed(await payloadOf(s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: legacy, name: "Legacy cashier 2" })));
+    expect(refusal.code).toBe(ROLE_RULE_CODE);
+    expect(await s.t.run((ctx) => ctx.db.get(legacy))).toMatchObject({ name: "Legacy cashier", permissions: ["view:sales", "create:sales"] });
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: legacy, name: "Legacy cashier 2", permissions: ["view:sales", "create:sales", "view:cost_price"] });
+    expect(await s.t.run((ctx) => ctx.db.get(legacy))).toMatchObject({ name: "Legacy cashier 2" });
   });
 
   test("the role-save refusal has English and Arabic text in the dictionary, and the English text equals the server message", async () => {
@@ -739,7 +745,7 @@ describe("SCRUM-886 round 13 rule 3: saving a role", () => {
   });
 });
 
-describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutation, run by hand, never from a deploy workflow)", () => {
+describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutation, run by the Deploy production rollout on every deploy, SCRUM-896)", () => {
   async function seededRoles() {
     const s = await seed();
     const accountantTemplate = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT")?.permissions ?? [];
@@ -779,7 +785,7 @@ describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutati
 
   test("the backfill is bounded: a page of one row touches at most one role and the cursor walks the rest", async () => {
     const { s, lacking } = await seededRoles();
-    const second = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "ACCOUNTANT", permissions: ["view:finance"] }));
+    const second = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "ACCOUNTANT", permissions: ["view:finance", "confirm:finance_disbursement"] }));
     let cursor: string | null = null;
     let updated = 0;
     let pages = 0;
@@ -797,6 +803,203 @@ describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutati
     expect(updated).toBe(2);
     expect(await permissionsOf(s, lacking)).toContain("view:cost_price");
     expect(await permissionsOf(s, second)).toContain("view:cost_price");
+  });
+
+  test("the backfill leaves an ACCOUNTANT-named role that cannot complete a sale alone: no sale-completing permission, no grant", async () => {
+    const { s } = await seededRoles();
+    const readOnly = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "ACCOUNTANT", permissions: ["view:finance"] }));
+    const result = await s.t.mutation(internal.migrateRoles.backfillAccountantCostPriceAccess, {});
+    expect(result.updatedCount).toBe(1);
+    expect(await permissionsOf(s, readOnly)).toEqual(["view:finance"]);
+  });
+
+});
+
+/**
+ * SCRUM-896 Seat 1 round 1 finding R1-F1 and Seat 2 finding R3-F1, both at ccd2f7647. The backfill runs on EVERY Deploy production
+ * rollout (owner ruling c24372), so it must not override a role the org owner saved or created. Invariant: once an owner has saved a
+ * role's permissions, they change only through an owner action or a one-time repair the owner approved, never through a recurring
+ * system job. The pair `manage:finance` + `view:cost_price` unlocks `vehicles.correctAcquisitionCost`, a GL-posting door, and
+ * `view:cost_price` alone unlocks the cost read, so each "not granted" row proves both public cost doors stay closed.
+ *
+ * The owner acts only through the public `roles.create`, `roles.update` and `roles.remove` doors. The one direct insert is the
+ * legacy default ACCOUNTANT (the default template minus `view:cost_price`, as seeded before round 13): no door can create it.
+ */
+describe("SCRUM-896 R1-F1 / R3-F1: the per-deploy ACCOUNTANT backfill repairs only the legacy sale-completing ACCOUNTANT", () => {
+  const FINANCE_CUSTOM = ["view:vehicles", "view:finance", "manage:finance"];
+  const roleArgs = (s: Seeded, name: string, permissions: string[]) => ({ orgId: s.orgId, name, permissions });
+  const runBackfill = (s: Seeded) => s.t.mutation(internal.migrateRoles.backfillAccountantCostPriceAccess, {});
+  const permissionsOf = (s: Seeded, id: Id<"roles">) => s.t.run(async (ctx) => (await ctx.db.get(id))?.permissions ?? []);
+  const costDoors = (s: Seeded, actor: Seeded["actors"]["owner"], vehicleId: Id<"vehicles">) => ({
+    read: () => actor.query(api.vehicles.get, { orgId: s.orgId, vehicleId }),
+    correctionContext: () => actor.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: s.orgId, vehicleId }),
+  });
+
+  /** The default ACCOUNTANT template, which holds `confirm:finance_disbursement`, less `view:cost_price`. */
+  function legacyDefaultPermissions(): string[] {
+    const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT")?.permissions ?? [];
+    expect(template).toContain("confirm:finance_disbursement");
+    expect(template).toContain("view:vehicles");
+    return template.filter((p) => p !== "view:cost_price");
+  }
+  async function insertLegacyAccountant(s: Seeded, orgId = s.orgId): Promise<Id<"roles">> {
+    return await s.t.run((ctx) => ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: legacyDefaultPermissions() }));
+  }
+  async function memberIn(s: Seeded, roleId: Id<"roles">, clerkId: string, orgId = s.orgId) {
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: clerkId }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    return s.t.withIdentity({ subject: clerkId, clerkId });
+  }
+  async function expectCostWithheld(s: Seeded, actor: Seeded["actors"]["owner"], vehicleId: Id<"vehicles">) {
+    const doors = costDoors(s, actor, vehicleId);
+    const vehicle = await doors.read();
+    expect(vehicle.purchasePrice).toBeUndefined();
+    expect(parsed(await payloadOf(doors.correctionContext()))).toEqual(FORBIDDEN_MISSING_COST_ACCESS);
+  }
+
+  // Row (6): the positive control. Without it, "never grants" would pass for a backfill that does nothing.
+  test("positive control: the legacy default ACCOUNTANT is repaired and a member in it can then read vehicle cost", async () => {
+    const s = await seed();
+    const roleId = await insertLegacyAccountant(s);
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, roleId, "scrum896_legacy_member");
+    await expectCostWithheld(s, actor, vehicleId);
+
+    const result = await runBackfill(s);
+
+    expect(result.updatedCount).toBe(1);
+    expect(await permissionsOf(s, roleId)).toContain("view:cost_price");
+    const doors = costDoors(s, actor, vehicleId);
+    expect((await doors.read()).purchasePrice).toBe(5_000);
+    expect(await payloadOf(doors.correctionContext())).toBeNull();
+  });
+
+  // Row (1): Seat 2's reproduction.
+  test("an owner renames the seeded ACCOUNTANT, then creates a custom role named ACCOUNTANT without completing permissions: the backfill does not grant it and cost stays withheld", async () => {
+    const s = await seed();
+    const original = await insertLegacyAccountant(s);
+    // R4-F1: a rename-only save of the legacy (invalid) default is refused, so the owner renames it together with the repair.
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: original, name: "Senior bookkeeper", permissions: [...legacyDefaultPermissions(), "view:cost_price"] });
+    const custom = await s.actors.owner.mutation(api.roles.create, roleArgs(s, "ACCOUNTANT", FINANCE_CUSTOM));
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, custom, "scrum896_custom_accountant");
+    const originalBefore = await permissionsOf(s, original);
+
+    const result = await runBackfill(s);
+
+    expect(result.updatedCount).toBe(0);
+    expect(await permissionsOf(s, custom)).toEqual(FINANCE_CUSTOM);
+    expect(await permissionsOf(s, original)).toEqual(originalBefore);
+    await expectCostWithheld(s, actor, vehicleId);
+  });
+
+  // Row (2)
+  test("an owner renames an existing custom role to ACCOUNTANT: the backfill does not grant it and cost stays withheld", async () => {
+    const s = await seed();
+    const custom = await s.actors.owner.mutation(api.roles.create, roleArgs(s, "Bookkeeper", FINANCE_CUSTOM));
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: custom, name: "ACCOUNTANT" });
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, custom, "scrum896_renamed_custom");
+
+    const result = await runBackfill(s);
+
+    expect(result.updatedCount).toBe(0);
+    expect(await permissionsOf(s, custom)).toEqual(FINANCE_CUSTOM);
+    await expectCostWithheld(s, actor, vehicleId);
+  });
+
+  // Row (3) is Seat 1's R1-F1 causal chain.
+  test("an owner strips view:cost_price and both sale-completing permissions from a repaired ACCOUNTANT: the next deploy run does not restore it and cost stays withheld", async () => {
+    const s = await seed();
+    const roleId = await insertLegacyAccountant(s);
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, roleId, "scrum896_stripped_member");
+
+    const firstDeploy = await runBackfill(s);
+    expect(firstDeploy.updatedCount).toBe(1);
+    expect(await permissionsOf(s, roleId)).toContain("view:cost_price");
+
+    const restricted = legacyDefaultPermissions().filter((p) => p !== "create:sales" && p !== "confirm:finance_disbursement");
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId, permissions: restricted });
+    const savedByOwner = await permissionsOf(s, roleId);
+    expect(savedByOwner).not.toContain("view:cost_price");
+    expect(savedByOwner).not.toContain("create:sales");
+    expect(savedByOwner).not.toContain("confirm:finance_disbursement");
+
+    const nextDeploy = await runBackfill(s);
+
+    expect(nextDeploy.updatedCount).toBe(0);
+    expect(await permissionsOf(s, roleId)).toEqual(savedByOwner);
+    await expectCostWithheld(s, actor, vehicleId);
+  });
+
+  // Row (3b): the template-sync writer (memberships.syncRolePermissionsToTemplate). It writes the template verbatim, and no
+  // template is in the repaired state, so the sync and the per-deploy run never fight over a role.
+  test("an owner syncs a legacy ACCOUNTANT to the template: the template grants view:cost_price and the next deploy run changes nothing", async () => {
+    const s = await seed();
+    const roleId = await insertLegacyAccountant(s);
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, roleId, "scrum896_template_sync_member");
+    const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT")?.permissions ?? [];
+    expect(template).toContain("view:cost_price");
+
+    await s.actors.owner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId: s.orgId });
+    expect(await permissionsOf(s, roleId)).toEqual([...template]);
+
+    const nextDeploy = await runBackfill(s);
+
+    expect(nextDeploy.updatedCount).toBe(0);
+    expect(await permissionsOf(s, roleId)).toEqual([...template]);
+    expect((await costDoors(s, actor, vehicleId).read()).purchasePrice).toBe(5_000);
+  });
+
+  // Row (4)
+  test("an owner deletes the unassigned ACCOUNTANT and recreates a role with that name without completing permissions: the backfill does not grant it and cost stays withheld", async () => {
+    const s = await seed();
+    const original = await insertLegacyAccountant(s);
+    await s.actors.owner.mutation(api.roles.remove, { orgId: s.orgId, roleId: original });
+    const recreated = await s.actors.owner.mutation(api.roles.create, roleArgs(s, "ACCOUNTANT", FINANCE_CUSTOM));
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, recreated, "scrum896_recreated_member");
+    const deletedBefore = await s.t.run((ctx) => ctx.db.get(original));
+    expect(deletedBefore?.isDeleted).toBe(true);
+
+    const result = await runBackfill(s);
+
+    expect(result.updatedCount).toBe(0);
+    expect(await permissionsOf(s, recreated)).toEqual(FINANCE_CUSTOM);
+    expect(await s.t.run((ctx) => ctx.db.get(original))).toEqual(deletedBefore);
+    await expectCostWithheld(s, actor, vehicleId);
+  });
+
+  // Row (5)
+  test("two organizations in one run: the legacy default ACCOUNTANT in each is repaired and a custom ACCOUNTANT-named role in a third is not", async () => {
+    const s = await seed();
+    async function addOrg(label: string) {
+      const orgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: `Org ${label}`, createdAt: Date.now() }));
+      await s.t.run((ctx) =>
+        ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+      );
+      const clerkId = `scrum896_owner_${label}`;
+      const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: clerkId }));
+      const roleId = await s.t.run((ctx) =>
+        ctx.db.insert("roles", { orgId, name: SYSTEM_OWNER_ROLE_NAME, permissions: [], isSystemOwnerRole: true })
+      );
+      await s.t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+      return { orgId, owner: s.t.withIdentity({ subject: clerkId, clerkId }) };
+    }
+    const orgB = await addOrg("b");
+    const orgC = await addOrg("c");
+    const legacyA = await insertLegacyAccountant(s);
+    const legacyB = await insertLegacyAccountant(s, orgB.orgId);
+    const customC = await orgC.owner.mutation(api.roles.create, { orgId: orgC.orgId, name: "ACCOUNTANT", permissions: FINANCE_CUSTOM });
+
+    const result = await runBackfill(s);
+
+    expect(result.updatedCount).toBe(2);
+    expect(await permissionsOf(s, legacyA)).toContain("view:cost_price");
+    expect(await permissionsOf(s, legacyB)).toContain("view:cost_price");
+    expect(await permissionsOf(s, customC)).toEqual(FINANCE_CUSTOM);
   });
 });
 
@@ -957,5 +1160,140 @@ describe("SCRUM-886 round 14b rule 4: acquisition-cost correction by the default
     expect(refusal).toEqual(FORBIDDEN_MISSING_FINANCE_MANAGEMENT);
     expect(await costCorrectionWorld(d)).toEqual(before);
     expect(before.purchasePrice).toBe(ORIGINAL_COST);
+  });
+});
+
+/**
+ * SCRUM-896 round 4 (Seat 2 R4-F1, Seat 1 L1/L3). The per-deploy ACCOUNTANT backfill repairs `completesSalesWithoutCostAccess`
+ * on every deploy, so any role writer that can STORE that state hands the grant back on the next deploy (and reopens
+ * `vehicles.correctAcquisitionCost`). Invariant: no writer other than the deploy backfill stores a non-deleted role in that state.
+ */
+describe("SCRUM-896 R4-F1: every role writer is sealed against the state the per-deploy backfill repairs", () => {
+  const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
+  const FINANCE_ONLY = ["view:vehicles", "view:finance", "manage:finance"];
+  const FINANCE_WITH_COMPLETING = [...FINANCE_ONLY, "confirm:finance_disbursement"];
+
+  beforeEach(() => {
+    process.env.SUPER_ADMIN_EMAILS = "admin896@autoflow.dev";
+    process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
+    process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
+  });
+  afterEach(() => {
+    process.env.SUPER_ADMIN_EMAILS = ORIGINAL_ALLOWLIST;
+  });
+
+  async function withAdmin() {
+    const s = await seed();
+    await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum896_super_admin", email: "admin896@autoflow.dev", name: "Admin" }));
+    return { s, admin: s.t.withIdentity({ subject: "scrum896_super_admin" }) };
+  }
+  const storedRole = (s: Seeded, id: Id<"roles">) => s.t.run((ctx) => ctx.db.get(id));
+  const permissionsOf = async (s: Seeded, id: Id<"roles">) => (await storedRole(s, id))?.permissions ?? [];
+  const insertRole = (s: Seeded, name: string, permissions: string[], extra: { isDeleted?: boolean; deletedAt?: number } = {}) =>
+    s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name, permissions, ...extra }));
+
+  test("(a) the finance backfill does not add confirm:finance_disbursement to a restricted ACCOUNTANT, so the deploy backfill later updates 0 roles and cost stays withheld", async () => {
+    const s = await seed();
+    const roleId = await insertRole(s, "ACCOUNTANT", FINANCE_ONLY);
+    const clerkId = "scrum896_r4_member";
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: clerkId }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const actor = s.t.withIdentity({ subject: clerkId, clerkId });
+    const vehicleId = await stockCar(s);
+
+    await s.t.mutation(internal.migrateRoles.backfillFinanceApplicationPermissions, {});
+
+    expect(await permissionsOf(s, roleId)).not.toContain("confirm:finance_disbursement");
+    const deploy = await s.t.mutation(internal.migrateRoles.backfillAccountantCostPriceAccess, {});
+    expect(deploy.updatedCount).toBe(0);
+    expect(await permissionsOf(s, roleId)).not.toContain("view:cost_price");
+    expect((await actor.query(api.vehicles.get, { orgId: s.orgId, vehicleId })).purchasePrice).toBeUndefined();
+    expect(parsed(await payloadOf(actor.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: s.orgId, vehicleId })))).toEqual(FORBIDDEN_MISSING_COST_ACCESS);
+  });
+
+  test("positive control: the finance backfill still adds confirm:finance_disbursement to a finance role that holds view:cost_price", async () => {
+    const s = await seed();
+    const roleId = await insertRole(s, "Finance reader", [...FINANCE_ONLY, "view:cost_price"]);
+    await s.t.mutation(internal.migrateRoles.backfillFinanceApplicationPermissions, {});
+    expect(await permissionsOf(s, roleId)).toContain("confirm:finance_disbursement");
+  });
+
+  test("(b) adminUpdateRecord removing view:cost_price from a role that keeps confirm:finance_disbursement is refused with the role-rule code and stores nothing", async () => {
+    const { s, admin } = await withAdmin();
+    const roleId = await insertRole(s, "Disburser", [...FINANCE_WITH_COMPLETING, "view:cost_price"]);
+    const before = await storedRole(s, roleId);
+
+    const refusal = parsed(await payloadOf(admin.mutation(api.adminData.adminUpdateRecord, {
+      table: "roles", id: roleId, patch: { permissions: FINANCE_WITH_COMPLETING },
+    })));
+
+    expect(refusal).toEqual({ code: ROLE_RULE_CODE, message: (dictionaries.en as Record<string, string>)[`ServerError_${ROLE_RULE_CODE}`] });
+    expect(await storedRole(s, roleId)).toEqual(before);
+  });
+
+  test("(b2) adminUpdateRecord that only renames a stored invalid role is refused too, and un-deleting through a patch is refused", async () => {
+    const { s, admin } = await withAdmin();
+    const invalid = await insertRole(s, "Legacy cashier", ["view:sales", "create:sales"]);
+    const deleted = await insertRole(s, "Gone cashier", ["view:sales", "create:sales"], { isDeleted: true, deletedAt: 1 });
+
+    const rename = parsed(await payloadOf(admin.mutation(api.adminData.adminUpdateRecord, { table: "roles", id: invalid, patch: { name: "ACCOUNTANT" } })));
+    const undelete = parsed(await payloadOf(admin.mutation(api.adminData.adminUpdateRecord, { table: "roles", id: deleted, patch: { isDeleted: false } })));
+
+    expect(rename.code).toBe(ROLE_RULE_CODE);
+    expect(undelete.code).toBe(ROLE_RULE_CODE);
+    expect((await storedRole(s, invalid))?.name).toBe("Legacy cashier");
+    expect((await storedRole(s, deleted))?.isDeleted).toBe(true);
+  });
+
+  test("positive controls: a valid adminUpdateRecord patch and a patch of a soft-deleted invalid role that stays deleted both succeed", async () => {
+    const { s, admin } = await withAdmin();
+    const valid = await insertRole(s, "Disburser ok", [...FINANCE_WITH_COMPLETING, "view:cost_price"]);
+    const deleted = await insertRole(s, "Gone cashier", ["view:sales", "create:sales"], { isDeleted: true, deletedAt: 1 });
+
+    await admin.mutation(api.adminData.adminUpdateRecord, { table: "roles", id: valid, patch: { permissions: [...FINANCE_WITH_COMPLETING, "view:cost_price", "view:customers"] } });
+    await admin.mutation(api.adminData.adminUpdateRecord, { table: "roles", id: deleted, patch: { name: "Gone cashier renamed" } });
+
+    expect(await permissionsOf(s, valid)).toContain("view:customers");
+    expect((await storedRole(s, deleted))?.name).toBe("Gone cashier renamed");
+  });
+
+  test("(c) adminRestoreRecords of a soft-deleted role that completes sales without view:cost_price is refused and the role stays deleted", async () => {
+    const { s, admin } = await withAdmin();
+    const invalid = await insertRole(s, "Gone cashier", ["view:sales", "create:sales"], { isDeleted: true, deletedAt: 1 });
+    const valid = await insertRole(s, "Gone cashier ok", ["view:sales", "create:sales", "view:cost_price"], { isDeleted: true, deletedAt: 1 });
+
+    const refusal = parsed(await payloadOf(admin.mutation(api.adminData.adminRestoreRecords, { table: "roles", ids: [valid, invalid] })));
+
+    expect(refusal.code).toBe(ROLE_RULE_CODE);
+    // The whole mutation rolled back: the valid role earlier in the same call is still deleted.
+    expect((await storedRole(s, invalid))?.isDeleted).toBe(true);
+    expect((await storedRole(s, valid))?.isDeleted).toBe(true);
+  });
+
+  test("positive control: adminRestoreRecords of a valid soft-deleted role succeeds", async () => {
+    const { s, admin } = await withAdmin();
+    const valid = await insertRole(s, "Gone cashier ok", ["view:sales", "create:sales", "view:cost_price"], { isDeleted: true, deletedAt: 1 });
+    const result = await admin.mutation(api.adminData.adminRestoreRecords, { table: "roles", ids: [valid] });
+    expect(result.restored).toBe(1);
+    expect((await storedRole(s, valid))?.isDeleted).toBe(false);
+  });
+
+  test("(d) a rename-only roles.update of an invalid legacy role to ACCOUNTANT is refused, so it never becomes a backfill target", async () => {
+    const s = await seed();
+    const legacy = await insertRole(s, "Legacy cashier", ["view:sales", "create:sales"]);
+
+    const refusal = parsed(await payloadOf(s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: legacy, name: "ACCOUNTANT" })));
+
+    expect(refusal).toEqual({ code: ROLE_RULE_CODE, message: (dictionaries.en as Record<string, string>)[`ServerError_${ROLE_RULE_CODE}`] });
+    expect(await storedRole(s, legacy)).toMatchObject({ name: "Legacy cashier", permissions: ["view:sales", "create:sales"] });
+    const deploy = await s.t.mutation(internal.migrateRoles.backfillAccountantCostPriceAccess, {});
+    expect(deploy.updatedCount).toBe(0);
+  });
+
+  test("positive control: a rename-only roles.update of a valid role to ACCOUNTANT succeeds", async () => {
+    const s = await seed();
+    const roleId = await insertRole(s, "Bookkeeper", FINANCE_ONLY);
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId, name: "ACCOUNTANT" });
+    expect((await storedRole(s, roleId))?.name).toBe("ACCOUNTANT");
   });
 });

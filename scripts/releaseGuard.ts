@@ -1271,13 +1271,16 @@ type CursorPage = { isDone: boolean; continueCursor: string | null };
 type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; maxPages: number };
 
 /**
- * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`.
+ * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`. Every rollout phase that
+ * pages by cursor goes through this one loop. `deployed` is the refusal subject ("Production is DEPLOYED, but ..."), so
+ * the wording stays per phase while the deadline, page cap and cursor rules stay in one place.
  * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
  * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
  * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
  */
-function walkRegistryPages<T extends CursorPage>(
+function walkCursorPages<T extends CursorPage>(
   limits: WalkLimits,
+  deployed: string,
   runPage: (cursor: string | null) => RegistryStep,
   parse: (value: unknown) => T | null,
   onPage: (page: T) => void,
@@ -1286,7 +1289,7 @@ function walkRegistryPages<T extends CursorPage>(
   const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
   const deadlineRefusal: Refusal = {
     ok: false,
-    reason: `${REGISTRY_DEPLOYED} reached the rollout deadline. A re-run resumes it.`,
+    reason: `${deployed} reached the rollout deadline. A re-run resumes it.`,
   };
   for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
     if (pastDeadline()) return deadlineRefusal;
@@ -1295,18 +1298,18 @@ function walkRegistryPages<T extends CursorPage>(
     // complete, or the run would go on to later phases having overrun the deadline (fail closed).
     if (pastDeadline()) return deadlineRefusal;
     if (!result.ok) {
-      return { ok: false, reason: `${REGISTRY_DEPLOYED} call failed. See backend logs; a re-run resumes it.` };
+      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
     }
     const page = parse(result.value);
-    if (!page) return { ok: false, reason: `${REGISTRY_DEPLOYED} returned an unrecognised result.` };
+    if (!page) return { ok: false, reason: `${deployed} returned an unrecognised result.` };
     onPage(page);
     if (page.isDone) return { ok: true };
     if (typeof page.continueCursor !== "string" || page.continueCursor === cursor) {
-      return { ok: false, reason: `${REGISTRY_DEPLOYED} cursor stopped advancing; refusing to page forever.` };
+      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever.` };
     }
     cursor = page.continueCursor;
   }
-  return { ok: false, reason: `${REGISTRY_DEPLOYED} reached its page cap. A re-run resumes it.` };
+  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
 }
 
 function parseCursorPage(value: unknown): CursorPage | null {
@@ -1351,7 +1354,7 @@ export function initialiseSupplierRegistry(
   const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
 
   let created = 0;
-  const backfill = walkRegistryPages(limits, input.backfillPage, parseBackfillPage, (page) => {
+  const backfill = walkCursorPages(limits, REGISTRY_DEPLOYED, input.backfillPage, parseBackfillPage, (page) => {
     created += page.migrated;
   });
   if (!backfill.ok) return backfill;
@@ -1359,7 +1362,7 @@ export function initialiseSupplierRegistry(
   let checked = 0;
   let deleting = 0;
   const missing: string[] = [];
-  const verify = walkRegistryPages(limits, input.verifyPage, parseCoveragePage, (page) => {
+  const verify = walkCursorPages(limits, REGISTRY_DEPLOYED, input.verifyPage, parseCoveragePage, (page) => {
     checked += page.checked;
     deleting += page.deleting;
     missing.push(...page.missing.map(opaqueOrgRef));
@@ -1410,6 +1413,106 @@ export function recoverSupplierVatHolds(input: {
     if (page.status === "READY") return { ok: true, pages: pageNumber + 1, reclassified };
   }
   return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached its page cap. A re-run resumes it." };
+}
+
+/**
+ * SCRUM-896 (owner ruling SCRUM-886 c24372): after a production deploy, gives `view:cost_price` to every stored, non-deleted role
+ * named ACCOUNTANT that holds a sale-completing permission without it (`completesSalesWithoutCostAccess`), which SOURCED sale
+ * completion now requires. Without it, an organization seeded before the template change has an accountant who is refused at
+ * every SOURCED completion door. Other ACCOUNTANT roles are left alone.
+ *
+ * Drives `migrateRoles:backfillAccountantCostPriceAccess` one page per call, passing `continueCursor` back until `isDone`.
+ * The mutation is idempotent (a role already holding the grant is not written), so a re-run resumes rather than restarts.
+ * A page can be short or empty before `isDone` (Convex does not promise a full page), so only `isDone` ends the walk, and
+ * only a cursor that comes back unchanged is treated as stuck.
+ *
+ * ⚠️ PUBLIC OUTPUT. The page's `updates` array holds one line per patched role: its name and its organization id. It is
+ * checked for shape and length and never copied, and no refusal reason here contains any backend text.
+ */
+export function backfillAccountantCostPriceAccessRollout(input: {
+  runPage: (cursor: string | null) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  /** The `numItems` the script asks the backend for; a page can never report more updates than this. */
+  pageSize: number;
+}): { ok: true; pages: number; updated: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+  let pages = 0;
+  let updated = 0;
+  const walk = walkCursorPages(
+    limits,
+    "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill",
+    input.runPage,
+    (value) => parseAccountantCostPricePage(value, input.pageSize),
+    (page) => {
+      pages += 1;
+      updated += page.updatedCount;
+    },
+  );
+  return walk.ok ? { ok: true, pages, updated } : walk;
+}
+
+/** SCRUM-896: grant `view:cost_price` to stored ACCOUNTANT roles (owner ruling SCRUM-886 c24372). */
+export const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";
+/** The backend clamps a page to 1..500 roles; 100 is its default. */
+export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
+/** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
+export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
+
+/**
+ * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script
+ * that no test executes in-process (coverage does not follow a child process), so it keeps only the phase skeleton (log,
+ * one call to this, publish the summary) and no branch of its own. The function name, page size, page cap, `numItems`
+ * argument, public summary text and the refusal branch live here, where tests execute them.
+ *
+ * `convex` is the script's CLI runner (the operator key, internal functions only). `fail` is the script's own `fail`, which
+ * prints, writes the job summary and exits 1; on a refusal it is called once with the cursor walker's reason, which never
+ * contains backend text. If a `fail` ever returned, this still throws rather than hand back a summary. The returned summary
+ * is counts and the phase label only: it never names a role or an organization.
+ */
+export function runAccountantCostPricePhase(input: {
+  convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const walk = backfillAccountantCostPriceAccessRollout({
+    runPage: (cursor) =>
+      input.convex([
+        "run",
+        ACCOUNTANT_COST_PRICE_BACKFILL_FN,
+        JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE }),
+      ]),
+    now: input.now,
+    startedAt: input.startedAt,
+    timeoutMs: input.timeoutMs,
+    maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
+    pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+  });
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The ACCOUNTANT cost-price phase refused and its fail handler returned.");
+  }
+  return (
+    `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
+    `Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.`
+  );
+}
+function parseAccountantCostPricePage(
+  value: unknown,
+  pageSize: number,
+): (CursorPage & { updatedCount: number }) | null {
+  const cursor = parseCursorPage(value);
+  // The backend always returns a string cursor, including on the last page; `null` is not a recognised answer here.
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const { updatedCount, updates } = value as { updatedCount?: unknown; updates?: unknown };
+  if (!isCount(updatedCount) || updatedCount > pageSize) return null;
+  // One `updates` line per patched role (patchRoleIfNeeded pushes exactly when it returns true), so the two agree.
+  if (!Array.isArray(updates) || updates.length !== updatedCount) return null;
+  return { ...cursor, updatedCount };
 }
 
 // ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────

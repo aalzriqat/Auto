@@ -1,0 +1,78 @@
+{
+  "id": "finance-backfill-does-not-grant-disbursement-to-a-role-without-cost-access",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round5",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-03"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillFinanceApplicationPermissions",
+      "input": {
+        "role": "ACCOUNTANT_FINANCE_ONLY"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "ACCOUNTANT_FINANCE_ONLY",
+        "run": "NEXT_DEPLOY"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "vehicles.getAcquisitionCostCorrectionContext",
+      "input": {
+        "role": "ACCOUNTANT_FINANCE_ONLY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "role.storedPermissions",
+      "value": "no-confirm-finance-disbursement"
+    },
+    {
+      "observable": "deployRun.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "vehicles.get.purchasePrice",
+      "value": "withheld"
+    },
+    {
+      "observable": "correctionContext.refusal",
+      "value": "FORBIDDEN-view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "(a) the finance backfill does not add confirm:finance_disbursement to a restricted ACCOUNTANT, so the deploy backfill later updates 0 roles and cost stays withheld"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "dbb09a7cb8343dc43099356ea56c5394dabb9cbd"
+  },
+  "fingerprint": "78aa96ce3403f15e3765244b9ee9b0ec90aad8fdc24fb976eec4c9092743b96f"
+}

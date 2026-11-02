@@ -1,0 +1,98 @@
+{
+  "id": "accountant-backfill-leaves-an-owner-restricted-accountant-alone",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round4",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "ACCOUNTANT_WITHOUT_COST_ACCESS"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT",
+        "removePermission": "view:cost_price",
+        "removeCompleting": "create:sales+confirm:finance_disbursement"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "ACCOUNTANT_OWNER_RESTRICTED",
+        "run": "NEXT_DEPLOY"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "vehicles.getAcquisitionCostCorrectionContext",
+      "input": {
+        "role": "ACCOUNTANT_OWNER_RESTRICTED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstRun.updatedCount",
+      "value": 1
+    },
+    {
+      "observable": "ownerSave.accepted",
+      "value": "true"
+    },
+    {
+      "observable": "nextRun.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "role.storedPermissions",
+      "value": "unchanged"
+    },
+    {
+      "observable": "vehicles.get.purchasePrice",
+      "value": "withheld"
+    },
+    {
+      "observable": "correctionContext.refusal",
+      "value": "FORBIDDEN-view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24372",
+      "digest": "bbf278d6f8d6e64a7b05d6c5ef2e896dbb4405940e2e634920588394364f351b"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "an owner strips view:cost_price and both sale-completing permissions from a repaired ACCOUNTANT: the next deploy run does not restore it and cost stays withheld"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "a79d324b3f1e1360ea901d6a37e5b1986543dcc2"
+  },
+  "fingerprint": "a0478c071a476501e6a4ebb585bf2c14088685b36b95298b560457b7bc7a7733"
+}

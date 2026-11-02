@@ -26,11 +26,12 @@ After the change, the default roles that may complete a SOURCED sale are OWNER (
 SENIOR_ACCOUNTANT. SALES holds neither completing permission and cannot complete a sale. RECEPTION holds neither. A custom
 role may hold a completing permission only together with `view:cost_price`.
 
-As a consequence of the template grant, the default ACCOUNTANT also passes the `vehicles.correctAcquisitionCost` gate, which requires `manage:finance` and `view:cost_price` together, and may post acquisition-cost corrections. Before this change only SENIOR_ACCOUNTANT and the system owner could: the default MANAGER template holds `view:cost_price` but not `manage:finance`, so MANAGER is refused at that door, and a test pins it. The owner allowed this (SCRUM-886 c24368, option A, 2026-11-02) and it is proved by a test that runs the correction as the default ACCOUNTANT. A legacy stored per-org ACCOUNTANT role that still lacks `view:cost_price` remains refused at that door until the backfill (c24365, owner decision still open) runs.
+As a consequence of the template grant, the default ACCOUNTANT also passes the `vehicles.correctAcquisitionCost` gate, which requires `manage:finance` and `view:cost_price` together, and may post acquisition-cost corrections. Before this change only SENIOR_ACCOUNTANT and the system owner could: the default MANAGER template holds `view:cost_price` but not `manage:finance`, so MANAGER is refused at that door, and a test pins it. The owner allowed this (SCRUM-886 c24368, option A, 2026-11-02) and it is proved by a test that runs the correction as the default ACCOUNTANT. A legacy stored per-org ACCOUNTANT role that still lacks `view:cost_price` remains refused at that door until the backfill runs. The owner ruled (c24372) that the backfill runs in the Deploy production rollout, after the deploy and automatically (SCRUM-896).
 
 ## Consequences
 
 The round 10 to 12 ordering fixes stay as defence in depth; a non-reader no longer reaches them through a door. Existing
 per-org ACCOUNTANT roles do not receive the template change on their own: a bounded, idempotent internal mutation in
-`convex/migrateRoles.ts` adds the permission, is run by hand, and is not wired into any workflow. Owner approval is required
-before it runs against any deployment (SCRUM-886 c24358).
+`convex/migrateRoles.ts` adds the permission. The owner ruled that it runs automatically in the Deploy production rollout step,
+after the deploy (SCRUM-886 c24372, SCRUM-896; see `2026-11-02-accountant-cost-price-backfill-runs-in-the-deploy-rollout.md`).
+Nothing runs it by hand.

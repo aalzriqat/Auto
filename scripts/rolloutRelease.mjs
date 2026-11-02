@@ -40,6 +40,7 @@ import {
   renderReleaseSummary,
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
+  runAccountantCostPricePhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -93,6 +94,7 @@ let bankSummary = null;
 let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
+let accountantCostPriceSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -116,6 +118,7 @@ function writeSummary(extra) {
   if (supplierVatSummary) body += `\n### Supplier VAT holds\n\n${supplierVatSummary}\n`;
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
+  if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -385,6 +388,21 @@ const supplierIdentity = repairAndVerifySupplierIdentity({
 supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
+
+// ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
+
+// SCRUM-896 (owner ruling SCRUM-886 c24372, "after the deploy, automatically"): sale completion on a SOURCED car now needs
+// `view:cost_price`, and an organization seeded before the template gained it has an ACCOUNTANT who is refused at every
+// completion door until the stored role is repaired. One page of roles per call through the operator key (internal
+// function, never the public API), the cursor passed back until the backend says it is done. Idempotent, so a re-run
+// resumes. It is after the empty-deployment exit on purpose: no organizations, no roles to repair. Same shared deadline.
+// A failed or malformed page ends the run here as "deployed but incomplete". Counts only: the backend's `updates` lines
+// name roles and organizations, and this output is public. The helper receives this script's `fail` and calls it on a
+// refusal, so the refusal branch is tested code; this script cannot be executed under coverage.
+console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
+lastVerdict = before.verdict;
+accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
+console.log(`  ${accountantCostPriceSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
