@@ -289,8 +289,8 @@ export function cancelAuthorityFor(status: string, planVersion: number): Permiss
 /**
  * SCRUM-886 round 13 (owner ruling comment 24358): the permissions that admit a sale-completion door.
  * `create:sales` admits `sales.create`, `sales.completeDraft` and `sales.completeFromQuote`; `confirm:finance_disbursement` admits
- * `applications.finalizeDeal`. Completing a SOURCED (consigned) car's sale also needs `view:cost_price`, so saving a role that
- * holds either without it is refused (`roles.create` / `roles.update`) and every default template that holds either also holds it.
+ * `applications.finalizeDeal`. Completing a SOURCED (consigned) car's sale also needs `view:cost_price`, so storing a role that
+ * holds either without it is refused (`assertRoleMayBeStored`: `roles.create`, `roles.update`, the Data Browser role edits) and every default template that holds either also holds it.
  * Derived from the `requireTenantAuth` lists of the four doors that call `completeSale`, `completeSalesForLineItems` and
  * `completeExistingSale`; add a permission here when a new completion door is added.
  */

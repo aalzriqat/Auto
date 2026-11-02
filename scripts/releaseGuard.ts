@@ -1416,9 +1416,10 @@ export function recoverSupplierVatHolds(input: {
 }
 
 /**
- * SCRUM-896 (owner ruling SCRUM-886 c24372): after a production deploy, gives every stored role named ACCOUNTANT the
- * `view:cost_price` permission that SOURCED sale completion now requires. Without it, an organization seeded before the
- * template change has an accountant who is refused at every SOURCED completion door.
+ * SCRUM-896 (owner ruling SCRUM-886 c24372): after a production deploy, gives `view:cost_price` to every stored, non-deleted role
+ * named ACCOUNTANT that holds a sale-completing permission without it (`completesSalesWithoutCostAccess`), which SOURCED sale
+ * completion now requires. Without it, an organization seeded before the template change has an accountant who is refused at
+ * every SOURCED completion door. Other ACCOUNTANT roles are left alone.
  *
  * Drives `migrateRoles:backfillAccountantCostPriceAccess` one page per call, passing `continueCursor` back until `isDone`.
  * The mutation is idempotent (a role already holding the grant is not written), so a re-run resumes rather than restarts.

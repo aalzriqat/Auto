@@ -2,7 +2,9 @@
   "id": "a-stored-role-holding-create-sales-without-view-cost-price-can-still-be-renamed",
   "domain": "permission",
   "level": "backend",
-  "status": "active",
+  "status": "retired",
+  "retiredReason": "SCRUM-896 R4-F1: roles.update now validates the final permission set, so a rename-only save of a stored create:sales role without view:cost_price is refused. Replaced by rename-only-save-of-an-invalid-legacy-role-to-accountant-is-refused.",
+  "retiredByRuling": "SCRUM-886#c24358",
   "source": {
     "runId": "scrum886-round13",
     "hunter": "scripted",

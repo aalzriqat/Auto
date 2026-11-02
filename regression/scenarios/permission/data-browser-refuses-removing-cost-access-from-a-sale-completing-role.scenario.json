@@ -1,0 +1,53 @@
+{
+  "id": "data-browser-refuses-removing-cost-access-from-a-sale-completing-role",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round5",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-03"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SUPER_ADMIN",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "table": "roles",
+        "id": "ROLE_ID",
+        "patch": {
+          "permissions": "WITHOUT_VIEW_COST_PRICE"
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusal",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "role.storedPermissions",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "(b) adminUpdateRecord removing view:cost_price from a role that keeps confirm:finance_disbursement is refused with the role-rule code and stores nothing"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "dbb09a7cb8343dc43099356ea56c5394dabb9cbd"
+  },
+  "fingerprint": "fa7fd0a1ad8db41abdb2876ae2a8ff3a36c13042decdefad9f8ac636d1589120"
+}

@@ -69,8 +69,8 @@ fact the permissions already show; matching on a role id list taken at the first
 dropping the automatic run contradicts c24372.
 
 Disclosed limit: the name cannot tell a custom role from the legacy default when both hold a completing permission without
-`view:cost_price`. Only a role stored before round 13 can be in that state, because `roles.create` and `roles.update` refuse it.
-So a custom role an owner named ACCOUNTANT (or ` Accountant `, since the name is normalized) and gave a sale-completing
+`view:cost_price`. Only a role stored before this release can be in that state: `roles.create`, `roles.update`, the Data Browser
+(`adminUpdateRecord`, `adminRestoreRecords`) and the finance backfill all refuse to store it now (see "Writers sealed"). So a custom role an owner named ACCOUNTANT (or ` Accountant `, since the name is normalized) and gave a sale-completing
 permission before this release receives `view:cost_price` in the same rollout as the default role. The owner is told this before
 the deploy (SCRUM-896 c24390).
 
@@ -116,11 +116,47 @@ the walker yet; moving them onto it is follow-up work.
 | Door | Who authorizes it | Affects |
 | --- | --- | --- |
 | Template seeding at organization creation (`organizations.ts`, from `DEFAULT_ROLE_TEMPLATES`) | The product, through code review of the template | New organizations only: OWNER, MANAGER, ACCOUNTANT, SENIOR_ACCOUNTANT |
-| `roles.create` and `roles.update` | The organization's OWNER (both call `requireOwner`). Saving a completing permission without `view:cost_price` is refused (c24358). | One role at a time, any name |
+| `roles.create` and `roles.update` | The organization's OWNER (both call `requireOwner`). Saving a role whose final permission set completes a sale without `view:cost_price` is refused (c24358); a rename-only save is checked against the stored permissions. | One role at a time, any name. Sealed: no longer stores the state, including by rename (R4-F1) |
+| `adminData.adminUpdateRecord` on `roles` | A super-admin (`requireSuperAdmin`) | Any field of any role. Was unchecked and could strip `view:cost_price` or rename an invalid role to ACCOUNTANT. Sealed: the merged document is checked and the mutation throws, so it rolls back |
+| `adminData.adminRestoreRecords` on `roles` | A super-admin | Un-deletes a role. Was unchecked. Sealed: the restored document is checked; one refusal rolls back the whole call |
+| `migrateRoles:backfillFinanceApplicationPermissions` | Run by hand with owner approval | Added `confirm:finance_disbursement` to any role with `manage:finance` or `view:finance`, which manufactured the state. Sealed: never added without `view:cost_price`; its other grants are unchanged |
 | This backfill, in the deploy rollout | The owner, c24372 | Every stored, non-deleted role named ACCOUNTANT that holds a sale-completing permission without `view:cost_price`; idempotent, and an owner's later restriction is left alone |
 | `migrateRoles:backfillSeniorAccountantRole` insert (copies the SENIOR_ACCOUNTANT template) | Run by hand with owner approval, as before. Not part of this change. | Inserts a missing SENIOR_ACCOUNTANT role |
 | `e2eBootstrap` role patches | Test environments only | Not a production door |
 | The older `migrateRoles.ts` backfills (view:users, finance application, marketplace, expense, valuation, payroll) | Run by hand with owner approval, as before | None of them grants `view:cost_price` |
+
+## Writers sealed (Seat 2 R4-F1, Seat 1 L1/L3)
+
+Defect: the per-deploy backfill repairs `completesSalesWithoutCostAccess`, but other writers could still store that state, so a
+later deploy granted `view:cost_price` silently (and with `manage:finance` reopened `vehicles.correctAcquisitionCost`). The
+four writers were `migrateRoles.backfillFinanceApplicationPermissions`, `adminUpdateRecord`, `adminRestoreRecords` and a
+rename-only `roles.update` (stored permissions never validated).
+
+Invariant: no writer other than the deploy backfill (which repairs it) stores a non-deleted role for which
+`completesSalesWithoutCostAccess(permissions)` is true. Once it holds, only rows stored before this release can match, and the
+per-deploy repair finds nothing after its first run.
+
+Decision: one shared assertion, `assertRoleMayBeStored` in `convex/utils/permissions.ts` next to the predicate, throws the
+existing coded refusal `SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS` (same English and Arabic text; the message constant moved
+beside it). Callers: `roles.create` (submitted set), `roles.update` (final set: submitted, else stored), and
+`adminUpdateRecord` / `adminRestoreRecords` for the `roles` table (stored document merged with the patch, or with
+`isDeleted: false`; a deleted result is not checked, other tables are unchanged). The finance backfill drops
+`confirm:finance_disbursement` from its grants for any role without `view:cost_price`. Deny by default and least privilege
+(OWASP Authorization Cheat Sheet): the invariant is enforced where the write happens, in the backend, not by the screen. A
+thrown error rolls the whole Convex mutation back, so a refused restore in a batch writes nothing (Convex mutation
+documentation, transactions).
+
+Consequence, owner-visible: a stored role that already holds the combination can no longer be renamed until it is repaired
+(save it with `view:cost_price`, or without the completing permission). This replaces the round 13 sentence "a stored role can
+still be renamed" and retires its scenario record. One round 15 test now renames the legacy default together with the repair.
+
+Evidence: describe "SCRUM-896 R4-F1" in `convex/consignedSaleCostAccessRule.scrum886.test.ts` (red at dbb09a7cb: 6 failed,
+51 passed of 57; green after the fix), a mutant that drops the `adminUpdateRecord` check fails two tests, and five scenario
+records under `regression/scenarios/permission/`. Writers found and left alone: `memberships.syncRolePermissionsToTemplate`
+(writes a template; every template that completes a sale holds `view:cost_price`), `migrations.backfillPermissions` (OWNER gets
+every permission, MANAGER only gains settings and approval), the other `patchRoleIfNeeded` backfills (none adds a completing
+permission), `backfillSeniorAccountantRole` and `organizations` seeding (insert templates), `roles.remove` (soft delete) and
+`e2eBootstrap` (test environments).
 
 ## Consequences
 
@@ -134,7 +170,9 @@ until the next deploy. Train position: after #746, before #740.
 
 A legacy ACCOUNTANT role that is repaired also passes the `vehicles.correctAcquisitionCost` gate (`manage:finance` plus
 `view:cost_price`). The owner allowed that for the default ACCOUNTANT (c24368, option A). The backfill extends it to the
-stored roles named ACCOUNTANT that hold a sale-completing permission, which is the legacy default role.
+stored roles named ACCOUNTANT that hold a sale-completing permission. That is the legacy default role and, by the disclosed limit
+above, any pre-release custom role of that name in the same state; with every writer sealed, no role can enter the state after
+this release.
 
 ## Evidence
 
