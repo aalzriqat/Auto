@@ -199,7 +199,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 | G3 | Contract skew truthful: exit 7 only until deploy; no stranded or stale baseline entries. | SCRUM-711, 866, 873 (#745), 887 (#753), 893 | IN PROGRESS `[Coord]` | Main 41361709901 exit 7, 0 unclassified, no ALSO PRESENT; 938 entries in 145 shards. |
 | G3.1 | Baseline expiry cliff: all 938 entries expire 2026-12-01. | SCRUM-711 | NOT STARTED `[Coord]` | 29 days from version 1; a delayed launch crosses it. |
 | G3.2 | Prevention for new unproven skew paths reaching main. | SCRUM-893 | NOT STARTED `[Sonnet]` | No work. |
-| G4 | Sonar Main reports at the tip within its timeout. | SCRUM-763 (#495), 764 (#736) | DEPLOYED/NOT VERIFIED `[CI]` | 41363941986 at 9139d164 in progress at version 1. |
+| G4 | Sonar Main reports at the tip within its timeout. | SCRUM-763 (#495), 764 (#736) | DEPLOYED/NOT VERIFIED `[CI]` | 41363941986 at 9139d164 success (2026-11-02 00:07Z, exactly one sonarqubecloud result at the tip). |
 | G5 | Exact-SHA rehearsal and trusted release verdict produced at the release tip. | SCRUM-812, `accounting-rehearsal.yml`, `trusted-accounting-rehearsal.yml` | NOT STARTED `[CI]` | Latest trusted verdict 41355867715 at 2ca8b8ab; none at 9139d164; SCRUM-812 has no comments. |
 | G6 | Deploy production of the pilot release (authorize, approval, deploy, rollout). | `deploy-production.yml`, SCRUM-890 | BLOCKED `[Coord]` | 11 PRs merged after ed0c4e1b undeployed (#745 #747 #741 #739 #750 #751 #752 #753 #749 #748 #732); hold until E3 green because #749 is on main. |
 | G7 | Post-deploy readbacks: backend identity, bank rebuild, Social Inbox, supplier registry (888), 17-car link (868), counts-only reads. | `rolloutRelease.mjs`, SCRUM-888, 868 | NOT STARTED `[Coord]` | After G6. |
@@ -281,3 +281,4 @@ Inputs: serial train throughput 4 to 6 h per PR with two seats; release cycle 3 
 | When (UTC) | Change |
 | --- | --- |
 | 2026-11-02 00:10 | Version 1 reconciled; 120 mandatory items (90 parents, 30 subtasks); 2 certified complete; 14 rows wait on the owner or a blocked gate. |
+| 2026-11-02 00:30 | Main 9139d164 fully landed (Sonar Main success; Trusted Main E2E, Tests green; Contract skew exit 7 only; no Pilot Role Audit run at this tip). G4 evidence updated; counts unchanged. #746 e5b90ddc Tests still in progress, swarm run 41364984802 started. |
