@@ -40,15 +40,15 @@ was read from comments, PRs and runs.
 | Measure | Count |
 | --- | --- |
 | Workstreams | 8 (A to H) |
-| Mandatory parent tasks | 90 |
+| Mandatory parent tasks | 91 |
 | Mandatory subtasks | 30 |
-| Mandatory items in total | 120 |
+| Mandatory items in total | 121 |
 | CERTIFIED COMPLETE | 2 |
 | DEPLOYED/NOT VERIFIED | 23 |
 | MERGED/NOT DEPLOYED | 8 (one of them also BLOCKED) |
 | IN REVIEW | 11 |
 | IN PROGRESS | 30 |
-| NOT STARTED | 32 |
+| NOT STARTED | 33 |
 | BLOCKED | 4 (plus the blocked merged row) |
 | OWNER DECISION | 10 |
 | EXPLICITLY DEFERRED (row A8 plus the X table, not counted as mandatory) | 1 + 12 |
@@ -159,6 +159,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 | E11 | Repository-level `CONVEX_DEPLOY_KEY` removed and the workstation production key revoked. | SCRUM-125, `AGENTS.md` "Still outstanding" | NOT STARTED `[OWNER]` | Release-integrity item; state unverified this session. |
 | E12 | Playwright traces in public artifacts carry no QA cookies. | SCRUM-820 | NOT STARTED `[Sonnet]` | No fix. |
 | E13 | Role audit does not expose protected subscriptions before page guards. | SCRUM-860 | IN PROGRESS `[Seats]` | No visual finding; superseded by the audit red (E3). |
+| E14 | Retro on the SCRUM-886 lane: one property test over every sale-completing door (non-reader response byte-identical at E−1 and E, nothing written), red-first at 4a85b84f5, in the PR gate; lint or hook where cheap; AGENTS.md names the enforcing check. | SCRUM-894 (owner standard SCRUM-760 c24361, practice 2) | NOT STARTED `[Sonnet]` | Created 2026-11-02 10:02. Runs after #746 merges, outside the serial train; two seats as for any money/permission change. |
 
 ## F. QA and certification (G2 to G8)
 
@@ -296,3 +297,4 @@ Inputs: serial train throughput 4 to 6 h per PR with two seats; release cycle 3 
 | 2026-11-02 09:03 | #746 round 12 at 4a85b84f5 pushed 08:58Z (c24357): sale completion split into begin / cost gate / finish stages, the quote door running each stage for every line before the next; coordinator red run 12/18, green 18/18 and 259/259; mutants M1/M3-M7 killed, M2 recorded equivalent; 18 scenario records; oracle doc (9) Round 12. Body r12 published, waiter armed with a fresh Seat 1 id, CI manager told. E1 and G1.1 to IN REVIEW (13 / 28). |
 | 2026-11-02 09:47 | Owner ruling (SCRUM-886 c24358): the #746 cost-disclosure class is closed by permission, not ordering: ACCOUNTANT gains view:cost_price; consigned sale completion and finalize require it server-side; custom-role save refuses the combination. Implementer dispatched on claude/scrum886-cost-access-rule (unpushed) while the round-12 seats run at 4a85b84f5 (started 09:34Z). Routing: CERTIFY → merge #746, rule PR next in train; CHANGES_REQUESTED → round 13 is the rule. |
 | 2026-11-02 09:53 | #746 round 12: Seat 2 CHANGES_REQUESTED (c24359; backstop-after-gate on a legacy hold-less deposit, seventh sibling). Routing per c24358: round 13 on #746 is the permission rule; implementer redirected, two extra tests. Seat 1 still running. E1 and G1.1 to IN PROGRESS (11 / 30). Worktree cleanup stopped at 104 removed, 2 failed, 36 not reached. |
+| 2026-11-02 10:02 | Seat 1 also CHANGES_REQUESTED at 4a85b84f5 (test gap on the per-line gate, c24360; comment 6574205496). OWNER STANDARD c24361 ("lets adopt it"): ADR + role policy before any money/permission PR, retro into checks, class table before the first fix, tracer-bullet slices; AGENTS.md section committed on this branch (19c5c9287), reviewer prompt block updated, first ADR in #746 round 13, retro task SCRUM-894 = E14 (121 mandatory items, NOT STARTED 33). |
