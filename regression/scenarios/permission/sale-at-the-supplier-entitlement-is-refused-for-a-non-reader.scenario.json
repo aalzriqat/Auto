@@ -1,5 +1,5 @@
 {
-  "id": "sale-at-the-supplier-entitlement-completes-for-a-non-reader",
+  "id": "sale-at-the-supplier-entitlement-is-refused-for-a-non-reader",
   "domain": "permission",
   "level": "backend",
   "steps": [

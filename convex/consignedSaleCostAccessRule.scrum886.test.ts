@@ -678,6 +678,31 @@ describe("SCRUM-886 round 13 rule 3: saving a role", () => {
     expect(refusal.code).toBe(ROLE_RULE_CODE);
   });
 
+  /** Round 14: the saved role already completes sales and holds view:cost_price; the save resubmits the whole set minus it. */
+  async function expectStrippingCostAccessRefused(completing: string, name: string, extra: string[]) {
+    const s = await seed();
+    const stored = [...extra, completing, "view:cost_price"];
+    const roleId = await s.actors.owner.mutation(api.roles.create, roleArgs(s, name, stored));
+    const rowBefore = await s.t.run((ctx) => ctx.db.get(roleId));
+    const notificationsBefore = await s.t.run(async (ctx) => (await ctx.db.query("notifications").take(100)).length);
+    expect(rowBefore?.permissions).toContain("view:cost_price");
+
+    const submitted = stored.filter((permission) => permission !== "view:cost_price");
+    const refusal = parsed(await payloadOf(s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId, permissions: submitted })));
+
+    expect(refusal).toEqual({ code: ROLE_RULE_CODE, message: (dictionaries.en as Record<string, string>)[`ServerError_${ROLE_RULE_CODE}`] });
+    expect(await s.t.run((ctx) => ctx.db.get(roleId))).toEqual(rowBefore);
+    expect(await s.t.run(async (ctx) => (await ctx.db.query("notifications").take(100)).length)).toBe(notificationsBefore);
+  }
+
+  test("roles.update refuses removing view:cost_price from a stored role that holds create:sales, with the coded refusal, and leaves the stored permissions alone", async () => {
+    await expectStrippingCostAccessRefused("create:sales", "Cashier keeps cost", ["view:sales"]);
+  });
+
+  test("roles.update refuses removing view:cost_price from a stored role that holds confirm:finance_disbursement, with the coded refusal, and leaves the stored permissions alone", async () => {
+    await expectStrippingCostAccessRefused("confirm:finance_disbursement", "Disburser keeps cost", ["view:finance"]);
+  });
+
   test("the refusal is accepted once view:cost_price is granted with the sale-completing permission, on create and on update", async () => {
     const s = await seed();
     const createdId = await s.actors.owner.mutation(api.roles.create, roleArgs(s, "Cashier2", ["view:sales", "create:sales", "view:cost_price"]));
