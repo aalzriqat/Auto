@@ -1271,13 +1271,16 @@ type CursorPage = { isDone: boolean; continueCursor: string | null };
 type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; maxPages: number };
 
 /**
- * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`.
+ * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`. Every rollout phase that
+ * pages by cursor goes through this one loop. `deployed` is the refusal subject ("Production is DEPLOYED, but ..."), so
+ * the wording stays per phase while the deadline, page cap and cursor rules stay in one place.
  * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
  * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
  * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
  */
-function walkRegistryPages<T extends CursorPage>(
+function walkCursorPages<T extends CursorPage>(
   limits: WalkLimits,
+  deployed: string,
   runPage: (cursor: string | null) => RegistryStep,
   parse: (value: unknown) => T | null,
   onPage: (page: T) => void,
@@ -1286,7 +1289,7 @@ function walkRegistryPages<T extends CursorPage>(
   const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
   const deadlineRefusal: Refusal = {
     ok: false,
-    reason: `${REGISTRY_DEPLOYED} reached the rollout deadline. A re-run resumes it.`,
+    reason: `${deployed} reached the rollout deadline. A re-run resumes it.`,
   };
   for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
     if (pastDeadline()) return deadlineRefusal;
@@ -1294,19 +1297,21 @@ function walkRegistryPages<T extends CursorPage>(
     // Checked again AFTER the call: a call that returns past the budget must not be accepted as
     // complete, or the run would go on to later phases having overrun the deadline (fail closed).
     if (pastDeadline()) return deadlineRefusal;
+    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
+    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
     if (!result.ok) {
-      return { ok: false, reason: `${REGISTRY_DEPLOYED} call failed. See backend logs; a re-run resumes it.` };
+      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
     }
     const page = parse(result.value);
-    if (!page) return { ok: false, reason: `${REGISTRY_DEPLOYED} returned an unrecognised result.` };
+    if (!page) return { ok: false, reason: `${deployed} returned an unrecognised result.` };
     onPage(page);
     if (page.isDone) return { ok: true };
     if (typeof page.continueCursor !== "string" || page.continueCursor === cursor) {
-      return { ok: false, reason: `${REGISTRY_DEPLOYED} cursor stopped advancing; refusing to page forever.` };
+      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever.` };
     }
     cursor = page.continueCursor;
   }
-  return { ok: false, reason: `${REGISTRY_DEPLOYED} reached its page cap. A re-run resumes it.` };
+  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
 }
 
 function parseCursorPage(value: unknown): CursorPage | null {
@@ -1351,7 +1356,7 @@ export function initialiseSupplierRegistry(
   const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
 
   let created = 0;
-  const backfill = walkRegistryPages(limits, input.backfillPage, parseBackfillPage, (page) => {
+  const backfill = walkCursorPages(limits, REGISTRY_DEPLOYED, input.backfillPage, parseBackfillPage, (page) => {
     created += page.migrated;
   });
   if (!backfill.ok) return backfill;
@@ -1359,7 +1364,7 @@ export function initialiseSupplierRegistry(
   let checked = 0;
   let deleting = 0;
   const missing: string[] = [];
-  const verify = walkRegistryPages(limits, input.verifyPage, parseCoveragePage, (page) => {
+  const verify = walkCursorPages(limits, REGISTRY_DEPLOYED, input.verifyPage, parseCoveragePage, (page) => {
     checked += page.checked;
     deleting += page.deleting;
     missing.push(...page.missing.map(opaqueOrgRef));
@@ -1434,47 +1439,34 @@ export function backfillAccountantCostPriceAccessRollout(input: {
   /** The `numItems` the script asks the backend for; a page can never report more updates than this. */
   pageSize: number;
 }): { ok: true; pages: number; updated: number } | Refusal {
-  const deployed = "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill";
-  let cursor: string | null = null;
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+  let pages = 0;
   let updated = 0;
-  for (let pageNumber = 0; pageNumber < input.maxPages; pageNumber += 1) {
-    if (input.now() - input.startedAt > input.timeoutMs) {
-      return { ok: false, reason: `${deployed} reached the rollout deadline. A re-run resumes it.` };
-    }
-    const result = input.runPage(cursor);
-    if (!result.ok) {
-      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
-    }
-    const page = parseAccountantCostPricePage(result.value, input.pageSize);
-    if (!page) {
-      return { ok: false, reason: `${deployed} returned an unrecognised result.` };
-    }
-    updated += page.updatedCount;
-    if (page.isDone) return { ok: true, pages: pageNumber + 1, updated };
-    if (page.continueCursor === cursor) {
-      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever. A re-run resumes it.` };
-    }
-    cursor = page.continueCursor;
-  }
-  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
+  const walk = walkCursorPages(
+    limits,
+    "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill",
+    input.runPage,
+    (value) => parseAccountantCostPricePage(value, input.pageSize),
+    (page) => {
+      pages += 1;
+      updated += page.updatedCount;
+    },
+  );
+  return walk.ok ? { ok: true, pages, updated } : walk;
 }
 
 function parseAccountantCostPricePage(
   value: unknown,
   pageSize: number,
-): { updatedCount: number; isDone: boolean; continueCursor: string } | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { updatedCount, updates, isDone, continueCursor } = value as {
-    updatedCount?: unknown;
-    updates?: unknown;
-    isDone?: unknown;
-    continueCursor?: unknown;
-  };
+): (CursorPage & { updatedCount: number }) | null {
+  const cursor = parseCursorPage(value);
+  // The backend always returns a string cursor, including on the last page; `null` is not a recognised answer here.
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const { updatedCount, updates } = value as { updatedCount?: unknown; updates?: unknown };
   if (!isCount(updatedCount) || updatedCount > pageSize) return null;
   // One `updates` line per patched role (patchRoleIfNeeded pushes exactly when it returns true), so the two agree.
   if (!Array.isArray(updates) || updates.length !== updatedCount) return null;
-  if (typeof isDone !== "boolean" || typeof continueCursor !== "string") return null;
-  return { updatedCount, isDone, continueCursor };
+  return { ...cursor, updatedCount };
 }
 
 // ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────
