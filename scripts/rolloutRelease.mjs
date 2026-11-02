@@ -397,17 +397,11 @@ if (!supplierIdentity.ok) fail(supplierIdentity.reason);
 // function, never the public API), the cursor passed back until the backend says it is done. Idempotent, so a re-run
 // resumes. It is after the empty-deployment exit on purpose: no organizations, no roles to repair. Same shared deadline.
 // A failed or malformed page ends the run here as "deployed but incomplete". Counts only: the backend's `updates` lines
-// name roles and organizations, and this output is public.
+// name roles and organizations, and this output is public. The helper receives this script's `fail` and calls it on a
+// refusal, so the refusal branch is tested code; this script cannot be executed under coverage.
 console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
 lastVerdict = before.verdict;
-const accountantCostPrice = runAccountantCostPricePhase({
-  convex,
-  now: Date.now,
-  startedAt: rolloutStartedAt,
-  timeoutMs: TIMEOUT_MS,
-});
-if (!accountantCostPrice.ok) fail(accountantCostPrice.reason);
-accountantCostPriceSummary = accountantCostPrice.summary;
+accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${accountantCostPriceSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────

@@ -24,7 +24,9 @@ verification (3), under the same single deadline (`rolloutStartedAt` plus `ROLLO
 page cursor is held by the script and passed back as `continueCursor`. Pages are 100 roles; the script stops after 10,000
 pages, which bounds one deployment at 1,000,000 role rows. Those constants, the function name, the `numItems` argument and the
 public summary text live in `runAccountantCostPricePhase` in `scripts/releaseGuard.ts`, where tests execute them; the script
-keeps only the phase skeleton (log, one call, `fail` on a refusal, publish the summary).
+keeps only the phase skeleton (log, one call, publish the summary). The helper receives the script's own `fail` and calls it
+on a refusal, because the script cannot be executed under coverage, so the phase body, refusal branch included, must live in
+tested code.
 
 Why the rollout step, and not another path:
 

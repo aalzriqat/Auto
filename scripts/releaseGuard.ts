@@ -1461,20 +1461,23 @@ export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
 export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
 
 /**
- * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script,
- * so it keeps only the phase skeleton (log, call this, `fail` on a refusal, publish the summary); the function name, page
- * size, page cap, `numItems` argument and public summary text live here, where they are tested.
+ * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script
+ * that no test executes in-process (coverage does not follow a child process), so it keeps only the phase skeleton (log,
+ * one call to this, publish the summary) and no branch of its own. The function name, page size, page cap, `numItems`
+ * argument, public summary text and the refusal branch live here, where tests execute them.
  *
- * `convex` is the script's CLI runner (the operator key, internal functions only). The result is counts and the phase label
- * only: the refusal is exactly the cursor walker's, which never contains backend text, and the summary never names a role
- * or an organization.
+ * `convex` is the script's CLI runner (the operator key, internal functions only). `fail` is the script's own `fail`, which
+ * prints, writes the job summary and exits 1; on a refusal it is called once with the cursor walker's reason, which never
+ * contains backend text. If a `fail` ever returned, this still throws rather than hand back a summary. The returned summary
+ * is counts and the phase label only: it never names a role or an organization.
  */
 export function runAccountantCostPricePhase(input: {
   convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
   now: () => number;
   startedAt: number;
   timeoutMs: number;
-}): { ok: true; summary: string; pages: number; updated: number } | Refusal {
+  fail: (reason: string) => never;
+}): string {
   const walk = backfillAccountantCostPriceAccessRollout({
     runPage: (cursor) =>
       input.convex([
@@ -1488,17 +1491,15 @@ export function runAccountantCostPricePhase(input: {
     maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
     pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
   });
-  if (!walk.ok) return walk;
-  return {
-    ok: true,
-    summary:
-      `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
-      `Custom and renamed roles are untouched.`,
-    pages: walk.pages,
-    updated: walk.updated,
-  };
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The ACCOUNTANT cost-price phase refused and its fail handler returned.");
+  }
+  return (
+    `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
+    `Custom and renamed roles are untouched.`
+  );
 }
-
 function parseAccountantCostPricePage(
   value: unknown,
   pageSize: number,

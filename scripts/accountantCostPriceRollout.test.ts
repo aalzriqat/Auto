@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -172,8 +172,8 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     const bank = at(/^const bank = rebuildBankBalances\(\{$/m);
     const registry = at(/^const supplierRegistry = initialiseSupplierRegistry\(\{$/m);
     const supplierIdentity = at(/^const supplierIdentity = repairAndVerifySupplierIdentity\(\{$/m);
-    const accountant = at(/^const accountantCostPrice = runAccountantCostPricePhase\(\{$/m);
-    const failure = at(/^if \(!accountantCostPrice.ok\) fail\(accountantCostPrice.reason\);$/m);
+    const accountant = at(/^accountantCostPriceSummary = runAccountantCostPricePhase\(\{/m);
+    const logged = at(/^console\.log\(`  \$\{accountantCostPriceSummary\}`\);$/m);
     const verification = at(/^console\.log\(`Verifying the rollout/m);
     expect(identity).toBeLessThan(refusal);
     expect(refusal).toBeLessThan(vat);
@@ -182,17 +182,19 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     expect(bank).toBeLessThan(registry);
     expect(registry).toBeLessThan(supplierIdentity);
     expect(supplierIdentity).toBeLessThan(accountant);
-    expect(accountant).toBeLessThan(failure);
-    expect(failure).toBeLessThan(verification);
-    // The phase is one call to the tested helper, handed the shared CLI runner and the shared deadline.
+    expect(accountant).toBeLessThan(logged);
+    expect(logged).toBeLessThan(verification);
+    // The phase is ONE statement: a single call to the tested helper, handed the shared CLI runner, the shared deadline and
+    // the script's own `fail`. The script keeps no branch of its own here, because it cannot be executed under coverage.
     expect(source).toMatch(
-      /const accountantCostPrice = runAccountantCostPricePhase\(\{\s*convex,\s*now: Date\.now,\s*startedAt: rolloutStartedAt,\s*timeoutMs: TIMEOUT_MS,\s*\}\);/,
+      /^accountantCostPriceSummary = runAccountantCostPricePhase\(\{\s*convex,\s*now: Date\.now,\s*startedAt: rolloutStartedAt,\s*timeoutMs: TIMEOUT_MS,\s*fail,?\s*\}\);$/m,
     );
+    expect(source.match(/runAccountantCostPricePhase\(/g)).toHaveLength(1);
+    // The old shape (a result object the script branched on) is gone.
+    expect(source).not.toContain("if (!accountantCostPrice.ok)");
+    expect(source).not.toContain("const accountantCostPrice");
     // The page size, page cap and function name live in the helper only; the script cannot drift from what is tested.
     expect(source).not.toMatch(/ACCOUNTANT_COST_PRICE|migrateRoles:/);
-    // A refusal stops the run, and only the helper's summary reaches the job summary and the log.
-    expect(source).toMatch(/^accountantCostPriceSummary = accountantCostPrice\.summary;$/m);
-    expect(source).toMatch(/^console\.log\(`  \$\{accountantCostPriceSummary\}`\);$/m);
     // Public log: the helper's result has no `updates`, and the script must never reach for one.
     expect(source).not.toMatch(/\bupdates\b/);
   });
@@ -202,11 +204,27 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
   const deadline = { now: () => 0, startedAt: 0, timeoutMs: 1000 };
   type Convex = Parameters<typeof runAccountantCostPricePhase>[0]["convex"];
 
-  /** Every result is checked for the sentinel on the success and refusal paths alike (the output is public). */
+  /** The script's `fail` prints, writes the summary and exits; this one records the reason and throws, so it never returns. */
+  class Refused extends Error {}
+
+  /**
+   * Runs the phase with a recording `fail`. `summary` is what the helper returned (undefined when it refused) and `failed`
+   * is every reason handed to `fail`. Both are checked for the sentinel, success and refusal alike (the output is public).
+   */
   const phase = (convex: Convex, overrides: Partial<typeof deadline> = {}) => {
-    const result = runAccountantCostPricePhase({ convex, ...deadline, ...overrides });
-    expect(JSON.stringify(result)).not.toContain(SECRET);
-    return result;
+    const failed: string[] = [];
+    const fail = (reason: string): never => {
+      failed.push(reason);
+      throw new Refused(reason);
+    };
+    let summary: string | undefined;
+    try {
+      summary = runAccountantCostPricePhase({ convex, ...deadline, ...overrides, fail });
+    } catch (error) {
+      if (!(error instanceof Refused)) throw error;
+    }
+    expect(JSON.stringify({ summary, failed })).not.toContain(SECRET);
+    return { summary, failed };
   };
 
   test("calls the CLI with the exact function name and page size, cursor null first and then the returned cursor", () => {
@@ -216,7 +234,8 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
       calls.push(args);
       return { ok: true, value: answers[calls.length - 1] };
     });
-    expect(result.ok).toBe(true);
+    expect(result.summary).toEqual(expect.any(String));
+    expect(result.failed).toEqual([]);
     expect(calls).toEqual([
       ["run", "migrateRoles:backfillAccountantCostPriceAccess", JSON.stringify({ cursor: null, numItems: 100 })],
       ["run", "migrateRoles:backfillAccountantCostPriceAccess", JSON.stringify({ cursor: "c1", numItems: 100 })],
@@ -231,9 +250,7 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
     let calls = 0;
     const result = phase(() => ({ ok: true, value: answers[calls++] }));
     expect(result).toEqual({
-      ok: true,
-      pages: 3,
-      updated: 3,
+      failed: [],
       summary:
         "3 stored ACCOUNTANT roles granted view:cost_price in 3 page call(s). Custom and renamed roles are untouched.",
     });
@@ -242,15 +259,29 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
   test("renders the summary for an already-repaired deployment (0 updates, one page)", () => {
     const result = phase(() => ({ ok: true, value: page(0, true, "end") }));
     expect(result).toEqual({
-      ok: true,
-      pages: 1,
-      updated: 0,
+      failed: [],
       summary:
         "0 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Custom and renamed roles are untouched.",
     });
   });
 
-  test("a refusal carries the walker's reason unchanged and no summary", () => {
+  test("success returns the summary string itself and never calls fail", () => {
+    const fail = vi.fn((reason: string): never => {
+      throw new Error(reason);
+    });
+    const summary = runAccountantCostPricePhase({
+      convex: () => ({ ok: true, value: page(2, true, "end") }),
+      ...deadline,
+      fail,
+    });
+    expect(typeof summary).toBe("string");
+    expect(summary).toBe(
+      "2 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Custom and renamed roles are untouched.",
+    );
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  test("a refusal calls fail exactly once with the walker's reason unchanged and yields no summary", () => {
     const answer = () => ({ ok: true as const, value: { ...page(1, true, "c"), updates: [] } });
     const expected = backfillAccountantCostPriceAccessRollout({
       runPage: answer,
@@ -260,16 +291,26 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
     });
     expect(expected.ok).toBe(false);
     const result = phase(answer);
-    expect(result).toEqual(expected);
-    expect(result).not.toHaveProperty("summary");
-    expect(result).toMatchObject({ reason: expect.stringContaining("Production is DEPLOYED, but the ACCOUNTANT cost-price backfill") });
+    expect(result.summary).toBeUndefined();
+    expect(result.failed).toEqual([(expected as { reason: string }).reason]);
+    expect(result.failed[0]).toContain("Production is DEPLOYED, but the ACCOUNTANT cost-price backfill");
   });
 
-  test("a failed CLI call refuses with the phase label and never echoes the CLI's reason", () => {
+  test("a `fail` that returns instead of exiting still yields no summary (the helper throws)", () => {
+    const fail = vi.fn() as unknown as (reason: string) => never;
+    expect(() =>
+      runAccountantCostPricePhase({ convex: () => ({ ok: false, reason: SECRET }), ...deadline, fail }),
+    ).toThrow();
+    expect(fail).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed CLI call fails with the phase label and never echoes the CLI's reason", () => {
     const result = phase(() => ({ ok: false, reason: `Role:ACCOUNTANT:${SECRET}` }));
     expect(result).toEqual({
-      ok: false,
-      reason: "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill call failed. See backend logs; a re-run resumes it.",
+      summary: undefined,
+      failed: [
+        "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill call failed. See backend logs; a re-run resumes it.",
+      ],
     });
   });
 
@@ -279,7 +320,7 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
       calls += 1;
       return { ok: true, value: page(0, true, "end") };
     }, { now: () => 1001 });
-    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
+    expect(result.failed).toEqual([expect.stringContaining("deadline")]);
     expect(calls).toBe(0);
   });
 
@@ -289,14 +330,14 @@ describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)
       calls += 1;
       return { ok: true, value: page(0, false, `c${calls}`) };
     });
-    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("page cap") });
+    expect(result.failed).toEqual([expect.stringContaining("page cap")]);
     expect(calls).toBe(MAX_ACCOUNTANT_COST_PRICE_PAGES);
     expect(MAX_ACCOUNTANT_COST_PRICE_PAGES).toBe(10_000);
   });
 
   test("a page reporting more updates than the exported page size is refused", () => {
     const result = phase(() => ({ ok: true, value: page(ACCOUNTANT_COST_PRICE_PAGE_SIZE + 1, true, "c") }));
-    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("unrecognised result") });
+    expect(result.failed).toEqual([expect.stringContaining("unrecognised result")]);
   });
 
   test("the page size is inside the backend's clamp, and the function name is the backend's internal mutation", () => {
