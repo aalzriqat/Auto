@@ -68,5 +68,9 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "a38cdb865d14e6f384bdd70750ff78ec14927d7e"
+  },
   "fingerprint": "b9c64ef31a1a514385333a9deb7e15847efbb09c48763017af1b9c1863922305"
 }
