@@ -7,6 +7,7 @@ import {
   LEGACY_PERMISSIONS,
   PERMISSIONS,
   SYSTEM_OWNER_ROLE_NAME,
+  completesSalesWithoutCostAccess,
   isReservedRoleName,
   isSystemOwnerRole,
   isUnqualifiedOwnerNamed,
@@ -266,6 +267,11 @@ export const backfillAccountantExpensePermissions = internalMutation({
  * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every custom role are left
  * alone, and a deleted row is never written. A custom role that holds a sale-completing permission without `view:cost_price` is
  * NOT changed here: it is refused at the completion door and surfaced to its owner through the role-save rule.
+ *
+ * Only an ACCOUNTANT that holds a sale-completing permission (`SALE_COMPLETING_PERMISSIONS`) and lacks `view:cost_price` is repaired:
+ * exactly the combination the role-save rule refuses (`completesSalesWithoutCostAccess`) and the completion doors refuse. That makes
+ * it safe to run on every deploy. An owner who saved the role without `view:cost_price` and without any sale-completing permission
+ * made a valid choice, and a recurring system job must not undo it (SCRUM-896 Seat 1 R1-F1).
  */
 export const backfillAccountantCostPriceAccess = internalMutation({
   args: {
@@ -289,6 +295,8 @@ export const backfillAccountantCostPriceAccess = internalMutation({
     for (const role of page.page) {
       if (role.isDeleted) continue;
       if (normalizeRoleName(role.name) !== accountant) continue;
+      // SCRUM-896 R1-F1: only the combination the role-save rule calls invalid (`completesSalesWithoutCostAccess`) is repaired.
+      if (!completesSalesWithoutCostAccess(role.permissions)) continue;
       if (await patchRoleIfNeeded(ctx, role, new Set([PERMISSIONS.VIEW_COST_PRICE]), updates)) updatedCount++;
     }
 

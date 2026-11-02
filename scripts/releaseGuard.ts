@@ -1497,7 +1497,7 @@ export function runAccountantCostPricePhase(input: {
   }
   return (
     `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
-    `Custom and renamed roles are untouched.`
+    `Roles that cannot complete sales, custom roles and renamed roles are untouched.`
   );
 }
 function parseAccountantCostPricePage(
