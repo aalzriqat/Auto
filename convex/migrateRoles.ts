@@ -257,11 +257,12 @@ export const backfillAccountantExpensePermissions = internalMutation({
  * SOURCED car's deal now needs it. A template change does not reach orgs that were seeded before it (there is no template sync;
  * `organizations.ts` seeds the templates once, at org creation), so this is the rollout for those orgs.
  *
- * Run BY HAND, once, with `npx convex run migrateRoles:backfillAccountantCostPriceAccess` against a deployment the owner has
- * approved. It is not wired into any deploy workflow and nothing in the repository calls it.
+ * Wired into the Deploy production rollout step (`scripts/rolloutRelease.mjs`, SCRUM-896, owner ruling SCRUM-886 c24372: after the
+ * deploy, automatically). The script calls it through the operator key, 100 roles per page, until `isDone`, and prints counts only:
+ * `updates` names roles and organizations, and the job log is public.
  *
  * Bounded and idempotent: one page of roles per call (`numItems`, default 100, at most 500; pass the returned `continueCursor`
- * back until `isDone`), and a role that already holds the grant is not written. Matches the ROLE NAME (normalized, so `ACCOUNTANT`
+ * back until `isDone`), and a role that already holds the grant is not written, so a re-run resumes. Matches the ROLE NAME (normalized, so `ACCOUNTANT`
  * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every custom role are left
  * alone, and a deleted row is never written. A custom role that holds a sale-completing permission without `view:cost_price` is
  * NOT changed here: it is refused at the completion door and surfaced to its owner through the role-save rule.

@@ -82,8 +82,8 @@ Product-template change (SCRUM-886 round 13, owner ruling c24358): the shipped A
 because completing or finalizing a SOURCED sale requires it on every door. The role audit therefore runs ACCOUNTANT with that
 permission and no other change; no route gate in the matrix depends on it, and the vehicle, sale-wizard and deal screens that show
 cost figures show them to ACCOUNTANT from that change. Organisations whose ACCOUNTANT role was stored earlier keep the old
-permission set until the by-hand backfill is run with owner approval (migrateRoles:backfillAccountantCostPriceAccess), so a hunt
-against such a deployment sees the old behaviour. The matrix below was not re-hunted for this change.
+permission set until the Deploy production rollout step has run the backfill (migrateRoles:backfillAccountantCostPriceAccess,
+SCRUM-896, owner ruling c24372), so a hunt against a deployment that has not been through that rollout sees the old behaviour. The matrix below was not re-hunted for this change.
 
 | Screen or state | Hunters | OWNER | MANAGER | SALES | RECEPTION | ACCOUNTANT | SENIOR_ACCOUNTANT |
 | --- | --- | --- | --- | --- | --- | --- | --- |
