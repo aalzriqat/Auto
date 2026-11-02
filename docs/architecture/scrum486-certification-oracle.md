@@ -893,7 +893,7 @@ Round 13 mutants, each applied alone to a clean committed HEAD, run against the 
 | M3 | `sales.completeFromQuote` door check given no vehicle ids | 2 killed |
 | M3b | `sales.completeFromQuote` door checks only the first line | 2 killed |
 | M4 | `applications.finalizeDeal` door check given no vehicle ids | 1 killed |
-| M5 | ACCOUNTANT template loses `view:cost_price` | 3 killed |
+| M5 | ACCOUNTANT template loses `view:cost_price` | 3 killed; after round 14b 4 killed (the positive correction test added) |
 | M6a | `roles.create` rule disabled | 3 killed |
 | M6b | `roles.update` rule disabled | 2 killed |
 | M7 | backstop in `passSupplierCostGate` removed | 5 killed |
@@ -905,6 +905,8 @@ Round 13 mutants, each applied alone to a clean committed HEAD, run against the 
 | M12 | `roles.update` guard exempts roles already holding `view:cost_price` (`&& !role.permissions.includes("view:cost_price")`) | 0 killed at d4c499098 (35/35 green, SURVIVED: every `roles.update` test started from a stored role without completion authority). After round 14: 2 killed, the two removal tests |
 
 Round 14 adds two tests to the "saving a role" group (one for `create:sales`, one for `confirm:finance_disbursement`): each stores a role that completes sales and holds `view:cost_price`, resubmits the whole stored set minus `view:cost_price`, and asserts the coded refusal with the English dictionary text, the stored role row unchanged and no new notification (Seat 2 MEDIUM, Seat 1 M12).
+
+Round 14b records owner ruling SCRUM-886 c24368 (option A, 2026-11-02): the default ACCOUNTANT passes the `vehicles.correctAcquisitionCost` gate through the template grant and may post acquisition-cost corrections, and two tests in the same file prove it (the template-built ACCOUNTANT restates a cash car's cost and the vehicle row, the correction row with `correctedBy` and one journal entry change; a stored ACCOUNTANT without `view:cost_price` is refused FORBIDDEN with every row count unchanged), so M5 is now killed by 4 tests (3 old and the positive one) while the control stays green. `convex/vehicles.ts` still carries an outdated code comment above `correctAcquisitionCost` (it says the default ACCOUNTANT template must not be a way around the gate), left unedited to avoid a contract-skew baseline renewal and recorded in the LOW ledger (SCRUM-879).
 
 Serial `convex-test` harness evidence, not platform, browser or production certification. Not verified: any rendered screen, the Arabic text in a browser, the rehearsal script against a live rehearsal, the backfill against a deployment.
 
