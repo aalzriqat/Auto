@@ -1,0 +1,61 @@
+{
+  "id": "deposit-door-control-below-the-threshold-is-coded-and-at-it-commits-two-sales",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "AVAILABLE_CONSIGNED_CAR",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "E_PLUS_DEPOSIT_1_SHORT_AND_AT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.belowThreshold.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "refusal.belowThreshold.message.storedSupplierEntitlement",
+      "value": "absent"
+    },
+    {
+      "observable": "sales.committedAtThreshold",
+      "value": "2"
+    },
+    {
+      "observable": "vehicles.statusAtThreshold",
+      "value": "SOLD"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
+    "testName": "control: the same deposit door with nothing wrong on the second line gives the coded refusal below the threshold and two sales at it"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round12",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
+  },
+  "fingerprint": "39e04227b45916c57ab3843f3948d63f0efe1d33718d7e0db4cf1e900406adc9"
+}

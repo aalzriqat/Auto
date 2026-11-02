@@ -1,0 +1,60 @@
+{
+  "id": "quote-with-nothing-wrong-is-coded-below-the-entitlement-and-two-sales-at-it",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "AVAILABLE_CONSIGNED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "ONE_FILS_SHORT_AND_AT_E_AND_1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.belowThreshold.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "refusal.belowThreshold.identicalAt1AndOneFilsShort",
+      "value": "true"
+    },
+    {
+      "observable": "sales.committedAtEntitlement",
+      "value": "2"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
+    "testName": "a non-reader with nothing wrong on the later line still gets the coded refusal below the entitlement and two sales at it"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round12",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
+  },
+  "fingerprint": "018b9bff910ed9ee136fe044f66f8d2e8ce24942d26e60d2097cee611ad7eec5"
+}
