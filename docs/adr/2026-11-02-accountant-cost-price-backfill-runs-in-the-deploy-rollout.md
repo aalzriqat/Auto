@@ -22,7 +22,9 @@ The backfill runs inside the Deploy production rollout step (`scripts/rolloutRel
 key until the backend reports `isDone`. It is phase 2e: after the supplier identity repair (2d) and before the Social Inbox
 verification (3), under the same single deadline (`rolloutStartedAt` plus `ROLLOUT_TIMEOUT_MINUTES`) as every other phase. The
 page cursor is held by the script and passed back as `continueCursor`. Pages are 100 roles; the script stops after 10,000
-pages, which bounds one deployment at 1,000,000 role rows.
+pages, which bounds one deployment at 1,000,000 role rows. Those constants, the function name, the `numItems` argument and the
+public summary text live in `runAccountantCostPricePhase` in `scripts/releaseGuard.ts`, where tests execute them; the script
+keeps only the phase skeleton (log, one call, `fail` on a refusal, publish the summary).
 
 Why the rollout step, and not another path:
 

@@ -1453,6 +1453,52 @@ export function backfillAccountantCostPriceAccessRollout(input: {
   return walk.ok ? { ok: true, pages, updated } : walk;
 }
 
+/** SCRUM-896: grant `view:cost_price` to stored ACCOUNTANT roles (owner ruling SCRUM-886 c24372). */
+export const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";
+/** The backend clamps a page to 1..500 roles; 100 is its default. */
+export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
+/** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
+export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
+
+/**
+ * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script,
+ * so it keeps only the phase skeleton (log, call this, `fail` on a refusal, publish the summary); the function name, page
+ * size, page cap, `numItems` argument and public summary text live here, where they are tested.
+ *
+ * `convex` is the script's CLI runner (the operator key, internal functions only). The result is counts and the phase label
+ * only: the refusal is exactly the cursor walker's, which never contains backend text, and the summary never names a role
+ * or an organization.
+ */
+export function runAccountantCostPricePhase(input: {
+  convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+}): { ok: true; summary: string; pages: number; updated: number } | Refusal {
+  const walk = backfillAccountantCostPriceAccessRollout({
+    runPage: (cursor) =>
+      input.convex([
+        "run",
+        ACCOUNTANT_COST_PRICE_BACKFILL_FN,
+        JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE }),
+      ]),
+    now: input.now,
+    startedAt: input.startedAt,
+    timeoutMs: input.timeoutMs,
+    maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
+    pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+  });
+  if (!walk.ok) return walk;
+  return {
+    ok: true,
+    summary:
+      `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
+      `Custom and renamed roles are untouched.`,
+    pages: walk.pages,
+    updated: walk.updated,
+  };
+}
+
 function parseAccountantCostPricePage(
   value: unknown,
   pageSize: number,

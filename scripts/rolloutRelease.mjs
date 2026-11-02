@@ -21,7 +21,6 @@ import path from "node:path";
 import process from "node:process";
 import {
   assertDeploymentIdentity,
-  backfillAccountantCostPriceAccessRollout,
   captureRunBaseline,
   classifyMaterializationReport,
   decideEmptyRollout,
@@ -41,6 +40,7 @@ import {
   renderReleaseSummary,
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
+  runAccountantCostPricePhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -59,12 +59,6 @@ const SUPPLIER_IDENTITY_COUNT_FN = "supplierIdentityRepair:countPage";
 const SUPPLIER_IDENTITY_PAGE_SIZE = 100;
 /** 100 rows per page, so this bounds one organization and row kind at 1,000,000 rows. */
 const MAX_SUPPLIER_IDENTITY_PAGES_PER_PHASE = 10_000;
-/** SCRUM-896: grant `view:cost_price` to stored ACCOUNTANT roles (owner ruling SCRUM-886 c24372). */
-const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";
-/** The backend clamps a page to 1..500 roles; 100 is its default. */
-const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
-/** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
-const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
 /** At most two parked rows per page, with a durable completion marker. */
 const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
@@ -406,17 +400,14 @@ if (!supplierIdentity.ok) fail(supplierIdentity.reason);
 // name roles and organizations, and this output is public.
 console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
 lastVerdict = before.verdict;
-const accountantCostPrice = backfillAccountantCostPriceAccessRollout({
-  runPage: (cursor) =>
-    convex(["run", ACCOUNTANT_COST_PRICE_BACKFILL_FN, JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE })]),
+const accountantCostPrice = runAccountantCostPricePhase({
+  convex,
   now: Date.now,
   startedAt: rolloutStartedAt,
   timeoutMs: TIMEOUT_MS,
-  maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
-  pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
 });
 if (!accountantCostPrice.ok) fail(accountantCostPrice.reason);
-accountantCostPriceSummary = `${accountantCostPrice.updated} stored ACCOUNTANT roles granted view:cost_price in ${accountantCostPrice.pages} page call(s). Custom and renamed roles are untouched.`;
+accountantCostPriceSummary = accountantCostPrice.summary;
 console.log(`  ${accountantCostPriceSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────

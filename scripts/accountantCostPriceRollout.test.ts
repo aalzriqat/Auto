@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { backfillAccountantCostPriceAccessRollout } from "./releaseGuard";
+import {
+  ACCOUNTANT_COST_PRICE_BACKFILL_FN,
+  ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+  MAX_ACCOUNTANT_COST_PRICE_PAGES,
+  backfillAccountantCostPriceAccessRollout,
+  runAccountantCostPricePhase,
+} from "./releaseGuard";
 
 type Input = Parameters<typeof backfillAccountantCostPriceAccessRollout>[0];
 type RunPage = Input["runPage"];
@@ -166,7 +172,7 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     const bank = at(/^const bank = rebuildBankBalances\(\{$/m);
     const registry = at(/^const supplierRegistry = initialiseSupplierRegistry\(\{$/m);
     const supplierIdentity = at(/^const supplierIdentity = repairAndVerifySupplierIdentity\(\{$/m);
-    const accountant = at(/^const accountantCostPrice = backfillAccountantCostPriceAccessRollout\(\{$/m);
+    const accountant = at(/^const accountantCostPrice = runAccountantCostPricePhase\(\{$/m);
     const failure = at(/^if \(!accountantCostPrice.ok\) fail\(accountantCostPrice.reason\);$/m);
     const verification = at(/^console\.log\(`Verifying the rollout/m);
     expect(identity).toBeLessThan(refusal);
@@ -178,12 +184,129 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     expect(supplierIdentity).toBeLessThan(accountant);
     expect(accountant).toBeLessThan(failure);
     expect(failure).toBeLessThan(verification);
-    expect(source).toContain('const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";');
-    expect(source).toMatch(/JSON\.stringify\(\{ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE \}\)/);
-    // The size the script asks for and the size the helper validates against are one constant.
-    expect(source).toMatch(/pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,/);
-    expect(source).toMatch(/startedAt: rolloutStartedAt,\s*timeoutMs: TIMEOUT_MS,\s*maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES/);
+    // The phase is one call to the tested helper, handed the shared CLI runner and the shared deadline.
+    expect(source).toMatch(
+      /const accountantCostPrice = runAccountantCostPricePhase\(\{\s*convex,\s*now: Date\.now,\s*startedAt: rolloutStartedAt,\s*timeoutMs: TIMEOUT_MS,\s*\}\);/,
+    );
+    // The page size, page cap and function name live in the helper only; the script cannot drift from what is tested.
+    expect(source).not.toMatch(/ACCOUNTANT_COST_PRICE|migrateRoles:/);
+    // A refusal stops the run, and only the helper's summary reaches the job summary and the log.
+    expect(source).toMatch(/^accountantCostPriceSummary = accountantCostPrice\.summary;$/m);
+    expect(source).toMatch(/^console\.log\(`  \$\{accountantCostPriceSummary\}`\);$/m);
     // Public log: the helper's result has no `updates`, and the script must never reach for one.
     expect(source).not.toMatch(/\bupdates\b/);
+  });
+});
+
+describe("SCRUM-896 runAccountantCostPricePhase (the whole phase, minus the CLI)", () => {
+  const deadline = { now: () => 0, startedAt: 0, timeoutMs: 1000 };
+  type Convex = Parameters<typeof runAccountantCostPricePhase>[0]["convex"];
+
+  /** Every result is checked for the sentinel on the success and refusal paths alike (the output is public). */
+  const phase = (convex: Convex, overrides: Partial<typeof deadline> = {}) => {
+    const result = runAccountantCostPricePhase({ convex, ...deadline, ...overrides });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    return result;
+  };
+
+  test("calls the CLI with the exact function name and page size, cursor null first and then the returned cursor", () => {
+    const answers = [page(1, false, "c1"), page(0, false, "c2"), page(2, true, "c3")];
+    const calls: string[][] = [];
+    const result = phase((args) => {
+      calls.push(args);
+      return { ok: true, value: answers[calls.length - 1] };
+    });
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([
+      ["run", "migrateRoles:backfillAccountantCostPriceAccess", JSON.stringify({ cursor: null, numItems: 100 })],
+      ["run", "migrateRoles:backfillAccountantCostPriceAccess", JSON.stringify({ cursor: "c1", numItems: 100 })],
+      ["run", "migrateRoles:backfillAccountantCostPriceAccess", JSON.stringify({ cursor: "c2", numItems: 100 })],
+    ]);
+    expect(ACCOUNTANT_COST_PRICE_BACKFILL_FN).toBe("migrateRoles:backfillAccountantCostPriceAccess");
+    expect(ACCOUNTANT_COST_PRICE_PAGE_SIZE).toBe(100);
+  });
+
+  test("renders the counts-only summary for N updates across P pages", () => {
+    const answers = [page(1, false, "c1"), page(0, false, "c2"), page(2, true, "c3")];
+    let calls = 0;
+    const result = phase(() => ({ ok: true, value: answers[calls++] }));
+    expect(result).toEqual({
+      ok: true,
+      pages: 3,
+      updated: 3,
+      summary:
+        "3 stored ACCOUNTANT roles granted view:cost_price in 3 page call(s). Custom and renamed roles are untouched.",
+    });
+  });
+
+  test("renders the summary for an already-repaired deployment (0 updates, one page)", () => {
+    const result = phase(() => ({ ok: true, value: page(0, true, "end") }));
+    expect(result).toEqual({
+      ok: true,
+      pages: 1,
+      updated: 0,
+      summary:
+        "0 stored ACCOUNTANT roles granted view:cost_price in 1 page call(s). Custom and renamed roles are untouched.",
+    });
+  });
+
+  test("a refusal carries the walker's reason unchanged and no summary", () => {
+    const answer = () => ({ ok: true as const, value: { ...page(1, true, "c"), updates: [] } });
+    const expected = backfillAccountantCostPriceAccessRollout({
+      runPage: answer,
+      ...deadline,
+      maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
+      pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+    });
+    expect(expected.ok).toBe(false);
+    const result = phase(answer);
+    expect(result).toEqual(expected);
+    expect(result).not.toHaveProperty("summary");
+    expect(result).toMatchObject({ reason: expect.stringContaining("Production is DEPLOYED, but the ACCOUNTANT cost-price backfill") });
+  });
+
+  test("a failed CLI call refuses with the phase label and never echoes the CLI's reason", () => {
+    const result = phase(() => ({ ok: false, reason: `Role:ACCOUNTANT:${SECRET}` }));
+    expect(result).toEqual({
+      ok: false,
+      reason: "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill call failed. See backend logs; a re-run resumes it.",
+    });
+  });
+
+  test("the shared deadline reaches the walker", () => {
+    let calls = 0;
+    const result = phase(() => {
+      calls += 1;
+      return { ok: true, value: page(0, true, "end") };
+    }, { now: () => 1001 });
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
+    expect(calls).toBe(0);
+  });
+
+  test("a nonterminating backend stops at the exported page cap", () => {
+    let calls = 0;
+    const result = phase(() => {
+      calls += 1;
+      return { ok: true, value: page(0, false, `c${calls}`) };
+    });
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("page cap") });
+    expect(calls).toBe(MAX_ACCOUNTANT_COST_PRICE_PAGES);
+    expect(MAX_ACCOUNTANT_COST_PRICE_PAGES).toBe(10_000);
+  });
+
+  test("a page reporting more updates than the exported page size is refused", () => {
+    const result = phase(() => ({ ok: true, value: page(ACCOUNTANT_COST_PRICE_PAGE_SIZE + 1, true, "c") }));
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("unrecognised result") });
+  });
+
+  test("the page size is inside the backend's clamp, and the function name is the backend's internal mutation", () => {
+    const backend = readFileSync(path.join(__dirname, "..", "convex", "migrateRoles.ts"), "utf8");
+    expect(backend).toMatch(/export const backfillAccountantCostPriceAccess = internalMutation\(/);
+    const clamp = /Math\.min\(Math\.max\(Math\.floor\(args\.numItems \?\? (\d+)\), (\d+)\), (\d+)\)/.exec(backend);
+    expect(clamp, "the backend's numItems clamp changed shape; update this pin").not.toBeNull();
+    const [, backendDefault, lower, upper] = clamp!.map(Number);
+    expect(ACCOUNTANT_COST_PRICE_PAGE_SIZE).toBeGreaterThanOrEqual(lower);
+    expect(ACCOUNTANT_COST_PRICE_PAGE_SIZE).toBeLessThanOrEqual(upper);
+    expect(ACCOUNTANT_COST_PRICE_PAGE_SIZE).toBe(backendDefault);
   });
 });
