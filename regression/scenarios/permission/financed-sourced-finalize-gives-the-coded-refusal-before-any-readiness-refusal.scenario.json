@@ -1,0 +1,49 @@
+{
+  "id": "financed-sourced-finalize-gives-the-coded-refusal-before-any-readiness-refusal",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-confirmer",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "deal": "FINANCED_SOURCED_DEAL_NO_HANDOVER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "readiness.refusal",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "applications.finalizeDeal gives the coded response to a deal that is not ready (no handover) before any readiness refusal"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "7b65472a59df4fd8ea9d7c0e8b96d4033aa49f30b1286f428a8c56ff78de83b9"
+}

@@ -16,30 +16,52 @@
         "route": "DIRECT_TO_SUPPLIER",
         "firstLinePrice": "E_PLUS_DEPOSIT_1_SHORT_AND_AT"
       }
+    },
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "AVAILABLE_CONSIGNED_CAR",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "AT_THRESHOLD"
+      }
     }
   ],
   "expected": [
     {
-      "observable": "refusal.belowThreshold.code",
+      "observable": "nonReader.refusal.belowThreshold.code",
       "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
     },
     {
-      "observable": "refusal.belowThreshold.message.storedSupplierEntitlement",
+      "observable": "nonReader.refusal.atThreshold.identicalToBelowThreshold",
+      "value": "true"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
       "value": "absent"
     },
     {
-      "observable": "sales.committedAtThreshold",
+      "observable": "nonReader.world.writtenByRefusedCommand",
+      "value": "nothing"
+    },
+    {
+      "observable": "reader.sales.committedAtThreshold",
       "value": "2"
     },
     {
-      "observable": "vehicles.statusAtThreshold",
+      "observable": "reader.vehicles.statusAtThreshold",
       "value": "SOLD"
     }
   ],
   "matrixRow": "SCRUM886-vehicle-cost-writes",
   "impl": {
     "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
-    "testName": "control: the same deposit door with nothing wrong on the second line gives the coded refusal below the threshold and two sales at it"
+    "testName": "control: the same deposit door with nothing wrong on the second line gives a non-reader the same coded refusal at and below the threshold, and a reader two sales at it"
   },
   "status": "active",
   "source": {
@@ -57,5 +79,5 @@
     "key": "SCRUM-886",
     "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
   },
-  "fingerprint": "39e04227b45916c57ab3843f3948d63f0efe1d33718d7e0db4cf1e900406adc9"
+  "fingerprint": "5d49610144c95fbb26c156b0a2a6500408f91b27503f6c1b3330e9535e166739"
 }

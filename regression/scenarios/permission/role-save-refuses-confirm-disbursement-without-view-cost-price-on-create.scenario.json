@@ -1,0 +1,49 @@
+{
+  "id": "role-save-refuses-confirm-disbursement-without-view-cost-price-on-create",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "permissions": "confirm:finance_disbursement"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "roles.stored",
+      "value": "nothing"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "roles.create refuses confirm:finance_disbursement without view:cost_price with the same coded refusal"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "d01e3622f3ee905117a452b3eea0a9616dbb988a596825304d2a44fd6a8ff385"
+}

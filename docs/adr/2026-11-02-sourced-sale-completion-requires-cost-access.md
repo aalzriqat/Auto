@@ -1,0 +1,32 @@
+# Completing a SOURCED sale requires view:cost_price
+
+Status: accepted
+
+## Context
+
+A caller who held `create:sales` or `confirm:finance_disbursement` without `view:cost_price` could still learn the hidden
+supplier entitlement. The backend used the vehicle cost to decide, so the outcome of a completion leaked it through refusal
+text, stored-value comparisons, replay fingerprints and the order in which refusals fired. Seven sibling leaks were closed
+one by one over PR #746 rounds 6 to 12, and each fix left a new sibling behind.
+
+## Decision
+
+Owner ruling SCRUM-886 c24358, 2026-11-02: completing or finalizing a SOURCED sale requires `view:cost_price` on every door
+(`sales.create`, `sales.completeDraft`, `sales.completeFromQuote`, `applications.finalizeDeal`). The server refuses it with
+`CONSIGNED_SALE_NEEDS_COST_ACCESS` as the first decision of the door, before any cost read, keyed on `sourceType` and the
+actor's permission only. The default ACCOUNTANT template gains `view:cost_price`. Saving a custom role (`roles.create`,
+`roles.update`) with either completing permission and no `view:cost_price` is refused with a coded EN/AR message. Stored
+custom roles are not migrated; one that already holds the combination is refused at the door and reported.
+
+## Role policy
+
+After the change, the default roles that may complete a SOURCED sale are OWNER (system owner), MANAGER, ACCOUNTANT and
+SENIOR_ACCOUNTANT. SALES holds neither completing permission and cannot complete a sale. RECEPTION holds neither. A custom
+role may hold a completing permission only together with `view:cost_price`.
+
+## Consequences
+
+The round 10 to 12 ordering fixes stay as defence in depth; a non-reader no longer reaches them through a door. Existing
+per-org ACCOUNTANT roles do not receive the template change on their own: a bounded, idempotent internal mutation in
+`convex/migrateRoles.ts` adds the permission, is run by hand, and is not wired into any workflow. Owner approval is required
+before it runs against any deployment (SCRUM-760 c24361).

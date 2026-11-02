@@ -14,22 +14,42 @@
         "route": "DIRECT_TO_SUPPLIER",
         "salePrice": "AT_ENTITLEMENT"
       }
+    },
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "AT_ENTITLEMENT"
+      }
     }
   ],
   "expected": [
     {
-      "observable": "sales.count",
+      "observable": "nonReader.refusal.atEntitlement.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.refusal.identicalToBelowEntitlement",
+      "value": "true"
+    },
+    {
+      "observable": "reader.sales.count",
       "value": "1"
     },
     {
-      "observable": "vehicle.status",
+      "observable": "reader.vehicle.status",
       "value": "SOLD"
     }
   ],
   "matrixRow": "SCRUM886-vehicle-cost-writes",
   "impl": {
     "file": "convex/saleCompletionCostDisclosure.scrum886.test.ts",
-    "testName": "control: a sale at the entitlement completes for a non-reader (the refusal is not widened)"
+    "testName": "control: a sale at the entitlement is refused for a non-reader with the same coded response and completes for a reader"
   },
   "status": "active",
   "source": {
@@ -43,5 +63,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "b45c8fc3f52392a89fc494b75de2ec22c02d1542e10acaa293dd50a1126c8cf2"
+  "fingerprint": "67218702014eff8b9c7e321f8063f747b5fcff2fe603dd57467c3dc8751ea60c"
 }

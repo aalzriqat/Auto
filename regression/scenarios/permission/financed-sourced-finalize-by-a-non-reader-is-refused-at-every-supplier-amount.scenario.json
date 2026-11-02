@@ -1,0 +1,54 @@
+{
+  "id": "financed-sourced-finalize-by-a-non-reader-is-refused-at-every-supplier-amount",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-confirmer",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "deal": "FINANCED_SOURCED_DEAL",
+        "supplierAmount": "EVERY_AMOUNT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.refusal.identicalAtEveryAmount",
+      "value": "true"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "applications.finalizeDeal refuses a confirm:finance_disbursement role without view:cost_price with one byte-identical coded response whatever the supplier amount, and writes nothing"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "bf1e6bc2c5351025e68f0f3595e7a40c1516f8f977674b52cb54cf4a176decd5"
+}

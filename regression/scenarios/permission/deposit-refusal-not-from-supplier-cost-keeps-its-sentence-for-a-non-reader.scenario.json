@@ -5,7 +5,7 @@
   "steps": [
     {
       "actor": {
-        "role": "sales-clerk",
+        "role": "cost-reader",
         "org": "A"
       },
       "action": "sales.create",
@@ -32,7 +32,7 @@
   "matrixRow": "SCRUM886-vehicle-cost-writes",
   "impl": {
     "file": "convex/consignedDepositResolution.test.ts",
-    "testName": "control: a deposit refusal that is not derived from the supplier cost keeps its own sentence for a non-reader"
+    "testName": "control: a deposit refusal that is not derived from the supplier cost keeps its own sentence for a cost reader"
   },
   "status": "active",
   "source": {
@@ -46,5 +46,5 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "7766a4dace9bb539bd1e282f602fc038d224a19b873fca061da4fab0da2e3d32"
+  "fingerprint": "79e85cb285a10158b2c6ba7600e5fa1e33a7bf5ece567bb6d86c611ddeefbd05"
 }

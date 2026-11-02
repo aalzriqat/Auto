@@ -1,0 +1,50 @@
+{
+  "id": "a-stored-role-holding-create-sales-without-view-cost-price-can-still-be-renamed",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "rename": "NEW_NAME",
+        "storedPermissions": "create:sales"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusal",
+      "value": "absent"
+    },
+    {
+      "observable": "role.name",
+      "value": "NEW_NAME"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "a stored role that already holds create:sales without view:cost_price can be renamed (existing roles are not migrated)"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "0b8c31eaeceed828748b7b1ba2e3f5b7d7b3e42dcef38395c70cacccfee8168b"
+}

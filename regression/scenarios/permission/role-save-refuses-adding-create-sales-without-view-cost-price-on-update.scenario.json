@@ -1,0 +1,49 @@
+{
+  "id": "role-save-refuses-adding-create-sales-without-view-cost-price-on-update",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "addPermission": "create:sales"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "role.storedPermissions",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "roles.update refuses adding create:sales without view:cost_price and leaves the stored permissions alone"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "7011604f1ceacfd7ea5111d77f26b8824bc73dba69a8ed4300676a6bc2a319b0"
+}
