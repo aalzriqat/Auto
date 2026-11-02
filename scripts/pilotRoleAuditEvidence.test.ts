@@ -374,12 +374,99 @@ test.each([
   expect(roleRegressionOutcome(report)).toMatchObject({ expected: 7, verified, measurement });
 });
 
+const caseProjects = roleTitles.map((_, index) => index < 4 ? "role-regressions" : "pilot-g8-role-hunt");
+function verdicts(overrides: Record<number, string> = {}, fill = "passed") {
+  return roleTitles.map((title, index) => ({ title, project: caseProjects[index], status: overrides[index] ?? fill }));
+}
+function withSpecs(extra: unknown[], base = roleReport()) {
+  return { ...base, suites: [{ ...base.suites[0], specs: [...base.suites[0].specs, ...extra] }] };
+}
+const messageSentinel = "SENTINEL-ERROR-MESSAGE tenant-Synthetic@EXAMPLE.INVALID /srv/secret/path.ts:12";
+const foreignTitleSentinel = "SENTINEL-FOREIGN-TITLE Synthetic Customer Name";
+function leakyReport() {
+  const base = roleReport(roleTitles.map((_, index) => index === 2 ? "failed" : "passed"));
+  const failing = base.suites[0].specs[2];
+  const leaking = { ...failing, tests: [{ ...failing.tests[0], status: "unexpected", results: [{ status: "failed",
+    error: { message: messageSentinel, stack: messageSentinel, location: { file: foreignTitleSentinel } },
+    attachments: [{ name: messageSentinel }], stdout: [{ text: messageSentinel }] }] }] };
+  const foreign = { ...failing, title: foreignTitleSentinel, ok: false };
+  return withSpecs([foreign], { ...base, suites: [{ ...base.suites[0], specs: base.suites[0].specs.map((spec, index) => index === 2 ? leaking : spec) }] });
+}
+
+test("a failing allowlisted case is published by constant title as failed, the others as passed", () => {
+  const report = roleReport(roleTitles.map((_, index) => index === 3 ? "failed" : "passed"));
+  expect(roleRegressionOutcome(report).cases).toEqual(verdicts({ 3: "failed" }));
+});
+
+test.each([
+  ["a Playwright unexpected failure", { status: "unexpected", result: "failed" }],
+  ["a timeout", { status: "unexpected", result: "timedOut" }],
+  ["an interruption", { status: "unexpected", result: "interrupted" }],
+  ["a flaky retry that finally passed", { status: "flaky", result: "passed" }],
+  ["a status this version does not know", { status: "brand-new-status", result: "brand-new-result" }],
+] as const)("%s is never published as passed", (_name, { status, result }) => {
+  const report = roleReport();
+  const spec = report.suites[0].specs[1];
+  const odd = { ...report, suites: [{ ...report.suites[0], specs: report.suites[0].specs.map((item, index) =>
+    index === 1 ? { ...spec, ok: status === "flaky", tests: [{ ...spec.tests[0], status, results: [{ status: result }] }] } : item) }] };
+  const outcome = roleRegressionOutcome(odd);
+  expect(outcome.cases).toEqual(verdicts({ 1: "failed" }));
+  expect(outcome.verified).toBe(false);
+});
+
+test("missing, duplicate, wrong-project and skipped cases are each named", () => {
+  expect(roleRegressionOutcome(roleReport(["passed", "passed", "passed"])).cases)
+    .toEqual(verdicts({ 3: "missing", 4: "missing", 5: "missing", 6: "missing" }));
+  expect(roleRegressionOutcome(wrongProjectReport()).cases).toEqual(verdicts({ 6: "wrong-project" }));
+  expect(roleRegressionOutcome(roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed"))).cases)
+    .toEqual(verdicts({ 1: "skipped" }));
+  expect(roleRegressionOutcome(withSpecs([roleReport().suites[0].specs[0]])).cases).toEqual(verdicts({ 0: "duplicate" }));
+  const nested = { errors: [], suites: [{ ...roleReport().suites[0], suites: [{ specs: [roleReport().suites[0].specs[0]] }] }] };
+  expect(roleRegressionOutcome(nested).cases).toEqual(verdicts({ 0: "duplicate" }));
+});
+
+test.each([
+  ["no report", null],
+  ["an unparseable report", { not: "a report" }],
+  ["a report with global errors", { ...roleReport(), errors: [{ message: "x" }] }],
+])("%s publishes every case as missing", (_name, report) => {
+  expect(roleRegressionOutcome(report).cases).toEqual(verdicts({}, "missing"));
+});
+
+test("a foreign title and a failure message never reach the public outcome", () => {
+  const outcome = roleRegressionOutcome(leakyReport());
+  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }));
+  expect(outcome.unexpected).toBe(1);
+  const published = JSON.stringify(outcome);
+  expect(published).not.toContain("SENTINEL");
+  expect(published).not.toContain("EXAMPLE.INVALID");
+  expect(published).not.toContain("/srv/secret");
+});
+
+test.each([
+  ["all seven passed", roleReport()],
+  ["a failing case", roleReport(roleTitles.map((_, index) => index === 0 ? "failed" : "passed"))],
+  ["a skipped case", roleReport(roleTitles.map((_, index) => index === 5 ? "skipped" : "passed"))],
+  ["missing cases", roleReport(["passed"])],
+  ["a wrong project", wrongProjectReport()],
+  ["a duplicate", withSpecs([roleReport().suites[0].specs[4]])],
+  ["a foreign extra case", leakyReport()],
+  ["no report", null],
+])("verified agrees with the per-case verdicts: %s", (_name, report) => {
+  const outcome = roleRegressionOutcome(report);
+  const allPassed = outcome.cases.every((item: { status: string }) => item.status === "passed");
+  expect(outcome.cases).toHaveLength(7);
+  expect(outcome.verified).toBe(allPassed && outcome.unexpected === 0);
+  if (outcome.verified) expect(outcome.cases).toEqual(verdicts());
+});
+
 test.each([
   { exitCode: 0, reportMode: "passed", complete: true },
   { exitCode: 0, reportMode: "missing", complete: false },
   { exitCode: 0, reportMode: "malformed", complete: false },
   { exitCode: 0, reportMode: "skipped", complete: false },
   { exitCode: 17, reportMode: "passed", complete: false },
+  { exitCode: 0, reportMode: "leaky", complete: false },
 ] as const)("native audit requires measured real-role cases: process=$exitCode report=$reportMode", async ({ exitCode, reportMode, complete }) => {
   const repo = path.join(root, `native-orchestration-${exitCode}-${reportMode}`);
   const captures = path.join(repo, "synthetic-inputs");
@@ -409,7 +496,10 @@ test.each([
   }
   const stub = path.join(repo, "synthetic-browser.cjs");
   const failureMarker = "\nPreview attestation failed: [Request ID: 42e39a239aecaeb1]\n";
-  const report = reportMode === "skipped" ? roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed")) : roleReport();
+  const hasReport = reportMode === "passed" || reportMode === "skipped" || reportMode === "leaky";
+  let report = roleReport();
+  if (reportMode === "skipped") report = roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed"));
+  if (reportMode === "leaky") report = leakyReport();
   const reportBytes = reportMode === "malformed" ? "{invalid report" : JSON.stringify(report);
   const reportWrite = reportMode === "missing" ? "" : `fs.writeFileSync(process.env.PLAYWRIGHT_JSON_OUTPUT_FILE,${JSON.stringify(reportBytes)});`;
   writeFileSync(stub, `const fs=require("node:fs"),path=require("node:path");const output=process.argv.find(arg=>arg.startsWith("--output="));fs.cpSync(path.join(process.cwd(),"synthetic-inputs"),output?output.slice(9):path.join(process.cwd(),"test-results"),{recursive:true});${reportWrite}process.stdout.write(process.env.AUDIT_CANARY);process.stderr.write(process.env.AUDIT_CANARY.toLowerCase());if(${exitCode}!==0)process.stderr.write(${JSON.stringify(failureMarker)});process.exit(${exitCode});`);
@@ -427,7 +517,9 @@ test.each([
   expect(outcome).toMatchObject({ cellsComplete: true, observedCells: 140, isolationVerified: true,
     complete, execution: exitCode === 0 ? "SUCCEEDED" : "FAILED",
     roleRegressionsVerified: reportMode === "passed",
-    roleRegressionsMeasurement: reportMode === "passed" ? "PASS" : reportMode === "skipped" ? "FAIL" : "UNAVAILABLE",
+    roleRegressionsMeasurement: reportMode === "passed" ? "PASS" : hasReport ? "FAIL" : "UNAVAILABLE",
+    roleRegressionCases: verdicts(({ skipped: { 1: "skipped" }, leaky: { 2: "failed" } } as Record<string, Record<number, string>>)[reportMode] ?? {},
+      hasReport ? "passed" : "missing"),
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" });
   const publication = path.join(runnerTemp, "pilot-role-audit-public");
   expect(JSON.parse(readFileSync(path.join(publication, "results.json"), "utf8"))).toEqual(outcome);
@@ -436,13 +528,13 @@ test.each([
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
   expect(manifest.runContext).toEqual(outcome.runContext);
   expect(manifest.measurement).toMatchObject({ complete, execution: outcome.execution, sha, role: "OWNER" });
-  expect(manifest.files.some((file: { path: string }) => file.path === "role-results.json")).toBe(reportMode === "passed" || reportMode === "skipped");
-  if (reportMode === "passed" || reportMode === "skipped") {
+  expect(manifest.files.some((file: { path: string }) => file.path === "role-results.json")).toBe(hasReport);
+  if (hasReport) {
     expect(JSON.parse(execFileSync(tar, ["-xOf", decoded, "role-results.json"], { encoding: "utf8" }))).toEqual(report);
   }
   expect(execFileSync(tar, ["-xOf", decoded, "browser.log"], { encoding: "utf8" })).toBe(canary + canary.toLowerCase() +
     (exitCode === 0 ? "" : failureMarker + "\nAttestation backend failures: request=42e39a239aecaeb1 class=RangeError category=unclassified location=unavailable\n"));
-  expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toMatch(/42e39a239aecaeb1|Synthetic.QA|EXAMPLE.INVALID/);
+  expect(readFileSync(path.join(publication, "results.json"), "utf8")).not.toMatch(/42e39a239aecaeb1|Synthetic.QA|EXAMPLE.INVALID|SENTINEL/);
   expect(readdirSync(runnerTemp).sort()).toEqual(["deal-scenarios-output.log", "pilot-role-audit-public"]);
   expect(readFileSync(path.join(sharedResults, "caller-owned.txt"), "utf8")).toBe("caller-owned results");
   expect(readFileSync(path.join(runnerTemp, "deal-scenarios-output.log"), "utf8")).toBe("caller-owned scenario log");
