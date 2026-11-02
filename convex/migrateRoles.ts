@@ -255,23 +255,25 @@ export const backfillAccountantExpensePermissions = internalMutation({
 
 /**
  * SCRUM-886 round 13 (owner ruling comment 24358): the default ACCOUNTANT template gained `view:cost_price` because finalizing a
- * SOURCED car's deal now needs it. A template change does not reach orgs that were seeded before it (there is no template sync;
- * `organizations.ts` seeds the templates once, at org creation), so this is the rollout for those orgs.
+ * SOURCED car's deal now needs it. A template change does not reach orgs that were seeded before it (`organizations.ts` seeds the
+ * templates once, at org creation, and `memberships.syncRolePermissionsToTemplate` runs only when an owner calls it), so this is the
+ * rollout for those orgs.
  *
  * Wired into the Deploy production rollout step (`scripts/rolloutRelease.mjs`, SCRUM-896, owner ruling SCRUM-886 c24372: after the
  * deploy, automatically). The script calls it through the operator key, 100 roles per page, until `isDone`, and prints counts only:
  * `updates` names roles and organizations, and the job log is public.
  *
  * Bounded and idempotent: one page of roles per call (`numItems`, default 100, at most 500; pass the returned `continueCursor`
- * back until `isDone`), and a role that already holds the grant is not written, so a re-run resumes. Matches the ROLE NAME (normalized, so `ACCOUNTANT`
- * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every other custom role are left
- * alone, and a deleted row is never written. A custom role that holds a sale-completing permission without `view:cost_price` is
- * NOT changed here: it is refused at the completion door and surfaced to its owner through the role-save rule.
+ * back until `isDone`), and a role that already holds the grant is not written, so a re-run resumes.
  *
- * Only an ACCOUNTANT that holds a sale-completing permission (`SALE_COMPLETING_PERMISSIONS`) and lacks `view:cost_price` is repaired:
- * exactly the combination the role-save rule refuses (`completesSalesWithoutCostAccess`) and the completion doors refuse. That makes
- * it safe to run on every deploy. An owner who saved the role without `view:cost_price` and without any sale-completing permission
- * made a valid choice, and a recurring system job must not undo it (SCRUM-896 Seat 1 R1-F1).
+ * A role is repaired only when BOTH hold:
+ * - its name normalizes to ACCOUNTANT (`ACCOUNTANT` and ` Accountant ` both match), because that is what the template seeded;
+ * - `completesSalesWithoutCostAccess(role.permissions)` is true: it holds a sale-completing permission and lacks `view:cost_price`,
+ *   exactly the combination the role-save rule and the completion doors refuse.
+ * Every other role is left alone: a renamed ACCOUNTANT, a role of any other name, a deleted row, and an ACCOUNTANT whose owner saved
+ * it without `view:cost_price` and without any sale-completing permission (a valid choice a recurring job must not undo). Because
+ * the role-save rule refuses the repaired combination, only a role stored before that rule can match, so the run is safe on every
+ * deploy. A role of another name in that state is not changed here: the completion door refuses it.
  */
 export const backfillAccountantCostPriceAccess = internalMutation({
   args: {

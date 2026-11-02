@@ -70,10 +70,16 @@ dropping the automatic run contradicts c24372.
 
 Disclosed limit: the name cannot tell a custom role from the legacy default when both hold a completing permission without
 `view:cost_price`. Only a role stored before round 13 can be in that state, because `roles.create` and `roles.update` refuse it.
+So a custom role an owner named ACCOUNTANT (or ` Accountant `, since the name is normalized) and gave a sale-completing
+permission before this release receives `view:cost_price` in the same rollout as the default role. The owner is told this before
+the deploy (SCRUM-896 c24390).
 
 ### What is not changed
 
-- A custom role and a renamed ACCOUNTANT role are untouched. The mutation matches the normalized role name `ACCOUNTANT`.
+- A renamed ACCOUNTANT role and every role of another name are untouched. The mutation matches the normalized role name
+  `ACCOUNTANT`. The one exception is the disclosed limit above.
+- A role synced to the template by `memberships.syncRolePermissionsToTemplate` already holds `view:cost_price`, so the run
+  changes nothing for it (pinned by a test).
 - An ACCOUNTANT role that holds no sale-completing permission is untouched, whatever else it holds.
 - A deleted role row is never written.
 - No other permission is granted, and nothing is revoked.

@@ -927,6 +927,26 @@ describe("SCRUM-896 R1-F1 / R3-F1: the per-deploy ACCOUNTANT backfill repairs on
     await expectCostWithheld(s, actor, vehicleId);
   });
 
+  // Row (3b): the template-sync writer (memberships.syncRolePermissionsToTemplate). It writes the template verbatim, and no
+  // template is in the repaired state, so the sync and the per-deploy run never fight over a role.
+  test("an owner syncs a legacy ACCOUNTANT to the template: the template grants view:cost_price and the next deploy run changes nothing", async () => {
+    const s = await seed();
+    const roleId = await insertLegacyAccountant(s);
+    const vehicleId = await stockCar(s);
+    const actor = await memberIn(s, roleId, "scrum896_template_sync_member");
+    const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT")?.permissions ?? [];
+    expect(template).toContain("view:cost_price");
+
+    await s.actors.owner.mutation(api.memberships.syncRolePermissionsToTemplate, { orgId: s.orgId });
+    expect(await permissionsOf(s, roleId)).toEqual([...template]);
+
+    const nextDeploy = await runBackfill(s);
+
+    expect(nextDeploy.updatedCount).toBe(0);
+    expect(await permissionsOf(s, roleId)).toEqual([...template]);
+    expect((await costDoors(s, actor, vehicleId).read()).purchasePrice).toBe(5_000);
+  });
+
   // Row (4)
   test("an owner deletes the unassigned ACCOUNTANT and recreates a role with that name without completing permissions: the backfill does not grant it and cost stays withheld", async () => {
     const s = await seed();
