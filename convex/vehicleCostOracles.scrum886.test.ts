@@ -202,3 +202,88 @@ describe("SCRUM-886 round 7: importBulk opening-stock replay gives a caller with
     expect(await openingImport(s, "costImporter", "os-886-d", 7_000)).toMatchObject({ inserted: 1 });
   });
 });
+
+/**
+ * SCRUM-886 round 8 (Seat 2 at 7cd0cebf). The PURCHASE-mode import replay is the same oracle class as the
+ * opening-stock one. A create-only caller who replays a known import key and the vehicle's facts with the
+ * stored price gets `alreadyRecorded: 1`; with any other price it gets IDEMPOTENCY_CONFLICT. The import key
+ * is client-supplied, not an authorization credential, so "no reader exposes it" is no defence. The rule
+ * is general: a caller who cannot read cost may not run an import that compares a cost with a stored
+ * fingerprint of it. PURCHASE and OPENING_STOCK-with-an-import-id both do; the legacy OPENING_STOCK call
+ * without an import id does not, and stays open to a create-only caller.
+ */
+const PURCHASE_VIN = "PURCHASE886VIN0001";
+const STORED_PURCHASE_COST = 8_000;
+const purchaseRow = (price?: number, rowId = 1, vin = PURCHASE_VIN) => ({
+  rowId, vin, make: "Kia", model: "Sportage", year: 2023, color: "Silver", fuelType: "Petrol",
+  transmission: "Automatic", sellingPrice: 15_000, sourceType: "STOCK",
+  ...(price === undefined ? {} : { purchasePrice: price }),
+});
+const purchaseImport = (s: Seeded, who: Who, importId: string, rows: ReturnType<typeof purchaseRow>[]) =>
+  s.actors[who].mutation(api.vehicles.importBulk, {
+    orgId: s.orgId, acquisitionPosting: "PURCHASE", importId, purchasePaymentMethod: "CASH", vehicles: rows,
+  });
+
+describe("SCRUM-886 round 8: importBulk PURCHASE replay gives a caller without cost access no equality oracle", () => {
+  test("a create-only caller replaying a known PURCHASE row is refused for the stored price and for a different one, identically", async () => {
+    const s = await seed();
+    await purchaseImport(s, "owner", "pur-886-a", [purchaseRow(STORED_PURCHASE_COST)]);
+    const equal = await refusalDataOf(purchaseImport(s, "importer", "pur-886-a", [purchaseRow(STORED_PURCHASE_COST)]));
+    const different = await refusalDataOf(purchaseImport(s, "importer", "pur-886-a", [purchaseRow(STORED_PURCHASE_COST + 1)]));
+    expect(equal).toEqual(different);
+    expect(equal?.code).toBe(COST_ACCESS_CODE);
+    expect(different?.code).toBe(COST_ACCESS_CODE);
+  });
+
+  test("the refusal does not depend on the import key being known, on the price, or on a price being present", async () => {
+    const s = await seed();
+    await purchaseImport(s, "owner", "pur-886-b", [purchaseRow(STORED_PURCHASE_COST)]);
+    const known = await refusalDataOf(purchaseImport(s, "importer", "pur-886-b", [purchaseRow(STORED_PURCHASE_COST)]));
+    const fresh = await refusalDataOf(purchaseImport(s, "importer", "pur-886-fresh", [purchaseRow(STORED_PURCHASE_COST + 1)]));
+    const priceless = await refusalDataOf(purchaseImport(s, "importer", "pur-886-b", [purchaseRow(undefined)]));
+    expect(fresh).toEqual(known);
+    expect(priceless).toEqual(known);
+    expect(known?.code).toBe(COST_ACCESS_CODE);
+  });
+
+  test("the refusal comes before any write: vehicles, evidence and journals are untouched", async () => {
+    const s = await seed();
+    await purchaseImport(s, "owner", "pur-886-c", [purchaseRow(STORED_PURCHASE_COST)]);
+    const rows = () => s.t.run(async (ctx) => ({
+      vehicles: (await ctx.db.query("vehicles").collect()).map((row) => [row.vin, row.purchasePrice ?? null]),
+      commands: (await ctx.db.query("commandIdempotency").collect()).length,
+      journals: (await ctx.db.query("journalEntries").collect()).length,
+    }));
+    const before = await rows();
+    await refusalDataOf(purchaseImport(s, "importer", "pur-886-c", [purchaseRow(STORED_PURCHASE_COST + 1)]));
+    await refusalDataOf(purchaseImport(s, "importer", "pur-886-new", [purchaseRow(9_500, 2, "PURCHASE886VIN0002")]));
+    expect(await rows()).toEqual(before);
+    expect(before.vehicles).toContainEqual([PURCHASE_VIN, STORED_PURCHASE_COST]);
+  });
+
+  test("control: a create caller who holds view:cost_price keeps the proven replay on a match and the conflict on a mismatch", async () => {
+    const s = await seed();
+    await purchaseImport(s, "owner", "pur-886-d", [purchaseRow(STORED_PURCHASE_COST)]);
+    expect(await purchaseImport(s, "costImporter", "pur-886-d", [purchaseRow(STORED_PURCHASE_COST)]))
+      .toMatchObject({ inserted: 0, alreadyRecorded: 1 });
+    const mismatch = await refusalDataOf(purchaseImport(s, "costImporter", "pur-886-d", [purchaseRow(STORED_PURCHASE_COST + 1)]));
+    expect(mismatch?.message).toMatch(/IDEMPOTENCY_CONFLICT/);
+    expect(mismatch?.code).not.toBe(COST_ACCESS_CODE);
+  });
+
+  test("control: a create caller who holds view:cost_price can run a fresh PURCHASE import", async () => {
+    const s = await seed();
+    expect(await purchaseImport(s, "costImporter", "pur-886-e", [purchaseRow(7_000)])).toMatchObject({ inserted: 1, alreadyRecorded: 0 });
+  });
+
+  test("a create-only caller can still run the legacy opening-stock import (no import id, no proof): a row with no cost key is inserted", async () => {
+    const s = await seed();
+    const { rowId: _rowId, ...legacyRow } = purchaseRow(undefined);
+    const result = await s.actors.importer.mutation(api.vehicles.importBulk, {
+      orgId: s.orgId, acquisitionPosting: "OPENING_STOCK", vehicles: [legacyRow],
+    });
+    expect(result).toMatchObject({ inserted: 1, skipped: 0, alreadyRecorded: 0 });
+    const stored = (await s.t.run((ctx) => ctx.db.query("vehicles").collect())).filter((row) => row.vin === PURCHASE_VIN);
+    expect(stored.map((row) => row.purchasePrice)).toEqual([undefined]);
+  });
+});
