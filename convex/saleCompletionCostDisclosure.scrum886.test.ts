@@ -259,7 +259,7 @@ describe("SCRUM-886 round 10: actorMayReadVehicleCost derives the answer from th
     expect(await answer("financeNonReader")).toBe(false);
   });
 
-  test("no actor, no membership, an offboarding membership, and a cost role held in another organization all answer false", async () => {
+  test("no actor, no membership, an offboarding membership, and a cost role from another organization all answer false", async () => {
     const s = await seed();
     const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other Org", createdAt: Date.now() }));
     const costRoleOther = await s.t.run((ctx) =>
@@ -273,7 +273,11 @@ describe("SCRUM-886 round 10: actorMayReadVehicleCost derives the answer from th
     await s.t.run((ctx) =>
       ctx.db.insert("memberships", { orgId: s.orgId, userId: leavingId, roleId: costRole, offboardingStatus: "PENDING_EXTERNAL_REMOVAL" })
     );
+    // A membership of this organization whose role row belongs to another organization is not a cost role here.
+    const misfiledId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum886s_misfiled", email: "misfiled@test.com", name: "misfiled" }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId: misfiledId, roleId: costRoleOther }));
     const answer = (userId: Id<"users"> | undefined) => s.t.run((ctx) => actorMayReadVehicleCost(ctx, s.orgId, userId));
+    expect(await answer(misfiledId)).toBe(false);
     expect(await answer(undefined)).toBe(false);
     expect(await answer(strangerId)).toBe(false);
     expect(await answer(elsewhereId)).toBe(false);
