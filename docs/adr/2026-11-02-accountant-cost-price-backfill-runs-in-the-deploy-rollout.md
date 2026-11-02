@@ -64,6 +64,12 @@ before that verification does.
 A page can be short or empty before `isDone` is true (Convex pagination makes no promise about page size). The helper
 therefore treats only `isDone` as the end, and refuses only a cursor that comes back unchanged.
 
+The phase runs on the shared cursor walker (`walkCursorPages` in `scripts/releaseGuard.ts`), the loop the supplier registry
+phases already use. The walker checks the shared deadline before and after every page call, so a page whose call returns past
+the deadline is refused instead of accepted as complete. The phase supplies only its refusal label and its page parser. The
+other hand-written loops (the bank balance rebuild, the supplier VAT hold recovery and the supplier identity phases) do not use
+the walker yet; moving them onto it is follow-up work.
+
 ## Class table: every door through which `view:cost_price` reaches a stored role
 
 | Door | Who authorizes it | Affects |
