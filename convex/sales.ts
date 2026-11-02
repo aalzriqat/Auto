@@ -42,7 +42,7 @@ import { deriveCommissionStatus, isCommissionOwed } from "./utils/commission";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { auditLog } from "./financialAudit";
 import { effectiveCommissionMode, isAutoCommissionMode } from "./utils/commissionMode";
-import { classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
+import { assertActorMayCompleteConsignedSale, classifySaleTimeCredits, customerBilledLinesMinor, sumBilledLinesMinor, completeExistingSale, completeSale, completeSalesForLineItems, computeAutoCommissionAmount, createDraftSale, financedMarginOf, CONSIGNED_RECALC_NEEDS_FROZEN_MARGIN, COMMISSION_BASE_UNUSABLE_RECALC_CODE, type CommissionBase } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { assertNoSaleLinkedLegacyReceivable } from "./utils/saleDebtContainment";
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
@@ -671,6 +671,10 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    // SCRUM-886 round 13: completing a SOURCED car's sale needs view:cost_price. The FIRST decision after auth: it depends only on
+    // the car's sourceType and the actor's role, so no refusal below can answer for a caller who may not read vehicle cost.
+    await assertActorMayCompleteConsignedSale(ctx, { orgId: args.orgId, actorId: user._id, vehicleIds: [args.vehicleId] });
+
     // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
     // Refused after auth and ahead of the rate limiter, validation and the idempotency claim.
     if (args.depositResolution?.treatment === "OTHER" && DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED) {
@@ -773,6 +777,18 @@ export const completeFromQuote = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-886 round 13: as `create`, for EVERY line of the quote, before any line is touched. A quote that cannot be read here is
+    // left to the door's own refusal below.
+    const quoteForCostAccess = await ctx.db.get(args.quoteId);
+    if (quoteForCostAccess && quoteForCostAccess.orgId === args.orgId) {
+      const lines = quoteForCostAccess.vehicleItems ?? [{ vehicleId: quoteForCostAccess.vehicleId }];
+      await assertActorMayCompleteConsignedSale(ctx, {
+        orgId: args.orgId,
+        actorId: user._id,
+        vehicleIds: lines.map((line) => line.vehicleId),
+      });
+    }
 
     // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
     // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.
@@ -920,6 +936,16 @@ export const completeDraft = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    // SCRUM-886 round 13: as `create`, for the draft's car. A draft that cannot be read here is left to the door's own refusal.
+    const draftForCostAccess = await ctx.db.get(args.saleId);
+    if (draftForCostAccess && draftForCostAccess.orgId === args.orgId) {
+      await assertActorMayCompleteConsignedSale(ctx, {
+        orgId: args.orgId,
+        actorId: user._id,
+        vehicleIds: [draftForCostAccess.vehicleId],
+      });
+    }
 
     // SCRUM-801: OTHER leaves the liability for a manual journal, which the pilot has switched off.
     // Refused after auth and ahead of the rate limiter and the idempotency claim, so it precedes the first write.

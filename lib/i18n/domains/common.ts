@@ -679,6 +679,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
+  // SCRUM-886 round 13. The English text must equal SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE in convex/roles.ts.
+  ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS: [
+    "A role that can create sales or confirm finance disbursements must also be able to see vehicle costs, because completing the sale of a sourced car depends on them. Add \"View Cost Price\" to this role, or remove the sales permission.",
+    "الدور الذي يستطيع إنشاء المبيعات أو تأكيد صرف التمويل يجب أن يملك أيضاً صلاحية الاطلاع على تكلفة السيارات، لأن إتمام بيع سيارة المورّد يعتمد عليها. أضف صلاحية \"عرض سعر التكلفة\" إلى هذا الدور، أو أزل صلاحية المبيعات.",
+  ],
   ServerError_PERMISSION_RETIRED: [
     "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
     "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",

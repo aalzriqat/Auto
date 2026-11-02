@@ -2083,6 +2083,38 @@ async function beginSaleCompletionSideEffects(
 }
 
 /**
+ * SCRUM-886 round 13 (owner ruling SCRUM-886 comment 24358, OWASP API3:2023 and API5:2023): completing or finalizing a sale of a
+ * SOURCED (consigned) vehicle needs `view:cost_price`, on every completion door.
+ *
+ * Rounds 10-12 closed the cost oracle channel by channel (refusal text, refusal order, order across quote lines). The class is closed
+ * here by PERMISSION: an actor who cannot read vehicle cost is refused before any decision that could depend on it, so there is no
+ * channel left to close. Each door (`sales.create`, `sales.completeDraft`, `sales.completeFromQuote`, `applications.finalizeDeal`)
+ * calls this as its FIRST decision after authentication, ahead of every refusal that reads server state and ahead of the begin stage.
+ *
+ * The decision depends only on the vehicle's `sourceType` (an OPEN-tier field) and the actor's role, never on a cost value, and it
+ * reuses `actorMayReadVehicleCost`, which fails closed (no actor, no membership, offboarding, a role from another org). A vehicle
+ * that does not exist, or that belongs to another organization, is left to the door's own refusal: this function must not say
+ * anything about another tenant's rows. The refusal is the existing coded `CONSIGNED_SALE_NEEDS_COST_ACCESS`, whose EN/AR text names
+ * no amount.
+ */
+export async function assertActorMayCompleteConsignedSale(
+  ctx: QueryCtx,
+  args: { orgId: Id<"organizations">; actorId: Id<"users"> | undefined; vehicleIds: ReadonlyArray<Id<"vehicles">> }
+): Promise<void> {
+  let carriesConsignedCar = false;
+  for (const vehicleId of args.vehicleIds) {
+    const vehicle = await ctx.db.get(vehicleId);
+    if (vehicle && vehicle.orgId === args.orgId && vehicle.sourceType === "SOURCED") {
+      carriesConsignedCar = true;
+      break;
+    }
+  }
+  if (!carriesConsignedCar) return;
+  if (await actorMayReadVehicleCost(ctx, args.orgId, args.actorId)) return;
+  throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+}
+
+/**
  * SCRUM-886 round 12, STAGE 2 of a completion's side effects: the consigned cost gate.
  *
  * This is the only place a consigned car's stored supplier entitlement (a COST-tier value) is compared with the caller's price,
@@ -2109,6 +2141,13 @@ async function passSupplierCostGate(ctx: MutationCtx, staged: StagedSaleCompleti
     if (callerMayReadCost) throw new ConvexError(specificSentence());
     throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
   };
+
+  // SCRUM-886 round 13: backstop behind the door check (`assertActorMayCompleteConsignedSale`). A completion of a consigned car by an
+  // actor who cannot read vehicle cost never gets past the doors; if a future caller of `completeSale` forgets that check, this
+  // refuses the same way, before any cost-derived decision, instead of committing a sale the actor could probe.
+  if (isSourced && !callerMayReadCost) {
+    throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+  }
 
   // The deposit stage's cost-derived refusal (the missing cost or the margin built from it), first, as it always was.
   if (pre.deferredDepositCostRefusal !== undefined) {

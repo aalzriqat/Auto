@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { MutationCtx, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
@@ -248,6 +249,49 @@ export const backfillAccountantExpensePermissions = internalMutation({
     }
 
     return { updatedCount, updates };
+  },
+});
+
+/**
+ * SCRUM-886 round 13 (owner ruling comment 24358): the default ACCOUNTANT template gained `view:cost_price` because finalizing a
+ * SOURCED car's deal now needs it. A template change does not reach orgs that were seeded before it (there is no template sync;
+ * `organizations.ts` seeds the templates once, at org creation), so this is the rollout for those orgs.
+ *
+ * Run BY HAND, once, with `npx convex run migrateRoles:backfillAccountantCostPriceAccess` against a deployment the owner has
+ * approved. It is not wired into any deploy workflow and nothing in the repository calls it.
+ *
+ * Bounded and idempotent: one page of roles per call (`numItems`, default 100, at most 500; pass the returned `continueCursor`
+ * back until `isDone`), and a role that already holds the grant is not written. Matches the ROLE NAME (normalized, so `ACCOUNTANT`
+ * and ` Accountant ` both match) because that is what the template seeded; a renamed ACCOUNTANT role and every custom role are left
+ * alone, and a deleted row is never written. A custom role that holds a sale-completing permission without `view:cost_price` is
+ * NOT changed here: it is refused at the completion door and surfaced to its owner through the role-save rule.
+ */
+export const backfillAccountantCostPriceAccess = internalMutation({
+  args: {
+    numItems: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.object({
+    updatedCount: v.number(),
+    updates: v.array(v.string()),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("roles")
+      .paginate({ numItems: Math.min(Math.max(Math.floor(args.numItems ?? 100), 1), 500), cursor: args.cursor ?? null });
+    let updatedCount = 0;
+    const updates: string[] = [];
+    const accountant = normalizeRoleName("ACCOUNTANT");
+
+    for (const role of page.page) {
+      if (role.isDeleted) continue;
+      if (normalizeRoleName(role.name) !== accountant) continue;
+      if (await patchRoleIfNeeded(ctx, role, new Set([PERMISSIONS.VIEW_COST_PRICE]), updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates, isDone: page.isDone, continueCursor: page.continueCursor };
   },
 });
 

@@ -295,6 +295,10 @@ export const AppErrorCode = {
   // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
   // ServerError_<code>.
   PERMISSION_RETIRED: "PERMISSION_RETIRED",
+  // SCRUM-886 round 13 (owner ruling comment 24358). `roles.create` / `roles.update` refuse to save a role that holds a
+  // sale-completing permission (`create:sales`, `confirm:finance_disbursement`) without `view:cost_price`. Message in
+  // convex/roles.ts; translated under ServerError_<code>.
+  SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS: "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS",
   // SCRUM-413 D-37. `cancelApplication` / `sales.cancelSale` refuse to cancel a CLOSED v2 deal
   // while the payment to the finance company is unsettled (`forwardCancelRefusal`). One code per
   // distinct reason; the EN dictionary text equals the server message. Translated under
