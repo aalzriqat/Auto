@@ -46,8 +46,8 @@ was read from comments, PRs and runs.
 | CERTIFIED COMPLETE | 2 |
 | DEPLOYED/NOT VERIFIED | 23 |
 | MERGED/NOT DEPLOYED | 8 (one of them also BLOCKED) |
-| IN REVIEW | 13 |
-| IN PROGRESS | 28 |
+| IN REVIEW | 11 |
+| IN PROGRESS | 30 |
 | NOT STARTED | 32 |
 | BLOCKED | 4 (plus the blocked merged row) |
 | OWNER DECISION | 10 |
@@ -144,7 +144,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
-| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (a38cdb865, round 8) | IN REVIEW `[Seat 1 Opus, Seat 2 Codex]` | Round 8 pushed at a38cdb865 (SCRUM-886 c24349): importBulk refuses PURCHASE and id-bearing opening-stock imports from a non-reader by role and mode before any probe or comparison; red run 3/15 on the pre-fix blob; typechecks exit 0; baseline 938/0/0 stale. CI pending at a38cdb865; seat waiter armed (fresh Seat 1 id). Rendered EN/AR checks of the hidden landed-cost section and import entry points owed (F9). |
+| E1 | Vehicle cost fields hidden from roles without `view:cost_price`; ACCOUNTANT keeps cost via `view:reports`. | SCRUM-886, PR #746 (a38cdb865 → round 9) | IN PROGRESS `[Sonnet]` | Round 8 at a38cdb865: CI fully green (swarm 66/66), Seat 1 CERTIFY (6568553250), Seat 2 CHANGES_REQUESTED (6568553497): new MEDIUM privacy oracle, vehicles.create idempotency replay compares a cost fingerprint for any same-org key holder (SCRUM-886 c24350). Accepted; round 9 dispatched 03:47Z to close the class (actor-bound replay in runWithIdempotency evaluated against per-mutation gates). Third sibling finding in a row. Rendered EN/AR checks owed (F9). |
 | E1.1 | Remaining finance-editor variants without `view:cost_price`. | SCRUM-886#c24247 | OWNER DECISION `[OWNER]` | ACCOUNTANT ruled; other variants open. |
 | E2 | Sidebar role visibility (SCRUM-890) deployable only after a green Pilot Role Audit. | SCRUM-890, PR #749 (89ccd15a) | MERGED/NOT DEPLOYED, BLOCKED `[Coord]` | Hold ruling c24239. |
 | E3 | Pilot Role Audit green on main (six roles, 136 cells each). | SCRUM-891, PR #751 (5284d625), `pilot-role-audit.yml` | BLOCKED `[Coord]` | Run 41297986256 at 5284d625 FAILED (5/6 roles) after the fixture fix; cause unknown, evidence GPG-encrypted. |
@@ -192,7 +192,7 @@ Select-String -Path docs/pilot/master-pilot-task-list.md -Pattern '^\| [A-H]\d' 
 | ID | Task and acceptance | Jira / PR | Status | Blocker, evidence, last verified |
 | --- | --- | --- | --- | --- |
 | G1 | Serial merge train completed: #746 → #737 re-seat → #740 last. | SCRUM-886, 811, 842 | IN REVIEW `[Coord]` | #746 at e5b90ddc CI running; #737 and #740 CONFLICTING, re-seat after remerge. |
-| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN REVIEW `[Seat 1 Opus, Seat 2 Codex]` | Round 8 body published with the fenced round-8 red run; checker fails only on the Seat 1 session line; seats run after green CI at a38cdb865. |
+| G1.1 | #746 seats CERTIFY, body with fenced Red run and /simplify, checker exit 0, three comment surfaces read, merge. | PR #746 | IN PROGRESS `[Sonnet]` | Round 8 seats split (c24350); round 9 in progress; body seat lines pending at the next head. |
 | G1.2 | #737 remerge, fresh seats at the new head, merge. | PR #737 | NOT STARTED `[Coord]` | After #746. |
 | G1.3 | #740 remerge, fresh seats, merge (last). | PR #740 | NOT STARTED `[Coord]` | After #737. |
 | G2 | Convex preview I/O quota managed (40.45/50 GB on 2026-11-01, about 6 GB/day). | SCRUM-892 (#752 c186c640), 807, 809 | OWNER DECISION `[OWNER]` | Spending limit question open; serial train in force; quota exhaustion stops every preview-backed check. |
@@ -286,3 +286,4 @@ Inputs: serial train throughput 4 to 6 h per PR with two seats; release cycle 3 
 | 2026-11-02 01:40 | #746 round 7 pushed at 7cd0cebf (SCRUM-886 c24347): both oracles closed, baseline 938/0. E1 and G1.1 back to IN REVIEW (13 / 28). CI running, seats armed. |
 | 2026-11-02 02:25 | #746 round 7 at 7cd0cebf: CI fully green, Seat 1 CERTIFY, Seat 2 CHANGES_REQUESTED (PURCHASE replay oracle, c24348). Round 8 dispatched. E1 and G1.1 back to IN PROGRESS (11 / 30). Critical path slips a second fix round. |
 | 2026-11-02 02:56 | #746 round 8 pushed at a38cdb865 (c24349): mode-and-role gate in importBulk, red run 3/15, typechecks 0, baseline 938/0. Body republished; seat waiter armed with a fresh Seat 1 id. E1 and G1.1 to IN REVIEW (13 / 28). Main 9139d164 unchanged. |
+| 2026-11-02 03:47 | #746 round 8 at a38cdb865: CI fully green, Seat 1 CERTIFY, Seat 2 CHANGES_REQUESTED (vehicles.create idempotency replay oracle, c24350). Round 9 dispatched to close the class by mechanism. E1 and G1.1 back to IN PROGRESS (11 / 30). Critical path slips a third fix round; earliest launch window now unlikely. |
