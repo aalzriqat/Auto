@@ -175,6 +175,9 @@ export const AppErrorCode = {
   // cannot replay after it; the org cannot be reactivated mid-reset. Translated under
   // ServerError_<code>.
   COMMAND_RECORDED_BEFORE_RESET: "COMMAND_RECORDED_BEFORE_RESET",
+  // SCRUM-886. A command identity is replayed only by the actor that minted it. Message in
+  // convex/utils/idempotency.ts; translated under ServerError_<code>.
+  COMMAND_IDENTITY_FOREIGN_ACTOR: "COMMAND_IDENTITY_FOREIGN_ACTOR",
   ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
   // SCRUM-571 S1 (c21732). Receipt containment: a payment link is created only against a debt
   // and never for more than that debt still owes, and its money arrives only through intent

@@ -292,7 +292,13 @@ describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOS
     });
   }
 
-  test("a CANCEL_CLOSED-only holder replaying a CREATE holder's key is served the stored outcome and changes nothing", async () => {
+  // SCRUM-886 round 9 supersedes the earlier "served the stored outcome" half of
+  // this test: a command identity belongs to the actor that minted it, so the
+  // other holder is refused (not served) and, as before, nothing changes. The
+  // entry gate still bounds who may reach the door; the actor binding now bounds
+  // who may replay a key. Web keys are a fresh UUID per intent, so no caller loses
+  // anything. The no-change half of the property is kept verbatim.
+  test("a CANCEL_CLOSED-only holder replaying a CREATE holder's key is refused as another actor's request and changes nothing", async () => {
     const s = await seed("replay");
     const applicationId = await underReview(s);
     const key = crypto.randomUUID();
@@ -304,8 +310,11 @@ describe("SCRUM-413 PR-B D-b - the entry gate and replay across actors (non-CLOS
 
     // A CANCEL_CLOSED-only holder (no CREATE) replays K with the same args.
     const replay = await refusalOf(cancelAs(s, applicationId, "CANCEL_ONLY", key));
-    expect(replay).toBeNull();
-    // Served from the stored record: no new mutation of any kind, not even a new record.
+    expect(replay).toMatch(/started by a different user/);
+    // Refused before the body: no new mutation of any kind, not even a new record.
+    expect(await snapshot(s, applicationId)).toBe(afterFirst);
+    // The minting actor's own retry is still served the stored outcome.
+    expect(await refusalOf(cancelAs(s, applicationId, "SALES", key))).toBeNull();
     expect(await snapshot(s, applicationId)).toBe(afterFirst);
   });
 

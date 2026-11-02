@@ -3744,8 +3744,9 @@ export const cancelApplication = mutation({
     // known until the application is loaded inside the idempotent body. So the
     // entry admits EITHER holder (CREATE for every status but CLOSED;
     // CANCEL_CLOSED for CLOSED), and the body then requires the one that
-    // matches the loaded status. A replay is keyed by org + operation + key,
-    // not by actor, so this entry gate is what bounds who may be served one.
+    // matches the loaded status. A replay is keyed by org + operation + key and
+    // is served only to the actor that minted the key (SCRUM-886 round 9), so
+    // this entry gate bounds who may reach the door, not who may replay.
     let createRefusal: unknown = null;
     let auth: Awaited<ReturnType<typeof requireTenantAuth>>;
     try {

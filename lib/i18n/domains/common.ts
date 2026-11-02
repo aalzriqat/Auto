@@ -173,6 +173,11 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
   ],
+  // SCRUM-886. The English text must equal the server message in convex/utils/idempotency.ts.
+  ServerError_COMMAND_IDENTITY_FOREIGN_ACTOR: [
+    "This request was started by a different user and cannot be repeated from this account. Start a new operation.",
+    "بدأ هذا الطلب مستخدم آخر ولا يمكن إعادة إرساله من هذا الحساب. يرجى بدء عملية جديدة.",
+  ],
   // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
   // and convex/collections.ts respectively.
   ServerError_PAYMENT_LINK_TARGET_REQUIRED: [
