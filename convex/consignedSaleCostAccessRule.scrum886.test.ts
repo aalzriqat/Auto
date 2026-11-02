@@ -388,6 +388,86 @@ describe("SCRUM-886 round 13 rule 2: applications.finalizeDeal", () => {
   });
 });
 
+/** The draft door: a PENDING save commits nothing, so it is not a completion and the rule does not apply to it. */
+const saveDraft = (s: Seeded, who: Who, vehicleId: Id<"vehicles">, salePrice: number) =>
+  s.actors[who].mutation(api.sales.createDraft, {
+    idempotencyKey: crypto.randomUUID(), orgId: s.orgId, vehicleId, customerId: s.customerId,
+    salespersonId: s.userIds[who], salePrice, saleDate: Date.now(), financingType: "CASH" as const,
+    supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
+  });
+
+/** How many rows each table that a completion would touch holds, plus the status of every car. */
+async function writeCountsOf(s: Seeded) {
+  return s.t.run(async (ctx) => ({
+    sales: (await ctx.db.query("sales").take(1000)).length,
+    commands: (await ctx.db.query("commandIdempotency").take(1000)).length,
+    queued: (await ctx.db.query("pendingAccountingEvents").take(1000)).length,
+    payments: (await ctx.db.query("canonicalPayments").take(1000)).length,
+    payables: (await ctx.db.query("vehicleSupplierPayables").take(1000)).length,
+    applications: (await ctx.db.query("depositApplications").take(1000)).length,
+    vehicles: (await ctx.db.query("vehicles").take(1000)).map((v) => [v._id, v.status]),
+  }));
+}
+
+describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
+  test("sales.createDraft saves a PENDING draft of a SOURCED car for a role without view:cost_price at one fils below the entitlement and at it with the same response shape and the same writes", async () => {
+    const s = await seed();
+    // Automatic commission is the one draft step that reads the car's cost (sourceCost). Its result is discarded, so the answer
+    // must not change with the price.
+    await s.t.run(async (ctx) => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+      await ctx.db.patch(settings!._id, { commissionMode: "AUTO_MEMBER" });
+      const membership = await ctx.db.query("memberships").withIndex("by_user", (q) => q.eq("userId", s.userIds.nonReader)).first();
+      await ctx.db.patch(membership!._id, { commissionRate: 5 });
+    });
+    const outcomes: Array<{ ids: Id<"sales">; deltas: Record<string, unknown>; row: Record<string, unknown> }> = [];
+    for (const price of [ONE_FILS_SHORT, ENTITLEMENT]) {
+      const car = await consignedCar(s);
+      const before = await writeCountsOf(s);
+      const saleId = await saveDraft(s, "nonReader", car, price);
+      const after = await writeCountsOf(s);
+      const row = await s.t.run(async (ctx) => {
+        const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, ...rest } = (await ctx.db.get(saleId))!;
+        void _id; void _creationTime; void salePrice; void vehicleId; void idempotencyKey;
+        return rest as Record<string, unknown>;
+      });
+      expect(typeof saleId, `the response at ${price} is one sale id`).toBe("string");
+      expect(after.vehicles, `the car at ${price} is untouched`).toEqual(before.vehicles);
+      outcomes.push({
+        ids: saleId,
+        deltas: {
+          sales: after.sales - before.sales, commands: after.commands - before.commands, queued: after.queued - before.queued,
+          payments: after.payments - before.payments, payables: after.payables - before.payables,
+          applications: after.applications - before.applications,
+        },
+        row,
+      });
+    }
+    expect(outcomes[0].deltas, "one sale row and the idempotency claim, nothing else").toEqual({
+      sales: 1, commands: 1, queued: 0, payments: 0, payables: 0, applications: 0,
+    });
+    expect(outcomes[1].deltas, "the same writes at the entitlement").toEqual(outcomes[0].deltas);
+    expect(outcomes[1].row, "the same stored draft (apart from id, price and car)").toEqual(outcomes[0].row);
+    expect(outcomes[0].row.status).toBe("PENDING");
+    expect(outcomes[0].row.commissionAmount, "no cost-derived figure is stored on a draft").toBeUndefined();
+  });
+
+  test("a draft saved by a role without view:cost_price is still refused with the coded response when it is completed through sales.completeDraft", async () => {
+    const s = await seed();
+    const payloads: Array<string | null> = [];
+    const drafts: Id<"sales">[] = [];
+    for (const price of [ONE_FILS_SHORT, ENTITLEMENT]) {
+      drafts.push(await saveDraft(s, "nonReader", await consignedCar(s), price));
+    }
+    const before = await worldOf(s);
+    for (const saleId of drafts) payloads.push(await payloadOf(completeDraft(s, "nonReader", saleId)));
+    expectOneCodedRefusal(payloads, "sales.completeDraft of a saved draft");
+    expect(await worldOf(s), "completing the saved draft wrote nothing").toEqual(before);
+    const statuses = await s.t.run(async (ctx) => Promise.all(drafts.map(async (id) => (await ctx.db.get(id))?.status)));
+    expect(statuses).toEqual(["PENDING", "PENDING"]);
+  });
+});
+
 describe("SCRUM-886 round 13 rule 2: what the rule does not touch", () => {
   test("the same role is not refused by this rule on a non-SOURCED car (the sale commits)", async () => {
     const s = await seed();
