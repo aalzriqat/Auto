@@ -1306,7 +1306,14 @@ async function resolveQuoteReservationDeposits(
         customerBillableMinor,
         marginMinor: opts.marginMinor,
       });
-      if (!plan.ok) throw new ConvexError(plan.reason);
+      if (!plan.ok) {
+        // SCRUM-886 round 10: a refusal built from the stored supplier cost (its absence, or the margin) confirms a
+        // COST-tier value, so a caller without view:cost_price gets the same coded, amount-free refusal as the shortfall.
+        if (plan.costDerived && !(await actorMayReadVehicleCost(ctx, args.orgId, args.actorId))) {
+          throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+        }
+        throw new ConvexError(plan.reason);
+      }
 
       if (plan.destination === "CUSTOMER_RECEIVABLE") {
         // THROUGH_DEALERSHIP: the dealership collected the gross, so the
