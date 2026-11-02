@@ -35,7 +35,7 @@ import {
   isCashCompletion,
 } from "./cashSalePilotGate";
 import { requireOrgMember } from "./tenancy";
-import { assertNoSaleLinkedLegacyReceivable } from "./saleDebtContainment";
+import { assertNoSaleLinkedLegacyReceivable, CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED } from "./saleDebtContainment";
 import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { assertNoPendingDepositRequest } from "./depositRequestGuards";
 import { assertOperatedDealMode, FINANCED_SALE_REQUIRES_DEAL_MESSAGE } from "./dealModes";
@@ -1599,12 +1599,78 @@ async function applyHeldDeposits(
   };
 }
 
+/**
+ * SCRUM-886 round 11 (OWASP API3:2023), STAGE 1 of the order in which `applySaleCompletionSideEffects` may refuse.
+ *
+ * The consigned cost gate further down (the shortfall / no-cost refusal and the cost-derived deposit refusal) compares the
+ * caller's price with the stored supplier entitlement, a COST-tier value. A caller without `view:cost_price` gets the same
+ * coded, amount-free refusal for both (round 10), but that only hides the AMOUNT: whether the gate fires at all is still a
+ * response, and every refusal that can come before or after it tells the caller which side of the entitlement the price is
+ * on. Binary search recovers the entitlement to the fils in about 25 refused calls, each of which writes nothing.
+ *
+ * The closing rule is an order, not a text: every refusal the caller can trigger at will, from the arguments alone, is
+ * decided here, BEFORE the gate, so the response does not depend on the price. After the gate the only refusals left are
+ * server-state or invariant refusals the caller cannot aim (see the table in docs/architecture/scrum486-certification-oracle.md,
+ * "(8) Round 11"). Run as the first statement, so it precedes the gate on every entry path (`completeSale`,
+ * `completeExistingSale`), and so it also precedes the deposit-plan refusal inside `resolveReservationDeposits`.
+ *
+ * Trade-in is the only caller-aimable family: `sales.create` and a draft carry it, `finalizeDeal` and the quote door pass none,
+ * and a FINANCED or LEASE sale cannot reach it. The texts are unchanged and the checks are in their original order.
+ */
+async function refuseUnacceptableTradeIn(
+  ctx: MutationCtx,
+  args: SaleCompletionArgs,
+  prepared: PreparedSaleCompletion
+): Promise<void> {
+  if (!(args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0)) return;
+  if (args.tradeInVehicleId === args.vehicleId) {
+    throw new ConvexError("A vehicle cannot be traded in against its own sale.");
+  }
+  const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
+  // `isDeleted` is the only term this second check owns that the guard in
+  // `prepareSaleCompletion` does not — that one already refused a missing or
+  // foreign trade-in long before the side effects run. Keep it.
+  if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
+    throw new ConvexError("Trade-in vehicle not found in this organization.");
+  }
+  if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
+    throw new ConvexError(`This trade-in vehicle is ${tradeInVehicle.status.toLowerCase()} and cannot be accepted as a trade-in.`);
+  }
+  // Sourced/drop-ship vehicles cost-basis from sourceCost, not purchasePrice
+  // (see computeVehicleCapitalizedCost) — patching purchasePrice below would
+  // silently never establish a cost basis for this vehicle if it's later resold.
+  if (tradeInVehicle.sourceType === "SOURCED") {
+    throw new ConvexError("A sourced/drop-ship vehicle record cannot be used as a trade-in.");
+  }
+  // A trade-in vehicle must be brand new to inventory — if it already has a
+  // purchase price, it was already capitalized via the normal acquisition
+  // flow (postVehicleAcquisitionIfOwned), and capitalizing it again here
+  // would double-count Vehicle Inventory.
+  if (tradeInVehicle.purchasePrice && tradeInVehicle.purchasePrice > 0) {
+    throw new ConvexError(
+      "This trade-in vehicle already has a purchase price recorded. Clear it before completing this sale, or the trade-in value won't be capitalized correctly."
+    );
+  }
+  const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
+  // While the SCRUM-802 pay-first containment is on, a CASH sale reaches its trade-in with the invoice already settled to
+  // nil by deposits (the pre-write check refuses it otherwise, and a trade-in never counts), so the trade-in allocation
+  // below always fails with the allocation overflow. That refusal used to be the LAST thing a consigned sale could say, after
+  // the cost gate, which made it the other half of the price oracle. It is stated here, with the same text, for a consigned
+  // car (the only car with a cost gate in front of it). Lifting the containment removes this line with it.
+  if (CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED && prepared.vehicle.sourceType === "SOURCED" && isCashCompletion(args)) {
+    throw new ConvexError(`Allocation amount ${tradeInValueMinor} exceeds receivable outstanding balance 0.`);
+  }
+}
+
 async function applySaleCompletionSideEffects(
   ctx: MutationCtx,
   args: SaleCompletionArgs,
   prepared: PreparedSaleCompletion,
   saleId: Id<"sales">
 ) {
+  // SCRUM-886 round 11, Stage 1: the refusals the caller aims with its own arguments, before anything that depends on the price.
+  await refuseUnacceptableTradeIn(ctx, args, prepared);
+
   // SCRUM-195 M3 — OPEN -> CONSUMED, beside the vehicle status change it
   // belongs with. This function has exactly two callers, `completeSale` and
   // `completeExistingSale`, and they are the only two ways a sale becomes
@@ -2183,35 +2249,8 @@ async function applySaleCompletionSideEffects(
   // What a trade-in allocated to the invoice in this completion; the pay-first rule reads it (owner: deposit only).
   let tradeInAppliedMinor = 0;
   if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
-    if (args.tradeInVehicleId === args.vehicleId) {
-      throw new ConvexError("A vehicle cannot be traded in against its own sale.");
-    }
-    const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    // `isDeleted` is the only term this second check owns that the guard in
-    // `prepareSaleCompletion` does not — that one already refused a missing or
-    // foreign trade-in long before the side effects run. Keep it.
-    if (tradeInVehicle?.orgId !== args.orgId || tradeInVehicle.isDeleted) {
-      throw new ConvexError("Trade-in vehicle not found in this organization.");
-    }
-    if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
-      throw new ConvexError(`This trade-in vehicle is ${tradeInVehicle.status.toLowerCase()} and cannot be accepted as a trade-in.`);
-    }
-    // Sourced/drop-ship vehicles cost-basis from sourceCost, not purchasePrice
-    // (see computeVehicleCapitalizedCost) — patching purchasePrice below would
-    // silently never establish a cost basis for this vehicle if it's later resold.
-    if (tradeInVehicle.sourceType === "SOURCED") {
-      throw new ConvexError("A sourced/drop-ship vehicle record cannot be used as a trade-in.");
-    }
-    // A trade-in vehicle must be brand new to inventory — if it already has a
-    // purchase price, it was already capitalized via the normal acquisition
-    // flow (postVehicleAcquisitionIfOwned), and capitalizing it again here
-    // would double-count Vehicle Inventory.
-    if (tradeInVehicle.purchasePrice && tradeInVehicle.purchasePrice > 0) {
-      throw new ConvexError(
-        "This trade-in vehicle already has a purchase price recorded. Clear it before completing this sale, or the trade-in value won't be capitalized correctly."
-      );
-    }
-
+    // Every refusal about WHICH vehicle is traded in, and its value's precision, was made in Stage 1
+    // (`refuseUnacceptableTradeIn`, first statement of this function) before the cost gate. Pure; it cannot throw again.
     const tradeInValueMinor = requireTradeInValueMinor(args.tradeInValue, prepared.currency);
     tradeInAppliedMinor = tradeInValueMinor;
     const tradeInPaymentId = await createCanonicalPayment(ctx, {

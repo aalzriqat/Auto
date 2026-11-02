@@ -1,0 +1,60 @@
+{
+  "id": "sale-with-a-sourced-trade-in-refuses-identically-at-every-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "tradeIn": "SOURCED_VEHICLE",
+        "salePrice": "PRICES_1_SHORT_AT_E_20000"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.kind",
+      "value": "tradeInSourced"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "absent"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionRefusalPrecedence.scrum886.test.ts",
+    "testName": "a SOURCED record used as the trade-in is refused with one response at every price"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round11",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "524875333f47677171fe77780ff9b6a0a9343e15"
+  },
+  "fingerprint": "8921e1f6536908e22525f824295136c696518856f7d8e6e2ea0f969dfe1e78d9"
+}
