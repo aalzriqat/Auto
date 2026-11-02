@@ -1412,6 +1412,71 @@ export function recoverSupplierVatHolds(input: {
   return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached its page cap. A re-run resumes it." };
 }
 
+/**
+ * SCRUM-896 (owner ruling SCRUM-886 c24372): after a production deploy, gives every stored role named ACCOUNTANT the
+ * `view:cost_price` permission that SOURCED sale completion now requires. Without it, an organization seeded before the
+ * template change has an accountant who is refused at every SOURCED completion door.
+ *
+ * Drives `migrateRoles:backfillAccountantCostPriceAccess` one page per call, passing `continueCursor` back until `isDone`.
+ * The mutation is idempotent (a role already holding the grant is not written), so a re-run resumes rather than restarts.
+ * A page can be short or empty before `isDone` (Convex does not promise a full page), so only `isDone` ends the walk, and
+ * only a cursor that comes back unchanged is treated as stuck.
+ *
+ * ⚠️ PUBLIC OUTPUT. The page's `updates` array holds one line per patched role: its name and its organization id. It is
+ * checked for shape and length and never copied, and no refusal reason here contains any backend text.
+ */
+export function backfillAccountantCostPriceAccessRollout(input: {
+  runPage: (cursor: string | null) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  /** The `numItems` the script asks the backend for; a page can never report more updates than this. */
+  pageSize: number;
+}): { ok: true; pages: number; updated: number } | Refusal {
+  const deployed = "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill";
+  let cursor: string | null = null;
+  let updated = 0;
+  for (let pageNumber = 0; pageNumber < input.maxPages; pageNumber += 1) {
+    if (input.now() - input.startedAt > input.timeoutMs) {
+      return { ok: false, reason: `${deployed} reached the rollout deadline. A re-run resumes it.` };
+    }
+    const result = input.runPage(cursor);
+    if (!result.ok) {
+      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
+    }
+    const page = parseAccountantCostPricePage(result.value, input.pageSize);
+    if (!page) {
+      return { ok: false, reason: `${deployed} returned an unrecognised result.` };
+    }
+    updated += page.updatedCount;
+    if (page.isDone) return { ok: true, pages: pageNumber + 1, updated };
+    if (page.continueCursor === cursor) {
+      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever. A re-run resumes it.` };
+    }
+    cursor = page.continueCursor;
+  }
+  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
+}
+
+function parseAccountantCostPricePage(
+  value: unknown,
+  pageSize: number,
+): { updatedCount: number; isDone: boolean; continueCursor: string } | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { updatedCount, updates, isDone, continueCursor } = value as {
+    updatedCount?: unknown;
+    updates?: unknown;
+    isDone?: unknown;
+    continueCursor?: unknown;
+  };
+  if (!isCount(updatedCount) || updatedCount > pageSize) return null;
+  // One `updates` line per patched role (patchRoleIfNeeded pushes exactly when it returns true), so the two agree.
+  if (!Array.isArray(updates) || updates.length !== updatedCount) return null;
+  if (typeof isDone !== "boolean" || typeof continueCursor !== "string") return null;
+  return { updatedCount, isDone, continueCursor };
+}
+
 // ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────
 
 /** The row kinds the repair walks, in order. Each is one paginated scan per organization. */
