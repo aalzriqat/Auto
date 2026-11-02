@@ -1,0 +1,53 @@
+{
+  "id": "upsert-landed-costs-keeps-paid-item-door-with-view-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "amount": "STORED_PAID"
+      }
+    },
+    {
+      "actor": {
+        "role": "costeditor",
+        "org": "A"
+      },
+      "action": "vehicles.upsertLandedCosts",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "amount": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "upsertLandedCosts.refusal.code",
+      "value": "PAID_LANDED_COST_CHANGE_PILOT_DISABLED"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostOracles.scrum886.test.ts",
+    "testName": "control: a holder of view:cost_price still gets the RT11 door for a changed paid item"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round7",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "a744194e1df0b740611da195dca4675dde3707ff1df095e7bd83ba3a81c17c6e"
+}

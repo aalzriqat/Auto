@@ -103,7 +103,7 @@ function parseSupplierId(raw: string | undefined, selectedId: Id<"suppliers"> | 
   return selectedId;
 }
 
-export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
+export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false, canViewCost = true }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const createVehicle = useMutation(api.vehicles.create);
@@ -269,6 +269,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   );
   const selectedAcquisitionBank = acquisitionBanks?.banks?.find((bank) => bank._id === watchedBankAccountId);
   const ownershipChangeBlocked = getOwnershipChangeBlock({ hasVehicle: !!vehicle, canEdit, storedSourceType, costLocked });
+  // SCRUM-886: on a saved car the server withholds cost and margin from a role without
+  // `view:cost_price`. Those inputs would show an empty box and echo back 0, so they are not
+  // rendered or sent. A buy-out still asks for its price: that is typed, not an echo.
+  const costWithheld = !!vehicle && !canViewCost;
+  const hideSourceCost = costWithheld && storedSourceType === "SOURCED";
+  const hidePurchasePrice = costWithheld && !asksSettlement;
   const showVinChecksumWarning = (watchedVin?.length ?? 0) === 17 && !validateVinChecksum(watchedVin ?? "");
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -390,7 +396,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const validateOwnership = (values: VehicleFormValues): boolean => {
     const gap = ownershipGaps(values, {
       typeRequired: !vehicle,
-      costRequired: !(vehicle && costLocked),
+      costRequired: !(vehicle && (costLocked || hideSourceCost)),
       purchaseTerms: !asksSettlement ? "none" : isBuyout ? "required" : "ifPriced",
     });
     if (!gap) return true;
@@ -417,8 +423,14 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         sourcedFromName: _sourcedFromName,
         sourcedSupplierId: rawSourcedSupplierId,
         sourceCost,
-        ...baseValues
+        minimumProfit: _minimumProfit,
+        ...baseValuesWithoutMargin
       } = values;
+      // SCRUM-886: the margin floor is a cost field. A role that cannot read it cannot have seen
+      // the stored value, so the form's copy is not the vehicle's and is not sent.
+      const baseValues = costWithheld
+        ? baseValuesWithoutMargin
+        : { ...baseValuesWithoutMargin, minimumProfit: _minimumProfit };
       const sourcedSupplierId = parseSupplierId(rawSourcedSupplierId, supplierIds.sourcedSupplierId);
       const purchaseSupplierId = parseSupplierId(rawPurchaseSupplierId, supplierIds.purchaseSupplierId);
       if (sourcedSupplierId === null || purchaseSupplierId === null) {
@@ -434,11 +446,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       // and nothing is posted), so its purchasePrice travels only with an edit.
       const ownershipFields =
         values.sourceType === "STOCK"
-          ? { ...(costsUnlocked ? { purchasePrice } : {}) }
+          ? { ...(costsUnlocked && !hidePurchasePrice ? { purchasePrice } : {}) }
           : {
               ...(sourcedSupplierId ? { sourcedSupplierId } : {}),
-              ...(costsUnlocked ? { sourceCost } : {}),
-              ...(vehicle && costsUnlocked ? { purchasePrice } : {}),
+              ...(costsUnlocked && !hideSourceCost ? { sourceCost } : {}),
+              ...(vehicle && costsUnlocked && !costWithheld ? { purchasePrice } : {}),
             };
       const restValues = { ...baseValues, ...ownershipFields };
       // The settlement travels only when it is being decided now (creation or a buy-out).
@@ -685,19 +697,21 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     </FormItem>
                   )}
                 />
-                <FormField
-                  control={form.control}
-                  name="sourceCost"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("SupplierCost" as any)} *</FormLabel>
-                      <FormControl>
-                        <Input type="number" min="0" step="0.01" {...field} onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                {!hideSourceCost && (
+                  <FormField
+                    control={form.control}
+                    name="sourceCost"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t("SupplierCost" as any)} *</FormLabel>
+                        <FormControl>
+                          <Input type="number" min="0" step="0.01" {...field} onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
               </div>
             )}
             </div>
@@ -891,7 +905,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               </div>
               <div className={vehicle || wizardStep === 2 ? "contents" : "hidden"}>
               {/* For owned vehicles, show purchasePrice directly; for sourced, sourceCost is used (shown in the sourcing section above). */}
-              {isOwned && (
+              {isOwned && !hidePurchasePrice && (
                 <FormField
                   control={form.control}
                   name="purchasePrice"
@@ -993,20 +1007,22 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   )}
                 />
               )}
-              <FormField
-                control={form.control}
-                name="minimumProfit"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("MinimumPriceUplift")} (JOD)</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormDescription>{t("MinimumPriceUpliftHelp")}</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {!costWithheld && (
+                <FormField
+                  control={form.control}
+                  name="minimumProfit"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("MinimumPriceUplift")} (JOD)</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormDescription>{t("MinimumPriceUpliftHelp")}</FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
               <FormField
                 control={form.control}
                 name="sellingPrice"

@@ -57,4 +57,11 @@ export interface VehicleDialogProps {
   vehicle?: Doc<"vehicles"> | null;
   canCreate?: boolean;
   canEdit?: boolean;
+  /**
+   * SCRUM-886: whether the signed-in role may read vehicle cost (`view:cost_price`). The server
+   * leaves the cost fields off a saved vehicle for a role that may not, so the dialog must not
+   * show them as an empty input or send them back as 0. Defaults to true; the vehicles page
+   * passes the real answer.
+   */
+  canViewCost?: boolean;
 }

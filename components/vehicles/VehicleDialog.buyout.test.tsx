@@ -221,6 +221,43 @@ describe("buying out a saved consignment car", () => {
   });
 });
 
+describe("SCRUM-886 - a saved car whose cost the server withheld", () => {
+  // The server leaves purchasePrice, sourceCost, landedCostTotal and minimumProfit off a vehicle
+  // for a role without view:cost_price. The form must not show empty cost boxes or echo 0 back.
+  const withheld = (sourceType: "SOURCED" | "STOCK") => {
+    const { sourceCost: _s, purchasePrice: _p, minimumProfit: _m, ...rest } = storedVehicle(sourceType) as unknown as Record<string, unknown>;
+    return rest as never;
+  };
+
+  test("a consignment car saves an ordinary edit without a supplier cost, a purchase price or a margin floor", async () => {
+    render(<VehicleDialog open onOpenChange={() => undefined} vehicle={withheld("SOURCED")} canEdit canViewCost={false} />);
+    expect(screen.queryByLabelText(/SupplierCost/)).toBeNull();
+    expect(screen.queryByLabelText(/MinimumPriceUplift/)).toBeNull();
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    const sent = updateSpy().mock.calls[0][0];
+    expect(sent).toMatchObject({ sourceType: "SOURCED" });
+    for (const key of ["sourceCost", "purchasePrice", "minimumProfit"]) expect(sent).not.toHaveProperty(key);
+  });
+
+  test("an owned car shows no purchase price field and sends none", async () => {
+    render(<VehicleDialog open onOpenChange={() => undefined} vehicle={withheld("STOCK")} canEdit canViewCost={false} />);
+    expect(screen.queryByLabelText(/PurchasePrice/)).toBeNull();
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    const sent = updateSpy().mock.calls[0][0];
+    for (const key of ["sourceCost", "purchasePrice", "minimumProfit"]) expect(sent).not.toHaveProperty(key);
+  });
+
+  test("a role that may read cost still sees and sends the stored figures", async () => {
+    renderEdit("SOURCED");
+    expect(screen.getByLabelText(/SupplierCost/)).toBeTruthy();
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourceCost: 9000, purchasePrice: 9000 });
+  });
+});
+
 describe("new-vehicle owned intake", () => {
   test("is unchanged: Owned shows the price field empty of any inherited amount and requires a method once priced", async () => {
     render(<VehicleDialog open onOpenChange={() => undefined} canCreate canEdit />);

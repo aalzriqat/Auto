@@ -282,6 +282,8 @@ export const AppErrorCode = {
   VEHICLE_BUYOUT_SOURCED_LANDED_COSTS: "VEHICLE_BUYOUT_SOURCED_LANDED_COSTS",
   VEHICLE_OWNERSHIP_FIELDS_LOCKED: "VEHICLE_OWNERSHIP_FIELDS_LOCKED",
   VEHICLE_SOURCED_ACQUISITION_REFUSED: "VEHICLE_SOURCED_ACQUISITION_REFUSED",
+  // SCRUM-886. `vehicleEdits.requestUpdate` refuses a cost-tier field from a caller who cannot read vehicle cost.
+  VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS",
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added `finalize:financed_deal`
   // (retired; split into manage:supplier_settlement and cancel:closed_deal). Translated under
   // ServerError_<code>.

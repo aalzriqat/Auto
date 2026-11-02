@@ -49,7 +49,7 @@ type FormatCurrency = (amount: number) => string;
  * Pulled out of the component so the sequence is a plain function to test
  * and doesn't add to the component's render-path complexity.
  */
-function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency): TrailStep[] {
+export function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency): TrailStep[] {
   const { sale, vehicle, customer, salespersonName } = trail;
   const vehicleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "";
   const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "";
@@ -106,10 +106,13 @@ function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency)
   }
 
   if (trail.supplierPayable) {
+    // The server withholds the amount (it is the supplier's cost) from a caller without view:cost_price.
+    // Absent is not zero: show who is owed and nothing about how much.
+    const { sourcedFromName, amountDue } = trail.supplierPayable;
     steps.push({
       icon: Truck,
       label: t("StepSupplierPayable"),
-      detail: `${trail.supplierPayable.sourcedFromName} — ${format(trail.supplierPayable.amountDue)}`,
+      detail: amountDue === undefined ? sourcedFromName : `${sourcedFromName} — ${format(amountDue)}`,
     });
   }
 

@@ -1,0 +1,42 @@
+{
+  "id": "update-allows-a-non-cost-edit-without-view-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "editoronly",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "sellingPrice": "NEW_PRICE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.outcome",
+      "value": "succeeds"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
+    "testName": "control: the same editor sending no cost keys still edits the vehicle"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round5",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "d6aa1fe1925e999d3dbfa4a373dae82a45ede976ec3c4cf3db5a4b6865a2988d"
+}

@@ -39,7 +39,10 @@ const OWNER_PERMISSIONS = [
   "approve:requests",
 ];
 // Can edit and create vehicles but holds NO finance authority.
-const CLERK_PERMISSIONS = ["create:vehicles", "edit:vehicles", "view:vehicles"];
+// SCRUM-886: this clerk proposes costs and purchase terms through requestUpdate, and a caller who cannot read cost may not (it would
+// be a cost-equality oracle), so the fixture role holds view:cost_price. The refusal for a role without it is
+// convex/vehicleCostDisclosureWrites.scrum886.test.ts.
+const CLERK_PERMISSIONS = ["create:vehicles", "edit:vehicles", "view:vehicles", "view:cost_price"];
 
 const baseVehicle = {
   vin: "1HGCM82633A000001",

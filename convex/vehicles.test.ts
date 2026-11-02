@@ -614,7 +614,9 @@ describe("inventory intelligence", () => {
   });
 
   test("upsertLandedCosts recomputes total and requires edit permission", async () => {
-    const { t, orgId, userId, asUser } = await setup();
+    const { t, orgId, userId, roleId, asUser } = await setup();
+    // SCRUM-886: the landed-cost breakdown is cost, so writing it needs view:cost_price as well.
+    await t.run((ctx) => ctx.db.patch(roleId, { permissions: [...PERMISSIONS, "view:cost_price"] }));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(), orgId, ...baseVehicle });
 
@@ -653,7 +655,9 @@ describe("inventory intelligence", () => {
   });
 
   test("reports combine purchase price and landed costs (not one or the other)", async () => {
-    const { t, orgId, userId, asUser } = await setup();
+    const { t, orgId, userId, roleId, asUser } = await setup();
+    // SCRUM-886: the landed-cost breakdown is cost, so writing it needs view:cost_price as well.
+    await t.run((ctx) => ctx.db.patch(roleId, { permissions: [...PERMISSIONS, "view:cost_price"] }));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId,

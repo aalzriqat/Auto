@@ -5,6 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS } from "./utils/permissions";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import {
@@ -124,7 +125,7 @@ export const get = query({
     leadId: v.id("leads"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
     const lead = await ctx.db.get(args.leadId);
     if (!lead || lead.isDeleted || lead.orgId !== args.orgId) {
@@ -142,7 +143,7 @@ export const get = query({
     return {
       ...lead,
       customer,
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       assignedUser: assignedUser
         ? { _id: assignedUser._id, name: assignedUser.name, email: assignedUser.email }
         : null,

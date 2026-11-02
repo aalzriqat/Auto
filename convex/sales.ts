@@ -6,6 +6,7 @@ import { Doc, Id, TableNames } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { canReadVehicleCost, projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -245,7 +246,7 @@ export const get = query({
 
     return {
       ...projectSaleRow(sale, role),
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       customer,
       salesperson: salesperson
         ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
@@ -526,7 +527,7 @@ export const getSaleTrail = query({
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
@@ -598,8 +599,8 @@ export const getSaleTrail = query({
     const commissionPaidByUser = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
 
     return {
-      sale,
-      vehicle,
+      sale: projectSaleRow(sale, role),
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       customer,
       salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
       lead: lead ? { _id: lead._id, stage: lead.stage } : null,
@@ -612,8 +613,16 @@ export const getSaleTrail = query({
       commissionJournalEntry: commissionJournalEntry
         ? { _id: commissionJournalEntry._id, journalNumber: commissionJournalEntry.journalNumber, postedAt: commissionJournalEntry.postedAt, status: commissionJournalEntry.status }
         : null,
+      // SCRUM-886: on a THROUGH_DEALERSHIP consigned sale `amountDue` IS the supplier entitlement (the
+      // vehicle's frozen cost), so the amount is COST tier like `consignedSupplierEntitlementMinor`: absent,
+      // never zeroed, for a caller without view:cost_price. Who is owed and the status are not cost.
       supplierPayable: supplierPayable
-        ? { amountDue: supplierPayable.amountDue, currency: supplierPayable.currency, status: supplierPayable.status, sourcedFromName: supplierPayable.sourcedFromName }
+        ? {
+            ...(canReadVehicleCost(role) ? { amountDue: supplierPayable.amountDue } : {}),
+            currency: supplierPayable.currency,
+            status: supplierPayable.status,
+            sourcedFromName: supplierPayable.sourcedFromName,
+          }
         : null,
       commissionPaidByName: commissionPaidByUser?.name ?? commissionPaidByUser?.email ?? null,
     };
