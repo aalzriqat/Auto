@@ -1,6 +1,6 @@
 # Completing a SOURCED sale requires view:cost_price
 
-Status: accepted
+Status: accepted. ADR required by SCRUM-760 c24361.
 
 ## Context
 
@@ -29,4 +29,4 @@ role may hold a completing permission only together with `view:cost_price`.
 The round 10 to 12 ordering fixes stay as defence in depth; a non-reader no longer reaches them through a door. Existing
 per-org ACCOUNTANT roles do not receive the template change on their own: a bounded, idempotent internal mutation in
 `convex/migrateRoles.ts` adds the permission, is run by hand, and is not wired into any workflow. Owner approval is required
-before it runs against any deployment (SCRUM-760 c24361).
+before it runs against any deployment (SCRUM-886 c24358).
