@@ -248,4 +248,28 @@ describe("SCRUM-886 round 9: the rule lives in runWithIdempotency, so every econ
     expect(different).toEqual(equal);
     expect(ran).toBe(0);
   });
+
+  test("a caller with no actor cannot replay or probe a command a user minted", async () => {
+    const s = await seed();
+    await s.t.run((ctx) =>
+      runWithIdempotency(ctx, {
+        orgId: s.orgId, operation: "test.user-minted", economic: true, idempotencyKey: "act-886-usr", fingerprint: "fp-1",
+        actorId: s.userIds.clerkA,
+      }, async () => "done")
+    );
+    let ran = 0;
+    const asSystem = (fingerprint: string) =>
+      refusalDataOf(
+        s.t.run((ctx) =>
+          runWithIdempotency(ctx, {
+            orgId: s.orgId, operation: "test.user-minted", economic: true, idempotencyKey: "act-886-usr", fingerprint,
+          }, async () => { ran += 1; return "x"; })
+        )
+      );
+    const equal = await asSystem("fp-1");
+    const different = await asSystem("fp-2");
+    expect(equal?.code).toBe(FOREIGN_ACTOR_CODE);
+    expect(different).toEqual(equal);
+    expect(ran).toBe(0);
+  });
 });
