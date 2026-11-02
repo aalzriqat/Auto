@@ -21,6 +21,7 @@ import path from "node:path";
 import process from "node:process";
 import {
   assertDeploymentIdentity,
+  backfillAccountantCostPriceAccessRollout,
   captureRunBaseline,
   classifyMaterializationReport,
   decideEmptyRollout,
@@ -58,6 +59,12 @@ const SUPPLIER_IDENTITY_COUNT_FN = "supplierIdentityRepair:countPage";
 const SUPPLIER_IDENTITY_PAGE_SIZE = 100;
 /** 100 rows per page, so this bounds one organization and row kind at 1,000,000 rows. */
 const MAX_SUPPLIER_IDENTITY_PAGES_PER_PHASE = 10_000;
+/** SCRUM-896: grant `view:cost_price` to stored ACCOUNTANT roles (owner ruling SCRUM-886 c24372). */
+const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";
+/** The backend clamps a page to 1..500 roles; 100 is its default. */
+const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
+/** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
+const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
 /** At most two parked rows per page, with a durable completion marker. */
 const MAX_SUPPLIER_VAT_HOLD_PAGES = 10_000;
 /** 16 journal lines per page, so this bounds one org at 160,000 bank lines. */
@@ -93,6 +100,7 @@ let bankSummary = null;
 let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
+let accountantCostPriceSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -116,6 +124,7 @@ function writeSummary(extra) {
   if (supplierVatSummary) body += `\n### Supplier VAT holds\n\n${supplierVatSummary}\n`;
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
+  if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -385,6 +394,30 @@ const supplierIdentity = repairAndVerifySupplierIdentity({
 supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
+
+// ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
+
+// SCRUM-896 (owner ruling SCRUM-886 c24372, "after the deploy, automatically"): sale completion on a SOURCED car now needs
+// `view:cost_price`, and an organization seeded before the template gained it has an ACCOUNTANT who is refused at every
+// completion door until the stored role is repaired. One page of roles per call through the operator key (internal
+// function, never the public API), the cursor passed back until the backend says it is done. Idempotent, so a re-run
+// resumes. It is after the empty-deployment exit on purpose: no organizations, no roles to repair. Same shared deadline.
+// A failed or malformed page ends the run here as "deployed but incomplete". Counts only: the backend's `updates` lines
+// name roles and organizations, and this output is public.
+console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
+lastVerdict = before.verdict;
+const accountantCostPrice = backfillAccountantCostPriceAccessRollout({
+  runPage: (cursor) =>
+    convex(["run", ACCOUNTANT_COST_PRICE_BACKFILL_FN, JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE })]),
+  now: Date.now,
+  startedAt: rolloutStartedAt,
+  timeoutMs: TIMEOUT_MS,
+  maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
+  pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+});
+if (!accountantCostPrice.ok) fail(accountantCostPrice.reason);
+accountantCostPriceSummary = `${accountantCostPrice.updated} stored ACCOUNTANT roles granted view:cost_price in ${accountantCostPrice.pages} page call(s). Custom and renamed roles are untouched.`;
+console.log(`  ${accountantCostPriceSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
