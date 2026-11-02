@@ -799,3 +799,135 @@ describe("SCRUM-886 round 13 rule 4: the ACCOUNTANT backfill (an internal mutati
     expect(await permissionsOf(s, second)).toContain("view:cost_price");
   });
 });
+
+
+/**
+ * SCRUM-886 round 14b rule 4 (owner ruling SCRUM-886 comment 24368, option A, 2026-11-02). The default ACCOUNTANT template holds
+ * `manage:finance` and, since round 13, `view:cost_price`, so it passes the `vehicles.correctAcquisitionCost` gate, which needs both
+ * together (COST_CORRECTION_PERMISSIONS). That mutation posts GL corrections. Before this PR only SENIOR_ACCOUNTANT, MANAGER and the
+ * system owner could run it. The owner allowed it and recorded it in the ADR role policy; these two tests prove it end to end through
+ * the public mutation. The template is read from the exported DEFAULT_ROLE_TEMPLATES, never copied.
+ */
+const ORIGINAL_COST = 12_500;
+const CORRECTED_COST = 9_800;
+const FORBIDDEN_MISSING_COST_ACCESS = {
+  code: "FORBIDDEN",
+  message: "Forbidden: Missing required permissions: view:cost_price",
+};
+
+async function seedCostCorrectionDealer() {
+  vi.useFakeTimers();
+  const t = convexTestWithComponents(schema, MODULES);
+  registerRateLimiter(t);
+  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Cost Correction Role Dealer", createdAt: Date.now() }));
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] })
+  );
+  const ownerUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum886r14b_owner", email: "owner14b@test.com", name: "Owner" }));
+  const ownerRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: SYSTEM_OWNER_ROLE_NAME, permissions: [], isSystemOwnerRole: true })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ownerUserId, roleId: ownerRoleId }));
+  const asOwner = t.withIdentity({ subject: "scrum886r14b_owner", clerkId: "scrum886r14b_owner" });
+  await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
+  await asOwner.mutation(api.accountingPeriods.create, {
+    orgId, startDate: Date.UTC(2020, 0, 1), endDate: Date.UTC(2035, 11, 31, 23, 59, 59, 999), fiscalYear: 2025, periodNumber: 1,
+  });
+  const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+  await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+  // A dealer-owned, cash-acquired car whose acquisition posted into a period that is now closed: the only situation in which a
+  // PRIOR_PERIOD_RESTATEMENT is accepted (SCRUM-725).
+  const vehicleId = await asOwner.mutation(api.vehicles.create, {
+    idempotencyKey: crypto.randomUUID(), orgId, vin: "1HGCM82633A886014", make: "Honda", model: "Accord", year: 2020, mileage: 10_000,
+    color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20_000, status: "AVAILABLE" as const,
+    sourceType: "STOCK" as const, purchasePrice: ORIGINAL_COST, purchasePaymentMethod: "CASH" as const,
+  });
+  await t.run(async (ctx) => {
+    await ctx.db.insert("accountingPeriods", {
+      orgId, startDate: Date.UTC(2019, 0, 1), endDate: Date.UTC(2019, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2019, periodNumber: 1, status: "CLOSED", createdAt: Date.now(),
+    });
+    const events = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString()))
+      .take(50);
+    for (const event of events) {
+      if (event.eventType === "VEHICLE_ACQUIRED") await ctx.db.patch(event._id, { accountingDate: Date.UTC(2019, 5, 15) });
+    }
+  });
+  return { t, orgId, vehicleId };
+}
+type CostCorrectionDealer = Awaited<ReturnType<typeof seedCostCorrectionDealer>>;
+
+/** A member whose stored role holds the default ACCOUNTANT template permissions, less any named, as a role saved before round 13 would. */
+async function accountantFromTemplate(d: CostCorrectionDealer, clerkId: string, without: readonly string[]) {
+  const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === "ACCOUNTANT");
+  if (!template) throw new Error("no ACCOUNTANT role template");
+  const userId = await d.t.run((ctx) => ctx.db.insert("users", { clerkId, email: `${clerkId}@test.com`, name: "Accountant" }));
+  const roleId = await d.t.run((ctx) =>
+    ctx.db.insert("roles", { orgId: d.orgId, name: `ACCOUNTANT ${clerkId}`, permissions: template.permissions.filter((p) => !without.includes(p)) })
+  );
+  await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId, roleId }));
+  return { userId, actor: d.t.withIdentity({ subject: clerkId, clerkId }) };
+}
+
+async function costCorrectionWorld(d: CostCorrectionDealer) {
+  return d.t.run(async (ctx) => ({
+    purchasePrice: (await ctx.db.get(d.vehicleId))?.purchasePrice,
+    corrections: (await ctx.db.query("vehicleCostCorrections").take(1000)).length,
+    events: (await ctx.db.query("accountingEvents").take(1000)).length,
+    pending: (await ctx.db.query("pendingAccountingEvents").take(1000)).length,
+    journalEntries: (await ctx.db.query("journalEntries").take(1000)).length,
+    journalLines: (await ctx.db.query("journalLines").take(1000)).length,
+    financialAudit: (await ctx.db.query("financialAuditLog").take(1000)).length,
+  }));
+}
+
+describe("SCRUM-886 round 14b rule 4: acquisition-cost correction by the default ACCOUNTANT (owner ruling c24368)", () => {
+  test("the default ACCOUNTANT template runs vehicles.correctAcquisitionCost as PRIOR_PERIOD_RESTATEMENT and the vehicle cost changes", async () => {
+    const d = await seedCostCorrectionDealer();
+    const { userId, actor } = await accountantFromTemplate(d, "scrum886r14b_accountant", []);
+    const before = await costCorrectionWorld(d);
+    expect(before.purchasePrice).toBe(ORIGINAL_COST);
+
+    await actor.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: d.vehicleId, newCost: CORRECTED_COST, reason: "Purchase price was recorded wrong",
+      correctionType: "PRIOR_PERIOD_RESTATEMENT" as const,
+    });
+
+    const after = await costCorrectionWorld(d);
+    expect(after.purchasePrice).toBe(CORRECTED_COST);
+    expect(after.corrections).toBe(before.corrections + 1);
+    expect(after.journalEntries).toBe(before.journalEntries + 1);
+    const rows = await d.t.run((ctx) =>
+      ctx.db.query("vehicleCostCorrections").withIndex("by_org_vehicle", (q) => q.eq("orgId", d.orgId).eq("vehicleId", d.vehicleId)).take(10)
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      previousCost: ORIGINAL_COST, newCost: CORRECTED_COST, correctionType: "PRIOR_PERIOD_RESTATEMENT", correctedBy: userId,
+    });
+    const entries = await d.t.run((ctx) =>
+      ctx.db.query("journalEntries").withIndex("by_org", (q) => q.eq("orgId", d.orgId)).take(1000)
+    );
+    expect(entries.filter((e) => e.sourceType === "vehicleCostCorrections")).toHaveLength(1);
+  });
+
+  test("a legacy stored ACCOUNTANT without view:cost_price is refused FORBIDDEN at vehicles.correctAcquisitionCost and nothing is written", async () => {
+    const d = await seedCostCorrectionDealer();
+    const { actor } = await accountantFromTemplate(d, "scrum886r14b_legacy", ["view:cost_price"]);
+    const before = await costCorrectionWorld(d);
+
+    const refusal = parsed(await payloadOf(actor.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId: d.orgId, vehicleId: d.vehicleId, newCost: CORRECTED_COST, reason: "Purchase price was recorded wrong",
+      correctionType: "PRIOR_PERIOD_RESTATEMENT" as const,
+    })));
+
+    expect(refusal).toEqual(FORBIDDEN_MISSING_COST_ACCESS);
+    expect(await costCorrectionWorld(d)).toEqual(before);
+    expect(before.purchasePrice).toBe(ORIGINAL_COST);
+  });
+});
