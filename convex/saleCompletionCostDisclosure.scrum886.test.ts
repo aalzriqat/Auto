@@ -25,6 +25,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { actorMayReadVehicleCost } from "./utils/vehicleCostVisibility";
 
 const NEEDS_COST_ACCESS_CODE = "CONSIGNED_SALE_NEEDS_COST_ACCESS";
 const ENTITLEMENT = 8_765.432;
@@ -245,5 +246,37 @@ describe("SCRUM-886 round 10: a sale refused below the supplier's entitlement di
     expect(saleId).toBeTruthy();
     expect(world.sales).toBe(1);
     expect(world.vehicle?.status).toBe("SOLD");
+  });
+});
+
+describe("SCRUM-886 round 10: actorMayReadVehicleCost derives the answer from the membership and fails closed", () => {
+  test("the system owner and a view:cost_price holder may read; sales and finance roles without it may not", async () => {
+    const s = await seed();
+    const answer = (who: Who) => s.t.run((ctx) => actorMayReadVehicleCost(ctx, s.orgId, s.userIds[who]));
+    expect(await answer("owner")).toBe(true);
+    expect(await answer("reader")).toBe(true);
+    expect(await answer("nonReader")).toBe(false);
+    expect(await answer("financeNonReader")).toBe(false);
+  });
+
+  test("no actor, no membership, an offboarding membership, and a cost role held in another organization all answer false", async () => {
+    const s = await seed();
+    const otherOrgId = await s.t.run((ctx) => ctx.db.insert("organizations", { name: "Other Org", createdAt: Date.now() }));
+    const costRoleOther = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: otherOrgId, name: "Cost elsewhere", permissions: SALES_WITH_COST })
+    );
+    const strangerId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum886s_stranger", email: "stranger@test.com", name: "stranger" }));
+    const elsewhereId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum886s_elsewhere", email: "elsewhere@test.com", name: "elsewhere" }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: otherOrgId, userId: elsewhereId, roleId: costRoleOther }));
+    const leavingId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "scrum886s_leaving", email: "leaving@test.com", name: "leaving" }));
+    const costRole = await s.t.run((ctx) => ctx.db.insert("roles", { orgId: s.orgId, name: "Cost leaving", permissions: SALES_WITH_COST }));
+    await s.t.run((ctx) =>
+      ctx.db.insert("memberships", { orgId: s.orgId, userId: leavingId, roleId: costRole, offboardingStatus: "PENDING_EXTERNAL_REMOVAL" })
+    );
+    const answer = (userId: Id<"users"> | undefined) => s.t.run((ctx) => actorMayReadVehicleCost(ctx, s.orgId, userId));
+    expect(await answer(undefined)).toBe(false);
+    expect(await answer(strangerId)).toBe(false);
+    expect(await answer(elsewhereId)).toBe(false);
+    expect(await answer(leavingId)).toBe(false);
   });
 });

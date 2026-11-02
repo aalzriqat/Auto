@@ -71,6 +71,7 @@ import { effectiveCommissionMode } from "./commissionMode";
 import { assertProfitApproved, saleRequiresMinimumProfit } from "./profitApproval";
 import { assertVehicleNotDeleted, assertVehicleReadyForSale } from "./vehicleLiveness";
 import { computeVehicleCapitalizedCost, vehicleHasCostBasis } from "./vehicleCost";
+import { actorMayReadVehicleCost } from "./vehicleCostVisibility";
 import { computeConsignedSupplierPosition } from "../../lib/financingEconomics";
 import { openSupplierReceivable } from "../supplierReceivables";
 import {
@@ -374,6 +375,16 @@ type PreparedSaleCompletion = {
  * a plain sale. Shared so the refusal reads identically wherever it fires, and
  * so the two places that enforce it cannot drift into describing it differently.
  */
+/**
+ * SCRUM-886 round 10: what a caller WITHOUT `view:cost_price` is told when a consigned sale is refused
+ * because of the supplier terms recorded on the car (no supplier amount, or the supplier would be paid
+ * less than his entitlement). It names no amount and does not say which reason applied, so the answer
+ * is the same whatever the stored cost or the submitted price. English text equal to
+ * `ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS` in lib/i18n/domains/common.ts.
+ */
+export const CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE =
+  "This sale cannot be completed as entered because of the supplier terms recorded on the car. Ask someone who can see vehicle costs to review them. Nothing has been changed.";
+
 export const FINANCED_DIRECT_NEEDS_APPROVED_AMOUNT =
   "This is a financed sale of the supplier's car settled directly with him, so what the finance company approved is what he actually receives — and the dealership's claim on him is measured from it. That amount lives on the finance application, so this deal has to be completed through the financing workflow rather than recorded as a sale directly.";
 
@@ -1913,11 +1924,25 @@ async function applySaleCompletionSideEffects(
       })()
     : false;
 
+  // SCRUM-886 round 10: the two refusals below state, or depend on, the supplier's entitlement (the
+  // vehicle's frozen COST-tier `sourceCost`), and a ConvexError reaches the client unredacted. Who may
+  // read it is decided here from the authenticated actor's membership (never a client argument), once,
+  // and only for a consigned car. A caller who may not read vehicle cost gets one amount-free coded
+  // refusal for both reasons; a reader and the system owner keep the specific sentence.
+  const callerMayReadCost = isSourced
+    ? await actorMayReadVehicleCost(ctx, args.orgId, args.actorId)
+    : true;
+  const refuseConsignedTerms = (specificSentence: () => string): never => {
+    if (callerMayReadCost) throw new ConvexError(specificSentence());
+    throwAppError(AppErrorCode.CONSIGNED_SALE_NEEDS_COST_ACCESS, CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE);
+  };
+
   const consignment = isSourced
     ? (() => {
         if (costMinor === undefined || costMinor <= 0) {
-          throw new ConvexError(
-            "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
+          return refuseConsignedTerms(
+            () =>
+              "This vehicle is sourced, so it belongs to the supplier and the sale is an agency sale — but no supplier cost is recorded, so the dealership's margin cannot be determined. Record the agreed supplier amount, or convert the vehicle to dealer-owned stock first."
           );
         }
         // Both agency refusals are made HERE, not only in the posting rule.
@@ -1963,8 +1988,9 @@ async function applySaleCompletionSideEffects(
           // they have no reason to suspect.
           console.error(error);
           const paidLabel = fromMinorUnits(supplierGrossReceiptMinor, prepared.currency);
-          throw new ConvexError(
-            `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${fromMinorUnits(costMinor, prepared.currency)} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
+          return refuseConsignedTerms(
+            () =>
+              `This car is ${prepared.vehicle.sourcedFromName ?? "the supplier"}'s and the dealership sells it as his agent, but he is only being paid ${paidLabel} against an entitlement of ${fromMinorUnits(costMinor, prepared.currency)} — the amount he is owed for it. The deal would leave him short by money somebody has to fund, which is a real situation but not one that can be assumed. Record the shortfall against the supplier agreement, or agree a lower supplier amount, before completing the sale.`
           );
         }
         // A financed deal settled directly with the supplier used to be refused

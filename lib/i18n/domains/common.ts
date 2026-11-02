@@ -178,6 +178,12 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This request was started by a different user and cannot be repeated from this account. Start a new operation.",
     "بدأ هذا الطلب مستخدم آخر ولا يمكن إعادة إرساله من هذا الحساب. يرجى بدء عملية جديدة.",
   ],
+  // SCRUM-886 round 10. The English text must equal CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE in
+  // convex/utils/saleCompletion.ts. It names no amount: the sender may not read vehicle cost.
+  ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS: [
+    "This sale cannot be completed as entered because of the supplier terms recorded on the car. Ask someone who can see vehicle costs to review them. Nothing has been changed.",
+    "لا يمكن إتمام هذا البيع بالشكل المُدخل بسبب شروط المورّد المسجّلة على السيارة. اطلب من شخص يملك صلاحية الاطلاع على تكلفة السيارات مراجعتها. لم يتم تغيير أي شيء.",
+  ],
   // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
   // and convex/collections.ts respectively.
   ServerError_PAYMENT_LINK_TARGET_REQUIRED: [

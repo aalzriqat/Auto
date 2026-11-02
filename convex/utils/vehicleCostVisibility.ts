@@ -18,7 +18,8 @@
  * Permission: the existing `view:cost_price` (`PERMISSIONS.VIEW_COST_PRICE`), or the system
  * owner, whom `requireTenantAuth` already lets through every permission list. No new grant.
  */
-import type { Doc } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
+import type { QueryCtx } from "../_generated/server";
 import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
 
 type VehicleReadTier = "OPEN" | "COST";
@@ -114,6 +115,32 @@ export const VEHICLE_EDIT_PAYLOAD_TIER = {
 /** True when the caller may read vehicle cost and margin: the system owner, or `view:cost_price`. */
 export function canReadVehicleCost(role: Doc<"roles">): boolean {
   return isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+}
+
+/**
+ * `canReadVehicleCost` for code that holds an actor id, not a resolved role: shared completion code
+ * (`saleCompletion`) is reached from several doors and every one of them passes the authenticated
+ * `user._id` as `actorId`, so the role is read back from that actor's membership here instead of being
+ * threaded through each door (a new door cannot forget it, and no client argument is involved).
+ *
+ * Fails closed: no actor, no membership in this organization, a membership that is being offboarded,
+ * or a missing role all answer false, so the caller gets the amount-free text. Mirrors the checks
+ * `requireTenantAuth` makes on the same rows (membership by org and user, `offboardingStatus`, role).
+ */
+export async function actorMayReadVehicleCost(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users"> | undefined
+): Promise<boolean> {
+  if (actorId === undefined) return false;
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", actorId))
+    .unique();
+  if (!membership || membership.offboardingStatus) return false;
+  const role = await ctx.db.get(membership.roleId);
+  if (!role || role.orgId !== orgId) return false;
+  return canReadVehicleCost(role);
 }
 
 function keepOpenFields<T extends object>(source: T, tiers: Record<string, VehicleReadTier>): Partial<T> {

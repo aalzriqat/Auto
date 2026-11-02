@@ -178,6 +178,10 @@ export const AppErrorCode = {
   // SCRUM-886. A command identity is replayed only by the actor that minted it. Message in
   // convex/utils/idempotency.ts; translated under ServerError_<code>.
   COMMAND_IDENTITY_FOREIGN_ACTOR: "COMMAND_IDENTITY_FOREIGN_ACTOR",
+  // SCRUM-886 round 10. A consigned sale refused because of the supplier terms recorded on the car, as
+  // seen by a caller who may not read vehicle cost: the same amount-free text whatever the reason or
+  // the price. Message in convex/utils/saleCompletion.ts; translated under ServerError_<code>.
+  CONSIGNED_SALE_NEEDS_COST_ACCESS: "CONSIGNED_SALE_NEEDS_COST_ACCESS",
   ORG_FINANCIAL_RESET_IN_PROGRESS: "ORG_FINANCIAL_RESET_IN_PROGRESS",
   // SCRUM-571 S1 (c21732). Receipt containment: a payment link is created only against a debt
   // and never for more than that debt still owes, and its money arrives only through intent
