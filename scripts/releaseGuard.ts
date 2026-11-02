@@ -1297,8 +1297,6 @@ function walkCursorPages<T extends CursorPage>(
     // Checked again AFTER the call: a call that returns past the budget must not be accepted as
     // complete, or the run would go on to later phases having overrun the deadline (fail closed).
     if (pastDeadline()) return deadlineRefusal;
-    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
-    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
     if (!result.ok) {
       return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
     }
