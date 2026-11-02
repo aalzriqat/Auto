@@ -411,6 +411,79 @@ async function completeWith(
   });
 }
 
+/**
+ * SCRUM-886 round 10 (OWASP API3:2023: the outcome of a mutation is a read channel). Applying a deposit to the
+ * supplier settlement is refused when the deposit exceeds the dealership's margin (sale price less the stored supplier
+ * cost) or when no supplier cost is recorded. Both words reached the client in a ConvexError for any `create:sales`
+ * caller: the first confirms where the stored cost sits relative to the price, the second confirms its presence.
+ * A caller without `view:cost_price` now gets the same coded, amount-free refusal the shortfall refusal uses.
+ * Expected values are literals from the seed: a 1,000 deposit, a 12,500 price and a supplier cost of 12,150
+ * (a 350 margin).
+ */
+describe("SCRUM-886 round 10: a deposit refusal derived from the supplier cost names nothing to a non-reader", () => {
+  const COST_ACCESS_CODE = "CONSIGNED_SALE_NEEDS_COST_ACCESS";
+  const THIN_MARGIN_COST = SALE_PRICE - 350;
+  const NON_READER = SALES_ONLY_PERMS.filter((p) => p !== "view:cost_price");
+  const READER = [...NON_READER, "view:cost_price"];
+
+  async function refusalOf(promise: Promise<unknown>): Promise<{ code?: string; message: string } | null> {
+    try {
+      await promise;
+    } catch (error) {
+      const data = (error as { data?: unknown }).data;
+      if (typeof data === "object" && data !== null) {
+        const { code, message } = data as { code?: unknown; message?: unknown };
+        return { ...(typeof code === "string" ? { code } : {}), message: String(message) };
+      }
+      return { message: typeof data === "string" ? data : String((error as Error).message) };
+    }
+    return null;
+  }
+
+  const settleAgainstSupplier = (s: Awaited<ReturnType<typeof seed>>) =>
+    completeAs(s.asManager, s, "DIRECT_TO_SUPPLIER", { treatment: "APPLY_TO_TRANSACTION_SETTLEMENT" });
+
+  test("a deposit larger than the margin is refused with the coded message, which names no margin and no amount", async () => {
+    const s = await seed("r10Thin", { sourceCost: THIN_MARGIN_COST, managerPermissions: NON_READER });
+    const refusal = await refusalOf(settleAgainstSupplier(s));
+    expect(refusal?.code).toBe(COST_ACCESS_CODE);
+    expect(refusal?.message).not.toMatch(/margin/i);
+    expect(refusal?.message).not.toMatch(/\d/);
+  });
+
+  test("a car with no recorded supplier cost gets the identical refusal, so presence is not a signal either", async () => {
+    const thin = await seed("r10ThinB", { sourceCost: THIN_MARGIN_COST, managerPermissions: NON_READER });
+    const none = await seed("r10None", { sourceCost: 0, managerPermissions: NON_READER });
+    const expected = await refusalOf(settleAgainstSupplier(thin));
+    const actual = await refusalOf(settleAgainstSupplier(none));
+    expect(actual?.code).toBe(COST_ACCESS_CODE);
+    expect(actual).toEqual(expected);
+  });
+
+  test("the refusal writes nothing: the deposit is still held and no sale exists", async () => {
+    const s = await seed("r10Writes", { sourceCost: THIN_MARGIN_COST, managerPermissions: NON_READER });
+    await refusalOf(settleAgainstSupplier(s));
+    const deposit = await s.t.run((ctx) => ctx.db.get(s.depositId));
+    expect(deposit?.status).toBe("HELD");
+    expect(deposit?.holdActive).toBe(true);
+    expect((await s.t.run((ctx) => ctx.db.query("sales").take(10))).length).toBe(0);
+  });
+
+  test("control: a view:cost_price holder still gets the margin sentence", async () => {
+    const s = await seed("r10ReadThin", { sourceCost: THIN_MARGIN_COST, managerPermissions: READER });
+    const refusal = await refusalOf(settleAgainstSupplier(s));
+    expect(refusal?.code).toBeUndefined();
+    expect(refusal?.message).toMatch(/exceeds the dealership's margin/i);
+  });
+
+  test("control: a view:cost_price holder still gets the no-recorded-cost sentence", async () => {
+    const s = await seed("r10ReadNone", { sourceCost: 0, managerPermissions: READER });
+    const refusal = await refusalOf(settleAgainstSupplier(s));
+    expect(refusal?.code).toBeUndefined();
+    expect(refusal?.message).toMatch(/no recorded supplier cost/i);
+  });
+});
+
 describe("the treatment taxonomy", () => {
   test("OTHER has no status, because it has no accounting outcome", () => {
     // Every other treatment says what happened to the money. OTHER says a human
