@@ -82,6 +82,10 @@ async function patchRoleIfNeeded(
  * One-time backfill for the new finance-application permissions (Phase 9 / PR #2).
  * Matches by existing capability rather than role name, since orgs can rename
  * roles (e.g. a "SALES" role renamed to "المبيعات" still has create:sales).
+ *
+ * SCRUM-896 R4-F1: `confirm:finance_disbursement` completes a sale (`SALE_COMPLETING_PERMISSIONS`), so the finance-capable grant
+ * adds it only to a role that already holds `view:cost_price` (any capability path, the owner included); otherwise it would
+ * store the state Rule 3 refuses and the per-deploy ACCOUNTANT backfill would then grant cost access. Its other grants are unchanged.
  */
 export const backfillFinanceApplicationPermissions = internalMutation({
   args: {},
@@ -126,6 +130,9 @@ export const backfillFinanceApplicationPermissions = internalMutation({
           PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
         ].forEach((p) => toAdd.add(p));
       }
+
+      // SCRUM-896 R4-F1 (Rule 3): confirm:finance_disbursement completes a sale, so no path above may add it to a role without view:cost_price.
+      if (!has(PERMISSIONS.VIEW_COST_PRICE)) toAdd.delete(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
 
       if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
     }

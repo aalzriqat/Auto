@@ -8,6 +8,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 import { assertAdminMayMutateTable } from "./utils/financialGuards";
 import { VEHICLE_OWNERSHIP_FIELD_KEYS, throwVehicleSourceShape } from "./utils/vehicleSourceShape";
+import { assertRoleMayBeStored } from "./utils/permissions";
 
 // Tables browsable in the cross-org Data Browser UI. Deliberately a subset
 // of every org-scoped table (excludes internal/derived tables like
@@ -241,6 +242,18 @@ export const adminGetRecord = query({
   },
 });
 
+/**
+ * SCRUM-896 R4-F1: the raw editor is a role writer. Whatever it would leave stored as a non-deleted role must pass the same
+ * Rule 3 check as `roles.create` / `roles.update`, or the per-deploy ACCOUNTANT backfill would hand `view:cost_price` back on the
+ * next deploy. `resulting` is the stored document merged with the patch; a soft-deleted result is not checked (the restore path
+ * checks it). Other tables are untouched. The throw rolls the whole mutation back (Convex mutations are transactional).
+ */
+function assertRoleWriteKeepsRuleThree(table: string, resulting: Record<string, unknown>): void {
+  if (table !== "roles" || resulting.isDeleted === true) return;
+  const permissions = resulting.permissions;
+  assertRoleMayBeStored(Array.isArray(permissions) ? permissions.filter((p): p is string => typeof p === "string") : []);
+}
+
 export const adminUpdateRecord = mutation({
   args: { table: v.string(), id: v.string(), patch: v.any() },
   handler: async (ctx, args) => {
@@ -264,6 +277,8 @@ export const adminUpdateRecord = mutation({
       args.patch,
       before as unknown as Record<string, unknown>
     );
+
+    assertRoleWriteKeepsRuleThree(args.table, { ...(before as unknown as Record<string, unknown>), ...(args.patch as Record<string, unknown>) });
 
     await ctx.db.patch(id, args.patch);
     const after = await ctx.db.get(id);
@@ -316,6 +331,8 @@ export const adminRestoreRecords = mutation({
       if ((before as any).isDeleted !== true) {
         throwAppError(AppErrorCode.VALIDATION_FAILED, "Record is not soft-deleted, so there is nothing to restore.");
       }
+
+      assertRoleWriteKeepsRuleThree(args.table, { ...(before as unknown as Record<string, unknown>), isDeleted: false });
 
       await ctx.db.patch(id, {
         isDeleted: false,

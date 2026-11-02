@@ -878,7 +878,8 @@ describe("SCRUM-896 R1-F1 / R3-F1: the per-deploy ACCOUNTANT backfill repairs on
   test("an owner renames the seeded ACCOUNTANT, then creates a custom role named ACCOUNTANT without completing permissions: the backfill does not grant it and cost stays withheld", async () => {
     const s = await seed();
     const original = await insertLegacyAccountant(s);
-    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: original, name: "Senior bookkeeper" });
+    // R4-F1: a rename-only save of the legacy (invalid) default is refused, so the owner renames it together with the repair.
+    await s.actors.owner.mutation(api.roles.update, { orgId: s.orgId, roleId: original, name: "Senior bookkeeper", permissions: [...legacyDefaultPermissions(), "view:cost_price"] });
     const custom = await s.actors.owner.mutation(api.roles.create, roleArgs(s, "ACCOUNTANT", FINANCE_CUSTOM));
     const vehicleId = await stockCar(s);
     const actor = await memberIn(s, custom, "scrum896_custom_accountant");
