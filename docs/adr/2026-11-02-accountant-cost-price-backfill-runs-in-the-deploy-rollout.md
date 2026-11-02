@@ -41,12 +41,43 @@ The phase must not run on the empty-deployment path. That path exits before phas
 organizations has nothing to roll out. A wiring test pins the order: identity check, refusal, supplier VAT migration, empty
 deployment branch, bank rebuild, supplier registry, supplier identity, this phase, then verification.
 
+### Predicate narrowed to sale-completing ACCOUNTANT roles (Seat 1 R1-F1, Seat 2 R3-F1, ccd2f7647)
+
+Invariant: once an organization owner has saved or created a role, its permissions change only through an owner action or a
+one-time repair the owner approved, never through a recurring system job.
+
+The first version of this decision granted `view:cost_price` to every non-deleted role named ACCOUNTANT. That was safe as a
+one-time by-hand run and unsafe as a per-deploy job. Seat 1's chain: deploy N repairs the legacy ACCOUNTANT; the owner then saves
+the role without `view:cost_price` and without `create:sales` and `confirm:finance_disbursement` (Rule 3 accepts that, since no
+completing permission remains); deploy N+1 patches it back, silently, with a counts-only public summary. Seat 2 reproduced the
+same defect through the name: a custom role named ACCOUNTANT (the default renamed and a new one created, a custom role renamed to
+ACCOUNTANT, or the default deleted and the name recreated) was granted `view:cost_price`. With `manage:finance` that opens the
+GL-posting `vehicles.correctAcquisitionCost` door and the correction context query, and `view:cost_price` alone opens the cost
+read in `vehicles.get`.
+
+Decision (Option A, adopted by the coordinator): the mutation repairs a role only when its normalized name is ACCOUNTANT, it is
+not deleted, it holds a sale-completing permission (`SALE_COMPLETING_PERMISSIONS`: `create:sales`,
+`confirm:finance_disbursement`) and it lacks `view:cost_price`. The mutation calls `completesSalesWithoutCostAccess`, the
+function Rule 3 uses to refuse a role save, so the repaired set is exactly the set Rule 3 calls invalid and the completion doors
+refuse. A role the owner deliberately left without both a completing permission and cost access is valid, and is not touched, so
+running on every deploy is safe by construction. The legacy default template holds `confirm:finance_disbursement`, so it is
+still repaired. Owner rulings c24372 (after the deploy, automatically) and c24358 are unchanged. The rollout script, its phase
+order and the permission list are not edited.
+
+Alternatives not taken: tracking "repaired once" per organization needs a new table or a role field and a schema change for a
+fact the permissions already show; matching on a role id list taken at the first deploy needs state outside the deployment;
+dropping the automatic run contradicts c24372.
+
+Disclosed limit: the name cannot tell a custom role from the legacy default when both hold a completing permission without
+`view:cost_price`. Only a role stored before round 13 can be in that state, because `roles.create` and `roles.update` refuse it.
+
 ### What is not changed
 
 - A custom role and a renamed ACCOUNTANT role are untouched. The mutation matches the normalized role name `ACCOUNTANT`.
+- An ACCOUNTANT role that holds no sale-completing permission is untouched, whatever else it holds.
 - A deleted role row is never written.
 - No other permission is granted, and nothing is revoked.
-- The mutation itself is not edited. This change adds a caller, a validating helper, tests and documentation.
+- The rollout script and its wiring are not edited. The mutation's predicate is the only backend change in this round.
 - `convex/utils/customerCreditPayoutContainment.ts` and its compile-time switches are not touched.
 
 ### Public logs
@@ -80,7 +111,7 @@ the walker yet; moving them onto it is follow-up work.
 | --- | --- | --- |
 | Template seeding at organization creation (`organizations.ts`, from `DEFAULT_ROLE_TEMPLATES`) | The product, through code review of the template | New organizations only: OWNER, MANAGER, ACCOUNTANT, SENIOR_ACCOUNTANT |
 | `roles.create` and `roles.update` | The organization's OWNER (both call `requireOwner`). Saving a completing permission without `view:cost_price` is refused (c24358). | One role at a time, any name |
-| This backfill, in the deploy rollout | The owner, c24372 | Every stored, non-deleted role named ACCOUNTANT, once per deploy, idempotent |
+| This backfill, in the deploy rollout | The owner, c24372 | Every stored, non-deleted role named ACCOUNTANT that holds a sale-completing permission without `view:cost_price`; idempotent, and an owner's later restriction is left alone |
 | `migrateRoles:backfillSeniorAccountantRole` insert (copies the SENIOR_ACCOUNTANT template) | Run by hand with owner approval, as before. Not part of this change. | Inserts a missing SENIOR_ACCOUNTANT role |
 | `e2eBootstrap` role patches | Test environments only | Not a production door |
 | The older `migrateRoles.ts` backfills (view:users, finance application, marketplace, expense, valuation, payroll) | Run by hand with owner approval, as before | None of them grants `view:cost_price` |
@@ -96,15 +127,18 @@ deploy ships the refusal and the repair separately, and an affected accountant i
 until the next deploy. Train position: after #746, before #740.
 
 A legacy ACCOUNTANT role that is repaired also passes the `vehicles.correctAcquisitionCost` gate (`manage:finance` plus
-`view:cost_price`). The owner allowed that for the default ACCOUNTANT (c24368, option A). The backfill extends it to every
-stored role named ACCOUNTANT, which is the same role.
+`view:cost_price`). The owner allowed that for the default ACCOUNTANT (c24368, option A). The backfill extends it to the
+stored roles named ACCOUNTANT that hold a sale-completing permission, which is the legacy default role.
 
 ## Evidence
 
 Failing-first tests in `scripts/accountantCostPriceRollout.test.ts` cover paging and cursor order, idempotent re-run,
 malformed pages, failed calls, the no-leak rule for `updates`, the page cap, the shared deadline and the wiring order.
 Backend behavior of the mutation (idempotency, bounded pages, name matching) is covered by the existing permission scenario
-`accountant-backfill-adds-view-cost-price-idempotently-and-in-bounded-pages`. Nothing in this change was run against a
+`accountant-backfill-adds-view-cost-price-idempotently-and-in-bounded-pages`. The predicate narrowing (R1-F1, R3-F1) is covered
+by the describe "SCRUM-896 R1-F1 / R3-F1" in `convex/consignedSaleCostAccessRule.scrum886.test.ts` (red at a79d324b3, 6 of 47
+failed; two mutants killed 6 and 9) and by the scenario records `accountant-backfill-leaves-an-owner-restricted-accountant-alone`
+and `accountant-backfill-does-not-grant-a-renamed-or-recreated-custom-accountant`. Nothing in this change was run against a
 deployment. The first real run is the production deploy, so the first run is where the real page sequence is observed.
 
 Sources checked: the Convex pagination documentation (`continueCursor` and `isDone` semantics, pages not guaranteed to match
