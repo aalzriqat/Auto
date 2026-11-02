@@ -65,6 +65,10 @@ function permissionsFor(role: RoleName): string[] {
   }
   const template = DEFAULT_ROLE_TEMPLATES.find((candidate) => candidate.name === role);
   if (!template) throw new Error(`No default role template named ${role}`);
+  // SCRUM-886 round 13: the default ACCOUNTANT template now holds view:cost_price (it completes sales). ACCOUNTANT here is the role as an
+  // org stored it BEFORE that change, which the template change does not reach until the backfill runs: the template without the
+  // permission. The template's own reader behaviour is covered by consignedSaleCostAccessRule.scrum886.test.ts.
+  if (role === "ACCOUNTANT") return template.permissions.filter((permission) => permission !== "view:cost_price");
   return [...template.permissions];
 }
 

@@ -48,6 +48,8 @@ async function seedDealer(tag: string) {
       "view:sales", "create:sales", "edit:sales", "delete:sales", "manage:finance", "view:finance",
       "view:customers", "create:customers", "view:vehicles", "create:vehicles", "edit:vehicles",
       "approve:requests", "view:commissions", "manage:commissions",
+      // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+      "view:cost_price",
     ],
   });
   await t.run((ctx) => ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] }));

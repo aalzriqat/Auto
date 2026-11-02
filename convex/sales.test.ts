@@ -46,6 +46,8 @@ async function seedSalesOrg(t: ReturnType<typeof convexTestWithComponents>, suff
         "view:vehicles",
         "view:commissions",
         "manage:commissions",
+        // SCRUM-886 round 13: this Admin completes a SOURCED sale below, which needs cost access.
+        "view:cost_price",
       ],
     })
   );

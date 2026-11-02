@@ -44,6 +44,8 @@ const PERMS = [
   "view:commissions", "manage:commissions",
   "approve:requests",
   "create:expenses",
+  // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;

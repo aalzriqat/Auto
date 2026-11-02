@@ -37,6 +37,8 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
 const PERMS = [
   "view:sales", "create:sales", "edit:sales",
+  // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+  "view:cost_price",
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "view:customers", "create:customers",
   "manage:finance", "view:finance",
