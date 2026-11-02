@@ -272,26 +272,85 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
   });
 
-  it("sets backend variables on the main E2E preview only after its cleanup pin is recorded", () => {
+  // SCRUM-892: the main E2E no longer creates a Convex cloud preview. These tests
+  // replace the former "sets backend variables on the main E2E preview only after
+  // its cleanup pin is recorded" test. Its cloud-only properties (a recorded
+  // cleanup identity, a pin step, a control-plane admin-key claim) no longer exist
+  // because no cloud resource exists to retire. Their local equivalents are
+  // pinned here: a backend that is started, configured and deployed in that
+  // order, and removed by a step that runs even when the suite fails.
+  describe("main E2E runs on a local self-hosted Convex backend (SCRUM-892)", () => {
     const steps = trustedMainE2EWorkflow.jobs?.playwright?.steps ?? [];
-    const setter = steps.find((entry) => String(entry.run ?? "").includes("convex env set"));
-    expect(setter, "a step that sets the preview's backend variables").toBeDefined();
-    // The pin step only warns on failure, so a failed pin must stop the setter
-    // here: otherwise the preview is changed while the always() delete step,
-    // which needs CONVEX_PREVIEW_CREATED_AT, would skip its cleanup.
-    expect(setter?.env).toHaveProperty("CONVEX_PREVIEW_CREATED_AT");
-    const run = String(setter?.run ?? "");
-    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
-    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the setter").toBeGreaterThanOrEqual(0);
-    // The guard comes before the admin-key claim too, so a failed pin touches the control plane not at all.
-    const claim = run.indexOf("resolveConvexPreviewCredentials");
-    expect(claim).toBeGreaterThanOrEqual(0);
-    expect(guard).toBeLessThan(claim);
-    expect(guard).toBeLessThan(run.indexOf("convex env set"));
-    expect(run.slice(guard, run.indexOf("convex env set"))).toContain("exit 1");
-    const pinIndex = steps.findIndex((entry) => String(entry.run ?? "").includes("previewDeploymentLifecycle.mjs pin"));
-    expect(pinIndex).toBeGreaterThanOrEqual(0);
-    expect(steps.indexOf(setter!)).toBeGreaterThan(pinIndex);
+    const indexOfRun = (needle: string) => steps.findIndex((entry) => String(entry.run ?? "").includes(needle));
+    const stepByRun = (needle: string) => {
+      const found = steps[indexOfRun(needle)];
+      expect(found, `a step that runs ${needle}`).toBeDefined();
+      return found as WorkflowStep;
+    };
+
+    it("starts the backend, sets its environment, then deploys, in that order, before the seed and the suite", () => {
+      const start = indexOfRun("scripts/localConvexBackend.mjs start");
+      const env = indexOfRun("scripts/localConvexBackend.mjs env");
+      const deploy = indexOfRun("scripts/localConvexBackend.mjs deploy");
+      const seed = indexOfRun("scripts/e2ePreviewBootstrap.mjs");
+      const suite = steps.findIndex((entry) => entry.id === "playwright");
+      expect(start).toBeGreaterThanOrEqual(0);
+      // convex/auth.config.ts is evaluated at deploy time, so the environment
+      // must be in place before the deploy, not after it.
+      expect(env).toBeGreaterThan(start);
+      expect(deploy).toBeGreaterThan(env);
+      expect(seed).toBeGreaterThan(deploy);
+      expect(suite).toBeGreaterThan(seed);
+    });
+
+    it("tears the backend down in a step that runs even when an earlier step failed", () => {
+      const stop = stepByRun("scripts/localConvexBackend.mjs stop");
+      expect(stop.if).toBe("always()");
+      expect(steps.indexOf(stop)).toBeGreaterThan(steps.findIndex((entry) => entry.id === "playwright"));
+      // Nothing after the stop step may still need the backend.
+      const after = steps.slice(steps.indexOf(stop) + 1);
+      expect(after.filter((entry) => /localConvexBackend|e2ePreviewBootstrap|playwright test/.test(String(entry.run ?? "")))).toEqual([]);
+    });
+
+    it("holds no Convex cloud credential and creates no cloud deployment", () => {
+      expect(trustedMainE2EWorkflowSource).not.toContain("--preview-create");
+      expect(trustedMainE2EWorkflowSource).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+      expect(trustedMainE2EWorkflowSource).not.toContain("CONVEX_DEPLOY_KEY");
+      expect(trustedMainE2EWorkflowSource).not.toContain("CONVEX_PREVIEW_NAME");
+      expect(trustedMainE2EWorkflowSource).not.toContain("previewDeploymentLifecycle");
+      expect(trustedMainE2EWorkflowSource).not.toMatch(/\bconvex deploy\b/);
+      expect(trustedMainE2EWorkflowSource).not.toMatch(/secrets\.CONVEX_/);
+    });
+
+    it("gives the backend scripts no secret beyond the Clerk publishable key", () => {
+      // The environment step needs the publishable key to derive the issuer
+      // domain, and nothing else secret. The start, deploy and stop steps need none.
+      const envStep = stepByRun("scripts/localConvexBackend.mjs env");
+      expect(Object.keys(envStep.env ?? {}).sort()).toEqual(["NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"]);
+      for (const verb of ["start", "deploy", "stop"]) {
+        expect(stepByRun(`scripts/localConvexBackend.mjs ${verb}`).env ?? {}).toEqual({});
+      }
+    });
+
+    it("hands the admin key to the seed step only through the masked step environment", () => {
+      // The script masks the key and writes it to GITHUB_ENV itself. The workflow
+      // never echoes a credential-named variable into GITHUB_ENV (the boundary
+      // test enforces that for every workflow) and never prints the key.
+      const seed = stepByRun("scripts/e2ePreviewBootstrap.mjs");
+      expect(seed.env).toMatchObject({
+        CONVEX_SELF_HOSTED_URL: "${{ env.CONVEX_SELF_HOSTED_URL }}",
+        CONVEX_SELF_HOSTED_ADMIN_KEY: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}",
+        NEXT_PUBLIC_CONVEX_URL: "${{ env.NEXT_PUBLIC_CONVEX_URL }}",
+      });
+      expect(Object.keys(seed.env ?? {})).not.toContain("CONVEX_DEPLOY_KEY");
+      const runText = steps.map((entry) => String(entry.run ?? "")).join("\n");
+      expect(runText).not.toMatch(/echo[^\n]*ADMIN_KEY/);
+    });
+
+    it("points the suite at the local backend", () => {
+      const suite = steps.find((entry) => entry.id === "playwright");
+      expect(suite?.env?.NEXT_PUBLIC_CONVEX_URL).toBe("${{ env.NEXT_PUBLIC_CONVEX_URL }}");
+    });
   });
 
   it("runs only as a successful Playwright workflow_run follow-up", () => {

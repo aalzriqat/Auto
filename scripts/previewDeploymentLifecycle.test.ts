@@ -415,8 +415,13 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       "hunt-preview.yml",
       "pilot-role-audit.yml",
       "trusted-accounting-rehearsal.yml",
-      "trusted-main-e2e.yml",
+      // SCRUM-892: trusted-main-e2e.yml ran on a local self-hosted backend and no
+      // longer creates a cloud preview, so it is no longer a creator.
     ]);
+    // ...and it must stay out of the census for the right reason.
+    const main = readFileSync(path.join(dir, "trusted-main-e2e.yml"), "utf8");
+    expect(main).not.toContain("--preview-create");
+    expect(main).not.toContain("previewDeploymentLifecycle");
   });
 
   // SCRUM-768: the hunt preview exists to OUTLIVE its run (a person hunts on

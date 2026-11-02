@@ -78,7 +78,9 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       expect(commands).toContain("node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual");
       expect(commands).toContain("node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual");
       expect(JSON.stringify(gate.env ?? {})).not.toContain("secrets.");
-      const previewIndex = steps.findIndex((step) => /preview/i.test(step.name ?? ""));
+      // SCRUM-892: trusted-main-e2e.yml names its backend steps "local Convex
+      // backend" instead of "preview"; the gate must still precede the first.
+      const previewIndex = steps.findIndex((step) => /preview|local convex backend/i.test(step.name ?? ""));
       expect(previewIndex).toBeGreaterThan(gateIndex);
       const deployIndex = steps.findIndex((step) => step.run?.includes("convex deploy"));
       if (deployIndex !== -1) expect(deployIndex).toBeGreaterThan(gateIndex);

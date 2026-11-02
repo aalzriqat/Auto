@@ -278,11 +278,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
   "trusted-accounting-rehearsal.yml":
     "5fa1ebee0748d69075852feb2c10b15490eef5bed1e9d7925d07d86412b7ce84",
-  // SCRUM-860: reviewed addition of the role frame census before preview
-  // provisioning, with no step secrets. All credential steps, preview targeting,
-  // cleanup and canonical-command/tamper controls remain pinned unchanged.
-  "trusted-main-e2e.yml":
-    "3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437",
+  // SCRUM-892: trusted-main-e2e.yml was pinned here (SCRUM-860) while it created a
+  // Convex cloud preview with CONVEX_PREVIEW_DEPLOY_KEY. It now runs on a local
+  // self-hosted backend and references no Convex credential, so it has no pin.
+  // It is not exempt: the next test fails if it ever reaches a credential again,
+  // and the whole-workflow comparison below fails until it is pinned again.
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
@@ -412,6 +412,13 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       expect(localUses(workflow), name).toEqual([]);
     }
     expect(actual).toEqual(CREDENTIAL_WORKFLOW_PINS);
+  });
+
+  it("SCRUM-892: the main E2E workflow reaches no Convex credential and so needs no pin", () => {
+    const entry = workflows.find(({ name }) => name === "trusted-main-e2e.yml");
+    expect(entry, "trusted-main-e2e.yml is loaded by this suite").toBeDefined();
+    expect(reachesConvexCredential(entry!.workflow)).toBe(false);
+    expect(Object.keys(CREDENTIAL_WORKFLOW_PINS)).not.toContain("trusted-main-e2e.yml");
   });
 
   it("changes the pin for every execution-affecting edit Sol demonstrated, and detects every credential route (Sol R3 on PR #341)", () => {
