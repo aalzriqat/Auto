@@ -14,7 +14,9 @@ one by one over PR #746 rounds 6 to 12, and each fix left a new sibling behind.
 Owner ruling SCRUM-886 c24358, 2026-11-02: completing or finalizing a SOURCED sale requires `view:cost_price` on every door
 (`sales.create`, `sales.completeDraft`, `sales.completeFromQuote`, `applications.finalizeDeal`). The server refuses it with
 `CONSIGNED_SALE_NEEDS_COST_ACCESS` as the first decision of the door, before any cost read, keyed on `sourceType` and the
-actor's permission only. The default ACCOUNTANT template gains `view:cost_price`. Saving a custom role (`roles.create`,
+actor's permission only. These are completion doors: `sales.create` accepts only COMPLETED. Saving a PENDING draft
+(`sales.createDraft`) is not gated, because the draft path makes no decision that depends on a cost value; the refusal comes
+when the draft is completed through `sales.completeDraft`. The default ACCOUNTANT template gains `view:cost_price`. Saving a custom role (`roles.create`,
 `roles.update`) with either completing permission and no `view:cost_price` is refused with a coded EN/AR message. Stored
 custom roles are not migrated; one that already holds the combination is refused at the door and reported.
 
