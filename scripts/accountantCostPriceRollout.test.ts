@@ -110,6 +110,36 @@ describe("SCRUM-896 ACCOUNTANT view:cost_price backfill rollout", () => {
     expect(calls).toBe(1);
   });
 
+  // The rollout deadline is shared by every phase and is checked on both sides of a call: a call that returns past the
+  // budget must not be accepted as complete, or the run would go on to later phases having overrun it (fail closed).
+  test.each([
+    ["terminal", true],
+    ["non-terminal", false],
+  ])("a well-formed %s page whose call finishes after the deadline is refused, not accepted", (_label, isDone) => {
+    let now = 0;
+    const result = run(
+      () => {
+        now = 1001;
+        return { ok: true, value: page(1, isDone, "c1") };
+      },
+      { now: () => now },
+    );
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
+    expect(JSON.stringify(result)).not.toContain("org_secret");
+  });
+
+  test("a terminal call that finishes exactly on the deadline is still accepted", () => {
+    let now = 0;
+    const result = run(
+      () => {
+        now = 1000;
+        return { ok: true, value: page(0, true, "end") };
+      },
+      { now: () => now },
+    );
+    expect(result).toEqual({ ok: true, pages: 1, updated: 0 });
+  });
+
   // The backend's `updates` array holds one line per patched role: the role name and the organization id.
   // The repository is public, so none of it may reach a reason, on the success path or on any refusal path.
   test("no result ever contains an element of updates, on success or on any refusal path", () => {
