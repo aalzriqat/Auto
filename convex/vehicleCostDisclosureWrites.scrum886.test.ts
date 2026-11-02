@@ -156,6 +156,22 @@ const importOf = (s: Seeded, who: Who, importId: string, row: ReturnType<typeof 
   });
 
 describe("SCRUM-886 round 4: importBulk refusals do not disclose a stored cost", () => {
+  // Round 8 refuses a PURCHASE import from a caller without cost access before any VIN comparison
+  // (`convex/vehicleCostOracles.scrum886.test.ts` pins that). The assertions below stay as they were:
+  // they still hold for the coded refusal, and the detailed-reason controls at the end of the block
+  // are the readers' side of the same rule.
+  test("round 8: the importer without cost access gets the coded refusal for every shape below, never a VIN comparison", async () => {
+    const s = await seed();
+    for (const [importId, row] of [
+      ["imp-code-1", sourcedRow(s.supplierId, STORED_SOURCE_COST + 1)],
+      ["imp-code-2", sourcedRow(s.supplierId, STORED_SOURCE_COST)],
+      ["imp-code-3", ownedRow(12_000)],
+      ["imp-code-4", ownedRow(ACQUISITION_COST)],
+    ] as const) {
+      expect(await refusalText(importOf(s, "importer", importId, row))).toContain("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
+  });
+
   test("a consigned VIN recorded at another supplier cost is refused without naming the stored cost", async () => {
     const s = await seed();
     const message = await refusalText(importOf(s, "importer", "imp-src-1", sourcedRow(s.supplierId, STORED_SOURCE_COST + 1)));

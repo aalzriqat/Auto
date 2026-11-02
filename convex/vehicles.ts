@@ -3914,16 +3914,30 @@ export const importBulk = mutation({
     // COST tier, so a caller who may not read it gets the same generic "already recorded under this VIN"
     // refusal whether the file's figure matches or differs: no stored amount and no equality signal.
     // Callers who may read cost keep the detailed reasons. Every refusal below that compares a row with
-    // an existing vehicle's cost, currency, payment route or creditor follows this rule.
+    // an existing vehicle's cost, currency, payment route or creditor follows this rule. Since the
+    // round-8 gate right below, only a PURCHASE import reaches those refusals and a caller without
+    // cost access never gets that far, so the `!mayReadCost` branches are defence in depth.
     const mayReadCost = canReadVehicleCost(role);
-    // SCRUM-886: an opening-stock import's retry proof COMPARES cost by design. The import and row ids
-    // are OPEN fields on the vehicle, so a caller who can see the vehicle can replay its row; the proof
-    // then succeeds when the submitted price equals the stored one and throws IDEMPOTENCY_CONFLICT (or
-    // "retry proof conflicts") when it differs. Neutralising that would weaken the idempotency proof,
-    // which readers rely on, so a caller who cannot read cost may not run an opening-stock import at
-    // all. Decided by role alone, before any evidence lookup, fingerprint or comparison. Every
-    // opening-stock row must carry a positive price, so no key-presence exemption exists.
-    if (tracksOpeningStock && !mayReadCost) {
+    // SCRUM-886 (OWASP API3:2023; Convex: authorize inside the function from `ctx.auth`, never from a
+    // client argument). INVARIANT: a caller who cannot read vehicle cost never submits a cost-bearing
+    // value into a path that compares it with a stored value or a stored fingerprint of it.
+    // Two import modes run exactly such a path, and both are decided here, by the caller's role and the
+    // request's mode alone, before any evidence lookup, fingerprint, supplier read or comparison:
+    //  - PURCHASE hashes every row with `importRowFingerprint` (purchasePrice, sourceCost, supplier,
+    //    the file's payment method and bank) and looks the (import, row) evidence up with it, twice
+    //    (the proven-replay probe below and the evidence loop). A match is `alreadyRecorded`, a
+    //    mismatch is IDEMPOTENCY_CONFLICT, so a replayed key plus guessed figures confirms the stored
+    //    ones. The mode always carries cost: a payment method is required, and a priceless row still
+    //    hashes `purchasePrice: null` against a stored price, so no row shape is exempt.
+    //  - OPENING_STOCK with an import id runs a retry proof that compares the price and the cost in
+    //    minor units by design. The import and row ids are OPEN fields on the vehicle.
+    // The import key is a client-supplied idempotency token, not a credential: "no reader exposes it"
+    // is no defence. Neutralising the comparison would weaken the proof readers rely on, so the call
+    // is refused instead. What stays open to a caller without cost access is the legacy opening-stock
+    // call with no import id: it posts nothing, keeps no proof and reads no stored cost (an existing
+    // VIN is counted as skipped, a VIN is an open field). `vehicles.update` and
+    // `vehicleEdits.requestUpdate` follow the same rule through `editPayloadCarriesCost`.
+    if ((postsAcquisitions || tracksOpeningStock) && !mayReadCost) {
       throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
     }
     // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
