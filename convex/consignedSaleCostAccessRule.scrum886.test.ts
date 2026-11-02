@@ -244,6 +244,18 @@ describe("SCRUM-886 round 13 rule 2: sales.completeDraft", () => {
     const statuses = await s.t.run(async (ctx) => Promise.all(drafts.map(async (id) => (await ctx.db.get(id))?.status)));
     expect(statuses).toEqual(Array(drafts.length).fill("PENDING"));
   });
+
+  test("sales.completeDraft refuses a draft whose SOURCED car is archived with the coded response too, so the door check is the first decision and not the shared backstop", async () => {
+    const s = await seed();
+    const archived = await consignedCar(s, ENTITLEMENT, "ARCHIVED");
+    const drafts: Id<"sales">[] = [];
+    for (const price of PRICES) drafts.push(await draftFor(s, "nonReader", archived, price));
+    const before = await worldOf(s);
+    const payloads: Array<string | null> = [];
+    for (const saleId of drafts) payloads.push(await payloadOf(completeDraft(s, "nonReader", saleId)));
+    expectOneCodedRefusal(payloads, "sales.completeDraft on an archived consigned car");
+    expect(await worldOf(s), "sales.completeDraft wrote nothing").toEqual(before);
+  });
 });
 
 describe("SCRUM-886 round 13 rule 2: sales.completeFromQuote checks every line before touching any", () => {
