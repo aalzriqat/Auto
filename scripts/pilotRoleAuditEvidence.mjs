@@ -86,27 +86,58 @@ export class AuditEvidenceError extends Error {
   constructor(code) { super(code); this.name = "AuditEvidenceError"; }
 }
 
+/** The one shape that counts as a pass: the single attempt passed as expected.
+ * @param {RoleCase} item */
+function isPassedRoleCase({ ok, row }) {
+  return ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
+    Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed";
+}
+
+/** Closed verdict for one observed attempt. Anything that is not the exact pass
+ * shape, including a status this version does not know, is "failed" or "skipped".
+ * @param {RoleCase} item */
+function roleCaseStatus(item) {
+  if (isPassedRoleCase(item)) return "passed";
+  const results = Array.isArray(item.row.results) ? item.row.results : [];
+  if (item.row.status === "skipped" || (results.length > 0 && results.every((result) => result?.status === "skipped"))) return "skipped";
+  return "failed";
+}
+
+/** One entry per allowlisted case, in constant order. Title and project come
+ * from the constant only; the report supplies nothing but the closed status.
+ * @param {RoleCase[]} observed */
+function roleCaseVerdicts(observed) {
+  return [...ROLE_CASE_PROJECTS].map(([title, project]) => {
+    const seen = observed.filter((item) => item.title === title);
+    let status = "missing";
+    if (seen.length > 1) status = "duplicate";
+    else if (seen.length === 1) status = seen[0].row.projectName === project ? roleCaseStatus(seen[0]) : "wrong-project";
+    return { title, project, status };
+  });
+}
+
 /** Measure exact real-role cases from the JSON reporter of this invocation.
+ * `cases` and `unexpected` are the only report-derived values that may be
+ * published: constant titles with a closed status, and a count of foreign cases.
  * @param {unknown} report */
 export function roleRegressionOutcome(report) {
-  const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE" };
+  const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE",
+    cases: roleCaseVerdicts([]), unexpected: 0 };
   const parsed = roleReportSchema.safeParse(report);
   if (!parsed.success || parsed.data.errors.length !== 0) return absent;
   const observed = collectRoleCases(parsed.data.suites);
   if (observed === null) return absent;
   const titles = new Set(observed.map((item) => item.title));
   const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
-      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ title, ok, row }) =>
-        ROLE_CASE_PROJECTS.get(title) === row.projectName &&
-        ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
-        Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed");
+      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every((item) =>
+        ROLE_CASE_PROJECTS.get(item.title) === item.row.projectName && isPassedRoleCase(item));
   let measurement = "FAIL";
   if (verified) measurement = "PASS";
   else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
   return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified,
-    measurement };
+    measurement, cases: roleCaseVerdicts(observed),
+    unexpected: observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length };
 }
-
 /** @template T @param {() => Promise<T>} operation
  * @returns {Promise<PromiseSettledResult<T>>} */
 async function settleEvidenceOperation(operation) {
@@ -397,6 +428,7 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
       complete: execution === "SUCCEEDED" && summary.cellsComplete && roleCases.verified, execution,
       roleRegressionsExpected: roleCases.expected, roleRegressionsObserved: roleCases.observed,
       roleRegressionsVerified: roleCases.verified, roleRegressionsMeasurement: roleCases.measurement,
+      roleRegressionCases: roleCases.cases, roleRegressionsUnexpectedCount: roleCases.unexpected,
       runContext: runContext ?? "UNAVAILABLE" };
     await fs.mkdir(path.join(archiveRoot, "captures"), { recursive: true, mode: 0o700 });
     /** @type {{path: string, bytes: number, sha256: string}[]} */

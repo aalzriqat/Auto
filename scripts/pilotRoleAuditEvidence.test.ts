@@ -497,7 +497,7 @@ test.each([
   const stub = path.join(repo, "synthetic-browser.cjs");
   const failureMarker = "\nPreview attestation failed: [Request ID: 42e39a239aecaeb1]\n";
   const hasReport = reportMode === "passed" || reportMode === "skipped" || reportMode === "leaky";
-  let report = roleReport();
+  let report: unknown = roleReport();
   if (reportMode === "skipped") report = roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed"));
   if (reportMode === "leaky") report = leakyReport();
   const reportBytes = reportMode === "malformed" ? "{invalid report" : JSON.stringify(report);
