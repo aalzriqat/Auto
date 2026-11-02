@@ -902,6 +902,9 @@ Round 13 mutants, each applied alone to a clean committed HEAD, run against the 
 | M10a | backfill never patches | 2 killed |
 | M10b | backfill no longer skips non-ACCOUNTANT roles | 3 killed |
 | M11 | the gate is added to `sales.createDraft` (the draft door) | 2 killed (both draft tests). The red proof of those tests, which were green on the first run |
+| M12 | `roles.update` guard exempts roles already holding `view:cost_price` (`&& !role.permissions.includes("view:cost_price")`) | 0 killed at d4c499098 (35/35 green, SURVIVED: every `roles.update` test started from a stored role without completion authority). After round 14: 2 killed, the two removal tests |
+
+Round 14 adds two tests to the "saving a role" group (one for `create:sales`, one for `confirm:finance_disbursement`): each stores a role that completes sales and holds `view:cost_price`, resubmits the whole stored set minus `view:cost_price`, and asserts the coded refusal with the English dictionary text, the stored role row unchanged and no new notification (Seat 2 MEDIUM, Seat 1 M12).
 
 Serial `convex-test` harness evidence, not platform, browser or production certification. Not verified: any rendered screen, the Arabic text in a browser, the rehearsal script against a live rehearsal, the backfill against a deployment.
 
