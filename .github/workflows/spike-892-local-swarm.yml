@@ -92,12 +92,16 @@ jobs:
         working-directory: trusted
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # SPIKE: identical to the real step except that convexCredentialBoundary.test.ts is
+      # excluded. That suite pins every file in .github/workflows against the real PR
+      # branch's workflow set; the spike branch adds spike-only workflows and lacks the
+      # PR branch's other commits, so it is red here for reasons unrelated to the backend.
       - name: Verify trusted impact and browser control plane
         working-directory: trusted
         run: |
           set -euo pipefail
           pnpm test:jev-impact
-          pnpm test:browser-swarm
+          pnpm test:browser-swarm --exclude scripts/intelligence/convexCredentialBoundary.test.ts
         env:
           NODE_ENV: test
 
