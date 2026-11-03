@@ -231,7 +231,10 @@ const suppliersMessages = defineBilingualMessages({
     "هذا السجل غير مرتبط بمورّد بعد. اربطه بمورّد أولاً.",
   ],
   ServerError_SUPPLIER_NO_CHANGE: ["There is nothing to change.", "لا يوجد ما يُغيَّر."],
-  ServerError_SUPPLIER_ALIAS_EXISTS: ["This supplier already has that alias.", "لدى هذا المورّد هذا الاسم المستعار بالفعل."],
+  ServerError_SUPPLIER_ALIAS_EXISTS: [
+    "This supplier already has that alias.",
+    "لدى هذا المورّد هذا الاسم المستعار بالفعل.",
+  ],
   ServerError_SUPPLIER_ALIAS_LIMIT: [
     "This supplier has reached the maximum number of aliases.",
     "بلغ هذا المورّد الحد الأقصى لعدد الأسماء المستعارة.",
@@ -254,8 +257,8 @@ const suppliersMessages = defineBilingualMessages({
     "تعذّر تحميل كشف الحساب. أعد تحميل الصفحة وحاول مرة أخرى.",
   ],
   SuppliersStmtIncomplete: [
-    "More lines exist than can be shown here. The lines and totals above are partial.",
-    "توجد بنود أكثر من المعروض هنا. البنود والمجاميع أعلاه جزئية.",
+    "More lines exist than can be shown here. The lines above are partial, so no total is shown.",
+    "توجد بنود أكثر من المعروض هنا. البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
   ],
   SuppliersStmtKindPayable: ["Supplier payable", "مستحق للمورّد"],
   SuppliersStmtKindReceivable: ["Margin receivable", "هامش مستحق على المورّد"],
@@ -265,7 +268,12 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtDaysOverdue: ["{days} days overdue", "متأخر {days} يوماً"],
   SuppliersStmtDisputed: ["Disputed", "متنازع عليه"],
   SuppliersStmtOverdue: ["Overdue", "متأخر"],
-  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],});
+  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],
+  SuppliersStmtTotalUnavailable: [
+    "Total unavailable: this list is incomplete",
+    "الإجمالي غير متاح: القائمة غير مكتملة",
+  ],
+});
 
 export const suppliersEn = suppliersMessages.en;
 export const suppliersAr = suppliersMessages.ar;

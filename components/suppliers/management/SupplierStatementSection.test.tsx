@@ -4,11 +4,16 @@
  * in English and Arabic through the real dictionaries.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 
 type Section = {
   rows: Array<Record<string, unknown>>;
-  totals: Array<{ currency: string; grossMinor: number; disputedMinor: number; overdueMinor: number }>;
+  totals: Array<{
+    currency: string;
+    grossMinor: number;
+    disputedMinor: number;
+    overdueMinor: number;
+  }>;
   complete: boolean;
 };
 
@@ -59,10 +64,25 @@ const ORG = "org_1" as never;
 const SUP = "sup_1" as never;
 
 const row = (over: Record<string, unknown>) => ({
-  kind: "PAYABLE", id: "r1", currency: "JOD", outstandingMinor: 9_500_000, disputedMinor: 0, dueAt: 1, dueDate: "2026-06-05",
-  rule: "AGREED", explanation: "x", daysOverdue: 10, bucket: "DAYS_1_30", ...over,
+  kind: "PAYABLE",
+  id: "r1",
+  currency: "JOD",
+  outstandingMinor: 9_500_000,
+  disputedMinor: 0,
+  dueAt: 1,
+  dueDate: "2026-06-05",
+  rule: "AGREED",
+  explanation: "x",
+  daysOverdue: 10,
+  bucket: "DAYS_1_30",
+  ...over,
 });
-const section = (over: Partial<Section> = {}): Section => ({ rows: [], totals: [], complete: true, ...over });
+const section = (over: Partial<Section> = {}): Section => ({
+  rows: [],
+  totals: [],
+  complete: true,
+  ...over,
+});
 
 beforeEach(() => {
   world.locale = "en";
@@ -72,10 +92,36 @@ beforeEach(() => {
   world.queryCalls.length = 0;
   world.statement = {
     supplierId: "sup_1",
-    payable: section({ rows: [row({})], totals: [{ currency: "JOD", grossMinor: 9_500_000, disputedMinor: 0, overdueMinor: 9_500_000 }] }),
+    payable: section({
+      rows: [row({})],
+      totals: [
+        {
+          currency: "JOD",
+          grossMinor: 9_500_000,
+          disputedMinor: 0,
+          overdueMinor: 9_500_000,
+        },
+      ],
+    }),
     receivable: section({
-      rows: [row({ kind: "RECEIVABLE", id: "r2", outstandingMinor: 3_000_000, dueDate: null, daysOverdue: null, bucket: "NO_DUE_DATE" })],
-      totals: [{ currency: "JOD", grossMinor: 3_000_000, disputedMinor: 0, overdueMinor: 0 }],
+      rows: [
+        row({
+          kind: "RECEIVABLE",
+          id: "r2",
+          outstandingMinor: 3_000_000,
+          dueDate: null,
+          daysOverdue: null,
+          bucket: "NO_DUE_DATE",
+        }),
+      ],
+      totals: [
+        {
+          currency: "JOD",
+          grossMinor: 3_000_000,
+          disputedMinor: 0,
+          overdueMinor: 0,
+        },
+      ],
     }),
   };
 });
@@ -86,8 +132,12 @@ const renderIt = () => render(<SupplierStatementSection orgId={ORG} supplierId={
 describe("supplier statement section", () => {
   test("shows A/P and A/R in two separate regions with their own totals and no net figure", () => {
     renderIt();
-    const ap = screen.getByRole("region", { name: en.SuppliersStmtPayableTitle });
-    const ar_ = screen.getByRole("region", { name: en.SuppliersStmtReceivableTitle });
+    const ap = screen.getByRole("region", {
+      name: en.SuppliersStmtPayableTitle,
+    });
+    const ar_ = screen.getByRole("region", {
+      name: en.SuppliersStmtReceivableTitle,
+    });
     expect(within(ap).getAllByText(/9,500/).length).toBeGreaterThan(0);
     expect(within(ap).queryByText(/3,000/)).toBeNull();
     expect(within(ar_).getAllByText(/3,000/).length).toBeGreaterThan(0);
@@ -109,13 +159,21 @@ describe("supplier statement section", () => {
     expect(screen.getByRole("status").textContent).toContain(en.SuppliersStmtLoading);
     unmount();
 
-    world.statement = { supplierId: "sup_1", payable: section(), receivable: section() };
+    world.statement = {
+      supplierId: "sup_1",
+      payable: section(),
+      receivable: section(),
+    };
     const second = renderIt();
     expect(screen.getByText(en.SuppliersStmtPayableEmpty)).toBeTruthy();
     expect(screen.getByText(en.SuppliersStmtReceivableEmpty)).toBeTruthy();
     second.unmount();
 
-    world.statement = { supplierId: "sup_1", payable: section({ complete: false }), receivable: section() };
+    world.statement = {
+      supplierId: "sup_1",
+      payable: section({ complete: false }),
+      receivable: section(),
+    };
     const third = renderIt();
     expect(screen.getAllByText(en.SuppliersStmtIncomplete)).toHaveLength(1);
     third.unmount();
@@ -147,13 +205,85 @@ describe("supplier statement section", () => {
       supplierId: "sup_1",
       payable: section({
         rows: [row({ disputedMinor: 1_000_000, outstandingMinor: 1_000_000 })],
-        totals: [{ currency: "JOD", grossMinor: 1_000_000, disputedMinor: 1_000_000, overdueMinor: 1_000_000 }],
+        totals: [
+          {
+            currency: "JOD",
+            grossMinor: 1_000_000,
+            disputedMinor: 1_000_000,
+            overdueMinor: 1_000_000,
+          },
+        ],
       }),
       receivable: section(),
     };
     renderIt();
-    const ap = screen.getByRole("region", { name: en.SuppliersStmtPayableTitle });
+    const ap = screen.getByRole("region", {
+      name: en.SuppliersStmtPayableTitle,
+    });
     expect(within(ap).getAllByText(new RegExp(en.SuppliersStmtDisputed)).length).toBeGreaterThan(0);
     expect(within(ap).getAllByText(new RegExp(en.SuppliersStmtOverdue)).length).toBeGreaterThan(0);
+  });
+
+  test("an incomplete section shows no total: an explicit unavailable line replaces the number (W14), in EN and AR", () => {
+    world.statement = {
+      supplierId: "sup_1",
+      payable: section({
+        rows: [row({})],
+        totals: [
+          {
+            currency: "JOD",
+            grossMinor: 9_500_000,
+            disputedMinor: 0,
+            overdueMinor: 9_500_000,
+          },
+        ],
+        complete: false,
+      }),
+      receivable: section({
+        rows: [row({ kind: "RECEIVABLE", id: "r2", outstandingMinor: 3_000_000 })],
+        totals: [
+          {
+            currency: "JOD",
+            grossMinor: 3_000_000,
+            disputedMinor: 0,
+            overdueMinor: 0,
+          },
+        ],
+      }),
+    };
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      const { unmount } = renderIt();
+      const ap = screen.getByRole("region", {
+        name: dict.SuppliersStmtPayableTitle,
+      });
+      const arRegion = screen.getByRole("region", {
+        name: dict.SuppliersStmtReceivableTitle,
+      });
+      expect(dict.SuppliersStmtTotalUnavailable, `${locale} string exists`).toBeTruthy();
+      expect(within(ap).queryByText(dict.SuppliersStmtTotal)).toBeNull();
+      expect(within(ap).getByText(dict.SuppliersStmtTotalUnavailable)).toBeTruthy();
+      // The complete section still shows its own total.
+      expect(within(arRegion).getByText(dict.SuppliersStmtTotal)).toBeTruthy();
+      expect(within(arRegion).queryByText(dict.SuppliersStmtTotalUnavailable)).toBeNull();
+      unmount();
+    }
+  });
+
+  test("the time window is refreshed while the page stays open, so a long-lived tab never trips the server clock check", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-15T09:00:00Z"));
+      renderIt();
+      const first = (world.queryCalls.at(-1)?.args as { nowMs: number }).nowMs;
+      act(() => {
+        vi.advanceTimersByTime(3 * 60 * 60 * 1000);
+      });
+      const later = (world.queryCalls.at(-1)?.args as { nowMs: number }).nowMs;
+      expect(later - first).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000 - 1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

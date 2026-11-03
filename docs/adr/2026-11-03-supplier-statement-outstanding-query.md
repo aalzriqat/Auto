@@ -1,6 +1,6 @@
 # Supplier statement, slice 1: outstanding A/P and A/R per supplier
 
-Status: proposed. ADR required before a money or permission PR by SCRUM-760 c24361. Jira: SCRUM-869 feature 1 and 2.
+Status: accepted and implemented (slices 1 to 3 on branch claude/scrum869-supplier-statement-4a5e0f; not yet merged). ADR required before a money or permission PR by SCRUM-760 c24361. Jira: SCRUM-869 feature 1 and 2.
 
 ## Context
 

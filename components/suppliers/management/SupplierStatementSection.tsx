@@ -9,8 +9,9 @@
  * RTL: logical utilities only; amounts, dates and currency codes sit in `<bdi>` so they keep their
  * order inside an Arabic sentence.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -20,27 +21,11 @@ import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
 
-interface StatementRow {
-  kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY";
-  id: string;
-  currency: string;
-  outstandingMinor: number;
-  disputedMinor: number;
-  dueDate: string | null;
-  daysOverdue: number | null;
-  bucket: string;
-}
-interface StatementTotal {
-  currency: string;
-  grossMinor: number;
-  disputedMinor: number;
-  overdueMinor: number;
-}
-interface StatementSectionData {
-  rows: StatementRow[];
-  totals: StatementTotal[];
-  complete: boolean;
-}
+export type SupplierStatementData = FunctionReturnType<typeof api.supplierStatement.outstanding>;
+type StatementSectionData = SupplierStatementData["payable"];
+type StatementRow = StatementSectionData["rows"][number];
+type StatementTotal = StatementSectionData["totals"][number];
+const NOW_REFRESH_MS = 60 * 60 * 1000;
 
 const KIND_KEY: Record<StatementRow["kind"], string> = {
   PAYABLE: "SuppliersStmtKindPayable",
@@ -65,7 +50,13 @@ function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Tr
       <span className="text-muted-foreground">
         {translate("SuppliersStmtDue")}: <bdi>{due}</bdi>
         {row.daysOverdue !== null && row.daysOverdue > 0 && (
-          <> · {interpolate(translate("SuppliersStmtDaysOverdue"), { days: String(row.daysOverdue) })}</>
+          <>
+            {" "}
+            ·{" "}
+            {interpolate(translate("SuppliersStmtDaysOverdue"), {
+              days: String(row.daysOverdue),
+            })}
+          </>
         )}
       </span>
       <span className="text-end">
@@ -108,7 +99,12 @@ function StatementRegion({
   title,
   emptyKey,
   data,
-}: Readonly<{ id: string; title: string; emptyKey: string; data: StatementSectionData }>) {
+}: Readonly<{
+  id: string;
+  title: string;
+  emptyKey: string;
+  data: StatementSectionData;
+}>) {
   const translate = useTranslate();
   return (
     <section aria-labelledby={id} className="space-y-2 rounded-lg border p-4">
@@ -129,14 +125,13 @@ function StatementRegion({
           {translate("SuppliersStmtIncomplete")}
         </p>
       )}
-      {data.totals.length > 0 && <Totals totals={data.totals} translate={translate} />}
+      {!data.complete ? (
+        <p className="border-t pt-2 text-sm font-medium">{translate("SuppliersStmtTotalUnavailable")}</p>
+      ) : (
+        data.totals.length > 0 && <Totals totals={data.totals} translate={translate} />
+      )}
     </section>
   );
-}
-
-export interface SupplierStatementData {
-  payable: StatementSectionData;
-  receivable: StatementSectionData;
 }
 
 /** The statement itself, free of data fetching so every state can be rendered from plain data. */
@@ -178,11 +173,16 @@ export function SupplierStatementView({ statement }: Readonly<{ statement: Suppl
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const { hasPermission, isLoading } = usePermissions();
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
-  // Fixed at mount: the server checks it against its own clock and a new day is a new mount.
-  const [nowMs] = useState(() => Date.now());
+  // The server checks `nowMs` against its own clock (24 h window), so a tab left open must not keep
+  // the mount-time value: refresh it hourly, which re-subscribes the query with a current window.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), NOW_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
   const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
   if (!allowed) return null;
-  return <SupplierStatementView statement={statement as SupplierStatementData | undefined} />;
+  return <SupplierStatementView statement={statement} />;
 }
 
 export function SupplierStatementError() {
@@ -193,6 +193,7 @@ export function SupplierStatementError() {
     </p>
   );
 }
+
 export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   return (
     <QueryErrorBoundary render={() => <SupplierStatementError />}>
