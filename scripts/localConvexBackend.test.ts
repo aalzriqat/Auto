@@ -11,6 +11,7 @@ import {
   ADMIN_KEY_PATTERN,
   COMPONENTS_QUERY,
   COMPONENT_MODULES_QUERY,
+  LAST_PUSH_QUERY,
   CONTAINER_ENV_VAR,
   ENV_ALLOWLIST,
   FINGERPRINT_ENV_VAR,
@@ -117,14 +118,23 @@ function configHashes(hash = "h1") {
 }
 
 /**
- * The three admin reads the fingerprint covers, shaped as the pinned system
- * queries return them: `_system/frontend/components:list` and
- * `_system/frontend/modules:listForAllComponents`. `componentPackage` is the
+ * The four admin reads the fingerprint covers, shaped as the pinned system
+ * queries return them: `_system/frontend/components:list`,
+ * `_system/frontend/modules:listForAllComponents` and
+ * `_system/frontend/deploymentEvents:lastPushEvent`. `componentPackage` is the
  * source package of the mounted component's module, which the backend renews
- * whenever that module's contents change.
+ * whenever that module's contents change. `pushId` is the newest push audit
+ * row, which every push writes, a dependency-only push included.
  */
-function deployedState({ rootHash = "h1", componentPackage = "pkg-c1" } = {}) {
+function deployedState({ rootHash = "h1", componentPackage = "pkg-c1", pushId = "push-1" } = {}) {
   return {
+    lastPush: {
+      _id: pushId,
+      _creationTime: pushId === "push-1" ? 1_000 : 2_000,
+      action: "push_config_with_components",
+      member_id: 0,
+      metadata: { component_diffs: {} },
+    } as Record<string, unknown> | null,
     configHashes: configHashes(rootHash),
     components: [
       { id: "root", name: null, path: "", args: {}, state: "active", httpPrefix: null },
@@ -138,8 +148,13 @@ function deployedState({ rootHash = "h1", componentPackage = "pkg-c1" } = {}) {
 }
 type DeployedState = ReturnType<typeof deployedState>;
 
-/** A fetch fake that answers the health probe and the three admin reads from `state`. */
+/** A fetch fake that answers the health probe and the four admin reads from `state`. */
 function answering(state: DeployedState) {
+  const queries: Record<string, unknown> = {
+    [COMPONENTS_QUERY]: state.components,
+    [COMPONENT_MODULES_QUERY]: state.componentModules,
+    [LAST_PUSH_QUERY]: state.lastPush,
+  };
   return async (url: RequestInfo | URL, init?: RequestInit) => {
     const href = String(url);
     if (href.endsWith("/api/get_config_hashes")) {
@@ -147,8 +162,7 @@ function answering(state: DeployedState) {
     }
     if (href.endsWith("/api/query")) {
       const { path } = JSON.parse(String(init?.body)) as { path: string };
-      const value = path === COMPONENTS_QUERY ? state.components : path === COMPONENT_MODULES_QUERY ? state.componentModules : undefined;
-      const body = value === undefined ? { status: "error", errorMessage: "no such function" } : { status: "success", value };
+      const body = path in queries ? { status: "success", value: queries[path] } : { status: "error", errorMessage: "no such function" };
       return { ok: true, status: 200, json: async () => body } as unknown as Response;
     }
     return { ok: true } as Response;
@@ -665,6 +679,37 @@ describe("codeFingerprint", () => {
     expect(() => codeFingerprint({ ...base, componentModules: unversioned })).toThrow(/component/);
   });
 
+  test("refuses a listing without exactly one root entry", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, componentModules: base.componentModules.slice(1) })).toThrow(/component/);
+    const twoRoots = [base.componentModules[0], ...base.componentModules];
+    expect(() => codeFingerprint({ ...base, componentModules: twoRoots })).toThrow(/component/);
+  });
+
+  test("changes when only a component's dependency modules were pushed: every listing is unchanged, the push record moves", () => {
+    // `_deps/` modules have no analysis, so `listForAllComponents` never lists
+    // them, and an unchanged importing module keeps its source package. The
+    // only read that moves is the newest push audit row.
+    const base = deployedState();
+    const depsOnly = deployedState({ pushId: "push-2" });
+    expect(depsOnly.componentModules).toEqual(base.componentModules);
+    expect(depsOnly.configHashes).toEqual(base.configHashes);
+    expect(codeFingerprint(depsOnly)).not.toBe(codeFingerprint(base));
+  });
+
+  test("hashes the push record's identity, not its free-form diff", () => {
+    const base = deployedState();
+    const otherDiff = { ...base, lastPush: { ...base.lastPush, metadata: { component_diffs: { x: 1 } } } };
+    expect(codeFingerprint(otherDiff)).toBe(codeFingerprint(base));
+  });
+
+  test("refuses a backend with no recorded code push", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, lastPush: null })).toThrow(/no code push/);
+    expect(() => codeFingerprint({ ...base, lastPush: { ...base.lastPush, action: "create_environment_variable" } })).toThrow(/no code push/);
+    expect(() => codeFingerprint({ ...base, lastPush: { ...base.lastPush, _creationTime: "1" } })).toThrow(/no code push/);
+  });
+
   test("stableStringify sorts keys at every depth", () => {
     expect(stableStringify({ b: 1, a: { d: [2, { y: 1, x: 0 }], c: null } })).toBe('{"a":{"c":null,"d":[2,{"x":0,"y":1}]},"b":1}');
   });
@@ -693,6 +738,7 @@ describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed e
     expect(queries.map(([, init]) => JSON.parse(String(init.body)))).toEqual([
       { path: COMPONENTS_QUERY, format: "convex_encoded_json", args: [{}] },
       { path: COMPONENT_MODULES_QUERY, format: "convex_encoded_json", args: [{}] },
+      { path: LAST_PUSH_QUERY, format: "convex_encoded_json", args: [{}] },
     ]);
     for (const [url, init] of queries) {
       expect(url).toBe(`${LOCAL_CONVEX_URL}/api/query`);
@@ -782,6 +828,12 @@ describe("verifyBackend (round 5 tripwire)", () => {
   test("fails when only a mounted component was redeployed after mark", async () => {
     const h = harness();
     h.deps.fetchImpl.mockImplementation(answering(deployedState({ componentPackage: "pkg-c2" })));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
+  });
+
+  test("fails when only a component's dependency modules were pushed after mark", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ pushId: "push-2" })));
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
   });
 

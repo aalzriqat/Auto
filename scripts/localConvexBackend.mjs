@@ -52,9 +52,11 @@
  * What holds instead: `mark` checks every backend variable's value against the
  * trusted plan and records a fingerprint of the deployed code, and `verify`
  * re-reads both from the host after the tests and fails the job on any change.
- * The fingerprint covers the root's module content hashes and every mounted
- * component's modules by source package (see `codeFingerprint`). The container
- * keeps no Linux capability.
+ * The fingerprint covers the root's module content hashes, every mounted
+ * component's analysed modules by source package, and the backend's record of
+ * the latest code push, which also moves when only a component's dependency
+ * modules change (see `codeFingerprint`). The container keeps no Linux
+ * capability.
  *
  * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): this is a
  * tripwire. It detects tampering that is still in place when `verify` runs; it
@@ -64,8 +66,8 @@
  * - code replaced before `mark`, which `mark` then records as the baseline;
  * - direct writes to the backend's own storage from inside the container,
  *   which no admin read observes.
- * Restoring code by redeploying is expected to leave a new source package id,
- * which `verify` would see (mod.rs:329-353). That is read from the source and
+ * Restoring code by redeploying is itself a push, so it is expected to leave a
+ * new push record that `verify` would see. That is read from the source and
  * has not been run.
  */
 import { spawnSync } from "node:child_process";
@@ -371,13 +373,22 @@ export function stableStringify(value) {
 }
 
 /**
- * The two system queries that cover mounted components (round 6). Both are
- * compiled into the backend binary: a push cannot define a `_system/` module
- * (crates/model/src/modules/mod.rs:120 at the pinned revision), so deployed
- * candidate code cannot answer them.
+ * The system queries the fingerprint reads besides `/api/get_config_hashes`.
+ * They are compiled into the backend binary: a push cannot define a `_system/`
+ * module (crates/model/src/modules/mod.rs:116-117 and :286-287 at the pinned
+ * revision), so deployed candidate code cannot answer them.
  */
 export const COMPONENTS_QUERY = "_system/frontend/components:list";
 export const COMPONENT_MODULES_QUERY = "_system/frontend/modules:listForAllComponents";
+export const LAST_PUSH_QUERY = "_system/frontend/deploymentEvents:lastPushEvent";
+const PUSH_ACTIONS = new Set(["push_config", "push_config_with_components"]);
+
+function lastPushIdentity(event) {
+  if (typeof event?._id !== "string" || typeof event._creationTime !== "number" || !PUSH_ACTIONS.has(event.action)) {
+    throw new LocalConvexRefusal("The backend reported no code push; the deployed code cannot be fingerprinted.");
+  }
+  return { id: event._id, creationTime: event._creationTime, action: event.action };
+}
 
 function rootModuleHashes(configHashes) {
   const modules = Array.isArray(configHashes?.moduleHashes) ? configHashes.moduleHashes : [];
@@ -391,18 +402,23 @@ const isVersionedModule = (entry) =>
   Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1]?.sourcePackageId === "string";
 
 /**
- * Every component's modules, each with the source package the backend renews
- * whenever that module's contents change. Refuses unless every mounted
- * component (every component but the root, whose path is "") has a listing.
+ * Every component's analysed modules, each with the source package the backend
+ * renews whenever that module's contents change. The listing skips modules
+ * with no analysis, which is every `_deps/` module
+ * (npm-packages/system-udfs/convex/_system/frontend/modules.ts:94-99,
+ * mod.rs:289-292); `lastPushIdentity` covers those. Refuses unless there is
+ * exactly one root entry and every mounted component (every component but the
+ * root, whose path is "") has a listing.
  */
 function componentModuleListings(components, componentModules) {
   const malformed = () =>
     new LocalConvexRefusal("The backend's component listing is incomplete; mounted component code cannot be fingerprinted.");
   if (!Array.isArray(components) || !Array.isArray(componentModules)) throw malformed();
   const mounted = components.filter((c) => c?.path !== "").length;
+  const roots = componentModules.filter((entry) => Array.isArray(entry) && entry[0] === null).length;
   const listed = componentModules.filter((entry) => Array.isArray(entry) && entry[0] !== null).length;
   const wellFormed = componentModules.every((entry) => Array.isArray(entry?.[1]) && entry[1].every(isVersionedModule));
-  if (listed !== mounted || !wellFormed) throw malformed();
+  if (roots !== 1 || listed !== mounted || !wellFormed) throw malformed();
   return componentModules
     .map(([id, modules]) => stableStringify([id, [...modules].sort((a, b) => compareCodeUnits(a[0], b[0]))]))
     .sort(compareCodeUnits);
@@ -418,9 +434,15 @@ function componentModuleListings(components, componentModules) {
  *   modules with their analysed functions and source package, from the two
  *   system queries above. A module's source package changes when its contents
  *   change (crates/model/src/modules/mod.rs:329-353), so a component redeploy
- *   changes the fingerprint even though no content hash is exposed for it.
- * Refuses a backend with no root module hashes, so an empty backend never
- * matches.
+ *   changes the fingerprint even though no content hash is exposed for it;
+ * - the identity of the latest code push. No pinned read lists a component's
+ *   `_deps/` modules, and an unchanged importing module keeps its old source
+ *   package, so a dependency-only push would otherwise leave the fingerprint
+ *   unchanged. Every push writes a push audit row in its own transaction
+ *   (crates/application/src/deploy_config.rs:861-969 and lib.rs:2292), and
+ *   `lastPushEvent` returns the newest one, so any push after `mark` moves it.
+ * Refuses a backend with no root module hashes or no recorded push, so an
+ * empty backend never matches.
  */
 export function codeFingerprint(state) {
   const root = state?.configHashes;
@@ -433,6 +455,7 @@ export function codeFingerprint(state) {
     nodeVersion: root.nodeVersion ?? null,
     components: state.components.map((c) => stableStringify(c)).sort(compareCodeUnits),
     componentModules,
+    lastPush: lastPushIdentity(state.lastPush),
   };
   return createHash("sha256").update(stableStringify(material)).digest("hex");
 }
@@ -770,7 +793,8 @@ async function fetchCodeFingerprint(deps, adminKey) {
   );
   const components = await systemQuery(deps, adminKey, COMPONENTS_QUERY);
   const componentModules = await systemQuery(deps, adminKey, COMPONENT_MODULES_QUERY);
-  return codeFingerprint({ configHashes, components, componentModules });
+  const lastPush = await systemQuery(deps, adminKey, LAST_PUSH_QUERY);
+  return codeFingerprint({ configHashes, components, componentModules, lastPush });
 }
 
 /**
