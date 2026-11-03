@@ -50,8 +50,11 @@ concurrency:
 #   (it controls only that job's throwaway backend);
 # - candidate "use node" code runs as root inside the backend container, can
 #   read the per-run INSTANCE_SECRET and mint an admin key for that backend.
-#   Nothing prevents this; the mark/verify tripwire only detects a change still
-#   in place when verify runs (owner ruling, SCRUM-892 option A);
+#   Nothing prevents this (owner ruling, SCRUM-892 option A). The mark/verify
+#   tripwire's whole claim is the TRIPWIRE table in
+#   scripts/localConvexBackend.mjs: verify checks the items in
+#   TRIPWIRE.verified, and the admin key can also change the items in
+#   TRIPWIRE.notChecked, which verify does not check;
 # - the backend container sits on Docker's default bridge, because it fetches
 #   Clerk's JWKS, and the deploy container shares its network namespace. From
 #   there, any runner service listening on all interfaces is reachable through
@@ -1111,8 +1114,9 @@ jobs:
       # PR #757 round 5: candidate "use node" actions run inside the backend
       # container and can mint an admin key from its instance secret. This
       # trusted tripwire re-reads the backend from the runner after the last test
-      # and fails the job if any variable differs from the trusted plan or the
-      # deployed code no longer has the fingerprint `mark` recorded.
+      # and fails the job unless every item in TRIPWIRE.verified
+      # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
+      # recorded. It does not check TRIPWIRE.notChecked.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
@@ -1658,8 +1662,9 @@ jobs:
       # PR #757 round 5: candidate "use node" actions run inside the backend
       # container and can mint an admin key from its instance secret. This
       # trusted tripwire re-reads the backend from the runner after the last test
-      # and fails the job if any variable differs from the trusted plan or the
-      # deployed code no longer has the fingerprint `mark` recorded.
+      # and fails the job unless every item in TRIPWIRE.verified
+      # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
+      # recorded. It does not check TRIPWIRE.notChecked.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
@@ -2186,8 +2191,9 @@ jobs:
       # PR #757 round 5: candidate "use node" actions run inside the backend
       # container and can mint an admin key from its instance secret. This
       # trusted tripwire re-reads the backend from the runner after the last test
-      # and fails the job if any variable differs from the trusted plan or the
-      # deployed code no longer has the fingerprint `mark` recorded.
+      # and fails the job unless every item in TRIPWIRE.verified
+      # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
+      # recorded. It does not check TRIPWIRE.notChecked.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify

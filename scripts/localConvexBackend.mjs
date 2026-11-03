@@ -49,27 +49,20 @@
  * and so hold an admin key. Reproduced in CI on this image. So the admin key is
  * NOT out of the candidate's reach, and nothing here pretends it is.
  *
- * What holds instead: `mark` checks every backend variable's value against the
- * trusted plan and records a fingerprint of the deployed code, and `verify`
- * re-reads both from the host after the tests and fails the job on any change.
- * The fingerprint covers the root's module content hashes, every mounted
- * component's analysed modules by source package, and the backend's record of
- * the latest code push, which also moves when only a component's dependency
- * modules change (see `codeFingerprint`). The container keeps no Linux
- * capability.
+ * What holds instead is a tripwire, `mark` before the tests and `verify` after
+ * them. Its whole claim is the `TRIPWIRE` table below, and nothing here says
+ * more than that table:
+ * - `TRIPWIRE.verified` lists the things `verify` checks;
+ * - `TRIPWIRE.auditedRoutes` lists the admin routes that write an audit-log row
+ *   in the same transaction as their change, so `verify` fails after any of
+ *   them through the newest-row check;
+ * - `TRIPWIRE.notChecked` lists what the admin key can also change that
+ *   `verify` does not check, each with its reason.
+ * The container keeps no Linux capability.
  *
- * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): this is a
- * tripwire. It detects tampering that is still in place when `verify` runs; it
- * does not prevent tampering. What it does not see:
- * - a change restored before `verify` runs, such as a variable changed and
- *   changed back;
- * - code replaced before `mark`, which `mark` then records as the baseline;
- * - anything done from inside the container below the admin API: root code
- *   there can write the backend's storage or replace the process that answers
- *   `verify`'s reads, so those reads can be made to report the marked state.
- * Restoring code by redeploying is itself a push, so it is expected to leave a
- * new push record that `verify` would see. That is read from the source and
- * has not been run.
+ * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): the tripwire
+ * prevents nothing. Two `TRIPWIRE.notChecked` rows are that ruling: work
+ * inside the container below the admin API, and changes made before `mark`.
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -313,25 +306,14 @@ export function compareCodeUnits(a, b) {
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 /**
- * Splits `convex env list` output into its lines with nothing normalised but
- * the line terminator: one `\r` before each `\n`, and the empty string after
- * the final `\n`. The pinned CLI prints one `NAME=value` (or `NAME`) line per
- * variable and prints the value verbatim unless it needs quoting
- * (node_modules/convex/dist/esm/cli/lib/env.js:131-141 and
- * formatEnvValueForDotfile.js:2-36, convex 1.42.1), so whitespace inside a
- * line is the backend's own value and is compared as written.
+ * `convex env list --names-only` output to a sorted list of names. The pinned
+ * CLI ends each line with "\n" only (node_modules/convex/dist/esm/cli/lib/env.js:125-142,
+ * convex 1.42.1), so only the empty string after the final "\n" is dropped; a
+ * "\r" is part of what the backend stored and fails the name check.
  */
-function envListLines(stdout) {
-  const lines = String(stdout ?? "")
-    .split("\n")
-    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
-  if (lines.at(-1) === "") lines.pop();
-  return lines;
-}
-
-/** `convex env list --names-only` output to a sorted list of names. */
 export function parseEnvNames(stdout) {
-  const names = envListLines(stdout);
+  const names = String(stdout ?? "").split("\n");
+  if (names.at(-1) === "") names.pop();
   for (const name of names) {
     if (!ENV_NAME.test(name)) {
       throw new LocalConvexRefusal("The backend's variable listing contained an unexpected value.");
@@ -355,26 +337,33 @@ export function assertEnvMatchesAllowlist(actualNames) {
 }
 
 /**
- * `convex env list` output must be exactly the plan's `NAME=value` lines, in
- * any order. Values are compared too, not just names: a candidate holding an
- * admin key can rewrite a value without changing the name set. Lines are
- * compared exactly and counted, so a value with added whitespace differs and a
- * duplicated line cannot stand in for a missing one. A plan value the CLI
- * would print quoted never matches, which fails closed. The refusal names
- * variables only.
+ * The backend's stored variables, as `ENV_QUERY` returns them, must be exactly
+ * the plan's (name, value) pairs, in any order. Values are compared too, not
+ * just names: a candidate holding an admin key can rewrite a value without
+ * changing the name set. Both strings are compared code unit for code unit,
+ * with nothing trimmed or decoded, because the backend stores whatever string
+ * a caller sends (`EnvVarValue::from_str` checks no characters at the pinned
+ * revision). Pairs are counted, so a duplicate cannot stand in for a missing
+ * one. The refusal names variables only, never a value.
  */
-export function assertEnvMatchesPlan(stdout, plan) {
-  const counts = new Map();
-  for (const [name, value] of plan) {
-    const line = `${name}=${value}`;
-    counts.set(line, (counts.get(line) ?? 0) + 1);
+export function assertEnvMatchesPlan(variables, plan) {
+  const wellFormed =
+    Array.isArray(variables) && variables.every((v) => typeof v?.name === "string" && typeof v?.value === "string");
+  if (!wellFormed) {
+    throw new LocalConvexRefusal("The backend's variable listing was not a list of names and values.");
   }
-  for (const line of envListLines(stdout)) counts.set(line, (counts.get(line) ?? 0) - 1);
-  const nameOf = (line) => {
-    const name = line.slice(0, Math.max(0, line.indexOf("=")));
-    return ENV_NAME.test(name) ? name : "<unparseable line>";
+  const counts = new Map();
+  const count = (name, value, by) => {
+    const key = JSON.stringify([name, value]);
+    const entry = counts.get(key) ?? { name, count: 0 };
+    entry.count += by;
+    counts.set(key, entry);
   };
-  const differing = [...counts].filter(([, count]) => count !== 0).map(([line]) => nameOf(line));
+  for (const [name, value] of plan) count(name, value, 1);
+  for (const { name, value } of variables) count(name, value, -1);
+  const differing = [...counts.values()]
+    .filter((entry) => entry.count !== 0)
+    .map((entry) => (ENV_NAME.test(entry.name) ? entry.name : "<malformed name>"));
   if (differing.length > 0) {
     const names = [...new Set(differing)].sort(compareCodeUnits);
     throw new LocalConvexRefusal(
@@ -403,13 +392,111 @@ export function stableStringify(value) {
 export const COMPONENTS_QUERY = "_system/frontend/components:list";
 export const COMPONENT_MODULES_QUERY = "_system/frontend/modules:listForAllComponents";
 export const LAST_PUSH_QUERY = "_system/frontend/deploymentEvents:lastPushEvent";
+/**
+ * The stored variables, as the pinned CLI's own `env list` reads them
+ * (node_modules/convex/dist/esm/cli/lib/env.js:43-50): every
+ * `_environment_variables` row with its exact `name` and `value` strings
+ * (npm-packages/system-udfs/convex/_system/cli/queryEnvironmentVariables.ts).
+ */
+export const ENV_QUERY = "_system/cli/queryEnvironmentVariables";
+/**
+ * Every `_deployment_audit_log` row at or after `fromTimestamp`, oldest first
+ * (npm-packages/system-udfs/convex/_system/frontend/listDeploymentEventsFromTime.ts).
+ * The start is clamped to the retention window, so a listing that does not
+ * begin with the push it was asked from is refused, not trusted.
+ */
+export const AUDIT_EVENTS_QUERY = "_system/frontend/listDeploymentEventsFromTime";
+/**
+ * The URLs functions read as CONVEX_CLOUD_URL / CONVEX_SITE_URL
+ * (crates/udf/src/environment.rs:68-87). An admin key can override them
+ * persistently (crates/local_backend/src/canonical_urls.rs:54-109), and this
+ * endpoint reports the effective pair, defaulting to the container's origins
+ * (:121-173).
+ */
+export const CANONICAL_URLS_ENDPOINT = "/api/v1/get_canonical_urls";
 const PUSH_ACTIONS = new Set(["push_config", "push_config_with_components"]);
 
-function lastPushIdentity(event) {
-  if (typeof event?._id !== "string" || typeof event._creationTime !== "number" || !PUSH_ACTIONS.has(event.action)) {
-    throw new LocalConvexRefusal("The backend reported no code push; the deployed code cannot be fingerprinted.");
+/**
+ * What the `mark` / `verify` tripwire covers, against every state-changing
+ * route an admin key reaches on the pinned backend (72ce13c3,
+ * crates/local_backend/src/router.rs:286-616). This table is the claim: the
+ * file header, browser-attack-swarm.yml and the PR body refer to it and say
+ * nothing broader. Paths are in get-convex/convex-backend at 72ce13c3; "lb" is
+ * crates/local_backend/src, "app" is crates/application/src.
+ *
+ * - `verified`: `mark` reads it, records or checks it, and `verify` reads it
+ *   back and compares it exactly.
+ * - `auditedRoutes`: these routes are not read back one by one. Each writes a
+ *   `_deployment_audit_log` row in the same transaction as its change, which
+ *   moves the newest row, which is `verified`. So `verify` fails after any of
+ *   them, even when the state was put back. Read from the source; the first
+ *   CI run after merge is the first runtime proof.
+ * - `notChecked`: the admin key can also change these, and `verify` does not
+ *   check them, with the reason each one is left.
+ */
+export const TRIPWIRE = Object.freeze({
+  verified: Object.freeze([
+    "the backend variables: every name and value, exactly (ENV_QUERY), against the trusted plan",
+    "the canonical URLs functions read as CONVEX_CLOUD_URL / CONVEX_SITE_URL (CANONICAL_URLS_ENDPOINT), equal to the local origins",
+    "the root component's config, module content hashes, UDF server and Node versions (/api/get_config_hashes)",
+    "every component, its mount arguments and state, and every component's analysed modules with their source package (COMPONENTS_QUERY, COMPONENT_MODULES_QUERY)",
+    "the identity of the latest code push (LAST_PUSH_QUERY), which also moves on a dependency-only push",
+    "the identity of the newest audit-log row since that push (AUDIT_EVENTS_QUERY)",
+  ]),
+  auditedRoutes: Object.freeze([
+    "POST /api/update_environment_variables and /api/v1 env routes (lb/environment_variables.rs:109,165-174; app/lib.rs:1803-1862)",
+    "POST /api/update_canonical_url and /api/v1/update_canonical_url (lb/canonical_urls.rs:54-109)",
+    "POST /api/push_config, /api/deploy2/finish_push (app/deploy_config.rs:861-969; app/lib.rs:2292)",
+    "POST /api/prepare_schema (lb/schema.rs:309)",
+    "POST /api/cancel_job, /api/cancel_all_jobs (lb/scheduling.rs:143-166; app/lib.rs:3308-3356)",
+    "dashboard delete_tables, delete_component, delete_scheduled_functions_table (lb/dashboard.rs:345-357; app/lib.rs:2935-2959, 2971-2985, 3279-3297)",
+    "POST /api/export/request/zip, set_expiration, cancel (app/lib.rs:1659-1728; lb/snapshot_export.rs:206-235)",
+    "POST /api/import, /api/perform_import and the snapshot-import routes (router.rs:479-491; app/snapshot_import/audit_log.rs:38)",
+    "/api/v1 usage limits create, update, delete (lb/usage_limits.rs:302-438)",
+    "/api/v1 pause and unpause deployment (lb/deployment_state.rs:131-132; app/deployment_state.rs:21-44)",
+    "/api/v1 log streams create, update, delete, rotate secret (lb/log_sinks.rs:1581-1586, 814-815; app/log_streaming.rs:56-120, 204-231)",
+    "/api/v1 data sync (lb/streaming_export.rs:236, 519-521)",
+    "the dashboard's _system/frontend data mutations: addDocument, clearTablePage, createTable, deleteDocuments, patchDocumentsFields, replaceDocument, fileStorageV2 deleteFile(s) and generateUploadUrl (writeAuditLog)",
+  ]),
+  notChecked: Object.freeze([
+    "the public function API and the action callbacks: /api/query, /api/mutation, /api/action, /api/function, /api/actions/*, /api/storage/upload, the sync websocket (lb/public_api.rs:769-783; router.rs:446-473). They write table data and files, which the deployed candidate code can already write itself; the tripwire claims nothing about data.",
+    "the streaming-import routes: replace_tables, clear_tables, fivetran_truncate_table, fivetran_create_table, import_airbyte_records, apply_fivetran_operations (router.rs:568-591; app/lib.rs:2691, 3734-3809). They write table data without an audit row; same reason as above.",
+    "PUT /api/streaming_import/add_primary_key_indexes (app/lib.rs:3616-3634): adds a reserved system index that functions cannot query.",
+    "POST /api/run_test_function (app/lib.rs:2710-2858): runs a query only (:2849-2858 refuses mutations); its uploaded package is not deployed, and it sets the UDF config only when no push exists yet (:2758-2766).",
+    "POST /api/deploy2/start_push, evaluate_push, evaluate_schema, wait_for_schema (app/deploy_config.rs:205, 569): staged state that goes live only through finish_push, which is audited.",
+    "anything done inside the backend container below the admin API (owner ruling SCRUM-892, option A): root code there can write the backend's storage, including the audit log, or replace the process that answers these reads.",
+    "a change made before `mark`, which `mark` records as the baseline.",
+  ]),
+});
+
+function auditIdentity(event) {
+  if (typeof event?._id !== "string" || typeof event._creationTime !== "number" || typeof event.action !== "string") {
+    return null;
   }
   return { id: event._id, creationTime: event._creationTime, action: event.action };
+}
+
+function lastPushIdentity(event) {
+  const identity = auditIdentity(event);
+  if (!identity || !PUSH_ACTIONS.has(identity.action)) {
+    throw new LocalConvexRefusal("The backend reported no code push; the deployed code cannot be fingerprinted.");
+  }
+  return identity;
+}
+
+/**
+ * The newest audit row since the latest push. Every audited admin action
+ * writes its row in the same transaction as its change (see `TRIPWIRE`), so
+ * any of them after `mark` moves this identity, even when the state it
+ * changed was put back.
+ */
+function lastAuditIdentity(events, lastPush) {
+  const refuse = () =>
+    new LocalConvexRefusal("The backend's audit log does not reach back to the latest code push; it cannot be fingerprinted.");
+  if (!Array.isArray(events) || events.length === 0 || auditIdentity(events[0])?.id !== lastPush.id) throw refuse();
+  const last = auditIdentity(events.at(-1));
+  if (!last || events.some((event) => !auditIdentity(event))) throw refuse();
+  return last;
 }
 
 function rootModuleHashes(configHashes) {
@@ -462,14 +549,17 @@ function componentModuleListings(components, componentModules) {
  *   package, so a dependency-only push would otherwise leave the fingerprint
  *   unchanged. Every push writes a push audit row in its own transaction
  *   (crates/application/src/deploy_config.rs:861-969 and lib.rs:2292), and
- *   `lastPushEvent` returns the newest one, so any push after `mark` moves it.
- * Refuses a backend with no root module hashes or no recorded push, so an
- * empty backend never matches.
+ *   `lastPushEvent` returns the newest one, so any push after `mark` moves it;
+ * - the identity of the newest audit-log row since that push
+ *   (`lastAuditIdentity`), which any route in `TRIPWIRE.auditedRoutes` moves.
+ * Refuses a backend with no root module hashes, no recorded push, or an audit
+ * listing that does not start at that push, so an empty backend never matches.
  */
 export function codeFingerprint(state) {
   const root = state?.configHashes;
   const moduleHashes = rootModuleHashes(root);
   const componentModules = componentModuleListings(state.components, state.componentModules);
+  const lastPush = lastPushIdentity(state.lastPush);
   const material = {
     config: root.config ?? null,
     moduleHashes,
@@ -477,7 +567,8 @@ export function codeFingerprint(state) {
     nodeVersion: root.nodeVersion ?? null,
     components: state.components.map((c) => stableStringify(c)).sort(compareCodeUnits),
     componentModules,
-    lastPush: lastPushIdentity(state.lastPush),
+    lastPush,
+    lastAudit: lastAuditIdentity(state.auditEvents, lastPush),
   };
   return createHash("sha256").update(stableStringify(material)).digest("hex");
 }
@@ -753,30 +844,47 @@ export function deployBackend(env, deps) {
   deps.log("Local backend deployed and marked as a disposable preview deployment.");
 }
 
-function assertEnvMatchesTrustedPlan(deps, env, adminKey) {
+/** `TRIPWIRE.verified`: the stored variables equal the trusted plan exactly. */
+async function assertEnvMatchesTrustedPlan(deps, env, adminKey) {
   const plan = buildEnvPlan({
     publishableKey: env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
     appUrl: env.NEXT_PUBLIC_APP_URL,
   });
-  const listed = runConvexCli(deps, env, adminKey, ["env", "list"], { capture: true });
-  assertEnvMatchesPlan(listed.stdout, plan);
+  assertEnvMatchesPlan(await systemQuery(deps, adminKey, ENV_QUERY), plan);
 }
 
 /**
- * One admin POST to the backend on the host. `what` names the read in every
+ * `TRIPWIRE.verified`: the canonical URLs are exactly the local origins, with
+ * no other field, so a function reading CONVEX_CLOUD_URL or CONVEX_SITE_URL
+ * sees this backend and nothing a candidate set.
+ */
+async function assertCanonicalUrlsAreLocal(deps, adminKey) {
+  const urls = await adminRequest(deps, adminKey, "GET", CANONICAL_URLS_ENDPOINT, undefined, "the canonical URLs read");
+  const keys = urls && typeof urls === "object" ? Object.keys(urls).sort(compareCodeUnits) : [];
+  const exact =
+    keys.join(",") === "convexCloudUrl,convexSiteUrl" &&
+    urls.convexCloudUrl === LOCAL_CONVEX_URL &&
+    urls.convexSiteUrl === LOCAL_CONVEX_SITE_URL;
+  if (!exact) {
+    throw new LocalConvexRefusal("The backend's canonical URLs are not the local origins; functions would read another deployment's URLs.");
+  }
+}
+
+/**
+ * One admin request to the backend on the host. `what` names the read in every
  * refusal; nothing from the request or the response body is echoed.
  */
-async function postAdmin(deps, adminKey, endpoint, payload, what) {
+async function adminRequest(deps, adminKey, method, endpoint, payload, what) {
   let response;
   try {
     response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}${endpoint}`, {
-      method: "POST",
+      method,
       headers: {
         authorization: `Convex ${adminKey}`,
-        "content-type": "application/json",
+        ...(payload === undefined ? {} : { "content-type": "application/json" }),
         "convex-client": `npm-cli-${deps.cliVersion()}`,
       },
-      body: JSON.stringify(payload),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
       redirect: "error",
       signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS * 6),
     });
@@ -794,10 +902,15 @@ async function postAdmin(deps, adminKey, endpoint, payload, what) {
   }
 }
 
-/** A system query, posted the way the pinned CLI's ConvexHttpClient posts one. */
-async function systemQuery(deps, adminKey, functionPath) {
+/**
+ * A system query, posted the way the pinned CLI's ConvexHttpClient posts one.
+ * `args` is plain JSON numbers and strings only, which convex_encoded_json
+ * carries unchanged.
+ */
+async function systemQuery(deps, adminKey, functionPath, args = {}) {
   const what = `the ${functionPath} read`;
-  const body = await postAdmin(deps, adminKey, "/api/query", { path: functionPath, format: "convex_encoded_json", args: [{}] }, what);
+  const payload = { path: functionPath, format: "convex_encoded_json", args: [args] };
+  const body = await adminRequest(deps, adminKey, "POST", "/api/query", payload, what);
   if (body?.status !== "success") {
     throw new LocalConvexRefusal(`${what} did not succeed.`);
   }
@@ -806,9 +919,10 @@ async function systemQuery(deps, adminKey, functionPath) {
 
 /** The deployed-code fingerprint, read from the backend's admin API on the host. */
 async function fetchCodeFingerprint(deps, adminKey) {
-  const configHashes = await postAdmin(
+  const configHashes = await adminRequest(
     deps,
     adminKey,
+    "POST",
     "/api/get_config_hashes",
     { version: deps.cliVersion(), adminKey },
     "the deployed-code fingerprint request",
@@ -816,7 +930,16 @@ async function fetchCodeFingerprint(deps, adminKey) {
   const components = await systemQuery(deps, adminKey, COMPONENTS_QUERY);
   const componentModules = await systemQuery(deps, adminKey, COMPONENT_MODULES_QUERY);
   const lastPush = await systemQuery(deps, adminKey, LAST_PUSH_QUERY);
-  return codeFingerprint({ configHashes, components, componentModules, lastPush });
+  const fromTimestamp = lastPushIdentity(lastPush).creationTime;
+  const auditEvents = await systemQuery(deps, adminKey, AUDIT_EVENTS_QUERY, { fromTimestamp });
+  return codeFingerprint({ configHashes, components, componentModules, lastPush, auditEvents });
+}
+
+/** Every `TRIPWIRE.verified` read except the fingerprint comparison itself. */
+async function readTripwire(deps, env, adminKey) {
+  await assertEnvMatchesTrustedPlan(deps, env, adminKey);
+  await assertCanonicalUrlsAreLocal(deps, adminKey);
+  return fetchCodeFingerprint(deps, adminKey);
 }
 
 /**
@@ -826,15 +949,14 @@ async function fetchCodeFingerprint(deps, adminKey) {
  * container, so only the marker step runs here, from the trusted checkout.
  *
  * Round 5: the candidate's "use node" actions run inside the backend container
- * and can recover the instance secret, so they can mint an admin key. `mark`
- * therefore checks every variable's VALUE against the trusted plan, not only
- * the names, and records the deployed-code fingerprint for `verify`.
+ * and can recover the instance secret, so they can mint an admin key. Before
+ * minting, `mark` checks the variables and canonical URLs and records the
+ * fingerprint, which together are `TRIPWIRE.verified`.
  */
 export async function markBackend(env, deps) {
   assertLocalOnly(env);
   const adminKey = assertAdminKey(env.CONVEX_SELF_HOSTED_ADMIN_KEY);
-  assertEnvMatchesTrustedPlan(deps, env, adminKey);
-  const fingerprint = await fetchCodeFingerprint(deps, adminKey);
+  const fingerprint = await readTripwire(deps, env, adminKey);
   runConvexCli(deps, env, adminKey, ["run", "e2eBootstrap:markPreviewDeployment", "{}"]);
   appendGithubEnv(env.GITHUB_ENV, [[FINGERPRINT_ENV_VAR, fingerprint]], deps.append);
   deps.log(`Local backend marked as a disposable preview deployment. Deployed-code fingerprint ${fingerprint}.`);
@@ -842,15 +964,11 @@ export async function markBackend(env, deps) {
 
 /**
  * The tripwire, run on the host after the job's last test and before the
- * verdict is uploaded. Fails closed unless the backend still answers, its
- * variables still equal the trusted plan exactly, and its deployed code still
- * has the fingerprint `mark` recorded. A candidate that used a minted admin key
- * to change either turns the job red. It reads through the backend binary's
- * admin API from the runner, a path deployed functions cannot serve.
- *
- * It detects tampering; it does not prevent it. A change that is made and
- * undone between two reads goes unseen: the owner accepted that residual gap
- * (SCRUM-892, option A; see the file header).
+ * verdict is uploaded. Fails closed unless the backend still answers and every
+ * `TRIPWIRE.verified` read equals what `mark` checked or recorded. It reads
+ * through the backend binary's admin API from the runner, a path deployed
+ * functions cannot serve. What it does not check is `TRIPWIRE.notChecked`; it
+ * prevents nothing (owner ruling SCRUM-892, option A).
  */
 export async function verifyBackend(env, deps) {
   assertLocalOnly(env);
@@ -862,14 +980,17 @@ export async function verifyBackend(env, deps) {
   if (!(await backendAnswers(deps))) {
     throw new LocalConvexRefusal("The local backend no longer answers; its state cannot be verified.");
   }
-  assertEnvMatchesTrustedPlan(deps, env, adminKey);
-  const fingerprint = await fetchCodeFingerprint(deps, adminKey);
+  const fingerprint = await readTripwire(deps, env, adminKey);
   if (fingerprint !== baseline) {
     throw new LocalConvexRefusal(
-      `The deployed code changed after it was marked (fingerprint ${fingerprint}, recorded ${baseline}).`,
+      "The deployed code changed after it was marked, or an audited admin action ran " +
+        `(fingerprint ${fingerprint}, recorded ${baseline}).`,
     );
   }
-  deps.log("Local backend unchanged since it was marked: environment equals the trusted plan, code fingerprint matches.");
+  deps.log(
+    `Local backend unchanged since it was marked. Checked: ${TRIPWIRE.verified.join("; ")}. ` +
+      `Not checked: ${TRIPWIRE.notChecked.length} disclosed items (TRIPWIRE.notChecked in scripts/localConvexBackend.mjs).`,
+  );
 }
 
 /** Removes the container. Idempotent: a missing container or name is fine. */
