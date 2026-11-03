@@ -9,10 +9,14 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   ADMIN_KEY_PATTERN,
+  COMPONENTS_QUERY,
+  COMPONENT_MODULES_QUERY,
+  LAST_PUSH_QUERY,
   CONTAINER_ENV_VAR,
   ENV_ALLOWLIST,
   FINGERPRINT_ENV_VAR,
   LOCAL_CONVEX_IMAGE,
+  LOCAL_CONVEX_SITE_URL,
   LOCAL_CONVEX_URL,
   LocalConvexRefusal,
   TURNSTILE_TEST_SECRET,
@@ -79,11 +83,7 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
       if (args.includes("list")) return ok(`${PLAN_LINES.join("\n")}\n`);
       return ok();
     }),
-    fetchImpl: vi.fn(async (url: string) =>
-      String(url).endsWith("/api/get_config_hashes")
-        ? ({ ok: true, status: 200, json: async () => configHashes() } as unknown as Response)
-        : ({ ok: true } as Response),
-    ),
+    fetchImpl: vi.fn(answering(deployedState())),
     sleep: vi.fn(async (ms: number) => {
       clock += ms;
     }),
@@ -101,7 +101,11 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
   return { deps, calls, logs, appended };
 }
 
-/** What `/api/get_config_hashes` answers for a deployed backend; `hash` varies the code. */
+/**
+ * What `/api/get_config_hashes` answers at the pinned backend: exactly
+ * `config`, `moduleHashes`, `udfServerVersion` and `nodeVersion`
+ * (crates/local_backend/src/deploy_config.rs:76-81). `hash` varies the code.
+ */
 function configHashes(hash = "h1") {
   return {
     config: { functions: "convex/", authInfo: [] },
@@ -109,8 +113,84 @@ function configHashes(hash = "h1") {
       { path: "b.js", hash: "hb", environment: "isolate" },
       { path: "a.js", hash, environment: "node" },
     ],
-    nodeDependencies: [],
     udfServerVersion: "1.42.1",
+    nodeVersion: "22",
+  };
+}
+
+/**
+ * The four admin reads the fingerprint covers, shaped as the pinned system
+ * queries return them: `_system/frontend/components:list`,
+ * `_system/frontend/modules:listForAllComponents` and
+ * `_system/frontend/deploymentEvents:lastPushEvent`. `componentPackage` is the
+ * source package of the mounted component's module, which the backend renews
+ * whenever that module's contents change. `pushId` is the newest push audit
+ * row, which every push writes, a dependency-only push included.
+ */
+function deployedState({
+  rootHash = "h1",
+  componentPackage = "pkg-c1",
+  pushId = "push-1",
+  variables = planVariables(),
+  canonicalUrls = { convexCloudUrl: LOCAL_CONVEX_URL, convexSiteUrl: LOCAL_CONVEX_SITE_URL } as Record<string, unknown>,
+  auditTail = [] as Record<string, unknown>[],
+} = {}) {
+  const lastPush = {
+    _id: pushId,
+    _creationTime: pushId === "push-1" ? 1_000 : 2_000,
+    action: "push_config_with_components",
+    member_id: 0,
+    metadata: { component_diffs: {} },
+  };
+  return {
+    lastPush: lastPush as Record<string, unknown> | null,
+    // `_system/frontend/listDeploymentEventsFromTime` from the push onward, oldest first.
+    auditEvents: [lastPush, ...auditTail] as Record<string, unknown>[],
+    // `_system/cli/queryEnvironmentVariables`: the stored rows, by name.
+    variables,
+    // `GET /api/v1/get_canonical_urls` (crates/local_backend/src/canonical_urls.rs:111-173).
+    canonicalUrls,
+    configHashes: configHashes(rootHash),
+    components: [
+      { id: "root", name: null, path: "", args: {}, state: "active", httpPrefix: null },
+      { id: "cmp-rl", name: "rateLimiter", path: "rateLimiter", args: {}, state: "active", httpPrefix: null },
+    ],
+    componentModules: [
+      [null, [["a.js", { functions: [{ name: "f", udfType: "Query", visibility: { kind: "public" } }], sourcePackageId: "pkg-r1" }]]],
+      ["cmp-rl", [["lib.js", { functions: [{ name: "limit", udfType: "Mutation", visibility: { kind: "public" } }], sourcePackageId: componentPackage }]]],
+    ],
+  };
+}
+type DeployedState = ReturnType<typeof deployedState>;
+
+/** A fetch fake that answers the health probe and the four admin reads from `state`. */
+function answering(state: DeployedState) {
+  const queries: Record<string, unknown> = {
+    [COMPONENTS_QUERY]: state.components,
+    [COMPONENT_MODULES_QUERY]: state.componentModules,
+    [LAST_PUSH_QUERY]: state.lastPush,
+    "_system/cli/queryEnvironmentVariables": state.variables,
+    "_system/frontend/listDeploymentEventsFromTime": state.auditEvents,
+  };
+  return async (url: RequestInfo | URL, init?: RequestInit) => {
+    const href = String(url);
+    if (href.endsWith("/api/get_config_hashes")) {
+      return { ok: true, status: 200, json: async () => state.configHashes } as unknown as Response;
+    }
+    if (href.endsWith("/api/v1/get_canonical_urls")) {
+      return { ok: true, status: 200, json: async () => state.canonicalUrls } as unknown as Response;
+    }
+    if (href.endsWith("/api/query")) {
+      const { path, args } = JSON.parse(String(init?.body)) as { path: string; args: [Record<string, unknown>] };
+      let value = queries[path];
+      if (path === "_system/frontend/listDeploymentEventsFromTime") {
+        const from = args[0]?.fromTimestamp;
+        value = typeof from === "number" ? state.auditEvents.filter((e) => (e._creationTime as number) >= from) : undefined;
+      }
+      const body = path in queries ? { status: "success", value } : { status: "error", errorMessage: "no such function" };
+      return { ok: true, status: 200, json: async () => body } as unknown as Response;
+    }
+    return { ok: true } as Response;
   };
 }
 
@@ -128,6 +208,40 @@ const PLAN_LINES = [
   "NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000",
   `TURNSTILE_SECRET_KEY=${TURNSTILE_TEST_SECRET}`,
 ];
+
+type StoredVariable = { _id: string; _creationTime: number; name: string; value: string };
+
+/** The plan as `_system/cli/queryEnvironmentVariables` returns it, with `edit` applied by name. */
+function planVariables(edit: Record<string, string> = {}): StoredVariable[] {
+  return PLAN_LINES.map((line, index) => {
+    const name = line.slice(0, line.indexOf("="));
+    const value = name in edit ? edit[name]! : line.slice(line.indexOf("=") + 1);
+    return { _id: `env-${index}`, _creationTime: 100 + index, name, value };
+  });
+}
+
+/** What the pinned CLI's `env list` prints for those rows (formatEnvValueForDotfile.js:9-11 for a newline). */
+function cliListing(variables: StoredVariable[]): string {
+  return `${variables.map(({ name, value }) => (value.includes("\n") ? `${name}='${value}'` : `${name}=${value}`)).join("\n")}\n`;
+}
+
+/**
+ * A harness on which every read of the backend sees `state`: the admin reads,
+ * and the CLI's `env list` printing the same rows. A tamper therefore reaches
+ * whichever read the helper makes.
+ */
+function harnessOn(state: DeployedState) {
+  const h = harness((call) =>
+    call.command !== "docker" && call.args.includes("list") && !call.args.includes("--names-only") ? ok(cliListing(state.variables)) : undefined,
+  );
+  h.deps.fetchImpl.mockImplementation(answering(state));
+  return h;
+}
+
+/** An audited admin action after the push, as `_deployment_audit_log` records it. */
+function auditRow(action: string, creationTime = 1_500) {
+  return { _id: `audit-${action}`, _creationTime: creationTime, action, member_id: 0, metadata: {} };
+}
 
 const READY_ENV = {
   CONVEX_SELF_HOSTED_URL: LOCAL_CONVEX_URL,
@@ -266,9 +380,20 @@ describe("buildEnvPlan refusals", () => {
 
 describe("environment allowlist comparison", () => {
   test("parses names and refuses anything that is not a variable name", () => {
-    expect(parseEnvNames("B\nA\n\n")).toEqual(["A", "B"]);
+    expect(parseEnvNames("B\nA\n")).toEqual(["A", "B"]);
+    expect(parseEnvNames("")).toEqual([]);
     expect(() => parseEnvNames("lowercase_value")).toThrow(/unexpected/);
     expect(() => parseEnvNames("A=1")).toThrow(/unexpected/);
+  });
+
+  test("compares names exactly: no trimming, no dropped lines", () => {
+    expect(() => parseEnvNames("A \nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames(" A\nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames("A\t\nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames("A\n\nB\n")).toThrow(/unexpected/);
+    // Round 10: the pinned CLI prints on "\n" only (env.js:140, logOutput), so a
+    // "\r" is part of what the backend stored and is never dropped.
+    expect(() => parseEnvNames("B\r\nA\r\n")).toThrow(/unexpected/);
   });
 
   test("orders by UTF-16 code unit, never by locale", () => {
@@ -535,27 +660,63 @@ describe("deployBackend", () => {
   });
 });
 
-describe("assertEnvMatchesPlan (round 5: values, not only names)", () => {
+describe("assertEnvMatchesPlan (round 10: the stored rows, compared as strings)", () => {
   const plan = buildEnvPlan({ publishableKey: PUBLISHABLE_KEY, appUrl: "http://127.0.0.1:3000" });
+  const row = (name: string, value: string) => ({ _id: `env-${name}`, _creationTime: 900, name, value });
 
   test("passes on the exact plan in any order", () => {
-    expect(() => assertEnvMatchesPlan([...PLAN_LINES].reverse().join("\n"), plan)).not.toThrow();
+    expect(() => assertEnvMatchesPlan([...planVariables()].reverse(), plan)).not.toThrow();
   });
 
   test.each([
-    ["a rewritten value under an allowed name", PLAN_LINES.map((l) => (l.startsWith("NEXT_PUBLIC_APP_URL=") ? "NEXT_PUBLIC_APP_URL=https://evil.example" : l))],
-    ["an added variable", [...PLAN_LINES, "PROBE_ESCALATED=1"]],
-    ["a removed variable", PLAN_LINES.slice(1)],
-    ["a duplicated line", [...PLAN_LINES, PLAN_LINES[0]!]],
-  ])("refuses %s, naming the variable and never its value", (_label, lines) => {
+    ["a rewritten value under an allowed name", planVariables({ NEXT_PUBLIC_APP_URL: "https://evil.example" })],
+    ["an added variable", [...planVariables(), row("PROBE_ESCALATED", "1")]],
+    ["a removed variable", planVariables().slice(1)],
+    ["a duplicated row", [...planVariables(), planVariables()[0]!]],
+  ])("refuses %s, naming the variable and never its value", (_label, rows) => {
     let message = "";
     try {
-      assertEnvMatchesPlan(lines.join("\n"), plan);
+      assertEnvMatchesPlan(rows, plan);
     } catch (error) {
       message = String(error);
     }
     expect(message).toMatch(/differs from the trusted plan/);
     expect(message).not.toContain("evil.example");
+  });
+
+  // The backend stores any value a caller sends (EnvVarValue::from_str has no
+  // character check at the pinned revision), so every code unit counts.
+  test.each([
+    ["a trailing carriage return", "preview\r"],
+    ["a NUL", "preview\0"],
+    ["a Unicode lookalike (Cyrillic e)", "prеview"],
+    ["a trailing newline", "preview\n"],
+    ["a trailing space", "preview "],
+    ["a trailing tab", "preview\t"],
+    ["a leading space", " preview"],
+    ["an extra '='", "preview=x"],
+    ["an empty value", ""],
+  ])("refuses %s in a value", (_label, value) => {
+    expect(() => assertEnvMatchesPlan(planVariables({ AUTOFLOW_DEPLOYMENT_CLASS: value }), plan)).toThrow(
+      /\[AUTOFLOW_DEPLOYMENT_CLASS\]/,
+    );
+  });
+
+  test.each([
+    ["a name with a trailing carriage return", [...planVariables().slice(1), row("AUTOFLOW_DEPLOYMENT_CLASS\r", "preview")]],
+    ["a duplicate standing in for a missing row", [planVariables()[0]!, planVariables()[0]!, ...planVariables().slice(2)]],
+  ])("refuses %s", (_label, rows) => {
+    expect(() => assertEnvMatchesPlan(rows, plan)).toThrow(/differs from the trusted plan/);
+  });
+
+  test("names the duplicated variable when the rows are equal as a set", () => {
+    expect(() => assertEnvMatchesPlan([...planVariables(), planVariables()[4]!], plan)).toThrow(/\[TURNSTILE_SECRET_KEY\]/);
+  });
+
+  test("refuses a listing that is not rows of string names and values", () => {
+    for (const listing of [null, "AUTOFLOW_DEPLOYMENT_CLASS=preview", [{ name: "AUTOFLOW_DEPLOYMENT_CLASS" }], [{ name: 1, value: "x" }]]) {
+      expect(() => assertEnvMatchesPlan(listing as never, plan)).toThrow(/variable listing/);
+    }
   });
 
   test("a name-only check would have passed the rewritten value: the allowlist comparison alone is blind to it", () => {
@@ -564,24 +725,110 @@ describe("assertEnvMatchesPlan (round 5: values, not only names)", () => {
 });
 
 describe("codeFingerprint", () => {
-  test("is independent of key order and module order, and changes with any module hash", () => {
-    const base = configHashes();
-    const reordered = { ...base, moduleHashes: [...base.moduleHashes].reverse() };
+  const withRoot = (configHashes: Record<string, unknown>) => ({ ...deployedState(), configHashes });
+
+  test("is independent of key order and module order, and changes with any root module hash", () => {
+    const base = deployedState();
+    const reordered = {
+      ...base,
+      configHashes: { ...base.configHashes, moduleHashes: [...base.configHashes.moduleHashes].reverse() },
+      components: [...base.components].reverse(),
+      componentModules: [...base.componentModules].reverse(),
+    };
     expect(codeFingerprint(reordered)).toBe(codeFingerprint(base));
-    expect(codeFingerprint(configHashes("h2"))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(deployedState({ rootHash: "h2" }))).not.toBe(codeFingerprint(base));
     expect(codeFingerprint(base)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("changes with the config or the node dependencies", () => {
-    const base = configHashes();
-    expect(codeFingerprint({ ...base, config: { functions: "other/" } })).not.toBe(codeFingerprint(base));
-    expect(codeFingerprint({ ...base, nodeDependencies: [{ name: "x", version: "1" }] })).not.toBe(codeFingerprint(base));
+  test("changes with the config, the Node version or the UDF server version", () => {
+    const base = deployedState();
+    expect(codeFingerprint(withRoot({ ...base.configHashes, config: { functions: "other/" } }))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(withRoot({ ...base.configHashes, nodeVersion: "20" }))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(withRoot({ ...base.configHashes, udfServerVersion: "1.0.0" }))).not.toBe(codeFingerprint(base));
+  });
+
+  test("does not read a nodeDependencies field: the pinned endpoint never sends one", () => {
+    const base = deployedState();
+    const invented = withRoot({ ...base.configHashes, nodeDependencies: [{ name: "x", version: "1" }] });
+    expect(codeFingerprint(invented)).toBe(codeFingerprint(base));
+  });
+
+  test("changes when a mounted component's module is redeployed, though the root is untouched", () => {
+    const base = deployedState();
+    expect(codeFingerprint(deployedState({ componentPackage: "pkg-c2" }))).not.toBe(codeFingerprint(base));
+    const [root, component] = base.componentModules as [unknown, [string, [string, Record<string, unknown>][]]];
+    const [, [[path, module]]] = component;
+    const otherFunctions = [root, [component[0], [[path, { ...module, functions: [] }]]]];
+    expect(codeFingerprint({ ...base, componentModules: otherFunctions })).not.toBe(codeFingerprint(base));
+  });
+
+  test("changes when a component's mount arguments change or a component disappears", () => {
+    const base = deployedState();
+    const reconfigured = base.components.map((c) => (c.path === "" ? c : { ...c, args: { limit: 1 } }));
+    expect(codeFingerprint({ ...base, components: reconfigured })).not.toBe(codeFingerprint(base));
+    expect(() => codeFingerprint({ ...base, components: base.components.slice(0, 1) })).toThrow(/component/);
   });
 
   test("refuses a backend that reports no modules, so an empty backend never matches", () => {
-    expect(() => codeFingerprint({ moduleHashes: [] })).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({ moduleHashes: [] }))).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({}))).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({ moduleHashes: [{ path: "a.js" }] }))).toThrow(/no module hashes/);
     expect(() => codeFingerprint({})).toThrow(/no module hashes/);
-    expect(() => codeFingerprint({ moduleHashes: [{ path: "a.js" }] })).toThrow(/no module hashes/);
+  });
+
+  test("refuses when any mounted component's modules are missing or unversioned", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, componentModules: base.componentModules.slice(0, 1) })).toThrow(/component/);
+    expect(() => codeFingerprint({ ...base, componentModules: undefined })).toThrow(/component/);
+    expect(() => codeFingerprint({ ...base, components: undefined })).toThrow(/component/);
+    const unversioned = [base.componentModules[0], ["cmp-rl", [["lib.js", { functions: [] }]]]];
+    expect(() => codeFingerprint({ ...base, componentModules: unversioned })).toThrow(/component/);
+  });
+
+  test("refuses a listing without exactly one root entry", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, componentModules: base.componentModules.slice(1) })).toThrow(/component/);
+    const twoRoots = [base.componentModules[0], ...base.componentModules];
+    expect(() => codeFingerprint({ ...base, componentModules: twoRoots })).toThrow(/component/);
+  });
+
+  test("changes when only a component's dependency modules were pushed: every listing is unchanged, the push record moves", () => {
+    // `_deps/` modules have no analysis, so `listForAllComponents` never lists
+    // them, and an unchanged importing module keeps its source package. The
+    // only read that moves is the newest push audit row.
+    const base = deployedState();
+    const depsOnly = deployedState({ pushId: "push-2" });
+    expect(depsOnly.componentModules).toEqual(base.componentModules);
+    expect(depsOnly.configHashes).toEqual(base.configHashes);
+    expect(codeFingerprint(depsOnly)).not.toBe(codeFingerprint(base));
+  });
+
+  test("changes when any audited admin action is recorded after the push, and only by its identity", () => {
+    const base = deployedState();
+    const after = deployedState({ auditTail: [auditRow("update_canonical_url")] });
+    expect(codeFingerprint(after)).not.toBe(codeFingerprint(base));
+    const otherMetadata = deployedState({ auditTail: [{ ...auditRow("update_canonical_url"), metadata: { x: 1 } }] });
+    expect(codeFingerprint(otherMetadata)).toBe(codeFingerprint(after));
+  });
+
+  test("refuses an audit listing that does not start at the latest push", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, auditEvents: [] })).toThrow(/audit log/);
+    expect(() => codeFingerprint({ ...base, auditEvents: [auditRow("update_canonical_url")] })).toThrow(/audit log/);
+    expect(() => codeFingerprint({ ...base, auditEvents: undefined as never })).toThrow(/audit log/);
+  });
+
+  test("hashes the push record's identity, not its free-form diff", () => {
+    const base = deployedState();
+    const otherDiff = { ...base, lastPush: { ...base.lastPush, metadata: { component_diffs: { x: 1 } } } };
+    expect(codeFingerprint(otherDiff)).toBe(codeFingerprint(base));
+  });
+
+  test("refuses a backend with no recorded code push", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, lastPush: null })).toThrow(/no code push/);
+    expect(() => codeFingerprint({ ...base, lastPush: { ...base.lastPush, action: "create_environment_variable" } })).toThrow(/no code push/);
+    expect(() => codeFingerprint({ ...base, lastPush: { ...base.lastPush, _creationTime: "1" } })).toThrow(/no code push/);
   });
 
   test("stableStringify sorts keys at every depth", () => {
@@ -593,22 +840,85 @@ describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed e
   test("verifies every value, records the code fingerprint, mints the marker, and never deploys", async () => {
     const h = harness();
     await markBackend({ ...READY_ENV, GITHUB_ENV: "/tmp/github_env" }, h.deps);
-    expect(h.calls.map((call) => call.args.slice(1, 4).join(" "))).toEqual([
-      "env list",
-      "run e2eBootstrap:markPreviewDeployment {}",
-    ]);
+    // Round 10: the variables are read as stored rows over the admin API, not
+    // from the CLI's printed listing, so the only CLI call is the marker.
+    expect(h.calls.map((call) => call.args.slice(1, 4).join(" "))).toEqual(["run e2eBootstrap:markPreviewDeployment {}"]);
     expect(h.calls.some((call) => call.args[1] === "deploy")).toBe(false);
     for (const call of h.calls) expect(call.env.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_CONVEX_URL);
-    expect(h.appended).toEqual([`${FINGERPRINT_ENV_VAR}=${codeFingerprint(configHashes())}\n`]);
+    expect(h.appended).toEqual([`${FINGERPRINT_ENV_VAR}=${codeFingerprint(deployedState())}\n`]);
     const [url, init] = h.deps.fetchImpl.mock.calls.find(([u]) => String(u).endsWith("/api/get_config_hashes"))! as unknown as [string, RequestInit];
     expect(url).toBe(`${LOCAL_CONVEX_URL}/api/get_config_hashes`);
     expect(init.redirect).toBe("error");
   });
 
-  test("does not mint the marker when a value differs from the trusted plan", async () => {
-    const h = harness((call) =>
-      call.args.includes("list") ? ok(PLAN_LINES.map((l) => l.replace("preview", "production")).join("\n")) : undefined,
+  test("reads every mounted component through the backend's own system queries, as admin", async () => {
+    const h = harness();
+    await markBackend(READY_ENV, h.deps);
+    const queries = (h.deps.fetchImpl.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u.endsWith("/api/query"));
+    expect(queries.map(([, init]) => JSON.parse(String(init.body)))).toEqual([
+      { path: "_system/cli/queryEnvironmentVariables", format: "convex_encoded_json", args: [{}] },
+      { path: COMPONENTS_QUERY, format: "convex_encoded_json", args: [{}] },
+      { path: COMPONENT_MODULES_QUERY, format: "convex_encoded_json", args: [{}] },
+      { path: LAST_PUSH_QUERY, format: "convex_encoded_json", args: [{}] },
+      { path: "_system/frontend/listDeploymentEventsFromTime", format: "convex_encoded_json", args: [{ fromTimestamp: 1_000 }] },
+    ]);
+    for (const [url, init] of queries) {
+      expect(url).toBe(`${LOCAL_CONVEX_URL}/api/query`);
+      expect(init.redirect).toBe("error");
+      expect((init.headers as Record<string, string>).authorization).toBe(`Convex ${ADMIN_KEY}`);
+    }
+    const [canonicalUrl, canonicalInit] = (h.deps.fetchImpl.mock.calls as unknown as [string, RequestInit][]).find(([u]) =>
+      u.endsWith("/api/v1/get_canonical_urls"),
+    )!;
+    expect(canonicalUrl).toBe(`${LOCAL_CONVEX_URL}/api/v1/get_canonical_urls`);
+    expect(canonicalInit.method).toBe("GET");
+    expect(canonicalInit.redirect).toBe("error");
+    expect((canonicalInit.headers as Record<string, string>).authorization).toBe(`Convex ${ADMIN_KEY}`);
+  });
+
+  // Round 10, F1: the pinned CLI prints a stored "\r" verbatim and the old
+  // listing parser dropped it, so a class of "preview\r" passed `mark`.
+  test("does not mint the marker when a value ends in a carriage return", async () => {
+    const h = harnessOn(deployedState({ variables: planVariables({ AUTOFLOW_DEPLOYMENT_CLASS: "preview\r" }) }));
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/\[AUTOFLOW_DEPLOYMENT_CLASS\]/);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+    expect(h.appended).toEqual([]);
+  });
+
+  // Round 10, F2: an admin key can override the URLs functions see
+  // (crates/local_backend/src/canonical_urls.rs:54-109).
+  test.each([
+    ["the cloud URL", { convexCloudUrl: "https://clever-mockingbird-719.convex.cloud", convexSiteUrl: "http://127.0.0.1:3211" }],
+    ["the site URL", { convexCloudUrl: LOCAL_CONVEX_URL, convexSiteUrl: "https://clever-mockingbird-719.convex.site" }],
+  ])("does not mint the marker when %s was overridden", async (_label, canonicalUrls) => {
+    const h = harnessOn(deployedState({ canonicalUrls }));
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/canonical URLs/);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+  });
+
+  test("does not mint the marker when the audit log no longer reaches back to the latest push", async () => {
+    const state = deployedState();
+    const h = harnessOn({ ...state, auditEvents: [auditRow("update_canonical_url")] });
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/audit log/);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+  });
+
+  test("does not mint the marker when a component read fails, and never echoes the backend's message", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) =>
+      String(url).endsWith("/api/query") && String(init?.body).includes(COMPONENTS_QUERY)
+        ? ({ ok: true, status: 200, json: async () => ({ status: "error", errorMessage: `leak ${ADMIN_KEY}` }) } as unknown as Response)
+        : answering(deployedState())(url, init),
     );
+    const error = await markBackend(READY_ENV, h.deps).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(LocalConvexRefusal);
+    expect(String((error as Error).message)).toMatch(new RegExp(COMPONENTS_QUERY));
+    expect(String((error as Error).message)).not.toContain(ADMIN_KEY);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+  });
+
+  test("does not mint the marker when a value differs from the trusted plan", async () => {
+    const h = harnessOn(deployedState({ variables: planVariables({ AUTOFLOW_DEPLOYMENT_CLASS: "production" }) }));
     await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/AUTOFLOW_DEPLOYMENT_CLASS/);
     expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
     expect(h.appended).toEqual([]);
@@ -640,36 +950,89 @@ describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed e
 });
 
 describe("verifyBackend (round 5 tripwire)", () => {
-  const MARKED_ENV = { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) };
+  const MARKED_ENV = { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(deployedState()) };
 
   test("passes when the variables equal the plan and the code fingerprint is unchanged", async () => {
     const h = harness();
     await verifyBackend(MARKED_ENV, h.deps);
-    expect(h.calls.map((call) => call.args.slice(1, 3).join(" "))).toEqual(["env list"]);
+    expect(h.calls).toEqual([]);
     expect(h.logs.at(-1)).toMatch(/unchanged since it was marked/);
   });
 
   test("fails when a candidate added a variable with a minted key", async () => {
-    const h = harness((call) => (call.args.includes("list") ? ok([...PLAN_LINES, "PROBE_ESCALATED=1"].join("\n")) : undefined));
+    const added = { _id: "env-x", _creationTime: 999, name: "PROBE_ESCALATED", value: "1" };
+    const h = harnessOn(deployedState({ variables: [...planVariables(), added] }));
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/PROBE_ESCALATED/);
   });
 
   test("fails when a candidate rewrote an allowed variable's value", async () => {
-    const h = harness((call) =>
-      call.args.includes("list")
-        ? ok(PLAN_LINES.map((l) => (l.startsWith("CLERK_JWT") ? "CLERK_JWT_ISSUER_DOMAIN=https://evil.example" : l)).join("\n"))
-        : undefined,
-    );
+    const h = harnessOn(deployedState({ variables: planVariables({ CLERK_JWT_ISSUER_DOMAIN: "https://evil.example" }) }));
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/CLERK_JWT_ISSUER_DOMAIN/);
+  });
+
+  // Round 10, F1. Each value is what the backend stores and what the CLI
+  // prints for it; only the carriage return passed the round-9 parser, the
+  // others are controls that must keep failing.
+  test.each([
+    ["a trailing carriage return", "preview\r"],
+    ["a NUL", "preview\0"],
+    ["a Unicode lookalike (Cyrillic e)", "prеview"],
+    ["a trailing newline", "preview\n"],
+  ])("fails when the deployment class holds %s", async (_label, value) => {
+    const h = harnessOn(deployedState({ variables: planVariables({ AUTOFLOW_DEPLOYMENT_CLASS: value }) }));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/differs from the trusted plan.*AUTOFLOW_DEPLOYMENT_CLASS/);
+  });
+
+  // Round 10, F2: the override is persistent, is not a push, and changes the
+  // CONVEX_CLOUD_URL / CONVEX_SITE_URL functions read
+  // (crates/udf/src/environment.rs:68-87).
+  test.each([
+    ["the cloud URL", { convexCloudUrl: "https://clever-mockingbird-719.convex.cloud", convexSiteUrl: "http://127.0.0.1:3211" }],
+    ["the site URL", { convexCloudUrl: LOCAL_CONVEX_URL, convexSiteUrl: "https://clever-mockingbird-719.convex.site" }],
+    ["a trailing slash", { convexCloudUrl: `${LOCAL_CONVEX_URL}/`, convexSiteUrl: "http://127.0.0.1:3211" }],
+    ["an extra field", { convexCloudUrl: LOCAL_CONVEX_URL, convexSiteUrl: "http://127.0.0.1:3211", other: "x" }],
+  ])("fails when %s was overridden after mark", async (_label, canonicalUrls) => {
+    const h = harnessOn(deployedState({ canonicalUrls }));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/canonical URLs/);
+  });
+
+  // Round 10, the class: every audited admin action writes a row to
+  // `_deployment_audit_log` in its own transaction, so any of them after `mark`
+  // moves the newest row even when the state it changed was restored.
+  test.each([
+    "update_canonical_url",
+    "create_environment_variable",
+    "delete_environment_variable",
+    "cancel_all_scheduled_functions",
+    "delete_scheduled_jobs_table",
+    "change_deployment_state",
+    "delete_component",
+  ])("fails when an audited admin action (%s) ran after mark", async (action) => {
+    const h = harnessOn(deployedState({ auditTail: [auditRow(action)] }));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/changed after it was marked/);
+  });
+
+  test("fails when the audit log no longer reaches back to the latest push", async () => {
+    const state = deployedState();
+    const h = harnessOn({ ...state, auditEvents: [] });
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/audit log/);
   });
 
   test("fails when the deployed code changed after mark", async () => {
     const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (url: string) =>
-      String(url).endsWith("/api/get_config_hashes")
-        ? ({ ok: true, status: 200, json: async () => configHashes("swapped") } as unknown as Response)
-        : ({ ok: true } as Response),
-    );
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ rootHash: "swapped" })));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
+  });
+
+  test("fails when only a mounted component was redeployed after mark", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ componentPackage: "pkg-c2" })));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
+  });
+
+  test("fails when only a component's dependency modules were pushed after mark", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ pushId: "push-2" })));
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
   });
 
@@ -729,7 +1092,7 @@ describe("main", () => {
     const h = harness();
     await main(["stop"], {}, h.deps);
     await main(["mark"], READY_ENV, h.deps);
-    await main(["verify"], { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) }, h.deps);
+    await main(["verify"], { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(deployedState()) }, h.deps);
     await expect(main(["deploy-prod"], {}, h.deps)).rejects.toThrow(/Usage/);
     await expect(main([], {}, h.deps)).rejects.toThrow(/Usage/);
   });

@@ -777,7 +777,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
         expect(verify["working-directory"]).toBe("trusted");
         expect(verify.if).toBeUndefined();
-        expect(verify["continue-on-error"]).toBeUndefined();
+        expect(Object.keys(verify)).not.toContain("continue-on-error");
         expect(verify.env).toEqual({
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
           NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
