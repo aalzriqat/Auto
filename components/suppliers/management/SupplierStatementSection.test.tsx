@@ -26,7 +26,7 @@ vi.mock("@/components/providers/LanguageProvider", async () => {
   return {
     useLanguage: () => ({
       t: (key: string) => (dictionaries[world.locale] as Record<string, string>)[key] ?? key,
-      language: world.locale,
+      locale: world.locale,
       isRtl: world.locale === "ar",
       dir: world.locale === "ar" ? "rtl" : "ltr",
     }),
@@ -88,9 +88,9 @@ describe("supplier statement section", () => {
     renderIt();
     const ap = screen.getByRole("region", { name: en.SuppliersStmtPayableTitle });
     const ar_ = screen.getByRole("region", { name: en.SuppliersStmtReceivableTitle });
-    expect(within(ap).getByText(/9,500/)).toBeTruthy();
+    expect(within(ap).getAllByText(/9,500/).length).toBeGreaterThan(0);
     expect(within(ap).queryByText(/3,000/)).toBeNull();
-    expect(within(ar_).getByText(/3,000/)).toBeTruthy();
+    expect(within(ar_).getAllByText(/3,000/).length).toBeGreaterThan(0);
     expect(within(ar_).queryByText(/9,500/)).toBeNull();
     expect(screen.getByText(en.SuppliersStmtNoNetNote)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/6,500|net position|balance/i);

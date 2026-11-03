@@ -237,7 +237,35 @@ const suppliersMessages = defineBilingualMessages({
     "بلغ هذا المورّد الحد الأقصى لعدد الأسماء المستعارة.",
   ],
   ServerError_SUPPLIER_ALIAS_ALREADY_RETIRED: ["This alias is already retired.", "هذا الاسم المستعار موقوف بالفعل."],
-});
+
+  // Supplier statement (SCRUM-869 slice 2). A/P and A/R are separate regions; nothing is netted.
+  SuppliersStmtTitle: ["Statement", "كشف الحساب"],
+  SuppliersStmtNoNetNote: [
+    "Amounts we owe this supplier and amounts this supplier owes us are shown separately. They are never offset against each other, and each currency is totalled on its own.",
+    "المبالغ المستحقة للمورّد والمبالغ المستحقة منه تُعرض منفصلة. لا تُقاصّ إحداهما بالأخرى أبداً، وتُجمع كل عملة على حدة.",
+  ],
+  SuppliersStmtPayableTitle: ["We owe this supplier (A/P)", "مستحق للمورّد علينا (ذمم دائنة)"],
+  SuppliersStmtReceivableTitle: ["This supplier owes us (A/R)", "مستحق لنا على المورّد (ذمم مدينة)"],
+  SuppliersStmtPayableEmpty: ["Nothing is outstanding to this supplier.", "لا يوجد مبلغ مستحق للمورّد."],
+  SuppliersStmtReceivableEmpty: ["This supplier owes us nothing outstanding.", "لا يوجد مبلغ مستحق لنا على المورّد."],
+  SuppliersStmtLoading: ["Loading the statement…", "جارٍ تحميل كشف الحساب…"],
+  SuppliersStmtLoadError: [
+    "The statement could not be loaded. Reload the page and try again.",
+    "تعذّر تحميل كشف الحساب. أعد تحميل الصفحة وحاول مرة أخرى.",
+  ],
+  SuppliersStmtIncomplete: [
+    "More lines exist than can be shown here. The lines and totals above are partial.",
+    "توجد بنود أكثر من المعروض هنا. البنود والمجاميع أعلاه جزئية.",
+  ],
+  SuppliersStmtKindPayable: ["Supplier payable", "مستحق للمورّد"],
+  SuppliersStmtKindReceivable: ["Margin receivable", "هامش مستحق على المورّد"],
+  SuppliersStmtKindRecovery: ["Cost recovery", "استرداد تكلفة"],
+  SuppliersStmtDue: ["Due", "الاستحقاق"],
+  SuppliersStmtNoDueDate: ["No due date", "بلا تاريخ استحقاق"],
+  SuppliersStmtDaysOverdue: ["{days} days overdue", "متأخر {days} يوماً"],
+  SuppliersStmtDisputed: ["Disputed", "متنازع عليه"],
+  SuppliersStmtOverdue: ["Overdue", "متأخر"],
+  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],});
 
 export const suppliersEn = suppliersMessages.en;
 export const suppliersAr = suppliersMessages.ar;
