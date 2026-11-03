@@ -152,7 +152,7 @@ export function parseAdminKey(output) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const candidate = lines[lines.length - 1];
+  const candidate = lines.at(-1);
   if (!candidate || !ADMIN_KEY_PATTERN.test(candidate)) {
     throw new LocalConvexRefusal(
       "generate_admin_key.sh did not print an admin key of the expected shape. The output is not reproduced.",
@@ -260,6 +260,15 @@ export function buildEnvPlan({ publishableKey, appUrl }) {
   ];
 }
 
+/**
+ * Orders strings by UTF-16 code unit, the order `Array#sort` uses with no
+ * comparator. Never `localeCompare`: a locale order varies between machines.
+ */
+export function compareCodeUnits(a, b) {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
 /** `convex env list --names-only` output to a sorted list of names. */
 export function parseEnvNames(stdout) {
   const names = String(stdout ?? "")
@@ -271,13 +280,13 @@ export function parseEnvNames(stdout) {
       throw new LocalConvexRefusal("The backend's variable listing contained an unexpected value.");
     }
   }
-  return names.sort();
+  return names.sort(compareCodeUnits);
 }
 
 /** Exact equality with the allowlist; neither extra nor missing names pass. */
 export function assertEnvMatchesAllowlist(actualNames) {
-  const expected = [...ENV_ALLOWLIST].sort();
-  const actual = [...actualNames].sort();
+  const expected = [...ENV_ALLOWLIST].sort(compareCodeUnits);
+  const actual = [...actualNames].sort(compareCodeUnits);
   if (actual.length !== expected.length || actual.some((name, index) => name !== expected[index])) {
     const missing = expected.filter((name) => !actual.includes(name));
     const extra = actual.filter((name) => !expected.includes(name));
@@ -386,8 +395,9 @@ function runConvexCli(deps, env, adminKey, args, { capture = false } = {}) {
     throw new LocalConvexRefusal(`Could not start the Convex CLI for "${args[0]}": ${result.error.message}`);
   }
   if (result.status !== 0) {
+    const subcommand = args[1] && !args[1].startsWith("-") ? ` ${args[1]}` : "";
     throw new LocalConvexRefusal(
-      `convex ${args[0]}${args[1] && !args[1].startsWith("-") ? ` ${args[1]}` : ""} failed with exit code ${result.status}. ` +
+      `convex ${args[0]}${subcommand} failed with exit code ${result.status}. ` +
         "The CLI's own output is above.",
     );
   }
@@ -407,9 +417,10 @@ function describeContainer(deps, env, name, secrets) {
     name,
   ]);
   const logs = docker(deps, env, ["logs", "--tail", String(LOG_TAIL_LINES), name]);
+  const logText = logs.stdout + logs.stderr;
   return (
     `Container state: ${boundedDiagnostic(state.stdout || state.stderr, secrets, 300).trim()}\n` +
-    `Last ${LOG_TAIL_LINES} log lines:\n${boundedDiagnostic(`${logs.stdout}${logs.stderr}`, secrets)}`
+    `Last ${LOG_TAIL_LINES} log lines:\n${boundedDiagnostic(logText, secrets)}`
   );
 }
 
@@ -429,33 +440,43 @@ export async function waitForBackend({
   intervalMs = HEALTH_INTERVAL_MS,
 }) {
   const deadline = deps.now() + timeoutMs;
-  for (;;) {
+  // Each poll must wait for the previous one, so this recurses rather than
+  // awaiting inside a loop. Depth is bounded by timeoutMs / intervalMs.
+  const poll = async () => {
     if (!isRunning()) return { ok: false, reason: "the container stopped before the backend answered" };
-    try {
-      const response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}/version`, {
-        signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
-      });
-      if (response.ok) return { ok: true };
-    } catch {
-      // Not listening yet: keep polling until the deadline.
-    }
+    if (await backendAnswers(deps)) return { ok: true };
     if (deps.now() + intervalMs > deadline) {
       return { ok: false, reason: `no healthy answer from ${LOCAL_CONVEX_URL}/version within ${Math.round(timeoutMs / 1000)}s` };
     }
     await deps.sleep(intervalMs);
+    return poll();
+  };
+  return poll();
+}
+
+async function backendAnswers(deps) {
+  try {
+    const response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}/version`, {
+      signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    // Not listening yet: keep polling until the deadline.
+    return false;
   }
 }
 
-async function pullImage(deps, env) {
-  let last;
-  for (let attempt = 1; attempt <= PULL_ATTEMPTS; attempt += 1) {
-    last = docker(deps, env, ["pull", "--quiet", LOCAL_CONVEX_IMAGE]);
-    if (last.status === 0) return;
-    if (attempt < PULL_ATTEMPTS) await deps.sleep(2_000 * attempt);
+/** Retries with linear backoff; attempts are sequential by design, so it recurses. */
+async function pullImage(deps, env, attempt = 1) {
+  const result = docker(deps, env, ["pull", "--quiet", LOCAL_CONVEX_IMAGE]);
+  if (result.status === 0) return;
+  if (attempt >= PULL_ATTEMPTS) {
+    throw new LocalConvexRefusal(
+      `docker pull of the pinned image failed after ${PULL_ATTEMPTS} attempts: ${boundedDiagnostic(result.stderr, [], 500).trim()}`,
+    );
   }
-  throw new LocalConvexRefusal(
-    `docker pull of the pinned image failed after ${PULL_ATTEMPTS} attempts: ${boundedDiagnostic(last?.stderr, [], 500).trim()}`,
-  );
+  await deps.sleep(2_000 * attempt);
+  return pullImage(deps, env, attempt + 1);
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -603,8 +624,10 @@ const invokedDirectly =
   Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (invokedDirectly) {
-  main(process.argv.slice(2)).catch((error) => {
+  try {
+    await main(process.argv.slice(2));
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
 }

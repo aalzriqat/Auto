@@ -19,6 +19,7 @@ import {
   assertAdminKey,
   assertContainerName,
   assertEnvMatchesAllowlist,
+  compareCodeUnits,
   assertLocalOnly,
   boundedDiagnostic,
   buildDockerRunArgs,
@@ -232,6 +233,14 @@ describe("environment allowlist comparison", () => {
     expect(parseEnvNames("B\nA\n\n")).toEqual(["A", "B"]);
     expect(() => parseEnvNames("lowercase_value")).toThrow(/unexpected/);
     expect(() => parseEnvNames("A=1")).toThrow(/unexpected/);
+  });
+
+  test("orders by UTF-16 code unit, never by locale", () => {
+    // A locale order puts "a" before "B" and "_" before letters; code units do not.
+    expect(["a", "B"].sort(compareCodeUnits)).toEqual(["B", "a"]);
+    expect(["a", "B"].sort((x, y) => x.localeCompare(y, "en"))).toEqual(["a", "B"]);
+    expect(parseEnvNames("A_B\nAB\nA1")).toEqual(["A1", "AB", "A_B"]);
+    expect(compareCodeUnits("A", "A")).toBe(0);
   });
 
   test("passes only on exact equality", () => {

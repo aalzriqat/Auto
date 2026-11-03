@@ -852,7 +852,8 @@ export async function setHuntSeatRole(
         "NEXT_PUBLIC_CONVEX_URL is not set, so the hunt preview being re-roled cannot be checked against the one the browser drives.",
     });
 
-  log(`Re-roling hunt seat ${seat} on ${local ? "the local Convex backend" : `preview "${safeForLog(previewName)}"`} to ${role}.`);
+  const target = local ? "the local Convex backend" : `preview "${safeForLog(previewName)}"`;
+  log(`Re-roling hunt seat ${seat} on ${target} to ${role}.`);
   run(
     buildConvexRunArgs({
       functionName: "e2eBootstrap:setHuntSeatRole",
