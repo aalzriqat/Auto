@@ -32,6 +32,7 @@ import {
   exitCodeForSummary,
   bannerForSummary,
   runRehearsalSequence,
+  targetEvidence,
 } from "./accountingPreviewRehearsal.mjs";
 import { previewNameForRef } from "./e2ePreviewBootstrap.mjs";
 
@@ -456,6 +457,125 @@ describe("the rehearsal refuses rather than degrades", () => {
     ["something else entirely", "https://example.com"],
   ])("%s is refused as a target URL", (_label, url) => {
     expect(() => assertRehearsalEnv({ ...VALID, NEXT_PUBLIC_CONVEX_URL: url })).toThrow(/Convex cloud deployment URL/);
+  });
+});
+
+// SCRUM-892: pull requests and the release rehearse on the runner-local backend (owner ruling c24441).
+describe("local mode targets only this job's loopback backend", () => {
+  const LOCAL_URL = "http://127.0.0.1:3210";
+  const ADMIN_KEY = "autoflow-local|" + "k".repeat(40);
+  const LOCAL = {
+    CONVEX_SELF_HOSTED_URL: LOCAL_URL,
+    CONVEX_SELF_HOSTED_ADMIN_KEY: ADMIN_KEY,
+    NEXT_PUBLIC_CONVEX_URL: LOCAL_URL,
+    CLERK_SECRET_KEY: "sk_test_xxx",
+    E2E_LOGIN_USER: "sales@example.test",
+    E2E_APPROVER_USER: "approver@example.test",
+    EVENT_NAME: "workflow_run",
+    GITHUB_EVENT_NAME: "workflow_run",
+  };
+
+  test("accepts the loopback backend and attests it as local in the evidence", () => {
+    const config = assertRehearsalEnv({ ...LOCAL });
+    expect(config).toMatchObject({ mode: "local", convexUrl: LOCAL_URL, previewName: null, deployKey: undefined,
+      local: { url: LOCAL_URL, adminKey: ADMIN_KEY } });
+    expect(targetEvidence(config)).toEqual({ previewName: null, convexUrl: LOCAL_URL, deploymentType: "local",
+      targetVerification: "assertE2EBootstrap agreed: preview marker present, local backend URL matches" });
+  });
+
+  test("the cloud attestation is unchanged", () => {
+    expect(targetEvidence(assertRehearsalEnv({ ...VALID }))).toEqual({ previewName: VALID.CONVEX_PREVIEW_NAME,
+      convexUrl: VALID.NEXT_PUBLIC_CONVEX_URL, deploymentType: "preview",
+      targetVerification: "assertE2EBootstrap agreed: preview marker present, cloud URL matches" });
+  });
+
+  // Owner ruling SCRUM-892 c24441: the release rehearsal runs on the local backend too.
+  test("accepts the release event, named by both variables, on the same loopback backend", () => {
+    const config = assertRehearsalEnv({ ...LOCAL, EVENT_NAME: "repository_dispatch", GITHUB_EVENT_NAME: "repository_dispatch" });
+    expect(config).toMatchObject({ mode: "local", convexUrl: LOCAL_URL, previewName: null });
+  });
+
+  test.each(["CONVEX_SELF_HOSTED_ADMIN_KEY", "NEXT_PUBLIC_CONVEX_URL", "CLERK_SECRET_KEY", "E2E_LOGIN_USER", "E2E_APPROVER_USER"])(
+    "a missing %s is a refusal", (key) => {
+      expect(() => assertRehearsalEnv({ ...LOCAL, [key]: "" })).toThrow(new RegExp(key));
+    });
+
+  test.each([
+    ["a deploy key", { CONVEX_DEPLOY_KEY: VALID.CONVEX_DEPLOY_KEY }, /CONVEX_DEPLOY_KEY/],
+    ["the preview deploy key", { CONVEX_PREVIEW_DEPLOY_KEY: VALID.CONVEX_DEPLOY_KEY }, /CONVEX_PREVIEW_DEPLOY_KEY/],
+    ["a named deployment", { CONVEX_DEPLOYMENT: "prod:wrong" }, /CONVEX_DEPLOYMENT/],
+    ["a preview name", { CONVEX_PREVIEW_NAME: VALID.CONVEX_PREVIEW_NAME }, /CONVEX_PREVIEW_NAME/],
+    ["another self-hosted URL", { CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3211" }, /not exactly/],
+    ["a browser URL other than the backend", { NEXT_PUBLIC_CONVEX_URL: VALID.NEXT_PUBLIC_CONVEX_URL }, /not exactly/],
+    ["a malformed admin key", { CONVEX_SELF_HOSTED_ADMIN_KEY: "not-a-key" }, /shape of an admin key/],
+  ])("refuses %s beside the local backend", (_label, override, message) => {
+    expect(() => assertRehearsalEnv({ ...LOCAL, ...override })).toThrow(message);
+  });
+
+  test("half of the self-hosted pair is refused, never treated as a cloud preview", () => {
+    expect(() => assertRehearsalEnv({ ...VALID, CONVEX_SELF_HOSTED_URL: LOCAL_URL })).toThrow();
+  });
+
+  test("the target assertion runs with the target in the child environment, never in argv", async () => {
+    const spawnCli = vi.fn((_command: string, _args: string[], _options: object) => ({ status: 0, stdout: Buffer.from("{}") }));
+    const config = assertRehearsalEnv({ ...LOCAL });
+    if (config.mode !== "local") throw new Error("expected local mode");
+    await runPreviewFunction({ functionName: "e2eBootstrap:assertE2EBootstrap", args: { expectedCloudUrl: LOCAL_URL },
+      local: config.local, env: { ...LOCAL }, spawnCli });
+    const [, argv, options] = spawnCli.mock.calls[0] ?? [];
+    expect(argv).toEqual(["exec", "convex", "run", "e2eBootstrap:assertE2EBootstrap", JSON.stringify({ expectedCloudUrl: LOCAL_URL })]);
+    expect(JSON.stringify(argv)).not.toContain(ADMIN_KEY);
+    expect(options).toMatchObject({ stdio: ["inherit", "pipe", "inherit"],
+      env: { CONVEX_SELF_HOSTED_URL: LOCAL_URL, CONVEX_SELF_HOSTED_ADMIN_KEY: ADMIN_KEY } });
+  });
+
+  test("cleanup calls carry the local target, strip every cloud target and pin the fixture URL", async () => {
+    const spawnCli = vi.fn<CleanupSpawn>(() => ({ status: 0, stdout: '{"phase":"DONE"}', stderr: "" }));
+    const config = assertRehearsalEnv({ ...LOCAL });
+    const parentEnv = { ...LOCAL, CONVEX_DEPLOY_KEY: VALID.CONVEX_DEPLOY_KEY, CONVEX_PREVIEW_NAME: "stale" };
+    const call = createCleanupPreviewCall(config, { env: parentEnv, spawnCli });
+    expect(await call("e2eBootstrap:observeOpeningCleanupFixture", { orgId: "synthetic" })).toEqual({ ok: true, value: { phase: "DONE" } });
+    const [, argv, options] = spawnCli.mock.calls[0] ?? [];
+    expect(argv).not.toContain("--preview-name");
+    expect(JSON.parse(String(argv?.[4])).expectedCloudUrl).toBe(LOCAL_URL);
+    const childEnv = (options as { env: Record<string, string> }).env;
+    expect(childEnv).toMatchObject({ CONVEX_SELF_HOSTED_URL: LOCAL_URL, CONVEX_SELF_HOSTED_ADMIN_KEY: ADMIN_KEY, NEXT_PUBLIC_CONVEX_URL: LOCAL_URL });
+    expect(childEnv).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(childEnv).not.toHaveProperty("CONVEX_PREVIEW_NAME");
+  });
+
+  test("cleanup output decodes a Buffer to the same text as the string, invalid UTF-8 included", async () => {
+    const bytes = Buffer.from([...Buffer.from('{"s":"a'), 0xff, ...Buffer.from('b"}\n')]);
+    const config = assertRehearsalEnv({ ...LOCAL });
+    const receipt = (stdout: string | Buffer) =>
+      createCleanupPreviewCall(config, { env: { ...LOCAL }, spawnCli: vi.fn<CleanupSpawn>(() => ({ status: 0, stdout, stderr: "" })) })
+        ("e2eBootstrap:observeOpeningCleanupFixture", { orgId: "synthetic" });
+    expect(await receipt(bytes)).toEqual({ ok: true, value: { s: "a�b" } });
+    expect(await receipt(bytes.toString("utf8"))).toEqual({ ok: true, value: { s: "a�b" } });
+  });
+
+  // Found by the first local run: the concurrency worker accepted only cloud
+  // URLs, so C1/C2 were UNPROVEN on the local backend.
+  test.each([
+    [LOCAL_URL, /REHEARSAL_TOKEN is required/],
+    ["https://happy-animal-123.convex.cloud", /REHEARSAL_TOKEN is required/],
+    ["http://127.0.0.1:3211", /Refusing to send/],
+    ["http://localhost:3210", /Refusing to send/],
+    ["https://127.0.0.1:3210", /Refusing to send/],
+  ])("the concurrency worker's target check for %s", (url, outcome) => {
+    const worker = spawnSync(process.execPath, ["scripts/rehearsalReleaseWorker.mjs", "0", "{}"], {
+      env: { NODE_ENV: "test", PATH: process.env.PATH, REHEARSAL_CONVEX_URL: url }, encoding: "utf8", timeout: 10_000,
+    });
+    expect(worker.status).toBe(1);
+    expect(JSON.parse(worker.stdout).error).toMatch(outcome);
+  });
+
+  test("a local cleanup closure refuses any URL but the loopback backend", () => {
+    const config = assertRehearsalEnv({ ...LOCAL });
+    expect(() => createCleanupPreviewCall({ ...config, convexUrl: "http://127.0.0.1:3211" }, { env: { ...LOCAL }, spawnCli: vi.fn() }))
+      .toThrow(/UNAVAILABLE/);
+    expect(() => createCleanupPreviewCall({ ...config, local: { url: "http://127.0.0.1:3211", adminKey: ADMIN_KEY } }, { env: { ...LOCAL }, spawnCli: vi.fn() }))
+      .toThrow(/UNAVAILABLE/);
   });
 });
 

@@ -240,7 +240,8 @@ describe("pull-request workflow secret boundary", () => {
     // No container ever mounts the candidate checkout in this lane now.
     expect(source).not.toContain("$GITHUB_WORKSPACE/candidate:/app");
     expect(source).not.toContain("$GITHUB_WORKSPACE/trusted:/");
-    expect(source).toContain("Disposable rehearsal preview environment does not match the trusted allowlist.");
+    // SCRUM-892 c24441: the local backend's allowlist step replaced the cloud scrub.
+    expect(source).toContain("run: node scripts/localConvexBackend.mjs env");
     expect(source).toContain("autoflow/trusted-accounting-rehearsal");
     expect(source).toContain("refs/pull/${PR_NUMBER}/head:refs/autoflow/accounting-pr-head");
     expect(source).toContain("refs/pull/${PR_NUMBER}/merge:refs/autoflow/accounting-pr-merge");

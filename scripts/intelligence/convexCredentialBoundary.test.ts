@@ -315,12 +315,17 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // hunt library. Nothing else in the workflow changed: still main-only, same
     // steps, secrets, permissions and checkouts.
     "2f1d2e3816f6927ec6d7cde133d044223a9a13029e6bfa63a845f30ffe7f9db8",
-  // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
-  // pin keeps its triggers, credentials, deploy and cleanup inside the review.
+  // SCRUM-616: main-only; SCRUM-892: each role job runs a local self-hosted
+  // backend, with no cloud preview or credential. This whole-workflow pin keeps
+  // its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
-    // PR #661: preserve screenshots in public-key encrypted evidence; publish
-    // only ciphertext and a fixed-field summary, with private browser logs.
-    "d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d",
+    // SCRUM-892: re-pinned for the local backend: the cloud preview create, pin
+    // and delete steps and the preview deploy key are gone; each role job starts,
+    // marks, verifies and stops its own runner-local backend. Triggers and
+    // permissions are unchanged.
+    // Previous pin d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d.
+    // Previous pin d8fdcec7304c4c8e92da8251f220bd57914b78064148445dcd42dd9c1834cae6 (verify's if was conditional).
+    "c6e255670342aabb42ff1c6d47e195da637ac2fde3e81fcec8e9ee2337de7cf1",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
@@ -333,8 +338,16 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
   // staged deployment and exact-SHA release verdict remain unchanged.
   // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
+  // SCRUM-892 option A: the pull-request path runs on the runner-local backend
+  // (start, staged deploy, mark, cases, verify, stop) and creates no preview;
+  // the cloud steps run only for repository_dispatch, their bodies unchanged.
+  // SCRUM-892 c24441: the release runs the same local lifecycle; every cloud
+  // step and the preview credential are gone. The release refusals (preflight,
+  // provenance, release verdict) stay byte-identical, pinned in
+  // trustedAccountingRehearsalReleasePath.test.ts. PR #760 round 3: verify runs
+  // under always() plus the run condition, so a missing baseline refuses.
   "trusted-accounting-rehearsal.yml":
-    "5fa1ebee0748d69075852feb2c10b15490eef5bed1e9d7925d07d86412b7ce84",
+    "3c288c65ca0c64d48a5ac8c8f6fdf650d23533ba4cf4e09b3177c8d3ad114bad",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
@@ -473,7 +486,12 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       expect(start, label).toBeGreaterThan(-1);
       expect(start, label).toBeLessThan(first);
       const stop = steps.find((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs stop");
-      expect(stop?.if, label).toBe("always()");
+      // SCRUM-892: the rehearsal job also serves the cloud release, so its stop
+      // is always() on every PR run; the release path never starts a backend.
+      expect(["always()", "always() && github.event_name == 'workflow_run'"], label).toContain(stop?.if);
+      if (stop?.if !== "always()") {
+        expect(String(steps[start]?.if ?? ""), label).toMatch(/^github\.event_name == 'workflow_run' && /);
+      }
       for (const step of steps) {
         for (const line of String(step.run ?? "").split("\n")) {
           if (/GITHUB_(ENV|OUTPUT)/.test(line)) expect(line, label).not.toMatch(LOCAL_BACKEND_KEY);
@@ -723,6 +741,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "browser-attack-swarm.yml :: attack-worker",
       "browser-attack-swarm.yml :: opening-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
+      // SCRUM-892 c24441: one local form for the pull request and the release.
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);
   });
@@ -754,22 +773,26 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("stages and audits the candidate backend with no credential, immediately before the deploy that consumes it", () => {
     for (const { label, job } of everyJob()) {
       const steps = job.steps ?? [];
-      const deployIndex = steps.findIndex((step) => step.name === STAGED_DEPLOY_STEP);
-      if (deployIndex < 0) continue;
-      const stageIndex = steps.findIndex((step) => step.name === STAGE_STEP);
-      const auditIndex = steps.findIndex((step) => step.name === AUDIT_STEP);
-      expect(stageIndex, label).toBeGreaterThanOrEqual(0);
-      // Nothing runs between the audit and the deploy it licenses.
-      expect([stageIndex, auditIndex, deployIndex], label).toEqual([deployIndex - 2, deployIndex - 1, deployIndex]);
-      const audit = steps[auditIndex] as Step;
-      expect(JSON.stringify(audit.env ?? {}), label).not.toMatch(/secrets\./);
-      expect(String(audit.run ?? ""), label).not.toMatch(CREDENTIAL_NAME);
-      expect(String(audit.if ?? ""), label).toBe(String((steps[deployIndex] as Step).if ?? ""));
-      const stage = steps[stageIndex] as Step;
-      expect(JSON.stringify(stage.env ?? {}), label).not.toMatch(/secrets\./);
-      expect(String(stage.run ?? ""), label).toContain(
-        "trusted/scripts/intelligence/stageCandidateBackend.mjs",
-      );
+      // SCRUM-892: a job may hold more than one deploy form (the rehearsal's
+      // release and PR paths); every one is checked, not only the first.
+      const deployIndexes = steps.flatMap((step, index) => (step.name === STAGED_DEPLOY_STEP ? [index] : []));
+      for (const deployIndex of deployIndexes) {
+        const stageIndex = deployIndex - 2;
+        const auditIndex = deployIndex - 1;
+        // Nothing runs between the audit and the deploy it licenses.
+        expect([steps[stageIndex]?.name, steps[auditIndex]?.name], label).toEqual([STAGE_STEP, AUDIT_STEP]);
+        const deployIf = String((steps[deployIndex] as Step).if ?? "");
+        const audit = steps[auditIndex] as Step;
+        expect(JSON.stringify(audit.env ?? {}), label).not.toMatch(/secrets\./);
+        expect(String(audit.run ?? ""), label).not.toMatch(CREDENTIAL_NAME);
+        expect(String(audit.if ?? ""), label).toBe(deployIf);
+        const stage = steps[stageIndex] as Step;
+        expect(String(stage.if ?? ""), label).toBe(deployIf);
+        expect(JSON.stringify(stage.env ?? {}), label).not.toMatch(/secrets\./);
+        expect(String(stage.run ?? ""), label).toContain(
+          "trusted/scripts/intelligence/stageCandidateBackend.mjs",
+        );
+      }
     }
   });
 });

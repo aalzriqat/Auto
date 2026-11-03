@@ -409,20 +409,17 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     .filter(w => Object.values(workflowSchema.parse(parse(w.text)).jobs).some(job => job.steps?.some(step => invocation(step, "create"))));
 
   it("finds the known creators", () => {
-    // SCRUM-892: browser-attack-swarm.yml left this census when it moved to a
-    // runner-local Convex backend. It no longer creates, pins or deletes any
-    // cloud Preview, so it owes no cleanup; the next test keeps it out.
-    // SCRUM-892 (owner ruling c24441): trusted-main-e2e.yml left it too. Its one
-    // job runs on a per-job local backend and owns no Preview; the test after
-    // next keeps it out.
+    // SCRUM-892 (owner ruling c24441): browser-attack-swarm.yml,
+    // pilot-role-audit.yml, trusted-accounting-rehearsal.yml and
+    // trusted-main-e2e.yml left this census when they moved to runner-local
+    // Convex backends. None of them creates, pins or deletes a cloud Preview,
+    // so none owes cleanup. The tests below keep the swarm, the rehearsal and
+    // Trusted Main E2E out; the role-audit workflow test keeps that one out.
     expect(creators.map((w) => w.file).sort()).toEqual([
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
-      "pilot-role-audit.yml",
-      "trusted-accounting-rehearsal.yml",
     ]);
   });
-
   it("SCRUM-892: trusted main E2E owns no Preview: it creates, pins and deletes none", () => {
     const mainText = readFileSync(path.join(dir, "trusted-main-e2e.yml"), "utf8");
     const mainJobs = workflowSchema.parse(parse(mainText)).jobs;
@@ -439,8 +436,8 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     expect(mainText).not.toContain("previewDeploymentLifecycle");
   });
 
-  it("SCRUM-892: the browser attack swarm owns no Preview: it creates, pins and deletes none", () => {
-    const swarmText = readFileSync(path.join(dir, "browser-attack-swarm.yml"), "utf8");
+  it.each(["browser-attack-swarm.yml", "trusted-accounting-rehearsal.yml"])("SCRUM-892: %s owns no Preview: it creates, pins and deletes none", (file) => {
+    const swarmText = readFileSync(path.join(dir, file), "utf8");
     const swarmJobs = workflowSchema.parse(parse(swarmText)).jobs;
     for (const [id, job] of Object.entries(swarmJobs)) {
       for (const entry of job.steps ?? []) {
