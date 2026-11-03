@@ -74,8 +74,9 @@ export function evaluate(selected, report, root) {
     if (!existsSync(path.join(root, file))) return { id: record.id, code: "BINDING_FILE_MISSING" };
     const result = byFile.get(normalise(file));
     if (!result) return { id: record.id, code: "FILE_NOT_EXECUTED" };
-    const matches = (result.assertionResults ?? []).filter(test => test.title === name);
-    if (matches.length === 0) return { id: record.id, code: result.status === "failed" && !(result.assertionResults ?? []).length ? "FILE_FAILED_TO_RUN" : "TEST_NOT_FOUND" };
+    const tests = result.assertionResults ?? [];
+    const matches = tests.filter(test => test.title === name);
+    if (matches.length === 0) return { id: record.id, code: result.status === "failed" && tests.length === 0 ? "FILE_FAILED_TO_RUN" : "TEST_NOT_FOUND" };
     if (matches.length > 1) return { id: record.id, code: "TEST_AMBIGUOUS" };
     const status = matches[0].status;
     if (status === "passed") return { id: record.id, code: "PASS" };
@@ -104,7 +105,7 @@ export function summarise(selection, verdicts, extraIssues) {
   };
 }
 
-/** Runs Vitest once over the bound files: one worker, no file parallelism, no retry. */
+/** Runs Vitest once over the bound files: one worker, no file parallelism, no retry. Its console output is discarded: it carries test titles and error text, and the Actions log is public. */
 export function runVitest(root, files, config) {
   const require = createRequire(import.meta.url);
   const vitestBin = path.join(path.dirname(require.resolve("vitest/package.json")), "vitest.mjs");
@@ -113,7 +114,7 @@ export function runVitest(root, files, config) {
   try {
     const args = [vitestBin, "run", "--root", root, "--maxWorkers=1", "--no-file-parallelism", "--retry=0",
       ...(config ? ["--config", config] : []), "--reporter=json", `--outputFile=${outputFile}`, ...files];
-    const child = spawnSync(process.execPath, args, { cwd: root, stdio: ["ignore", "inherit", "inherit"], env: process.env });
+    const child = spawnSync(process.execPath, args, { cwd: root, stdio: "ignore", env: process.env });
     const report = existsSync(outputFile) ? JSON.parse(readFileSync(outputFile, "utf8")) : null;
     return { report, exitCode: child.status ?? 1 };
   } finally {

@@ -37,11 +37,18 @@ a required check.
   already on main. `claude/scrum-761-s3-pilot-path` and the other `claude/scrum-761-*` branches carry records that
   `main` already holds. Nothing from them is needed.
 
+## Selection by level, not by domain
+
+The runner selects by level (`backend`), not by domain. Every active backend record is a money, permission, tenancy or backend-level screen record, and all of them are bound to a test that runs under `convex-test` or jsdom in about ten minutes in total, so filtering by domain would only drop checks. Test titles are matched on the leaf title exactly, as `regression/README.md` requires; the same title in two `describe` blocks of one file is `TEST_AMBIGUOUS` (fail-closed).
+
+The discarded Vitest console output is not printed: it carries test titles, file paths and assertion text, and the Actions log is public. Only the summary is printed.
+
 ## Not covered, stated plainly
 
 - `active` browser-level records (screen audits and replays) need Playwright and a backend. The runner counts them as
   `browserDeferred`; it does not run them and does not claim them. Their PR execution stays with the existing
   Playwright jobs and `jevImpact`. SCRUM-762 closes the gap by running them against a real backend.
+  Open policy question for the owner: under " a scenario that cannot run is a FAIL ", these records are not executed at PR time. This job reports them as `notRunHere.browserDeferred` and does not claim a green result for them; it does not turn the run red for them, because that would make the advisory job permanently red until SCRUM-762 lands.
 - The JSON reporter does not expose `test.fails`. An expected-failure test would report `passed`; the record validator
   refuses it statically, and the runner relies on that.
 - Execution is local convex-test, serial. It is not platform or production certification.
