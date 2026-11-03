@@ -524,6 +524,9 @@ jobs:
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
           VERCEL_GIT_COMMIT_SHA: ${{ needs.prepare.outputs.tested_sha }}
           AUTOFLOW_SWARM_STANDALONE: "1"
+          # SCRUM-892: lets lib/security/contentSecurityPolicy.ts add the exact
+          # runner-local Convex origin; it throws unless the URL above is it.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
         run: |
           set -euo pipefail
           docker run --rm \
@@ -542,6 +545,7 @@ jobs:
             --env NEXT_PUBLIC_APP_URL \
             --env VERCEL_GIT_COMMIT_SHA \
             --env AUTOFLOW_SWARM_STANDALONE \
+            --env AUTOFLOW_LOCAL_CONVEX_CI \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
             sh -lc 'mkdir -p "$HOME/bin" && corepack enable --install-directory "$HOME/bin" && export PATH="$HOME/bin:$PATH" && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
 

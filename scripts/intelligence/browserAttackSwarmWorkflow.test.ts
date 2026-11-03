@@ -556,6 +556,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "${{ needs.prepare.outputs.tested_sha }}",
     );
     expect(buildEnv).toHaveProperty("AUTOFLOW_SWARM_STANDALONE", "1");
+    // SCRUM-892: the CSP's local-origin switch reaches the build container.
+    expect(buildEnv).toHaveProperty("AUTOFLOW_LOCAL_CONVEX_CI", "1");
+    expect(String(build.run ?? "")).toContain("--env AUTOFLOW_LOCAL_CONVEX_CI");
     expect(String(build.run ?? "")).toContain("pnpm build");
     expect(String(build.run ?? "")).toContain("--cap-drop ALL");
     expect(String(build.run ?? "")).not.toContain("actions/cache");
