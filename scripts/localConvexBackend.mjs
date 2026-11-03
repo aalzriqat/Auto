@@ -352,7 +352,8 @@ export function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   if (value && typeof value === "object") {
     const keys = Object.keys(value).sort(compareCodeUnits);
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+    const entries = keys.map((key) => JSON.stringify(key) + ":" + stableStringify(value[key]));
+    return `{${entries.join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
 }

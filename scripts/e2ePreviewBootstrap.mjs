@@ -482,21 +482,9 @@ export function runConvex(args, label, spawn = spawnSync, env = process.env) {
     }
   }
   // SCRUM-892: with no `--preview-name` the CLI targets whatever its
-  // environment selects, so that environment is checked here, at the spawn:
-  // exactly the loopback backend with an admin key, and no cloud credential.
+  // environment selects, so that environment is checked here, at the spawn.
   const local = !args.includes("--preview-name");
-  if (local) {
-    try {
-      assertLocalTargeting({
-        local: { url: env.CONVEX_SELF_HOSTED_URL, adminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY },
-        env,
-      });
-    } catch (error) {
-      throw new PreviewTargetingError(
-        `Refusing to run ${label}: ${error instanceof Error ? error.message : "the local target is invalid"}`,
-      );
-    }
-  }
+  if (local) assertLocalSpawnEnv(env, label);
 
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const result = spawn(pnpm, args, local ? { stdio: "inherit", env } : { stdio: "inherit" });
@@ -507,6 +495,25 @@ export function runConvex(args, label, spawn = spawnSync, env = process.env) {
     throw new Error(
       `${label} failed with exit code ${result.status}. The Convex CLI's own output is above.`,
     );
+  }
+}
+
+/**
+ * Local mode: the CLI child's environment must name exactly the loopback
+ * backend with an admin key, and carry no cloud credential.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {string} label
+ */
+function assertLocalSpawnEnv(env, label) {
+  try {
+    assertLocalTargeting({
+      local: { url: env.CONVEX_SELF_HOSTED_URL, adminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY },
+      env,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "the local target is invalid";
+    throw new PreviewTargetingError(`Refusing to run ${label}: ${reason}`);
   }
 }
 
