@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { newContainedContext } from "../containedContext";
-import { PILOT_ACCOUNTING_VIEWS, PILOT_G8_ROLE_TAG, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
+import { PILOT_ACCOUNTING_SECTION_PANEL_XPATH, PILOT_ACCOUNTING_VIEWS, PILOT_G8_ROLE_TAG, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
 import { ensureFinanceCompany, ZERO_FEE_COMPANY, CUSTOMER_STATUS } from "../fixtures/financedDeal";
 import { ensureSupplier } from "../fixtures/dealScenarios";
 import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
@@ -129,13 +129,16 @@ test("pilot Accounting traversal paints every section and nested reader", { tag:
         await openHuntPage(page, baseURL, `${path}?section=${view.section}`);
         await pilotPaint(page, path, allowed, locale);
         if (allowed) {
-          // Radix mounts only the active TabsContent, so the one tabpanel in <main>
-          // with no tabpanel ancestor is the requested section's own panel. The
-          // section id is part of its generated id (`<base>-content-<section>`);
-          // AccountingClient silently falls back to Overview for an unknown or
-          // unmounted section, which this assertion refuses, with or without tabs.
-          let scope: Locator = page.locator('xpath=//main//*[@role="tabpanel"][not(ancestor::*[@role="tabpanel"])]');
+          // Radix Tabs renders EVERY TabsContent element and only hides the inactive
+          // ones (no children), so the requested section's panel is the one ACTIVE
+          // tabpanel in <main> with no tabpanel ancestor (see the XPath's note;
+          // pinned in AccountingClient.deepLink.test.tsx). The section id is part of
+          // its generated id (`<base>-content-<section>`); AccountingClient silently
+          // falls back to Overview for an unknown section, which this assertion
+          // refuses, with or without tabs.
+          let scope: Locator = page.locator(`xpath=${PILOT_ACCOUNTING_SECTION_PANEL_XPATH}`);
           await expect(scope).toHaveAttribute("id", new RegExp(`-content-${view.section}$`));
+          await expect(scope).toBeVisible();
           // Each inner tab is looked up only inside the panel opened by the previous
           // step. The section nav also has a `receivables` trigger (visible from sm
           // up) that an unscoped `-trigger-receivables` match would hit as well.
@@ -240,7 +243,13 @@ test("pilot Deals opens owned and SOURCED cash and configured financed detail sc
           if (allowed) {
             // Follow the actual row link: a direct URL alone misses list/cockpit integration.
             await openHuntPage(page, baseURL, `/${orgId}/deals`);
-            const link = page.locator(`main a[href="${path}"]`).first();
+            // The list paints every deal twice, a card (`@2xl:hidden`) before a
+            // table row (`hidden @2xl:block`), so the first anchor in document order is
+            // display:none at the 1440px cell. Keep only the displayed one, and require
+            // exactly one: a deal missing from the list, or painted twice, still fails.
+            // (locator.filter({ visible: true }): Playwright >= 1.51, repo is on 1.61.)
+            const link = page.locator(`main a[href="${path}"]`).filter({ visible: true });
+            await expect(link).toHaveCount(1);
             await link.click();
           } else await openHuntPage(page, baseURL, path);
           await pilotPaint(page, path, allowed, locale);
