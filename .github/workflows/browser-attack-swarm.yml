@@ -813,6 +813,9 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          # SCRUM-892: the trusted frontend reaches the runner-local backend only
+          # through lib/security/contentSecurityPolicy.ts's explicit CI switch.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -1381,6 +1384,9 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          # SCRUM-892: the trusted frontend reaches the runner-local backend only
+          # through lib/security/contentSecurityPolicy.ts's explicit CI switch.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -1890,6 +1896,9 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          # SCRUM-892: the trusted frontend reaches the runner-local backend only
+          # through lib/security/contentSecurityPolicy.ts's explicit CI switch.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}

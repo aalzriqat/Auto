@@ -1897,3 +1897,19 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     });
   });
 });
+
+describe("SCRUM-892 local-backend CSP switch on the trusted frontend", () => {
+  it("sets AUTOFLOW_LOCAL_CONVEX_CI on every auth-setup step, or the CSP blocks the local backend", () => {
+    const authSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobName, entry]) =>
+      (entry.steps ?? [])
+        .filter((candidate) => String(candidate.run ?? "").includes("playwright/tests/auth.setup.ts"))
+        .map((candidate) => ({ jobName, candidate })),
+    );
+    expect(authSteps.map(({ jobName }) => jobName).sort()).toEqual(
+      ["attack-worker", "opening-proof", "trusted-e2e"].sort(),
+    );
+    for (const { candidate } of authSteps) {
+      expect(candidate.env).toHaveProperty("AUTOFLOW_LOCAL_CONVEX_CI", "1");
+    }
+  });
+});
