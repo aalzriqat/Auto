@@ -182,3 +182,96 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.receivable.rows).toEqual([]);
   });
 });
+
+const settledOf = (s: Seed, supplierId: Id<"suppliers"> = s.supplierId) =>
+  s.asUser.query(api.supplierStatement.settled, { orgId: s.orgId, supplierId } as never);
+
+describe("SCRUM-869 supplier statement: settled history (cash actually paid or received)", () => {
+  test("shows what was paid and received per section and currency, never netted; open and cancelled rows are not history", async () => {
+    const s = await seed("sh1");
+    await addPayable(s, { status: "PAID", amountPaid: 9_500 }); // paid in full
+    await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 4_000 }); // 4,000 of 9,500 paid
+    await addPayable(s); // nothing paid yet: open, not history
+    await addPayable(s, { status: "CANCELLED" });
+    await addReceivable(s, { status: "PAID", amountReceived: 3_000 });
+    await addRecovery(s, { status: "PARTIALLY_RECOVERED", amountRecoveredMinor: 50_000 });
+    await addRecovery(s); // nothing recovered yet
+    const r = await settledOf(s);
+
+    expect(
+      r.payable.rows.map((x: { settledMinor: number }) => x.settledMinor).sort((a: number, b: number) => a - b),
+    ).toEqual([4_000_000, 9_500_000]);
+    expect(r.payable.rows.find((x: { status: string }) => x.status === "PARTIALLY_PAID")).toMatchObject({
+      dueMinor: 9_500_000,
+      settledMinor: 4_000_000,
+    });
+    expect(r.payable.totals).toEqual([{ currency: "JOD", settledMinor: 13_500_000 }]);
+    expect(r.receivable.rows.map((x: { kind: string }) => x.kind).sort()).toEqual(["RECEIVABLE", "RECOVERY"]);
+    expect(r.receivable.totals).toEqual([{ currency: "JOD", settledMinor: 3_050_000 }]);
+    expect(r.payable.complete && r.receivable.complete).toBe(true);
+    // No net, balance or difference anywhere.
+    expect(Object.keys(r).sort()).toEqual(["payable", "receivable", "supplierId"]);
+    const keys: string[] = [];
+    JSON.stringify(r, (k, v) => (keys.push(k), v));
+    expect(keys.filter((k) => /net|balance|diff|offset/i.test(k))).toEqual([]);
+  });
+
+  test("another supplier's rows are excluded and currencies are never blended", async () => {
+    const s = await seed("sh2");
+    const other = await addSupplier(s.t, s.orgId, "Other Importer", s.userId);
+    await addPayable(s, { supplierId: other, status: "PAID", amountPaid: 9_500 });
+    await addPayable(s, { status: "PAID", amountPaid: 100, amountDue: 100, currency: "USD" });
+    await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const r = await settledOf(s);
+    const byCurrency = Object.fromEntries(
+      r.payable.totals.map((t: { currency: string; settledMinor: number }) => [t.currency, t.settledMinor]),
+    );
+    expect(byCurrency).toEqual({ JOD: 9_500_000, USD: 10_000 });
+  });
+
+  test("the newest settlements come first", async () => {
+    const s = await seed("sh3");
+    await addPayable(s, { status: "PAID", amountPaid: 9_500, updatedAt: NOW - 3 * DAY });
+    await addPayable(s, { status: "PAID", amountPaid: 9_500, amountDue: 9_500, updatedAt: NOW - DAY });
+    await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 1_000, updatedAt: NOW - 2 * DAY });
+    const r = await settledOf(s);
+    expect(r.payable.rows.map((x: { lastChangedAt: number }) => x.lastChangedAt)).toEqual([
+      NOW - DAY,
+      NOW - 2 * DAY,
+      NOW - 3 * DAY,
+    ]);
+  });
+
+  test("a family over the read bound reports complete=false; open rows never count against it", async () => {
+    const s = await seed("sh4");
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addReceivable(s); // open: not history
+    const r = await settledOf(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.rows).toHaveLength(STATEMENT_FAMILY_LIMIT);
+    expect(r.receivable.complete).toBe(true);
+    expect(r.receivable.rows).toEqual([]);
+  });
+
+  test("tenancy and permission: foreign supplier, other org and missing view:finance all refuse", async () => {
+    const a = await seed("sh5");
+    const orgB = await a.t.run((ctx) => ctx.db.insert("organizations", { name: "SH other", createdAt: Date.now() }));
+    await a.t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: orgB,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+    const supplierB = await addSupplier(a.t, orgB, "Foreign Supplier", a.userId);
+    await expect(settledOf(a, supplierB), "foreign supplier in own org").rejects.toThrow();
+    await expect(
+      a.asUser.query(api.supplierStatement.settled, { orgId: orgB, supplierId: supplierB } as never),
+      "other org",
+    ).rejects.toThrow();
+    const noFinance = await seed("sh6", ["view:vehicles"]);
+    await expect(settledOf(noFinance), "no finance").rejects.toThrow();
+  });
+});

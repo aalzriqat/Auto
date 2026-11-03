@@ -54,4 +54,16 @@ Convex pagination and bounded reads: https://docs.convex.dev/database/pagination
 control account) is the standard AP/AR practice; the design packet `docs/architecture/scrum869-supplier-workspace-design.md`
 on branch `claude/scrum869-design` holds the full invariants W1 to W16.
 
+## Amendment 2026-11-04: settled history (slice 4)
+
+`api.supplierStatement.settled` shows the cash actually paid to the supplier (A/P) and received from it (A/R), as the same two
+sections with the same gate (VIEW_FINANCE, accounting feature, `requireOwnedRow`) and no net field. It reads only the statuses
+that can hold settled cash through `by_org_and_supplierId_and_status` (payables and receivables PAID and PARTIALLY_PAID; cost
+recoveries RECOVERED and PARTIALLY_RECOVERED), so open rows cannot use up the bound. Exhaustive `satisfies Record<status, boolean>`
+maps classify every status. Each row carries `dueMinor`, `settledMinor` and `lastChangedAt` (the row's `updatedAt`, which is when
+the last payment was recorded for a settled row). Rows come back newest first, bounded to `STATEMENT_FAMILY_LIMIT` per family;
+past the bound `complete` is false and the screen shows "total unavailable" instead of a total (W14). A row whose settled status
+holds no settled amount is left out (data defect, gap 4). Not here: payer or payee, payment method and per-payment lines. Those
+live in the settlement and cash-movement records and need their own slice; this query reports the running totals on the row.
+
 Known limit: a row stored as PAID/RECOVERED whose amounts still show a remainder is not read here; that data defect belongs to per-supplier GL reconciliation (gap 4).

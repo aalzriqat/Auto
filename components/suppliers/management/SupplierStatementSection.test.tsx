@@ -22,6 +22,7 @@ const world = vi.hoisted(() => ({
   permissions: [] as string[],
   permissionsLoading: false,
   statement: undefined as unknown,
+  settled: undefined as unknown,
   queryThrows: null as null | Error,
   queryCalls: [] as Array<{ name: string; args: unknown }>,
 }));
@@ -49,7 +50,8 @@ vi.mock("convex/react", async () => {
     useQuery: (reference: never, args: unknown) => {
       world.queryCalls.push({ name: getFunctionName(reference), args });
       if (world.queryThrows) throw world.queryThrows;
-      return args === "skip" ? undefined : world.statement;
+      if (args === "skip") return undefined;
+      return getFunctionName(reference) === "supplierStatement:settled" ? world.settled : world.statement;
     },
   };
 });
@@ -89,6 +91,7 @@ beforeEach(() => {
   world.permissions = [PERMISSIONS.VIEW_FINANCE];
   world.permissionsLoading = false;
   world.queryThrows = null;
+  world.settled = undefined;
   world.queryCalls.length = 0;
   world.statement = {
     supplierId: "sup_1",
@@ -271,16 +274,79 @@ describe("supplier statement section", () => {
     }
   });
 
+  test("settled history: paid and received sit in two regions with their own totals, in EN and AR, and no net figure", () => {
+    const settledRow = (over: Record<string, unknown>) => ({
+      kind: "PAYABLE",
+      id: "s1",
+      currency: "JOD",
+      status: "PAID",
+      dueMinor: 9_500_000,
+      settledMinor: 9_500_000,
+      lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
+      ...over,
+    });
+    world.settled = {
+      supplierId: "sup_1",
+      payable: {
+        rows: [settledRow({}), settledRow({ id: "s2", status: "PARTIALLY_PAID", settledMinor: 4_000_000 })],
+        totals: [{ currency: "JOD", settledMinor: 13_500_000 }],
+        complete: true,
+      },
+      receivable: {
+        rows: [settledRow({ kind: "RECEIVABLE", id: "s3", dueMinor: 3_000_000, settledMinor: 3_000_000 })],
+        totals: [{ currency: "JOD", settledMinor: 3_000_000 }],
+        complete: true,
+      },
+    };
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      const { unmount } = renderIt();
+      expect(screen.getByRole("heading", { name: dict.SuppliersStmtHistoryTitle })).toBeTruthy();
+      const paid = screen.getByRole("region", { name: dict.SuppliersStmtHistoryPaidTitle });
+      const received = screen.getByRole("region", { name: dict.SuppliersStmtHistoryReceivedTitle });
+      expect(within(paid).getAllByText(/13,500/).length).toBeGreaterThan(0);
+      expect(within(paid).getByText(dict.SuppliersStmtHistoryTotalPaid)).toBeTruthy();
+      expect(within(paid).getByText(dict.SuppliersStmtHistorySettled)).toBeTruthy();
+      expect(within(paid).getByText(dict.SuppliersStmtHistoryPartly)).toBeTruthy();
+      expect(within(received).getAllByText(/3,000/).length).toBeGreaterThan(0);
+      expect(within(received).getByText(dict.SuppliersStmtHistoryTotalReceived)).toBeTruthy();
+      expect(within(received).queryByText(/13,500/)).toBeNull();
+      expect(document.body.textContent).not.toMatch(/16,500|net position/i);
+      unmount();
+    }
+  });
+
+  test("settled history: an incomplete list shows no total; empty and loading states render", () => {
+    world.settled = {
+      supplierId: "sup_1",
+      payable: { rows: [], totals: [], complete: false },
+      receivable: { rows: [], totals: [], complete: true },
+    };
+    const first = renderIt();
+    const paid = screen.getByRole("region", { name: en.SuppliersStmtHistoryPaidTitle });
+    expect(within(paid).getByText(en.SuppliersStmtTotalUnavailable)).toBeTruthy();
+    expect(screen.getByText(en.SuppliersStmtHistoryReceivedEmpty)).toBeTruthy();
+    first.unmount();
+    world.settled = undefined;
+    renderIt();
+    expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
+  });
+
   test("the time window is refreshed while the page stays open, so a long-lived tab never trips the server clock check", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-06-15T09:00:00Z"));
       renderIt();
-      const first = (world.queryCalls.at(-1)?.args as { nowMs: number }).nowMs;
+      const first = (
+        world.queryCalls.findLast((c) => c.name === "supplierStatement:outstanding")?.args as { nowMs: number }
+      ).nowMs;
       act(() => {
         vi.advanceTimersByTime(3 * 60 * 60 * 1000);
       });
-      const later = (world.queryCalls.at(-1)?.args as { nowMs: number }).nowMs;
+      const later = (
+        world.queryCalls.findLast((c) => c.name === "supplierStatement:outstanding")?.args as { nowMs: number }
+      ).nowMs;
       expect(later - first).toBeGreaterThanOrEqual(3 * 60 * 60 * 1000 - 1000);
     } finally {
       vi.useRealTimers();

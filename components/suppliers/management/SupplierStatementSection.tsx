@@ -170,6 +170,120 @@ export function SupplierStatementView({ statement }: Readonly<{ statement: Suppl
   );
 }
 
+export type SupplierSettledData = FunctionReturnType<typeof api.supplierStatement.settled>;
+type SettledSectionData = SupplierSettledData["payable"];
+type SettledRowData = SettledSectionData["rows"][number];
+
+const AMMAN_DATE = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Amman",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; translate: Translate }>) {
+  const inFull = row.settledMinor >= row.dueMinor;
+  return (
+    <li className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-sm">
+      <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
+      <span className="text-muted-foreground">
+        <span>{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</span> ·{" "}
+        {translate("SuppliersStmtHistoryLastChange")}: <bdi>{AMMAN_DATE.format(row.lastChangedAt)}</bdi>
+      </span>
+      <span className="text-end">
+        <Money minor={row.settledMinor} currency={row.currency} />
+        {!inFull && (
+          <span className="ms-2 text-xs text-muted-foreground">
+            {translate("SuppliersStmtHistoryOf")} <Money minor={row.dueMinor} currency={row.currency} />
+          </span>
+        )}
+      </span>
+    </li>
+  );
+}
+
+function SettledRegion({
+  id,
+  title,
+  emptyKey,
+  totalKey,
+  data,
+}: Readonly<{ id: string; title: string; emptyKey: string; totalKey: string; data: SettledSectionData }>) {
+  const translate = useTranslate();
+  return (
+    <section aria-labelledby={id} className="space-y-2 rounded-lg border p-4">
+      <h4 id={id} className="text-base font-semibold">
+        {title}
+      </h4>
+      {data.rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
+      ) : (
+        <ul className="divide-y">
+          {data.rows.map((row) => (
+            <SettledItem key={`${row.kind}:${row.id}`} row={row} translate={translate} />
+          ))}
+        </ul>
+      )}
+      {!data.complete && (
+        <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+          {translate("SuppliersStmtIncomplete")}
+        </p>
+      )}
+      {!data.complete ? (
+        <p className="border-t pt-2 text-sm font-medium">{translate("SuppliersStmtTotalUnavailable")}</p>
+      ) : (
+        data.totals.length > 0 && (
+          <dl className="space-y-1 border-t pt-2 text-sm">
+            {data.totals.map((total) => (
+              <div key={total.currency} className="flex flex-wrap justify-between gap-x-4">
+                <dt className="font-medium">{translate(totalKey)}</dt>
+                <dd className="text-end">
+                  <Money minor={total.settledMinor} currency={total.currency} />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )
+      )}
+    </section>
+  );
+}
+
+/** Settled history (SCRUM-869 slice 4): cash paid and received, in two regions that are never combined. */
+export function SupplierSettledView({ settled }: Readonly<{ settled: SupplierSettledData | undefined }>) {
+  const translate = useTranslate();
+  if (settled === undefined) {
+    return (
+      <p role="status" className="py-4 text-center text-sm text-muted-foreground">
+        {translate("SuppliersStmtLoading")}
+      </p>
+    );
+  }
+  return (
+    <section aria-labelledby="supplier-settled-title" className="space-y-3">
+      <h3 id="supplier-settled-title" className="text-lg font-semibold">
+        {translate("SuppliersStmtHistoryTitle")}
+      </h3>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SettledRegion
+          id="supplier-settled-ap"
+          title={translate("SuppliersStmtHistoryPaidTitle")}
+          emptyKey="SuppliersStmtHistoryPaidEmpty"
+          totalKey="SuppliersStmtHistoryTotalPaid"
+          data={settled.payable}
+        />
+        <SettledRegion
+          id="supplier-settled-ar"
+          title={translate("SuppliersStmtHistoryReceivedTitle")}
+          emptyKey="SuppliersStmtHistoryReceivedEmpty"
+          totalKey="SuppliersStmtHistoryTotalReceived"
+          data={settled.receivable}
+        />
+      </div>
+    </section>
+  );
+}
+
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const { hasPermission, isLoading } = usePermissions();
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
@@ -181,8 +295,14 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
     return () => clearInterval(timer);
   }, []);
   const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
+  const settled = useQuery(api.supplierStatement.settled, allowed ? { orgId, supplierId } : "skip");
   if (!allowed) return null;
-  return <SupplierStatementView statement={statement} />;
+  return (
+    <div className="space-y-6">
+      <SupplierStatementView statement={statement} />
+      {statement !== undefined && <SupplierSettledView settled={settled} />}
+    </div>
+  );
 }
 
 export function SupplierStatementError() {

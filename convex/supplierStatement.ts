@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
-import { readSupplierOutstanding } from "./utils/supplierObligationDue";
+import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
 /**
@@ -33,6 +33,38 @@ const section = v.object({
     v.object({ currency: v.string(), grossMinor: v.number(), disputedMinor: v.number(), overdueMinor: v.number() })
   ),
   complete: v.boolean(),
+});
+
+const settledRow = v.object({
+  kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
+  id: v.string(),
+  currency: v.string(),
+  status: v.string(),
+  dueMinor: v.number(),
+  settledMinor: v.number(),
+  lastChangedAt: v.number(),
+});
+const settledSection = v.object({
+  rows: v.array(settledRow),
+  totals: v.array(v.object({ currency: v.string(), settledMinor: v.number() })),
+  complete: v.boolean(),
+});
+
+/**
+ * SCRUM-869 slice 4 - what this supplier has been paid (A/P) and has paid back (A/R): settled and
+ * part-settled rows with the cash actually moved, newest first. Same gate and tenancy as
+ * `outstanding`; no net field, no currency blending.
+ */
+export const settled = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
+  returns: v.object({ supplierId: v.id("suppliers"), payable: settledSection, receivable: settledSection }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    const { payable, receivable } = await readSupplierSettled(ctx, args);
+    return { supplierId: args.supplierId, payable, receivable };
+  },
 });
 
 export const outstanding = query({

@@ -411,3 +411,166 @@ export async function readSupplierOutstanding(
     ),
   };
 }
+
+export interface SettledRow {
+  kind: ObligationKind;
+  id: string;
+  currency: string;
+  /** The stored status of the row, so a part-settled line is not mistaken for a closed one. */
+  status: string;
+  /** The full amount of the obligation. */
+  dueMinor: number;
+  /** Cash actually paid (A/P) or received (A/R) so far, in minor units of `currency`. */
+  settledMinor: number;
+  /** When the row last changed. For a settled row this is when the last payment was recorded. */
+  lastChangedAt: number;
+}
+
+export interface SettledTotal {
+  currency: string;
+  settledMinor: number;
+}
+
+export interface SettledSection {
+  rows: SettledRow[];
+  /** One total per currency; currencies are never added together. */
+  totals: SettledTotal[];
+  /** False when a family held more rows than the read bound: rows and totals are then partial. */
+  complete: boolean;
+}
+
+// Statuses whose rows can hold settled cash. Exhaustive like the open maps above: a status added to
+// the schema fails typecheck until it is classified. CANCELLED, DISPUTED-with-nothing-paid and
+// REVERSED rows are not settlements.
+const PAYABLE_HAS_SETTLED = {
+  PENDING: false,
+  NOT_YET_DUE: false,
+  DUE_ON_SALE: false,
+  PARTIALLY_PAID: true,
+  DISPUTED: false,
+  PAID: true,
+  CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierPayables">["status"], boolean>;
+const RECEIVABLE_HAS_SETTLED = {
+  OPEN: false,
+  PARTIALLY_PAID: true,
+  DISPUTED: false,
+  PAID: true,
+  CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
+const RECOVERY_HAS_SETTLED = {
+  OPEN: false,
+  PARTIALLY_RECOVERED: true,
+  RECOVERED: true,
+  REVERSED: false,
+} satisfies Record<Doc<"supplierCostRecoveries">["status"], boolean>;
+const SETTLED_PAYABLE_STATUSES = openStatuses(PAYABLE_HAS_SETTLED);
+const SETTLED_RECEIVABLE_STATUSES = openStatuses(RECEIVABLE_HAS_SETTLED);
+const SETTLED_RECOVERY_STATUSES = openStatuses(RECOVERY_HAS_SETTLED);
+
+/** The newest STATEMENT_FAMILY_LIMIT rows across the statuses read; callers compare the unsliced length with the limit. */
+function newest<D extends { updatedAt: number }>(docs: D[]): D[] {
+  return [...docs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, STATEMENT_FAMILY_LIMIT);
+}
+
+function settledSection(rows: SettledRow[], complete: boolean): SettledSection {
+  const byCurrency = new Map<string, SettledTotal>();
+  for (const row of rows) {
+    const total = byCurrency.get(row.currency) ?? { currency: row.currency, settledMinor: 0 };
+    total.settledMinor += row.settledMinor;
+    byCurrency.set(row.currency, total);
+  }
+  return {
+    rows: [...rows].sort((a, b) => b.lastChangedAt - a.lastChangedAt),
+    totals: [...byCurrency.values()],
+    complete,
+  };
+}
+
+/**
+ * SCRUM-869 slice 4 - what one supplier has been paid (A/P) and has paid back (A/R), as two sections
+ * that are never combined. Reads only the settled statuses through the supplier index, newest first,
+ * so open rows cannot use up the bound. Rows whose stored status and amounts disagree (a settled
+ * status with nothing settled) are left out: that is a data defect for the reconciliation slice.
+ * The caller must already have proved the supplier belongs to `orgId`.
+ */
+export async function readSupplierSettled(
+  ctx: Reader,
+  args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
+): Promise<{ payable: SettledSection; receivable: SettledSection }> {
+  const { orgId, supplierId } = args;
+  const payableDocs = await openByStatus(SETTLED_PAYABLE_STATUSES, (status) =>
+    ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_and_supplierId_and_status", (q) =>
+        q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
+      )
+      .order("desc")
+      .take(STATEMENT_FAMILY_LIMIT + 1),
+  );
+  const receivableDocs = await openByStatus(SETTLED_RECEIVABLE_STATUSES, (status) =>
+    ctx.db
+      .query("vehicleSupplierReceivables")
+      .withIndex("by_org_and_supplierId_and_status", (q) =>
+        q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
+      )
+      .order("desc")
+      .take(STATEMENT_FAMILY_LIMIT + 1),
+  );
+  const recoveryDocs = await openByStatus(SETTLED_RECOVERY_STATUSES, (status) =>
+    ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_and_supplierId_and_status", (q) =>
+        q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
+      )
+      .order("desc")
+      .take(STATEMENT_FAMILY_LIMIT + 1),
+  );
+  const payableRows: SettledRow[] = [];
+  for (const row of newest(payableDocs)) {
+    const settledMinor = toMinorUnits(row.amountPaid ?? 0, row.currency);
+    if (settledMinor <= 0) continue;
+    payableRows.push({
+      kind: "PAYABLE",
+      id: row._id,
+      currency: row.currency,
+      status: row.status,
+      dueMinor: toMinorUnits(row.amountDue, row.currency),
+      settledMinor,
+      lastChangedAt: row.updatedAt,
+    });
+  }
+  const receivableRows: SettledRow[] = [];
+  for (const row of newest(receivableDocs)) {
+    const settledMinor = toMinorUnits(row.amountReceived ?? 0, row.currency);
+    if (settledMinor <= 0) continue;
+    receivableRows.push({
+      kind: "RECEIVABLE",
+      id: row._id,
+      currency: row.currency,
+      status: row.status,
+      dueMinor: toMinorUnits(row.amountDue, row.currency),
+      settledMinor,
+      lastChangedAt: row.updatedAt,
+    });
+  }
+  for (const row of newest(recoveryDocs)) {
+    if (row.amountRecoveredMinor <= 0) continue;
+    receivableRows.push({
+      kind: "RECOVERY",
+      id: row._id,
+      currency: row.currency,
+      status: row.status,
+      dueMinor: row.amountDueMinor,
+      settledMinor: row.amountRecoveredMinor,
+      lastChangedAt: row.updatedAt,
+    });
+  }
+  return {
+    payable: settledSection(payableRows, payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    receivable: settledSection(
+      receivableRows,
+      receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
+    ),
+  };
+}
