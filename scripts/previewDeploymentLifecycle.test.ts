@@ -409,8 +409,10 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     .filter(w => Object.values(workflowSchema.parse(parse(w.text)).jobs).some(job => job.steps?.some(step => invocation(step, "create"))));
 
   it("finds the known creators", () => {
+    // SCRUM-892: browser-attack-swarm.yml left this census when it moved to a
+    // runner-local Convex backend. It no longer creates, pins or deletes any
+    // cloud Preview, so it owes no cleanup; the next test keeps it out.
     expect(creators.map((w) => w.file).sort()).toEqual([
-      "browser-attack-swarm.yml",
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
       "pilot-role-audit.yml",
@@ -422,6 +424,23 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     const main = readFileSync(path.join(dir, "trusted-main-e2e.yml"), "utf8");
     expect(main).not.toContain("--preview-create");
     expect(main).not.toContain("previewDeploymentLifecycle");
+  });
+
+  it("SCRUM-892: the browser attack swarm owns no Preview: it creates, pins and deletes none", () => {
+    const swarmText = readFileSync(path.join(dir, "browser-attack-swarm.yml"), "utf8");
+    const swarmJobs = workflowSchema.parse(parse(swarmText)).jobs;
+    for (const [id, job] of Object.entries(swarmJobs)) {
+      for (const entry of job.steps ?? []) {
+        for (const kind of ["create", "pin", "delete"] as const) {
+          expect(invocation(entry, kind), `${id} :: ${entry.name} ${kind}`).toBe(false);
+        }
+      }
+    }
+    expect(swarmText).not.toContain("--preview-create");
+    expect(swarmText).not.toContain("previewDeploymentLifecycle");
+    // A swarm that regained a creator would be caught by this same census.
+    const regained = { run: "pnpm exec convex deploy --preview-create 'x'" } as Step;
+    expect(invocation(regained, "create")).toBe(true);
   });
 
   // SCRUM-768: the hunt preview exists to OUTLIVE its run (a person hunts on
@@ -440,19 +459,14 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       return found[0];
     };
     const creationSteps = hits("create");
-    if (file === "browser-attack-swarm.yml") {
-      expect(creationSteps.map(index => steps[index].id)).toEqual(["prepare", "opening-prepare"]);
-    } else {
-      expect(creationSteps, file).toHaveLength(1);
-    }
+    expect(creationSteps, file).toHaveLength(1);
     expect(hits("pin"), `${file} every creator has one pin`).toHaveLength(creationSteps.length);
     expect(hits("delete"), `${file} every creator has one cleanup`).toHaveLength(creationSteps.length);
     for (const creates of creationSteps) {
       const creatorJobId = steps[creates].id;
-      const opening = file === "browser-attack-swarm.yml" && creatorJobId === "opening-prepare";
-      const cleanupJobId = file === "browser-attack-swarm.yml"
-        ? opening ? "opening-cleanup" : "preview-cleanup"
-        : steps[only("delete")].id;
+      // SCRUM-892: the swarm's separate opening-prepare / opening-cleanup /
+      // preview-cleanup jobs are gone, so no "opening" lifecycle branch remains.
+      const cleanupJobId = steps[only("delete")].id;
       const pin = only("pin", creatorJobId);
       const del = only("delete", cleanupJobId);
       const creator = steps[creates].s;
@@ -496,42 +510,7 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
       }
 
       const delJobId = steps[del].id;
-      if (opening) {
-        const pinJob = jobs[creatorJobId], delJob = jobs[delJobId];
-        expect(pinJob.outputs).toMatchObject({
-          creation_attempted: "${{ steps.create.outputs.attempted }}",
-          preview_name: "${{ steps.pin.outputs.preview_name }}",
-          convex_cloud_url: "${{ steps.pin.outputs.convex_cloud_url }}",
-          cleanup_preview_created_at: "${{ steps.pin.outputs.preview_created_at }}",
-        });
-        const attempt = executable(creator).indexOf('echo "attempted=true" >> "$GITHUB_OUTPUT"');
-        expect(attempt).toBeGreaterThanOrEqual(0);
-        expect(attempt).toBeLessThan(executable(creator).indexOf("pnpm exec convex deploy"));
-        expect(executable(pinStep)).toMatch(/^\s*node scripts\/previewDeploymentLifecycle\.mjs pin --strict\s*$/m);
-        expect(delJob.needs).toEqual(["prepare", "opening-prepare", "opening-build", "opening-proof"]);
-        expect(delJob.if?.split("&&").map(value => value.trim())).toEqual([
-          "always()",
-          "github.event.workflow_run.event == 'pull_request'",
-          "github.event.workflow_run.head_repository.full_name == github.repository",
-          "needs.opening-prepare.outputs.creation_attempted == 'true'",
-        ]);
-        const ownedIdentity = {
-          CONVEX_PREVIEW_NAME: "${{ needs.opening-prepare.outputs.preview_name }}",
-          CONVEX_PREVIEW_URL: "${{ needs.opening-prepare.outputs.convex_cloud_url }}",
-          CONVEX_PREVIEW_CREATED_AT: "${{ needs.opening-prepare.outputs.cleanup_preview_created_at }}",
-        };
-        expect(delStep.env).toMatchObject(ownedIdentity);
-        expect(delStep.run).toBe("node scripts/previewDeploymentLifecycle.mjs delete --strict");
-        expect(delJob.steps?.at(-1)).toBe(delStep);
-        const refusals = delJob.steps?.filter(step => step.name === "Refuse missing opening cleanup identity") ?? [];
-        expect(refusals).toHaveLength(1);
-        const refusal = refusals[0];
-        expect(refusal.env).toEqual(ownedIdentity);
-        expect(refusal.if).toBeUndefined();
-        expect(refusal["continue-on-error"]).toBeUndefined();
-        expect(refusal.run?.trim()).toBe('if [ -z "$CONVEX_PREVIEW_NAME" ] || [ -z "$CONVEX_PREVIEW_URL" ] || [ -z "$CONVEX_PREVIEW_CREATED_AT" ]; then\n  echo "Opening cleanup ownership is unavailable after creation was attempted." >&2\n  exit 1\nfi');
-        expect(delJob.steps?.indexOf(refusal)).toBeLessThan(delJob.steps?.indexOf(delStep) ?? -1);
-      } else if (delJobId === steps[creates].id) {
+      if (delJobId === steps[creates].id) {
         // Same job: the delete is its final step and runs whatever came before.
         expect(del).toBeGreaterThan(pin);
         expect(delStep.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
@@ -576,38 +555,51 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     assertLifecycles(file, workflowSchema.parse(parse(text)).jobs);
   });
 
+  // SCRUM-892: the two tests below used the swarm's opening-prepare /
+  // opening-cleanup / preview-cleanup lifecycle as their "actual workflow".
+  // That lifecycle is gone, so the same properties are now proved against the
+  // actual trusted-main-e2e.yml lifecycle, which has the same create, pin and
+  // delete contract in one job. Each former mutation keeps its slot:
+  //   wrong cleanup identity -> weakened cleanup guard
+  //   missing consumer -> missing cleanup
+  //   warn-only opening deletion -> deletion that is not the final step
+  //   missing cleanup identity check -> pin without its always() guard
+  function actualMainLifecycle() {
+    const main = creators.find(workflow => workflow.file === "trusted-main-e2e.yml");
+    if (!main) throw new Error("Actual main lifecycle unavailable");
+    const jobs = workflowSchema.parse(parse(main.text)).jobs;
+    const entry = Object.entries(jobs).find(([, job]) => job.steps?.some(step => invocation(step, "create")));
+    if (!entry || !entry[1].steps) throw new Error("Actual main lifecycle incomplete");
+    const steps = entry[1].steps;
+    const create = steps.findIndex(step => invocation(step, "create"));
+    const pin = steps.findIndex(step => invocation(step, "pin"));
+    const del = steps.findIndex(step => invocation(step, "delete"));
+    if (create < 0 || pin < 0 || del < 0) throw new Error("Actual main lifecycle incomplete");
+    return { file: main.file, jobs, job: entry[1], steps, create, pin, del };
+  }
+
   it("allows comments and quoted command examples without inventing another Preview owner", () => {
-    const swarm = creators.find(workflow => workflow.file === "browser-attack-swarm.yml");
-    if (!swarm) throw new Error("Actual swarm lifecycle unavailable");
-    const jobs = workflowSchema.parse(parse(swarm.text)).jobs;
-    jobs["opening-prepare"].steps?.push({ run: '# pnpm exec convex deploy --preview-create example\n: node scripts/previewDeploymentLifecycle.mjs delete\necho "pnpm exec convex deploy --preview-create example"\necho --preview-create\nprintf "%s\\n" --preview-create' });
-    expect(() => assertLifecycles(swarm.file, jobs)).not.toThrow();
+    const actual = actualMainLifecycle();
+    actual.steps.splice(actual.pin + 1, 0, { run: '# pnpm exec convex deploy --preview-create example\n: node scripts/previewDeploymentLifecycle.mjs delete\necho "pnpm exec convex deploy --preview-create example"\necho --preview-create\nprintf "%s\\n" --preview-create' });
+    expect(() => assertLifecycles(actual.file, actual.jobs)).not.toThrow();
   });
 
-  it.each(["missing pin", "wrong cleanup identity", "unpaired creator", "missing consumer", "warn-only opening deletion", "missing cleanup identity check", "wrapped unpaired creator"])("refuses an actual swarm lifecycle with %s", mutation => {
-    const swarm = creators.find(workflow => workflow.file === "browser-attack-swarm.yml");
-    if (!swarm) throw new Error("Actual swarm lifecycle unavailable");
-    const jobs = workflowSchema.parse(parse(swarm.text)).jobs;
-    const opening = jobs["opening-prepare"], cleanup = jobs["opening-cleanup"];
-    const pinIndex = opening.steps?.findIndex(step => step.id === "pin");
-    const deletion = cleanup.steps?.find(step => step.run === "node scripts/previewDeploymentLifecycle.mjs delete --strict");
-    if (pinIndex === undefined || pinIndex < 0 || !opening.steps || !deletion?.env) throw new Error("Actual opening lifecycle incomplete");
-    if (mutation === "missing pin") opening.steps.splice(pinIndex, 1);
-    if (mutation === "wrong cleanup identity") deletion.env.CONVEX_PREVIEW_URL = "${{ needs.prepare.outputs.cleanup_convex_url }}";
-    if (mutation === "unpaired creator") jobs["unpaired-creator"] = structuredClone(opening);
+  it.each(["missing pin", "weakened cleanup guard", "unpaired creator", "missing cleanup", "deletion that is not the final step", "pin without its always() guard", "wrapped unpaired creator"])("refuses an actual main lifecycle with %s", mutation => {
+    const actual = actualMainLifecycle();
+    expect(() => assertLifecycles(actual.file, structuredClone(actual.jobs))).not.toThrow();
+    const { jobs, job, steps } = actual;
+    if (mutation === "missing pin") steps.splice(actual.pin, 1);
+    if (mutation === "weakened cleanup guard") steps[actual.del] = { ...steps[actual.del], if: "always()" };
+    if (mutation === "unpaired creator") jobs["unpaired-creator"] = structuredClone(job);
     if (mutation === "wrapped unpaired creator") {
       jobs["unpaired-creator"] = { steps: [{ run: 'env SOME_FLAG=x pnpm exec convex deploy --preview-create "$OTHER"' }] };
-      const originalCleanup = jobs["preview-cleanup"];
-      if (!Array.isArray(originalCleanup.needs)) throw new Error("Actual cleanup dependency inventory unavailable");
-      originalCleanup.needs.push("unpaired-creator");
     }
-    if (mutation === "missing consumer") cleanup.needs = ["prepare", "opening-prepare", "opening-build"];
-    if (mutation === "warn-only opening deletion") deletion.run = "node scripts/previewDeploymentLifecycle.mjs delete";
-    if (mutation === "missing cleanup identity check") cleanup.steps = cleanup.steps?.filter(step => step.name !== "Refuse missing opening cleanup identity");
-    expect(() => assertLifecycles(swarm.file, jobs)).toThrow();
+    if (mutation === "missing cleanup") steps.splice(actual.del, 1);
+    if (mutation === "deletion that is not the final step") steps.push({ name: "Late step", run: "echo late" });
+    if (mutation === "pin without its always() guard") steps[actual.pin] = { ...steps[actual.pin], if: "env.CONVEX_PREVIEW_URL != ''" };
+    expect(() => assertLifecycles(actual.file, jobs)).toThrow();
   });
 });
-
 describe("SCRUM-768 strict teardown (delete --strict)", () => {
   /** GET answers the preview until a delete POST lands, then 404 if `honour`. */
   function deletingApi(honour: boolean) {
