@@ -412,10 +412,11 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     // SCRUM-892: browser-attack-swarm.yml left this census when it moved to a
     // runner-local Convex backend. It no longer creates, pins or deletes any
     // cloud Preview, so it owes no cleanup; the next test keeps it out.
+    // SCRUM-892: pilot-role-audit.yml left it too (owner: fully local); the
+    // role-audit workflow test pins that it owns no Preview.
     expect(creators.map((w) => w.file).sort()).toEqual([
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
-      "pilot-role-audit.yml",
       "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);

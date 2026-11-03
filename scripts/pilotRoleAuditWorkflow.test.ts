@@ -8,8 +8,6 @@ import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
 import { LOCAL_CONVEX_DEPLOYMENT, convexDeploymentOf, servedDeployments } from "../playwright/scenarios/formExplorer/attestedPreview";
 import roleConfig from "../playwright.role-audit.config";
 import visualConfig from "../playwright.visual.config";
-import { spawnSync } from "node:child_process";
-import { carriesPreviewIdentity } from "./previewDeploymentLifecycle.mjs";
 
 test.each([
   ["OWNER", "dashboard"], ["MANAGER", "dashboard"], ["SALES", "sales"],
@@ -28,8 +26,8 @@ const jobSchema = z.object({ if: z.string(), steps: z.array(stepSchema) });
 const workflow = z.object({
   on: z.record(z.string(), z.unknown()), permissions: z.object({ contents: z.string() }).strict(),
   concurrency: z.object({ group: z.string() }).passthrough(),
-  jobs: z.object({ roles: jobSchema.extend({ env: z.record(z.string(), z.string()), strategy: z.object({
-    matrix: z.object({ role: z.array(z.string()) }), "max-parallel": z.string(), "fail-fast": z.boolean(),
+  jobs: z.object({ roles: jobSchema.extend({ strategy: z.object({
+    matrix: z.object({ role: z.array(z.string()) }), "max-parallel": z.number(), "fail-fast": z.boolean(),
   }) }) }),
 }).parse(parse(source));
 function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
@@ -39,26 +37,6 @@ function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
 }
 
 describe("SCRUM-616 role audit trust and coverage contract", () => {
-  test("role preview name matches the observed canonical identity and missing pin refuses admission", () => {
-    const steps = workflow.jobs.roles.steps;
-    const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/bash";
-    const naming = stepNamed(steps, "Name the disposable scenarios preview");
-    if (!naming.run) throw new Error("Role naming command unavailable");
-    const named = spawnSync(shell, ["-c", naming.run], { encoding: "utf8", timeout: 30000,
-      env: { NODE_ENV: "test", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-        GITHUB_REF: "refs/heads/main", AUDIT_ROLE: "SENIOR_ACCOUNTANT", GITHUB_ENV: "/dev/null" } });
-    expect(named.status).toBe(0);
-    const name = /Preview deployment name: ([a-z0-9._-]+)/.exec(named.stdout)?.[1];
-    // Actual run40105175825 control-plane reference; no cloud request or credential is used.
-    expect(carriesPreviewIdentity({ reference: "preview/e2e-main-role-senior-accountant-9a6173934b", previewIdentifier: null }, name)).toBe(true);
-    expect(stepNamed(steps, "Pin the disposable preview for cleanup").run).toBe("node scripts/previewDeploymentLifecycle.mjs pin --strict");
-    const admission = stepNamed(steps, "Refuse an unpinned role audit preview");
-    if (!admission.run) throw new Error("Role pin admission command unavailable");
-    expect(steps.indexOf(admission)).toBeLessThan(steps.indexOf(stepNamed(steps, "Seed the QA dealership")));
-    expect(spawnSync(shell, ["-c", admission.run], { env: { NODE_ENV: "test" }, timeout: 30000 }).status).toBe(1);
-    expect(spawnSync(shell, ["-c", admission.run], { env: { NODE_ENV: "test", CONVEX_PREVIEW_CREATED_AT: "1792857485000" }, timeout: 30000 }).status).toBe(0);
-  });
-
   test("PR and trusted-main paint the role screens and require their separate exact inventory", () => {
     const project = visualConfig.projects?.find(item => item.name === "role-page-controls");
     expect(project?.testDir).toBe("./playwright/tests");
@@ -129,8 +107,8 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     const job = workflow.jobs.roles;
     expect(job.if).toBe("github.ref == 'refs/heads/main'");
     expect(job.strategy.matrix.role.toSorted()).toEqual(DEFAULT_ROLE_TEMPLATES.map((role) => role.name).sort());
-    // SCRUM-892: serial in cloud mode (preview quota), all six roles in parallel locally.
-    expect(job.strategy["max-parallel"]).toBe("${{ inputs.backend == 'cloud' && 1 || 6 }}");
+    // SCRUM-892: every role has its own local backend, so all six run in parallel.
+    expect(job.strategy["max-parallel"]).toBe(6);
     expect(job.strategy["fail-fast"]).toBe(false);
     const browserStep = stepNamed(job.steps, "Run the attested role, locale and viewport matrix");
     expect(browserStep.run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
@@ -138,56 +116,32 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     expect(readFileSync(path.resolve("playwright.role-audit.config.ts"), "utf8")).toContain("workers: 1");
   });
 
-  test("creates and tears down only run-owned previews and uses only the preview deploy key", () => {
-    const steps = workflow.jobs.roles.steps;
-    const deploy = stepNamed(steps, "Recreate Convex E2E backend");
-    expect(deploy.run).toContain('--preview-create "$CONVEX_PREVIEW_NAME"');
-    expect(deploy.run).toContain("--preview-run e2eBootstrap:markPreviewDeployment");
-    for (const step of steps) {
-      if (step.env?.CONVEX_DEPLOY_KEY) {
-        // Cloud-only steps name the preview key; the matrix step names it behind
-        // the cloud switch so local mode, which refuses a deploy key, gets "".
-        expect(step.env.CONVEX_DEPLOY_KEY).toMatch(
-          /^\$\{\{ (env\.AUDIT_BACKEND == 'cloud' && )?secrets\.CONVEX_PREVIEW_DEPLOY_KEY( \|\| '')? \}\}$/,
-        );
-      }
-    }
-    const cleanup = stepNamed(steps, "Delete the disposable preview");
-    expect(cleanup.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
-    expect(cleanup.run).toBe("node scripts/previewDeploymentLifecycle.mjs delete");
-    expect(source).not.toContain("pull_request");
-  });
-
-  test("SCRUM-892: the schedule and an ordinary dispatch use the local backend; cloud is an explicit input", () => {
-    const dispatch = z.object({ inputs: z.object({ backend: z.object({
-      type: z.string(), options: z.array(z.string()), default: z.string() }) }) }).parse(workflow.on.workflow_dispatch);
-    expect(dispatch.inputs.backend).toMatchObject({ type: "choice", options: ["local", "cloud"], default: "local" });
-    // A schedule carries no inputs, so the empty value must resolve to local.
-    expect(workflow.jobs.roles.env.AUDIT_BACKEND).toBe("${{ inputs.backend || 'local' }}");
-    expect(workflow.concurrency.group).toContain("inputs.backend || 'local'");
-    expect(workflow.jobs.roles.if).toBe("github.ref == 'refs/heads/main'");
+  test("SCRUM-892: no cloud Preview, preview credential or --preview-create remains; every run is local and parallel", () => {
     expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
-  });
-
-  test("SCRUM-892: cloud mode keeps --preview-create and every cloud-credential step is cloud-only", () => {
+    // No dispatch input: there is no cloud mode to select.
+    expect(workflow.on.workflow_dispatch ?? null).toBeNull();
+    expect(workflow.jobs.roles.if).toBe("github.ref == 'refs/heads/main'");
+    expect(workflow.concurrency.group).toBe("pilot-role-audit-${{ github.ref }}");
+    expect(source).not.toMatch(/--preview-create|--preview-run|previewDeploymentLifecycle/);
+    expect(source).not.toMatch(/CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY|CONVEX_DEPLOYMENT\b|CONVEX_PREVIEW_NAME|CONVEX_PREVIEW_URL|CONVEX_PREVIEW_CREATED_AT/);
+    expect(source).not.toContain("AUDIT_BACKEND");
     const steps = workflow.jobs.roles.steps;
-    const deploy = stepNamed(steps, "Recreate Convex E2E backend");
-    expect(deploy.if).toBe("env.AUDIT_BACKEND == 'cloud'");
-    expect(deploy.run).toContain('--preview-create "$CONVEX_PREVIEW_NAME"');
-    for (const name of ["Name the disposable scenarios preview", "Refuse an unpinned role audit preview",
-      "Seed the QA dealership", "Set exact product role templates"]) {
-      expect(stepNamed(steps, name).if).toBe("env.AUDIT_BACKEND == 'cloud'");
-    }
-    // The matrix step receives the preview credentials only in cloud mode.
+    expect(steps.some((step) => /convex deploy/.test(step.run ?? "") && /preview/i.test(step.run ?? ""))).toBe(false);
+    for (const step of steps) expect(step.if ?? "").not.toMatch(/cloud/);
     const matrix = stepNamed(steps, "Run the attested role, locale and viewport matrix");
-    expect(matrix.env?.CONVEX_DEPLOY_KEY).toBe("${{ env.AUDIT_BACKEND == 'cloud' && secrets.CONVEX_PREVIEW_DEPLOY_KEY || '' }}");
-    expect(matrix.env?.CONVEX_PREVIEW_NAME).toBe("${{ env.AUDIT_BACKEND == 'cloud' && env.CONVEX_PREVIEW_NAME || '' }}");
-    expect(matrix.env?.AUTOFLOW_LOCAL_CONVEX_CI).toBe("${{ env.AUDIT_BACKEND == 'local' && '1' || '' }}");
+    expect(matrix.env?.AUTOFLOW_LOCAL_CONVEX_CI).toBe("1");
   });
 
   test("SCRUM-892: local mode starts, marks, verifies and stops a per-job backend with no cloud credential", () => {
     const steps = workflow.jobs.roles.steps;
-    const localSteps = steps.filter((step) => step.if?.includes("env.AUDIT_BACKEND == 'local'"));
+    const localNames = ["Start the local Convex backend",
+      "Set and verify the local backend environment allowlist",
+      "Deploy main to the local Convex backend",
+      "Mint the disposable-preview marker and record the tripwire baseline",
+      "Seed the QA dealership on the local backend",
+      "Set exact product role templates on the local backend",
+      "Verify the local backend was not changed during the run"];
+    const localSteps = localNames.map((name) => stepNamed(steps, name));
     expect(localSteps.map((step) => step.name)).toEqual([
       "Start the local Convex backend",
       "Set and verify the local backend environment allowlist",
