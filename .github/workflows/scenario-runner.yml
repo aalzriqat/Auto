@@ -1,0 +1,47 @@
+name: PR scenario runner
+
+# SCRUM-761 R3: runs every active backend-level record of the regression library at
+# its bound test and fails when a bound test is missing, not found, skipped or red.
+# Backend tests use convex-test, so this job needs no Convex deployment and no secret.
+# Advisory: it is not a required check until the owner decides so.
+# See docs/adr/2026-11-03-pr-time-scenario-runner.md.
+on:
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scenario-runner-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scenarios:
+    name: pr-scenario-runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 11.13.0
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Run the library's bound scenarios
+      run: node scripts/regression/prRunner.mjs
+      env:
+        NODE_ENV: test
+        NODE_OPTIONS: --max-old-space-size=5632
