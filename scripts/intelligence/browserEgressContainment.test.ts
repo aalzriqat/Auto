@@ -232,6 +232,51 @@ describe("egress proxy semantics", () => {
     expect(await connectVia(`127.0.0.1:${upstreamPort}`)).toContain("200");
   });
 
+  // SCRUM-892: the browser really opens ws://127.0.0.1:3210 (Convex sync).
+  // Chromium tunnels ws:// through CONNECT, so an allowlisted loopback
+  // authority must carry a complete WebSocket upgrade and its frames both ways.
+  it("tunnels a WebSocket upgrade and its frames through CONNECT to an allowlisted loopback authority", async () => {
+    const wsServer = http.createServer();
+    wsServer.on("upgrade", (_req, socket) => {
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+      socket.on("data", (chunk) => socket.write(Buffer.concat([Buffer.from("echo:"), chunk])));
+    });
+    const wsPort = await listen(wsServer);
+    const wsProxy = await startEgressProxy({ allow: [`127.0.0.1:${wsPort}`], port: 0 });
+    try {
+      const authority = `127.0.0.1:${wsPort}`;
+      const transcript = await new Promise<string>((resolve, reject) => {
+        let seen = "";
+        const socket = net.connect(wsProxy.port, "127.0.0.1", () => {
+          socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
+        });
+        socket.on("data", (chunk) => {
+          seen += chunk.toString();
+          if (seen.includes("200 Connection Established") && !seen.includes("Upgrade: websocket")) {
+            socket.write(
+              `GET /api/1.31.0/sync HTTP/1.1\r\nHost: ${authority}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+                "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+            );
+          } else if (seen.includes("101 Switching Protocols") && !seen.includes("echo:")) {
+            socket.write("frame-1");
+          }
+          if (seen.includes("echo:frame-1")) {
+            resolve(seen);
+            socket.destroy();
+          }
+        });
+        socket.on("error", reject);
+      });
+      expect(transcript).toContain("200 Connection Established");
+      expect(transcript).toContain("101 Switching Protocols");
+      expect(transcript).toContain("echo:frame-1");
+      expect(wsProxy.denied).toEqual([]);
+    } finally {
+      wsProxy.stop();
+      wsServer.close();
+    }
+  });
+
   it("denies non-absolute-form requests and plain upgrades", async () => {
     const raw = await new Promise<string>((resolve) => {
       const socket = net.connect(proxy.port, "127.0.0.1", () =>
