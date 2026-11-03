@@ -53,11 +53,13 @@
  * them. Its whole claim is the `TRIPWIRE` table below, and nothing here says
  * more than that table:
  * - `TRIPWIRE.verified` lists the things `verify` checks;
- * - `TRIPWIRE.auditedRoutes` lists the admin routes that write an audit-log row
- *   in the same transaction as their change, so `verify` fails after any of
- *   them through the newest-row check;
+ * - `TRIPWIRE.auditedRoutes` lists the admin route paths that write an
+ *   audit-log row in the same transaction as the change they name, so
+ *   `verify` fails after any of them through the newest-row check;
  * - `TRIPWIRE.notChecked` lists what the admin key can also change that
- *   `verify` does not check, each with its reason.
+ *   `verify` does not check, each with its reason, including the unaudited
+ *   sibling commits of audited routes;
+ * - `TRIPWIRE.falseRed` lists what can turn `verify` red with no tamper.
  * The container keeps no Linux capability.
  *
  * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): the tripwire
@@ -426,13 +428,17 @@ const PUSH_ACTIONS = new Set(["push_config", "push_config_with_components"]);
  *
  * - `verified`: `mark` reads it, records or checks it, and `verify` reads it
  *   back and compares it exactly.
- * - `auditedRoutes`: these routes are not read back one by one. Each writes a
- *   `_deployment_audit_log` row in the same transaction as its change, which
- *   moves the newest row, which is `verified`. So `verify` fails after any of
- *   them, even when the state was put back. Read from the source; the first
- *   CI run after merge is the first runtime proof.
+ * - `auditedRoutes`: these route paths are not read back one by one. Each
+ *   writes a `_deployment_audit_log` row in the same transaction as the change
+ *   it names, which moves the newest row, which is `verified`. So `verify`
+ *   fails after any of them, even when the state was put back. A sibling
+ *   commit of the same route that writes no row is a `notChecked` row. Read
+ *   from the source; runtime-proven only for the env routes (spike run
+ *   41636341060).
  * - `notChecked`: the admin key can also change these, and `verify` does not
  *   check them, with the reason each one is left.
+ * - `falseRed`: what can turn `verify` red when nothing was tampered with.
+ *   Each fails closed.
  */
 export const TRIPWIRE = Object.freeze({
   verified: Object.freeze([
@@ -447,15 +453,15 @@ export const TRIPWIRE = Object.freeze({
     "POST /api/update_environment_variables and /api/v1 env routes (lb/environment_variables.rs:109,165-174; app/lib.rs:1803-1862)",
     "POST /api/update_canonical_url and /api/v1/update_canonical_url (lb/canonical_urls.rs:54-109)",
     "POST /api/push_config, /api/deploy2/finish_push (app/deploy_config.rs:861-969; app/lib.rs:2292)",
-    "POST /api/prepare_schema (lb/schema.rs:309)",
-    "POST /api/cancel_job, /api/cancel_all_jobs (lb/scheduling.rs:143-166; app/lib.rs:3308-3356)",
+    "POST /api/prepare_schema when it is not a dry run and the index diff is not empty (lb/schema.rs:303-310)",
+    "POST /api/cancel_job, /api/cancel_all_jobs: each page that cancels at least one job (lb/scheduling.rs:143-166; app/lib.rs:3308-3356)",
     "dashboard delete_tables, delete_component, delete_scheduled_functions_table (lb/dashboard.rs:345-357; app/lib.rs:2935-2959, 2971-2985, 3279-3297)",
-    "POST /api/export/request/zip, set_expiration, cancel (app/lib.rs:1659-1728; lb/snapshot_export.rs:206-235)",
-    "POST /api/import, /api/perform_import and the snapshot-import routes (router.rs:479-491; app/snapshot_import/audit_log.rs:38)",
+    "POST /api/export/request/zip, set_expiration, cancel: the request and its changes (app/lib.rs:1659-1728; lb/snapshot_export.rs:206-235)",
+    "snapshot import activation: the one transaction that deletes the tables being replaced and makes the imported hidden tables active (app/snapshot_import/mod.rs:1046-1160)",
     "/api/v1 usage limits create, update, delete (lb/usage_limits.rs:302-438)",
     "/api/v1 pause and unpause deployment (lb/deployment_state.rs:131-132; app/deployment_state.rs:21-44)",
-    "/api/v1 log streams create, update, delete, rotate secret (lb/log_sinks.rs:1581-1586, 814-815; app/log_streaming.rs:56-120, 204-231)",
-    "/api/v1 data sync (lb/streaming_export.rs:236, 519-521)",
+    "/api/v1 log streams create, config update, delete, rotate secret: the config change (lb/log_sinks.rs:1581-1586, 814-815; app/log_streaming.rs:56-120, 204-231)",
+    "/api/v1 data sync: the transaction that creates a sync's progress record (app/streaming_export.rs:232-243)",
     "the dashboard's _system/frontend data mutations: addDocument, clearTablePage, createTable, deleteDocuments, patchDocumentsFields, replaceDocument, fileStorageV2 deleteFile(s) and generateUploadUrl (writeAuditLog)",
   ]),
   notChecked: Object.freeze([
@@ -463,9 +469,15 @@ export const TRIPWIRE = Object.freeze({
     "the streaming-import routes: replace_tables, clear_tables, fivetran_truncate_table, fivetran_create_table, import_airbyte_records, apply_fivetran_operations (router.rs:568-591; app/lib.rs:2691, 3734-3809). They write table data without an audit row; same reason as above.",
     "PUT /api/streaming_import/add_primary_key_indexes (app/lib.rs:3616-3634): adds a reserved system index that functions cannot query.",
     "POST /api/run_test_function (app/lib.rs:2710-2858): runs a query only (:2849-2858 refuses mutations); its uploaded package is not deployed, and it sets the UDF config only when no push exists yet (:2758-2766).",
-    "POST /api/deploy2/start_push, evaluate_push, evaluate_schema, wait_for_schema (app/deploy_config.rs:205, 569): staged state that goes live only through finish_push, which is audited.",
+    "POST /api/deploy2/start_push, evaluate_push, evaluate_schema, wait_for_schema (app/deploy_config.rs:205, 359-372, 569), and the external-deps package a push uploads before its own commit (app/lib.rs:2885-2929): staged state that goes live only through push_config or finish_push, which are audited.",
+    "POST /api/prepare_schema as a dry run (the default) or with an empty index diff: commits a pending schema, and empty table records for the tables it names, with no audit row (lb/schema.rs:271-310; database/src/bootstrap_model/schema/mod.rs:339-346, 413-416). Staged: a pending or validated schema never refuses a write, a violating write only marks it failed (schema/mod.rs:188-216), and it becomes active only through a code push (schema/mod.rs:88-118), which is audited. An empty table reads the same as an absent one.",
+    "snapshot import before activation: storing, confirming and cancelling an import, the worker's progress, and the hidden tables it fills commit with no audit row (app/snapshot_import/mod.rs:12-25, 218-325, 502-586, 1523-1526, 1659-1730). Staged: hidden tables go live only in the audited activation, and components an import creates are in the `verified` component listing. Except an append into an existing table, which inserts into the live table batch by batch before the activation (mod.rs:1604-1609, 1626-1627) and keeps those rows if the import fails or is cancelled: table data, as the public API row.",
+    "progress bookkeeping that functions cannot read: a data sync's progress refreshes after its creation (app/streaming_export.rs:244-251, `_data_sync_progress`), update_log_stream's second, unaudited transaction that resets the sink status to Pending after the audited config change (lb/log_sinks.rs:1569-1570; app/log_streaming.rs:131-155, `_log_sinks`), and the export worker's status and result (app/exports/worker.rs:146, 202, 268, 394, `_exports`). Functions can read only the `_storage` and `_scheduled_functions` system tables (docs.convex.dev/database/advanced/system-tables).",
     "anything done inside the backend container below the admin API (owner ruling SCRUM-892, option A): root code there can write the backend's storage, including the audit log, or replace the process that answers these reads.",
     "a change made before `mark`, which `mark` records as the baseline.",
+  ]),
+  falseRed: Object.freeze([
+    "a background system writer adding an audit row with no tamper. The only one at 72ce13c3 is the usage-limits worker, which records a crossed limit and the stop state it sets (usage_limits/src/worker.rs:237-290); it needs a usage limit to exist, and creating one is audited. Searched: every insert into _deployment_audit_log in crates/ at 72ce13c3.",
   ]),
 });
 
@@ -485,10 +497,10 @@ function lastPushIdentity(event) {
 }
 
 /**
- * The newest audit row since the latest push. Every audited admin action
- * writes its row in the same transaction as its change (see `TRIPWIRE`), so
- * any of them after `mark` moves this identity, even when the state it
- * changed was put back.
+ * The newest audit row since the latest push. Each path in
+ * `TRIPWIRE.auditedRoutes` writes its row in the same transaction as the
+ * change it names, so any of them after `mark` moves this identity, even when
+ * the state it changed was put back. So does a `TRIPWIRE.falseRed` source.
  */
 function lastAuditIdentity(events, lastPush) {
   const refuse = () =>
@@ -967,8 +979,9 @@ export async function markBackend(env, deps) {
  * verdict is uploaded. Fails closed unless the backend still answers and every
  * `TRIPWIRE.verified` read equals what `mark` checked or recorded. It reads
  * through the backend binary's admin API from the runner, a path deployed
- * functions cannot serve. What it does not check is `TRIPWIRE.notChecked`; it
- * prevents nothing (owner ruling SCRUM-892, option A).
+ * functions cannot serve. What it does not check is `TRIPWIRE.notChecked`;
+ * what can turn it red with no tamper is `TRIPWIRE.falseRed`. It prevents
+ * nothing (owner ruling SCRUM-892, option A).
  */
 export async function verifyBackend(env, deps) {
   assertLocalOnly(env);
@@ -983,7 +996,8 @@ export async function verifyBackend(env, deps) {
   const fingerprint = await readTripwire(deps, env, adminKey);
   if (fingerprint !== baseline) {
     throw new LocalConvexRefusal(
-      "The deployed code changed after it was marked, or an audited admin action ran " +
+      "The deployed code changed after it was marked, or an audit-log row was written since: an audited admin " +
+        "action, or a source in TRIPWIRE.falseRed " +
         `(fingerprint ${fingerprint}, recorded ${baseline}).`,
     );
   }

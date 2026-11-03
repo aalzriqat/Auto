@@ -6,6 +6,7 @@
  * Nothing here starts Docker or the Convex CLI: both go through the `exec`
  * seam, so every test runs the real control flow against a recording fake.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import {
   ADMIN_KEY_PATTERN,
@@ -42,6 +43,7 @@ import {
   stableStringify,
   startBackend,
   stopBackend,
+  TRIPWIRE,
   verifyBackend,
   waitForBackend,
 } from "./localConvexBackend.mjs";
@@ -1018,6 +1020,11 @@ describe("verifyBackend (round 5 tripwire)", () => {
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/audit log/);
   });
 
+  test("names TRIPWIRE.falseRed when a background writer's audit row arrives with no tamper", async () => {
+    const h = harnessOn(deployedState({ auditTail: [auditRow("usage_limit_exceeded")] }));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/audit-log row was written since.*TRIPWIRE\.falseRed/);
+  });
+
   test("fails when the deployed code changed after mark", async () => {
     const h = harness();
     h.deps.fetchImpl.mockImplementation(answering(deployedState({ rootHash: "swapped" })));
@@ -1084,6 +1091,49 @@ describe("stopBackend", () => {
   test("refuses beside a cloud credential like every other command", () => {
     const h = harness();
     expect(() => stopBackend({ [CONTAINER_ENV_VAR]: CONTAINER, CONVEX_DEPLOY_KEY: "x" }, h.deps)).toThrow(LocalConvexRefusal);
+  });
+});
+
+/**
+ * PR #757 round 11: a route can write its audit row on one path and commit on
+ * a sibling path with none. Each such route must appear twice, its audited
+ * path in `auditedRoutes` and its unaudited sibling in `notChecked`, so the
+ * table never claims the whole route.
+ */
+describe("TRIPWIRE table", () => {
+  test("has exactly verified, auditedRoutes, notChecked and falseRed, each a frozen non-empty list", () => {
+    expect(Object.keys(TRIPWIRE).sort()).toEqual(["auditedRoutes", "falseRed", "notChecked", "verified"]);
+    for (const rows of Object.values(TRIPWIRE)) {
+      expect(Object.isFrozen(rows)).toBe(true);
+      expect(rows.length).toBeGreaterThan(0);
+    }
+  });
+
+  test.each([
+    ["prepare_schema", /^POST \/api\/prepare_schema when it is not a dry run/, /^POST \/api\/prepare_schema as a dry run/],
+    ["snapshot import", /^snapshot import activation:/, /^snapshot import before activation:/],
+    ["data sync", /^\/api\/v1 data sync: the transaction that creates/, /data sync's progress refreshes after its creation/],
+    ["log streams", /^\/api\/v1 log streams .*: the config change/, /resets the sink status to Pending/],
+    ["export", /^POST \/api\/export\/request\/zip.*: the request and its changes/, /export worker's status and result/],
+    ["code push", /^POST \/api\/push_config, \/api\/deploy2\/finish_push/, /external-deps package a push uploads/],
+  ])("%s: the audited path and its unaudited sibling are separate rows", (_route, audited, unaudited) => {
+    expect(TRIPWIRE.auditedRoutes.filter((row) => audited.test(row))).toHaveLength(1);
+    expect(TRIPWIRE.notChecked.filter((row) => unaudited.test(row))).toHaveLength(1);
+  });
+
+  test("discloses the usage-limits worker as a false-red source, with the search behind it", () => {
+    expect(TRIPWIRE.falseRed).toHaveLength(1);
+    expect(TRIPWIRE.falseRed[0]).toMatch(/usage-limits worker.*\(usage_limits\/src\/worker\.rs:237-290\)/);
+    expect(TRIPWIRE.falseRed[0]).toMatch(/Searched: every insert into _deployment_audit_log in crates\/ at 72ce13c3/);
+  });
+
+  test("the swarm workflow names falseRed beside every verify step", () => {
+    const workflow = readFileSync(".github/workflows/browser-attack-swarm.yml", "utf8");
+    const verifySteps = workflow.match(/node scripts\/localConvexBackend\.mjs verify/g) ?? [];
+    const falseRedNotes = workflow.match(/TRIPWIRE\.falseRed source can turn it red with no tamper/g) ?? [];
+    expect(verifySteps.length).toBeGreaterThan(0);
+    expect(falseRedNotes).toHaveLength(verifySteps.length);
+    expect(workflow).toMatch(/TRIPWIRE\.falseRed\s+#\s+lists what can turn verify red with no tamper/);
   });
 });
 

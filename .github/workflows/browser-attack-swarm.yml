@@ -54,7 +54,8 @@ concurrency:
 #   tripwire's whole claim is the TRIPWIRE table in
 #   scripts/localConvexBackend.mjs: verify checks the items in
 #   TRIPWIRE.verified, and the admin key can also change the items in
-#   TRIPWIRE.notChecked, which verify does not check;
+#   TRIPWIRE.notChecked, which verify does not check; TRIPWIRE.falseRed
+#   lists what can turn verify red with no tamper;
 # - the backend container sits on Docker's default bridge, because it fetches
 #   Clerk's JWKS, and the deploy container shares its network namespace. From
 #   there, any runner service listening on all interfaces is reachable through
@@ -1116,7 +1117,8 @@ jobs:
       # trusted tripwire re-reads the backend from the runner after the last test
       # and fails the job unless every item in TRIPWIRE.verified
       # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
-      # recorded. It does not check TRIPWIRE.notChecked.
+      # recorded. It does not check TRIPWIRE.notChecked, and a
+      # TRIPWIRE.falseRed source can turn it red with no tamper.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
@@ -1664,7 +1666,8 @@ jobs:
       # trusted tripwire re-reads the backend from the runner after the last test
       # and fails the job unless every item in TRIPWIRE.verified
       # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
-      # recorded. It does not check TRIPWIRE.notChecked.
+      # recorded. It does not check TRIPWIRE.notChecked, and a
+      # TRIPWIRE.falseRed source can turn it red with no tamper.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
@@ -2193,7 +2196,8 @@ jobs:
       # trusted tripwire re-reads the backend from the runner after the last test
       # and fails the job unless every item in TRIPWIRE.verified
       # (scripts/localConvexBackend.mjs) still equals what `mark` checked or
-      # recorded. It does not check TRIPWIRE.notChecked.
+      # recorded. It does not check TRIPWIRE.notChecked, and a
+      # TRIPWIRE.falseRed source can turn it red with no tamper.
       - name: Verify the local backend was not changed during the run
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
