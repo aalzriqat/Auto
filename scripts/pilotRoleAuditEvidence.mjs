@@ -155,6 +155,7 @@ export function roleRegressionOutcome(report) {
   else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
   return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified, measurement, cases, unexpected };
 }
+
 /** @template T @param {() => Promise<T>} operation
  * @returns {Promise<PromiseSettledResult<T>>} */
 async function settleEvidenceOperation(operation) {
