@@ -460,6 +460,16 @@ test.each([
   if (outcome.verified) expect(outcome.cases).toEqual(verdicts());
 });
 
+test("all seven allowlisted cases passing plus one foreign passing title is not verified", () => {
+  const base = roleReport();
+  const foreign = { ...base.suites[0].specs[0], title: foreignTitleSentinel };
+  const outcome = roleRegressionOutcome(withSpecs([foreign], base));
+  expect(outcome.cases).toEqual(verdicts());
+  expect(outcome.unexpected).toBe(1);
+  expect(outcome.verified).toBe(false);
+  expect(outcome.measurement).toBe("FAIL");
+});
+
 test.each([
   { exitCode: 0, reportMode: "passed", complete: true },
   { exitCode: 0, reportMode: "missing", complete: false },

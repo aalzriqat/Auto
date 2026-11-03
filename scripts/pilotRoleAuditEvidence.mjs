@@ -103,18 +103,38 @@ function roleCaseStatus(item) {
   return "failed";
 }
 
-/** One entry per allowlisted case, in constant order. Title and project come
- * from the constant only; the report supplies nothing but the closed status.
- * @param {RoleCase[]} observed */
-function roleCaseVerdicts(observed) {
-  return [...ROLE_CASE_PROJECTS].map(([title, project]) => {
-    const seen = observed.filter((item) => item.title === title);
-    let status = "missing";
-    if (seen.length > 1) status = "duplicate";
-    else if (seen.length === 1) status = seen[0].row.projectName === project ? roleCaseStatus(seen[0]) : "wrong-project";
-    return { title, project, status };
-  });
+/** Closed verdict for one allowlisted case, from what the report showed for its title.
+ * Title and project come from the constant; the report supplies only the status.
+ * @param {string} title @param {string} project @param {RoleCase[] | undefined} seenForTitle */
+function classifyRoleCase(title, project, seenForTitle) {
+  const seen = seenForTitle ?? [];
+  if (seen.length === 0) return "missing";
+  if (seen.length > 1) return "duplicate";
+  return seen[0].row.projectName === project ? roleCaseStatus(seen[0]) : "wrong-project";
 }
+
+/** @param {RoleCase[]} observed
+ * @returns {Map<string, RoleCase[]>} */
+function groupByTitle(observed) {
+  /** @type {Map<string, RoleCase[]>} */
+  const byTitle = new Map();
+  for (const item of observed) {
+    const group = byTitle.get(item.title);
+    if (group) group.push(item);
+    else byTitle.set(item.title, [item]);
+  }
+  return byTitle;
+}
+
+/** One entry per allowlisted case, in constant order.
+ * @param {Map<string, RoleCase[]>} byTitle */
+function roleCaseVerdicts(byTitle) {
+  return Array.from(ROLE_CASE_PROJECTS, ([title, project]) => ({
+    title, project, status: classifyRoleCase(title, project, byTitle.get(title)),
+  }));
+}
+
+const ABSENT_ROLE_CASES = Object.freeze(roleCaseVerdicts(new Map()).map((entry) => Object.freeze(entry)));
 
 /** Measure exact real-role cases from the JSON reporter of this invocation.
  * `cases` and `unexpected` are the only report-derived values that may be
@@ -122,21 +142,18 @@ function roleCaseVerdicts(observed) {
  * @param {unknown} report */
 export function roleRegressionOutcome(report) {
   const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE",
-    cases: roleCaseVerdicts([]), unexpected: 0 };
+    cases: ABSENT_ROLE_CASES, unexpected: 0 };
   const parsed = roleReportSchema.safeParse(report);
   if (!parsed.success || parsed.data.errors.length !== 0) return absent;
   const observed = collectRoleCases(parsed.data.suites);
   if (observed === null) return absent;
-  const titles = new Set(observed.map((item) => item.title));
-  const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
-      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every((item) =>
-        ROLE_CASE_PROJECTS.get(item.title) === item.row.projectName && isPassedRoleCase(item));
+  const cases = roleCaseVerdicts(groupByTitle(observed));
+  const unexpected = observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length;
+  const verified = cases.every((entry) => entry.status === "passed") && unexpected === 0;
   let measurement = "FAIL";
   if (verified) measurement = "PASS";
   else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
-  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified,
-    measurement, cases: roleCaseVerdicts(observed),
-    unexpected: observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length };
+  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified, measurement, cases, unexpected };
 }
 /** @template T @param {() => Promise<T>} operation
  * @returns {Promise<PromiseSettledResult<T>>} */
