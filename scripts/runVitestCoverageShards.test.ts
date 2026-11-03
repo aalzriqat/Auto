@@ -582,6 +582,48 @@ describe("runVitestCoverageShards", () => {
       for (const load of perSlice) expect(Math.abs(load - mean)).toBeLessThanOrEqual(heaviest);
     });
 
+    test("SCRUM-752: the committed weights, batch default and workflow slice count balance the real census", async () => {
+      const { parse } = await import("yaml");
+      const workflow = parse(readFileSync(path.join(process.cwd(), ".github", "workflows", "test.yml"), "utf8")) as {
+        jobs: Record<string, { strategy: { matrix: { slice: number[] } } }>;
+      };
+      const sliceCount = workflow.jobs["unit-and-integration-slice"].strategy.matrix.slice.length;
+      const seconds = (file: string) => WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds;
+      // The cost of one Vitest process, from the committed weights alone (not
+      // from anything the runner prints), so a change to the planner cannot
+      // grade its own balance.
+      const processCost = (mode: "unit" | "sonar", files: string[]) =>
+        WORKLOAD.processSeconds[mode] + files.reduce((sum, file) => sum + seconds(file), 0);
+
+      const load = Array.from({ length: sliceCount }, () => 0);
+      const batches: number[] = [];
+      const seen: Record<string, string[]> = { unit: [], sonar: [] };
+      for (let slice = 1; slice <= sliceCount; slice += 1) {
+        for (const mode of ["unit", "sonar"] as const) {
+          const calls = await callsFor(mode, { AUTOFLOW_COVERAGE_PHASE: "run", AUTOFLOW_COVERAGE_SLICE: `${slice}/${sliceCount}` });
+          for (const call of calls) {
+            const files = batchTestFiles(call);
+            load[slice - 1] += processCost(mode, files);
+            seen[mode].push(...files);
+            if (files.length > 1) batches.push(processCost(mode, files));
+          }
+        }
+      }
+      // Slice assignment never changes what runs: each mode saw every file once.
+      expect(new Set(seen.unit).size).toBe(seen.unit.length);
+      expect(new Set(seen.sonar).size).toBe(seen.sonar.length);
+
+      const mean = load.reduce((a, b) => a + b, 0) / sliceCount;
+      // Measured slice walls before this change spread 638..1593 s around a mean
+      // of ~1000 s. Planned cost within 12% of the mean per slice is what the
+      // greedy assignment reaches once the weights name the heavy suites.
+      for (const total of load) expect(Math.abs(total - mean) / mean).toBeLessThanOrEqual(0.12);
+      // No multi-file batch dominates a slice: one longer than half the mean slice
+      // cost (two lanes) is the 638 s sonar-20 batch of run 41584728669 again.
+      // Single-file processes are exempt; a lone suite cannot be split.
+      for (const cost of batches) expect(cost).toBeLessThanOrEqual(mean / 2);
+    });
+
     const invalidSliceEnvs: Array<[Record<string, string>, string]> = [
       [{ AUTOFLOW_COVERAGE_PHASE: "slice" }, "AUTOFLOW_COVERAGE_PHASE must be one of"],
       [{ AUTOFLOW_COVERAGE_PHASE: "run" }, "AUTOFLOW_COVERAGE_SLICE is required with"],
@@ -799,9 +841,10 @@ describe("runVitestCoverageShards", () => {
 
     test("the most expensive batch starts first", async () => {
       await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
-      const heaviest = Object.entries(WORKLOAD.files).sort((a, b) => b[1] - a[1])[0][0];
-      const first = childBoundary.calls.find((call) => call.async)!;
-      expect(batchTestFiles(first)).toEqual([heaviest]);
+      const cost = (call: (typeof childBoundary.calls)[number]) =>
+        batchTestFiles(call).reduce((sum, file) => sum + (WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds), 0);
+      const started = childBoundary.calls.filter((call) => call.async);
+      expect(cost(started[0])).toBe(Math.max(...started.map(cost)));
     });
 
     test("each overlapping batch's output is written in one piece under its own header", async () => {

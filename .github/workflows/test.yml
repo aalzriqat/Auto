@@ -30,12 +30,12 @@ jobs:
   # merges the blobs with the unchanged merge commands and fails closed on a
   # failed, cancelled, skipped or missing slice.
   unit-and-integration-slice:
-    name: unit-and-integration slice ${{ matrix.slice }}/4
+    name: unit-and-integration slice ${{ matrix.slice }}/8
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        slice: [1, 2, 3, 4]
+        slice: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -70,7 +70,7 @@ jobs:
       env:
         NODE_ENV: test
         AUTOFLOW_COVERAGE_PHASE: run
-        AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/4
+        AUTOFLOW_COVERAGE_SLICE: ${{ matrix.slice }}/8
         AUTOFLOW_COVERAGE_REPORTS_DIR: coverage-slice
         AUTOFLOW_COVERAGE_TIMINGS: coverage-timings/slice-${{ matrix.slice }}.jsonl
         # SCRUM-752: two batch processes at a time on the 4-core runner. Each
