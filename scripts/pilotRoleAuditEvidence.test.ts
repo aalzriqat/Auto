@@ -348,11 +348,17 @@ const roleTitles = [
   "pilot Deals opens owned and SOURCED cash and configured financed detail screens",
 ];
 
+// The shapes Playwright 1.61 emits (computeTestCaseOutcome in lib/common/index.js): a test.skip or
+// test.fixme case has expectedStatus "skipped"; everything else is expected to pass.
+function caseShape(status: string) {
+  if (status === "skipped") return { expectedStatus: "skipped", status: "skipped", results: [{ status: "skipped" }] };
+  return { expectedStatus: "passed", status: status === "passed" ? "expected" : status, results: [{ status }] };
+}
+
 function roleReport(statuses: readonly string[] = roleTitles.map(() => "passed")) {
   return { errors: [], suites: [{ file: "../tests/audit-role-access.spec.ts", specs: statuses.map((status, index) => ({
-    title: roleTitles[index] ?? roleTitles[0], file: "../tests/audit-role-access.spec.ts", ok: status === "passed",
-    tests: [{ projectName: index < 4 ? "role-regressions" : "pilot-g8-role-hunt", status: status === "passed" ? "expected" : status,
-      expectedStatus: "passed", results: status === "skipped" ? [] : [{ status }] }],
+    title: roleTitles[index] ?? roleTitles[0], file: "../tests/audit-role-access.spec.ts", ok: status === "passed" || status === "skipped",
+    tests: [{ projectName: index < 4 ? "role-regressions" : "pilot-g8-role-hunt", ...caseShape(status) }],
   })) }] };
 }
 
@@ -375,8 +381,24 @@ test.each([
 });
 
 const caseProjects = roleTitles.map((_, index) => index < 4 ? "role-regressions" : "pilot-g8-role-hunt");
-function verdicts(overrides: Record<number, string> = {}, fill = "passed") {
-  return roleTitles.map((title, index) => ({ title, project: caseProjects[index], status: overrides[index] ?? fill }));
+function verdicts(overrides: Record<number, string> = {}, fill = "passed", locations: Record<number, string> = {}) {
+  return roleTitles.map((title, index) => ({ title, project: caseProjects[index], status: overrides[index] ?? fill,
+    location: locations[index] ?? null }));
+}
+const runnerRoot = "/home/runner/work/Auto/Auto";
+const specPath = `${runnerRoot}/playwright/tests/audit-role-access.spec.ts`;
+/** Case 2 fails with the given attempts; the others pass. */
+function failureReport(results: unknown[], extra: Record<string, unknown> = {}) {
+  const base = roleReport();
+  const failing = base.suites[0].specs[2];
+  const failed = { ...failing, ok: false, tests: [{ ...failing.tests[0], expectedStatus: "passed", status: "unexpected", results, ...extra }] };
+  return { ...base, suites: [{ ...base.suites[0], specs: base.suites[0].specs.map((spec, index) => index === 2 ? failed : spec) }] };
+}
+/** The location published for case 2 when its only attempt failed at file:line. */
+function publishedLocation(file: unknown, line: unknown) {
+  const outcome = roleRegressionOutcome(failureReport([{ status: "failed", errorLocation: { file, line, column: 9 } }]));
+  expect(outcome.cases[2].status).toBe("failed");
+  return outcome.cases[2].location;
 }
 function withSpecs(extra: unknown[], base = roleReport()) {
   return { ...base, suites: [{ ...base.suites[0], specs: [...base.suites[0].specs, ...extra] }] };
@@ -388,6 +410,8 @@ function leakyReport() {
   const failing = base.suites[0].specs[2];
   const leaking = { ...failing, tests: [{ ...failing.tests[0], status: "unexpected", results: [{ status: "failed",
     error: { message: messageSentinel, stack: messageSentinel, location: { file: foreignTitleSentinel } },
+    errorLocation: { file: `/srv/secret/${messageSentinel.split(" ")[1]}/playwright/tests/audit-role-access.spec.ts`, line: 12, column: 3 },
+    errors: [{ message: messageSentinel, location: { file: foreignTitleSentinel, line: 1, column: 1 } }],
     attachments: [{ name: messageSentinel }], stdout: [{ text: messageSentinel }] }] }] };
   const foreign = { ...failing, title: foreignTitleSentinel, ok: false };
   return withSpecs([foreign], { ...base, suites: [{ ...base.suites[0], specs: base.suites[0].specs.map((spec, index) => index === 2 ? leaking : spec) }] });
@@ -401,7 +425,8 @@ test("a failing allowlisted case is published by constant title as failed, the o
 test.each([
   ["a Playwright unexpected failure", { status: "unexpected", result: "failed" }],
   ["a timeout", { status: "unexpected", result: "timedOut" }],
-  ["an interruption", { status: "unexpected", result: "interrupted" }],
+  // Playwright reports an interrupted-only test as status "skipped" (computeTestCaseOutcome).
+  ["an interruption", { status: "skipped", result: "interrupted" }],
   ["a flaky retry that finally passed", { status: "flaky", result: "passed" }],
   ["a status this version does not know", { status: "brand-new-status", result: "brand-new-result" }],
 ] as const)("%s is never published as passed", (_name, { status, result }) => {
@@ -412,6 +437,34 @@ test.each([
   const outcome = roleRegressionOutcome(odd);
   expect(outcome.cases).toEqual(verdicts({ 1: "failed" }));
   expect(outcome.verified).toBe(false);
+});
+
+// A case that was expected to pass but did not run cannot run, so it is a FAIL, never a skip. Playwright
+// 1.61 still reports every one of these as test status "skipped".
+test.each([
+  ["interrupted attempt only", [{ status: "interrupted" }]],
+  ["no attempt at all", []],
+  ["a skipped attempt although the case was expected to pass", [{ status: "skipped" }]],
+  ["several skipped attempts although the case was expected to pass", [{ status: "skipped" }, { status: "skipped" }]],
+] as const)("an expected-to-pass case with %s publishes failed", (_name, results) => {
+  const report = failureReport([...results], { status: "skipped" });
+  const outcome = roleRegressionOutcome(report);
+  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }));
+  expect(outcome.verified).toBe(false);
+  expect(outcome.measurement).toBe("FAIL");
+});
+
+test("a skipped attempt followed by a failing attempt publishes failed", () => {
+  const report = failureReport([{ status: "skipped" }, { status: "failed" }], { status: "unexpected" });
+  expect(roleRegressionOutcome(report).cases).toEqual(verdicts({ 2: "failed" }));
+});
+
+test("only a case whose expected status is skipped publishes skipped", () => {
+  const skipped = failureReport([{ status: "skipped" }], { expectedStatus: "skipped", status: "skipped" });
+  expect(roleRegressionOutcome(skipped).cases).toEqual(verdicts({ 2: "skipped" }));
+  // The same expectation with a real failure is not a skip.
+  const failedDespiteSkipExpectation = failureReport([{ status: "failed" }], { expectedStatus: "skipped", status: "unexpected" });
+  expect(roleRegressionOutcome(failedDespiteSkipExpectation).cases).toEqual(verdicts({ 2: "failed" }));
 });
 
 test("missing, duplicate, wrong-project and skipped cases are each named", () => {
@@ -435,8 +488,8 @@ test.each([
 
 test("a foreign title and a failure message never reach the public outcome", () => {
   const outcome = roleRegressionOutcome(leakyReport());
-  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }));
-  expect(outcome.unexpected).toBe(1);
+  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }, "passed", { 2: "playwright/tests/audit-role-access.spec.ts:12" }));
+  expect(outcome.unlisted).toBe(1);
   const published = JSON.stringify(outcome);
   expect(published).not.toContain("SENTINEL");
   expect(published).not.toContain("EXAMPLE.INVALID");
@@ -444,8 +497,107 @@ test("a foreign title and a failure message never reach the public outcome", () 
 });
 
 test.each([
+  ["an absolute Linux runner path", specPath, 42, "playwright/tests/audit-role-access.spec.ts:42"],
+  ["an absolute Windows path", "D:\\a\\Auto\\Auto\\playwright\\tests\\audit-role-access.spec.ts", 42, "playwright/tests/audit-role-access.spec.ts:42"],
+  ["a runner path that itself has a playwright directory", "/home/playwright/Auto/playwright/fixtures/roleAudit.ts", 7, "playwright/fixtures/roleAudit.ts:7"],
+  ["a repo-relative path", "playwright/tests/audit-role-access.spec.ts", 3, "playwright/tests/audit-role-access.spec.ts:3"],
+  ["an mjs helper", `${runnerRoot}/playwright/support/helper-1_a.mjs`, 1, "playwright/support/helper-1_a.mjs:1"],
+  ["the largest safe line", specPath, Number.MAX_SAFE_INTEGER, `playwright/tests/audit-role-access.spec.ts:${Number.MAX_SAFE_INTEGER}`],
+] as const)("the failing location is published repo-relative for %s", (_name, file, line, expected) => {
+  expect(publishedLocation(file, line)).toBe(expected);
+});
+
+test.each([
+  ["a path outside playwright/", `${runnerRoot}/tests/audit-role-access.spec.ts`, 42],
+  ["a path that only contains the word playwright", `${runnerRoot}/not-playwright/tests/a.spec.ts`, 42],
+  ["a Playwright package path", `${runnerRoot}/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/lib/x.js`, 42],
+  ["a node_modules path under playwright/", `${runnerRoot}/playwright/node_modules/dep/index.js`, 42],
+  ["a path with a node_modules directory before playwright/", `${runnerRoot}/node_modules/pkg/playwright/tests/a.spec.ts`, 42],
+  ["a traversal inside the suffix", `${runnerRoot}/playwright/tests/../../secrets/a.ts`, 42],
+  ["a traversal before the suffix", `${runnerRoot}/../etc/playwright/tests/a.spec.ts`, 42],
+  ["a Windows traversal", "C:\\a\\playwright\\tests\\..\\..\\secret.ts", 42],
+  ["a space in the path", `${runnerRoot}/playwright/tests/Synthetic Customer.spec.ts`, 42],
+  ["a quote in the path", `${runnerRoot}/playwright/tests/it's "x".spec.ts`, 42],
+  ["an Arabic name in the path", `${runnerRoot}/playwright/tests/عميل.spec.ts`, 42],
+  ["a tenant-like email in the path", `${runnerRoot}/playwright/tests/tenant@example.invalid.spec.ts`, 42],
+  ["an unlisted extension", `${runnerRoot}/playwright/tests/a.json`, 42],
+  ["a directory instead of a file", `${runnerRoot}/playwright/tests/`, 42],
+  ["no file below playwright/", `${runnerRoot}/playwright/`, 42],
+  ["a fractional line", specPath, 1.5],
+  ["a zero line", specPath, 0],
+  ["a negative line", specPath, -3],
+  ["an unsafe integer line", specPath, 2 ** 53],
+  ["a string line", specPath, "42"],
+  ["a null line", specPath, null],
+  ["a missing line", specPath, undefined],
+  ["a non-string file", 42, 42],
+  ["a null file", null, 42],
+] as const)("%s publishes a null location", (_name, file, line) => {
+  expect(publishedLocation(file, line)).toBeNull();
+});
+
+test("only the line and repo-relative path are published, never the column or absolute path", () => {
+  const published = JSON.stringify(roleRegressionOutcome(failureReport([{ status: "failed",
+    errorLocation: { file: specPath, line: 42, column: 987654 } }])));
+  expect(published).toContain('"location":"playwright/tests/audit-role-access.spec.ts:42"');
+  expect(published).not.toContain("987654");
+  expect(published).not.toContain("/home/runner");
+});
+
+test("a location comes from errors[].location when the attempt has no errorLocation", () => {
+  const outcome = roleRegressionOutcome(failureReport([{ status: "timedOut",
+    errors: [{ message: messageSentinel }, { message: "x", location: { file: specPath, line: 88, column: 1 } }] }]));
+  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }, "passed", { 2: "playwright/tests/audit-role-access.spec.ts:88" }));
+  expect(JSON.stringify(outcome)).not.toContain("SENTINEL");
+});
+
+test("the location is the last failing attempt's, never a passing attempt's", () => {
+  const at = (line: number) => ({ file: specPath, line, column: 1 });
+  const outcome = roleRegressionOutcome(failureReport([
+    { status: "failed", errorLocation: at(10) }, { status: "timedOut", errorLocation: at(20) }, { status: "passed", errorLocation: at(30) },
+  ], { status: "flaky" }));
+  expect(outcome.cases[2]).toMatchObject({ status: "failed", location: "playwright/tests/audit-role-access.spec.ts:20" });
+});
+
+test.each([
+  ["a string", "playwright/tests/a.ts:1"],
+  ["an array", [specPath, 1]],
+  ["a number", 7],
+  ["null", null],
+  ["an object of the wrong types", { file: { path: specPath }, line: "x", column: [] }],
+] as const)("a malformed errorLocation (%s) publishes null without making the report absent", (_name, errorLocation) => {
+  const outcome = roleRegressionOutcome(failureReport([{ status: "failed", errorLocation, errors: "not an array" }]));
+  expect(outcome.cases).toEqual(verdicts({ 2: "failed" }));
+  expect(outcome.observed).toBe(7);
+  expect(outcome.measurement).toBe("FAIL");
+});
+
+test("a failing case with no location data publishes null", () => {
+  expect(roleRegressionOutcome(failureReport([{ status: "failed" }])).cases).toEqual(verdicts({ 2: "failed" }));
+});
+
+test("passed, skipped, missing, duplicate and wrong-project cases never carry a location", () => {
+  const located = { errorLocation: { file: specPath, line: 5, column: 1 } };
+  const passed = roleReport();
+  const withLocation = (report: ReturnType<typeof roleReport>, index: number, result: Record<string, unknown>) => ({ ...report,
+    suites: [{ ...report.suites[0], specs: report.suites[0].specs.map((spec, at) => at === index
+      ? { ...spec, tests: [{ ...spec.tests[0], results: [{ ...spec.tests[0].results[0], ...result }] }] } : spec) }] });
+  expect(roleRegressionOutcome(withLocation(passed, 0, located)).cases).toEqual(verdicts());
+  const skipped = withLocation(roleReport(roleTitles.map((_, index) => index === 1 ? "skipped" : "passed")), 1, located);
+  expect(roleRegressionOutcome(skipped).cases).toEqual(verdicts({ 1: "skipped" }));
+  const failedTwice = withLocation(roleReport(["failed"]), 0, located);
+  expect(roleRegressionOutcome(withSpecs([failedTwice.suites[0].specs[0]], failedTwice)).cases[0])
+    .toMatchObject({ status: "duplicate", location: null });
+  expect(roleRegressionOutcome(roleReport(["failed"])).cases[5]).toMatchObject({ status: "missing", location: null });
+  const wrongProject = wrongProjectReport();
+  const wrongAndFailing = withLocation(wrongProject, 6, { status: "failed", ...located });
+  expect(roleRegressionOutcome(wrongAndFailing).cases[6]).toMatchObject({ status: "wrong-project", location: null });
+  for (const entry of roleRegressionOutcome(null).cases) expect(entry).toMatchObject({ status: "missing", location: null });
+});
+
+test.each([
   ["all seven passed", roleReport()],
-  ["a failing case", roleReport(roleTitles.map((_, index) => index === 0 ? "failed" : "passed"))],
+  ["a failing case",roleReport(roleTitles.map((_, index) => index === 0 ? "failed" : "passed"))],
   ["a skipped case", roleReport(roleTitles.map((_, index) => index === 5 ? "skipped" : "passed"))],
   ["missing cases", roleReport(["passed"])],
   ["a wrong project", wrongProjectReport()],
@@ -456,7 +608,7 @@ test.each([
   const outcome = roleRegressionOutcome(report);
   const allPassed = outcome.cases.every((item: { status: string }) => item.status === "passed");
   expect(outcome.cases).toHaveLength(7);
-  expect(outcome.verified).toBe(allPassed && outcome.unexpected === 0);
+  expect(outcome.verified).toBe(allPassed && outcome.unlisted === 0);
   if (outcome.verified) expect(outcome.cases).toEqual(verdicts());
 });
 
@@ -465,7 +617,7 @@ test("all seven allowlisted cases passing plus one foreign passing title is not 
   const foreign = { ...base.suites[0].specs[0], title: foreignTitleSentinel };
   const outcome = roleRegressionOutcome(withSpecs([foreign], base));
   expect(outcome.cases).toEqual(verdicts());
-  expect(outcome.unexpected).toBe(1);
+  expect(outcome.unlisted).toBe(1);
   expect(outcome.verified).toBe(false);
   expect(outcome.measurement).toBe("FAIL");
 });
@@ -529,10 +681,17 @@ test.each([
     roleRegressionsVerified: reportMode === "passed",
     roleRegressionsMeasurement: reportMode === "passed" ? "PASS" : hasReport ? "FAIL" : "UNAVAILABLE",
     roleRegressionCases: verdicts(({ skipped: { 1: "skipped" }, leaky: { 2: "failed" } } as Record<string, Record<number, string>>)[reportMode] ?? {},
-      hasReport ? "passed" : "missing"),
+      hasReport ? "passed" : "missing", reportMode === "leaky" ? { 2: "playwright/tests/audit-role-access.spec.ts:12" } : {}),
+    roleRegressionsUnlistedCount: reportMode === "leaky" ? 1 : 0,
     visualReview: "UNAVAILABLE_UNTIL_LOCAL_DECRYPT_AND_INSPECTION" });
+  expect(outcome).not.toHaveProperty("roleRegressionsUnexpectedCount");
   const publication = path.join(runnerTemp, "pilot-role-audit-public");
-  expect(JSON.parse(readFileSync(path.join(publication, "results.json"), "utf8"))).toEqual(outcome);
+  const publishedText = readFileSync(path.join(publication, "results.json"), "utf8");
+  expect(JSON.parse(publishedText)).toEqual(outcome);
+  if (reportMode === "leaky") {
+    expect(publishedText).toContain('"location": "playwright/tests/audit-role-access.spec.ts:12"');
+    expect(publishedText).not.toMatch(/\/srv\/secret|"column"/);
+  }
   const decoded = path.join(root, `native-orchestration-${exitCode}-${reportMode}.tar`);
   runGpg(["--output", decoded, "--decrypt", path.join(publication, "role-evidence.tar.gpg")]);
   const manifest = JSON.parse(execFileSync(tar, ["-xOf", decoded, "manifest.json"], { encoding: "utf8" }));
