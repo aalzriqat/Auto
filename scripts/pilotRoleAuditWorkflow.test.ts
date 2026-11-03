@@ -22,16 +22,28 @@ test.each([
 const source = readFileSync(path.resolve(".github/workflows/pilot-role-audit.yml"), "utf8");
 const stepSchema = z.object({ name: z.string().optional(), run: z.string().optional(),
   with: z.object({ path: z.string().optional() }).passthrough().optional(),
-  if: z.string().optional(), "continue-on-error": z.unknown().optional(),
+  if: z.string().optional(),
   env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional() });
 const jobSchema = z.object({ if: z.string(), steps: z.array(stepSchema) });
+// SCRUM-892 (Seat 1 F1, Seat 2 round 2): the role audit's own schemas are strict
+// allowlists. Any key the test does not list (continue-on-error, shell, defaults,
+// needs, timeout-minutes on a step, working-directory, id, ...) fails the parse,
+// so a new way to turn a red step or job green cannot pass unnoticed.
+const roleStepSchema = z.object({ name: z.string().optional(), uses: z.string().optional(),
+  run: z.string().optional(), with: z.object({}).passthrough().optional(), if: z.string().optional(),
+  env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional() }).strict();
+const roleJobSchema = z.object({
+  strategy: z.object({
+    matrix: z.object({ role: z.array(z.string()) }).strict(), "max-parallel": z.number(), "fail-fast": z.boolean(),
+  }).strict(),
+  if: z.string(), "runs-on": z.literal("ubuntu-latest"), "timeout-minutes": z.literal(120),
+  steps: z.array(roleStepSchema),
+}).strict();
 const workflow = z.object({
-  on: z.record(z.string(), z.unknown()), permissions: z.object({ contents: z.string() }).strict(),
-  concurrency: z.object({ group: z.string() }).passthrough(),
-  jobs: z.object({ roles: jobSchema.extend({ strategy: z.object({
-    matrix: z.object({ role: z.array(z.string()) }), "max-parallel": z.number(), "fail-fast": z.boolean(),
-  }) }) }),
-}).parse(parse(source));
+  name: z.string(), on: z.record(z.string(), z.unknown()), permissions: z.object({ contents: z.string() }).strict(),
+  concurrency: z.object({ group: z.string(), "cancel-in-progress": z.boolean() }).strict(),
+  jobs: z.object({ roles: roleJobSchema }).strict(),
+}).strict().parse(parse(source));
 function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
   const step = steps.find((item) => item.name === name);
   if (!step) throw new Error(`Missing required workflow step: ${name}`);
@@ -166,12 +178,57 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       steps.indexOf(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline")),
       steps.indexOf(verify) + 1,
     );
-    for (const step of tripwireSpan) expect(step["continue-on-error"], step.name).toBeUndefined();
+    expect(tripwireSpan.length).toBeGreaterThan(1);
     // Exactly always(), as the shared credential-boundary test requires.
     const stop = stepNamed(steps, "Stop the local Convex backend");
     expect(stop.if).toBe("always()");
     expect(stop.run).toBe("node scripts/localConvexBackend.mjs stop");
     expect(stepNamed(steps, "Run the attested role, locale and viewport matrix").run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
+  });
+
+  // Every GitHub Actions key that can turn a failing step or job green, or skip the
+  // tripwire, and the assertion that covers it. The strict schemas above reject any
+  // key not listed; this table walks the raw YAML so a key nested anywhere is found.
+  const GREENING_KEYS: ReadonlyArray<readonly [string, string]> = [
+    ["continue-on-error", "step or job: a failing step/job reports success"],
+    ["shell", "step or defaults.run: `bash -c '...; exit 0'` swallows the exit code"],
+    ["defaults", "workflow or job: defaults.run.shell reaches every run step"],
+    ["needs", "job: a publishing job could ignore the audit job's result"],
+    ["container", "job: runs steps somewhere other than the runner the tripwire reads"],
+    ["services", "job: side containers on the runner"],
+    ["environment", "job: environment secrets and approvals"],
+    ["working-directory", "step: runs the same script from another tree"],
+  ];
+  const EXPECTED_IF: Readonly<Record<string, string | undefined>> = {
+    "Verify the local backend was not changed during the run": "always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''",
+    "Stop the local Convex backend": "always()",
+    "Upload encrypted role audit evidence": "always()",
+  };
+  function keysAnywhere(value: unknown, found: string[] = []): string[] {
+    if (Array.isArray(value)) value.forEach((item) => keysAnywhere(item, found));
+    else if (value && typeof value === "object") {
+      for (const [key, child] of Object.entries(value)) { found.push(key); keysAnywhere(child, found); }
+    }
+    return found;
+  }
+
+  test("SCRUM-892: no key that turns a failing step or job green, or skips the tripwire, exists anywhere", () => {
+    const present = new Set(keysAnywhere(parse(source)));
+    for (const [key, why] of GREENING_KEYS) expect(present.has(key), `${key}: ${why}`).toBe(false);
+    // One job, so no publishing job can depend on or ignore it; and no job-level
+    // continue-on-error, defaults or timeout change (the strict schema pins the rest).
+    expect(Object.keys(workflow.jobs)).toEqual(["roles"]);
+    expect(workflow.jobs.roles["timeout-minutes"]).toBe(120);
+    // Step `if`: exactly the three always() steps, and none on any other step.
+    for (const step of workflow.jobs.roles.steps) {
+      expect(step.if, step.name ?? step.uses).toBe(step.name ? EXPECTED_IF[step.name] : undefined);
+    }
+    // Step run commands in the tripwire span are the exact trusted commands (no `shell` key
+    // can reach them, and no wrapper can be added to the command itself).
+    for (const [name, command] of [
+      ["Mint the disposable-preview marker and record the tripwire baseline", "mark"],
+      ["Verify the local backend was not changed during the run", "verify"],
+    ] as const) expect(stepNamed(workflow.jobs.roles.steps, name).run).toBe(`node scripts/localConvexBackend.mjs ${command}`);
   });
 
   test("SCRUM-892: the browser helpers name only the exact local backend, nothing else on loopback", () => {
