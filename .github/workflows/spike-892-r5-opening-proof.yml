@@ -769,7 +769,10 @@ jobs:
 
       - name: Execute the two terminal opening browser witnesses
         working-directory: trusted
-        run: pnpm exec playwright test -c playwright.opening-proof.config.ts
+        # SPIKE DEVIATION: the fixture accepts only the swarm's own workflow name and
+        # workflow_run event (playwright/fixtures/openingOnboarding.ts:41-45); this spike
+        # is a push workflow under another name, so the two names are set in the shell.
+        run: GITHUB_WORKFLOW='Trusted Browser Attack Swarm' GITHUB_EVENT_NAME=workflow_run pnpm exec playwright test -c playwright.opening-proof.config.ts
         env:
           CI: true
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
