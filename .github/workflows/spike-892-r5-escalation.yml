@@ -1,0 +1,80 @@
+name: SPIKE SCRUM-892 r5 candidate Node action escalation (never merged)
+
+# Reproduces the PR #757 round-5 Seat 2 finding on the pinned self-hosted image:
+# a candidate "use node" action recovers the instance secret, mints an admin key
+# and changes the backend's environment. A trusted step outside the container
+# reads the env NAMES before and after. Nothing secret is printed.
+on:
+  push:
+    branches: ["claude/scrum892-r5-escalation-spike"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-892-r5-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  escalation:
+    if: github.ref == 'refs/heads/claude/scrum892-r5-escalation-spike'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Start the local Convex backend
+        run: node scripts/localConvexBackend.mjs start
+
+      - name: Deploy the probe (stands in for a candidate backend)
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" deploy --typecheck disable --yes
+
+      - name: Env names before the probe (trusted, outside the container)
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env list --names-only | sort | tee "$RUNNER_TEMP/before.txt"
+
+      - name: Run the candidate probe action
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" run probe:probe '{}' | tee "$RUNNER_TEMP/probe.json"
+
+      - name: Env names after the probe (trusted, outside the container)
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env list --names-only | sort | tee "$RUNNER_TEMP/after.txt"
+
+      - name: Verdict
+        run: |
+          set -euo pipefail
+          echo "--- names added by the probe:"
+          comm -13 "$RUNNER_TEMP/before.txt" "$RUNNER_TEMP/after.txt" | tee "$RUNNER_TEMP/added.txt"
+          if grep -qx PROBE_BOGUS "$RUNNER_TEMP/added.txt"; then
+            echo "CONTROL BROKEN: a key not derived from the secret changed the env"; exit 1
+          fi
+          if grep -qx PROBE_ESCALATED "$RUNNER_TEMP/added.txt"; then
+            echo "ESCALATION REPRODUCED: candidate Node code changed the certifying backend's environment"
+          else
+            echo "ESCALATION NOT REPRODUCED"
+          fi
+          {
+            echo "### Probe result"; echo '```'; cat "$RUNNER_TEMP/probe.json"; echo '```'
+            echo "### Names added"; echo '```'; cat "$RUNNER_TEMP/added.txt"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the local Convex backend
+        if: always()
+        run: node scripts/localConvexBackend.mjs stop
