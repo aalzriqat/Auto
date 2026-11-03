@@ -317,11 +317,13 @@ describe("SCRUM-894: the sale-completing doors are derived from source and every
         'async function wrapper(ctx) { return await completeExistingSale(ctx, {}); }',
         'export const gated = internalMutation({ handler: async (ctx) => { await assertActorMayCompleteConsignedSale(ctx, {}); await completeSalesForLineItems(ctx, {}); } });',
         '// export const commented = mutation({ handler: async () => completeSale(ctx) })',
+        // A door built with a custom builder is not recognised as a mutation, so it must fail closed as unclassified.
+        'export const viaBuilder = customMutation({ handler: async (ctx) => { await completeSale(ctx, {}); } });',
       ].join("\n"),
       into
     );
     expect(into.doors.sort()).toEqual(["fake.gated", "fake.newDoor"]);
-    expect(into.unclassifiedCallers).toEqual(["fake.wrapper"]);
+    expect(into.unclassifiedCallers.sort()).toEqual(["fake.viaBuilder", "fake.wrapper"]);
     expect(into.doorsWithoutGate).toEqual(["fake.newDoor"]);
   });
 });
