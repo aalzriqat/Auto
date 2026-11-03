@@ -339,7 +339,15 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
   "trusted-main-e2e.yml":
-    "3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437",
+    // SCRUM-892 (owner ruling c24441): the Convex cloud preview, its preview deploy
+    // key and its create/pin/delete steps are removed; the one `playwright` job
+    // starts, deploys to, marks, verifies and stops a per-job local backend through
+    // scripts/localConvexBackend.mjs. The job id, name, triggers, main-only `if`,
+    // concurrency and permissions are unchanged (trustedMainE2eWorkflow.test.ts).
+    // The suite step gains the AUTOFLOW_LOCAL_CONVEX_CI switch. No trigger, grant,
+    // checkout or secret other than the Clerk keys the suite already read.
+    // Previous pin 3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437.
+    "e436b52e622a86cf7a381a6da4e272b935da69dd0c54f069390d8dc8bc93eca6",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
@@ -475,6 +483,32 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
     }
     // Not vacuous: the swarm's three backend-owning jobs.
     expect(jobsNamingTheKey).toBeGreaterThanOrEqual(3);
+  });
+
+  it("SCRUM-892: trusted main E2E reads no Convex cloud key, names the local admin key only after its own start, and always() stops the backend", () => {
+    const entry = workflows.find(({ name }) => name === "trusted-main-e2e.yml");
+    const job = entry?.workflow.jobs?.playwright;
+    expect(job, "the playwright job").toBeDefined();
+    const source = readFileSync(path.join(workflowsDir, "trusted-main-e2e.yml"), "utf8");
+    // The preview deploy key and the repository deploy key are not read, by any spelling.
+    expect(source).not.toMatch(/CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY/);
+    expect(JSON.stringify(entry?.workflow)).not.toMatch(/CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY|--preview-create/);
+    expect(referencesConvexSecret(entry?.workflow)).toBe(false);
+    for (const step of job?.steps ?? []) {
+      expect(referencesConvexSecret(step), String(step.name)).toBe(false);
+    }
+    // It does hold the local admin key (so the whole-workflow pin and the generic
+    // start/stop ordering test above apply to it), and it is not a vacuous pass.
+    expect(reachesConvexCredential(entry?.workflow)).toBe(true);
+    const steps = job?.steps ?? [];
+    const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");
+    const firstKey = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+    expect(start).toBeGreaterThan(-1);
+    expect(firstKey).toBeGreaterThan(start);
+    const stop = steps.find((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs stop");
+    expect(stop?.if).toBe("always()");
+    // A regained preview key is detected: the control the assertions above rely on.
+    expect(referencesConvexSecret({ env: { K: "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}" } })).toBe(true);
   });
 
   it("is run by the trusted controller, not only by candidate-controlled PR CI (Sol F3 on PR #341)", () => {
