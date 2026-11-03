@@ -88,6 +88,7 @@ jobs:
         id: playwright
         run: pnpm exec playwright test
         env:
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
