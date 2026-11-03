@@ -79,7 +79,7 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
       if (args.includes("list")) return ok(`${PLAN_LINES.join("\n")}\n`);
       return ok();
     }),
-    fetchImpl: vi.fn(async (url: string) =>
+    fetchImpl: vi.fn(async (url: RequestInfo | URL) =>
       String(url).endsWith("/api/get_config_hashes")
         ? ({ ok: true, status: 200, json: async () => configHashes() } as unknown as Response)
         : ({ ok: true } as Response),
@@ -665,7 +665,7 @@ describe("verifyBackend (round 5 tripwire)", () => {
 
   test("fails when the deployed code changed after mark", async () => {
     const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (url: string) =>
+    h.deps.fetchImpl.mockImplementation(async (url: RequestInfo | URL) =>
       String(url).endsWith("/api/get_config_hashes")
         ? ({ ok: true, status: 200, json: async () => configHashes("swapped") } as unknown as Response)
         : ({ ok: true } as Response),

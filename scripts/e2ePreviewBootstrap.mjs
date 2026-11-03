@@ -459,6 +459,8 @@ export function maskEmail(email) {
  * @param {(command: string, args: string[], options: object) =>
  *          { status: number | null, error?: Error | undefined }} [spawn]
  *        the seam the failure-path tests drive; only `status` and `error` are read
+ * @param {Record<string, string | undefined>} [env] the CLI child's environment; in local
+ *        mode it carries the target and is validated before the spawn
  */
 export function runConvex(args, label, spawn = spawnSync, env = process.env) {
   // ⚠️ RE-VALIDATED AT THE CALL SITE, not merely where the argv was built.
