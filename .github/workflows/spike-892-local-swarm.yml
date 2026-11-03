@@ -17,6 +17,9 @@ name: SPIKE SCRUM-892 local Convex browser attack swarm (never merged)
 #     autoflow/trusted-browser-swarm, and the terminal opening-proof job.
 #   - attack-worker does not wait for trusted-e2e (both are proofs of their own).
 #   - Spike-only steps print the gate verdict line and the worker mission count.
+#   - FINDING: the two "Authenticate E2E seats" steps set AUTOFLOW_LOCAL_CONVEX_CI=1 here.
+#     The real converted workflow does not, and its trusted-frontend build for the auth
+#     step then blocks the local backend under the CSP (stuck on "Loading your workspace...").
 # It posts no status or check, holds no Convex cloud credential, and produces none
 # of the check names the release guard reads (.github/release-waivers.json).
 on:
@@ -575,6 +578,8 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          # SPIKE-ONLY ADDITION (finding): see the note at the top of this file.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -1136,6 +1141,8 @@ jobs:
         run: pnpm exec playwright test playwright/tests/auth.setup.ts --project=setup
         env:
           CI: true
+          # SPIKE-ONLY ADDITION (finding): see the note at the top of this file.
+          AUTOFLOW_LOCAL_CONVEX_CI: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
