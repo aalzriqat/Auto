@@ -1,0 +1,70 @@
+{
+  "id": "ap-recon-empty-system-reconciles-at-zero",
+  "fingerprint": "c367012c41479b8d7f5803add934dc967d0b0ced0fd27f60a84874a32d747be9",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedEmptySystem",
+      "input": {
+        "payables": 0,
+        "apLines": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "periodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "earlier"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": true
+    },
+    {
+      "observable": "closeChecklist.supplierWarnings",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "CONTROL: an empty system (no payables, no AP lines) reconciles at zero and raises no supplier warning"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

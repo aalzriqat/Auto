@@ -185,6 +185,20 @@ describe("Phase 9 — supplier payable payment method", () => {
   test("markPaid stores bank-transfer method and credits Bank", async () => {
     const { t, orgId, userId, asUser, bankAccountId } = await seedDealer("supplier_method");
     const now = Date.now();
+    const supplierId = await t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId,
+        displayName: "Partner Dealer",
+        displayNameKey: "partner dealer",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: userId,
+        createdAt: now,
+        updatedBy: userId,
+        updatedAt: now,
+      })
+    );
     const vehicleId = await t.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId,
@@ -198,6 +212,8 @@ describe("Phase 9 — supplier payable payment method", () => {
         transmission: "Automatic",
         sellingPrice: 16_000,
         sourceType: "SOURCED",
+        sourcedFromName: "Partner Dealer",
+        sourcedSupplierId: supplierId,
         sourceCost: 12_000,
         status: "SOLD",
       })
@@ -207,6 +223,7 @@ describe("Phase 9 — supplier payable payment method", () => {
         orgId,
         vehicleId,
         sourcedFromName: "Partner Dealer",
+        supplierId,
         amountDue: 12_000,
         currency: "JOD",
         status: "PENDING",

@@ -1,0 +1,64 @@
+{
+  "id": "sourced-sale-nonreader-refused-at-complete-draft-at-every-price",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeDraft",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "draft": "PENDING_DRAFT",
+        "salePrice": "EVERY_PRICE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.completeDraft.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.completeDraft.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "nonReader.completeDraft.entitlementInMessage",
+      "value": "absent"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    },
+    {
+      "observable": "draft.status",
+      "value": "PENDING"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "sales.completeDraft refuses a sale-completing role without view:cost_price with one byte-identical coded response at every price and the draft stays PENDING"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "e36796ea1d8dea63c09efa9cea5f3aa06e61bd87358f3d2974247da02f74bf8b"
+}

@@ -4,7 +4,7 @@ import { mutation, socialBulkMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
-import { projectVehicleForJoin } from "./utils/vehicleRowProjection";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -743,7 +743,7 @@ export const getRelations = query({
         return {
           ...quote,
           // Same-org is not enough: the car's cost stays behind `view:cost_price` (OWASP API3:2023).
-          vehicle: vehicle ? projectVehicleForJoin(vehicle, role) : null,
+          vehicle: projectOptionalVehicleForRole(vehicle, role),
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           companyName,
           createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",

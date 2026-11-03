@@ -1,0 +1,60 @@
+{
+  "id": "outstanding-summary-never-merges-unresolved-rows-by-name",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierReceivables.outstandingSummary",
+      "input": {
+        "unresolvedClaims": 2,
+        "unresolvedRecoveries": 2,
+        "identifiedClaims": 1,
+        "sameName": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "summary.totalOutstanding",
+      "value": 8000
+    },
+    {
+      "observable": "summary.costRecoveryOutstanding",
+      "value": 1000
+    },
+    {
+      "observable": "summary.bySupplier.length",
+      "value": 5
+    },
+    {
+      "observable": "summary.bySupplier.maxClaimsPerEntry",
+      "value": 1
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-settlement",
+  "impl": {
+    "file": "convex/supplierSettlementIdentity.test.ts",
+    "testName": "same-name unresolved claims and recoveries stay separate entries; identified rows stay grouped by id; totals unchanged"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-settlement",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "6a6e7f0739a29ffdec5cd1093d2ee4bec2d90d1a833cb4e14f5503540844ab4d"
+}

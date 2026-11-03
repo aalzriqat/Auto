@@ -7,11 +7,12 @@ import { changedContractPaths, encodeSignatures } from "./specDiff.mjs";
 import { fetchDeployedSpec, readSpecFile, redact } from "./fetchSpec.mjs";
 import { blockersForRelease } from "./compare.mjs";
 import { unscannedConvexClients } from "./clientFiles.mjs";
+import { writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 /** Synthetic CLI projects own their baseline; real repository debt is unrelated input. */
 const fixtureBaselineArgs = (dir: string) => {
-  fs.writeFileSync(path.join(dir, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
-  return ["--baseline", "baseline.json"];
+  writeBaselineDirectory(path.join(dir, "baseline"), []);
+  return ["--baseline", "baseline"];
 };
 
 /**

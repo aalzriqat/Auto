@@ -1,0 +1,54 @@
+{
+  "id": "import-bulk-consigned-refusal-does-not-name-the-stored-supplier-cost",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "importer",
+        "org": "A"
+      },
+      "action": "vehicles.importBulk",
+      "input": {
+        "vin": "SOURCED_CAR",
+        "sourceCost": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "importBulk.refusal",
+      "value": "present"
+    },
+    {
+      "observable": "importBulk.refusal.storedSupplierCost",
+      "value": "absent"
+    },
+    {
+      "observable": "vehicle.sourceCost",
+      "value": "unchanged"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
+    "testName": "a consigned VIN recorded at another supplier cost is refused without naming the stored cost"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round4",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "f193229f788c659c7b1e931dfa29eaf5df6e2dfa"
+  },
+  "fingerprint": "9f5e95aed1c8b269c9da72dba2f89fe9f1936326924419f50e5b07ecbc44e22f"
+}

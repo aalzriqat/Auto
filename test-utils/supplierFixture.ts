@@ -1,4 +1,5 @@
 import type { Id } from "../convex/_generated/dataModel";
+import type { MutationCtx } from "../convex/_generated/server";
 import { normalizeNameKey } from "../convex/utils/supplierNames";
 import type { convexTestWithComponents } from "./convexTest";
 
@@ -67,27 +68,39 @@ export async function supplierIdFor(
   orgId: Id<"organizations">,
   displayName: string
 ): Promise<Id<"suppliers">> {
+  return await t.run((ctx) => supplierIdInCtx(ctx, orgId, displayName));
+}
+
+/**
+ * `supplierIdFor` for a fixture that is already inside `t.run(async (ctx) => ...)`, e.g. one that
+ * inserts a SOURCED vehicle in the same call: `sourcedSupplierId: await supplierIdInCtx(ctx, orgId, name)`.
+ * Sale completion refuses a SOURCED car without a resolvable supplier id (SCRUM-868 P3), so a
+ * fixture that sells one needs this row.
+ */
+export async function supplierIdInCtx(
+  ctx: Pick<MutationCtx, "db">,
+  orgId: Id<"organizations">,
+  displayName: string
+): Promise<Id<"suppliers">> {
   const nameKey = normalizeNameKey(displayName);
-  return await t.run(async (ctx) => {
-    // A fixture scan (tests hold a handful of suppliers); the production index is not needed here.
-    const existing = (await ctx.db.query("suppliers").take(500)).find(
-      (row) => row.orgId === orgId && row.displayNameKey === nameKey
-    );
-    if (existing) return existing._id;
-    const author = await ctx.db.query("users").first();
-    if (!author) throw new Error("supplierIdFor needs a seeded user");
-    const now = Date.now();
-    return await ctx.db.insert("suppliers", {
-      orgId,
-      displayName,
-      displayNameKey: nameKey,
-      status: "ACTIVE",
-      version: 1,
-      origin: "MANUAL",
-      createdBy: author._id,
-      createdAt: now,
-      updatedBy: author._id,
-      updatedAt: now,
-    });
+  // A fixture scan (tests hold a handful of suppliers); the production index is not needed here.
+  const existing = (await ctx.db.query("suppliers").take(500)).find(
+    (row) => row.orgId === orgId && row.displayNameKey === nameKey
+  );
+  if (existing) return existing._id;
+  const author = await ctx.db.query("users").first();
+  if (!author) throw new Error("supplierIdFor needs a seeded user");
+  const now = Date.now();
+  return await ctx.db.insert("suppliers", {
+    orgId,
+    displayName,
+    displayNameKey: nameKey,
+    status: "ACTIVE",
+    version: 1,
+    origin: "MANUAL",
+    createdBy: author._id,
+    createdAt: now,
+    updatedBy: author._id,
+    updatedAt: now,
   });
 }

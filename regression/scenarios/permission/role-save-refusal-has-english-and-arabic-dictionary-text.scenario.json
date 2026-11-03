@@ -1,0 +1,49 @@
+{
+  "id": "role-save-refusal-has-english-and-arabic-dictionary-text",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "i18n.inspect",
+      "input": {
+        "code": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "en.equalsServerMessage",
+      "value": "true"
+    },
+    {
+      "observable": "ar.present",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the role-save refusal has English and Arabic text in the dictionary, and the English text equals the server message"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "15e28ff89a9cde6fa783f86f4a0576dbda988710e424fa979865a6e1a68dc123"
+}

@@ -19,23 +19,21 @@
  * entry is added by a person, from an inspected report, with a rationale, an
  * issue and an expiry.
  */
-import fs from "node:fs";
 import crypto from "node:crypto";
 import { indexAllNamed, normalizeIdentifier } from "./specIndex.mjs";
 import { compareCodeUnits } from "./compareCodeUnits.mjs";
+import { IDENTITY_FIELDS, identityOf, loadShardedBaseline } from "./baselineShards.mjs";
+
+export { identityOf };
 
 /**
- * Fields that identify a finding, in key order. `fingerprint` and `cause` are
- * deliberately NOT part of the identity: the cause text embeds the backend
+ * `IDENTITY_FIELDS` (baselineShards.mjs) are the fields that identify a finding, in key order. `fingerprint` and
+ * `cause` are deliberately NOT part of the identity: the cause text embeds the backend
  * validator's type, so including it would turn "the contract under this path
  * changed" into an unrelated removed+new pair and hide the real reason.
  */
-const IDENTITY_FIELDS = ["surface", "file", "callSiteId", "functionId", "contractPath", "kind"];
 const REQUIRED_TEXT = [...IDENTITY_FIELDS, "cause", "fingerprint", "rationale", "issue", "expires"];
 const KINDS = new Set(["SHAPE_UNKNOWN", "TYPE_UNKNOWN"]);
-
-/** @param {Record<string, unknown>} entry */
-export const identityOf = (entry) => IDENTITY_FIELDS.map((f) => String(entry[f])).join("\u0001");
 
 const describe = (entry) =>
   `${entry.surface}:${entry.file} ${entry.callSiteId} ${entry.functionId} ${entry.contractPath} [${entry.kind}]`;
@@ -129,40 +127,20 @@ export function unprovenFrom(needsEvidence, spec) {
 }
 
 /**
- * @param {string} file
- * @returns {{ok: true, entries: any[]} | {ok: false, problem: string}}
+ * Load the baseline: a directory of shards, one per client file (baselineShards.mjs). It fails closed; the problem
+ * says what was wrong. `files` is the snapshot an author tool passes back to `writeShardedBaseline`.
+ *
+ * @param {string} directory
+ * @returns {{ok: true, entries: any[], files: Map<string, string>} | {ok: false, problem: string}}
  */
-export function loadBaseline(file) {
-  let text;
-  try {
-    text = fs.readFileSync(file, "utf8");
-  } catch (error) {
-    const code = /** @type {{code?: string}} */ (error)?.code;
-    return {
-      ok: false,
-      problem:
-        code === "ENOENT"
-          ? `the needs-evidence baseline ${file} is absent; an absent baseline is not an empty one`
-          : `the needs-evidence baseline ${file} could not be read (${String(/** @type {Error} */ (error)?.message ?? error)})`,
-    };
-  }
-  try {
-    const parsed = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.entries)) {
-      return { ok: false, problem: `the needs-evidence baseline ${file} has no \`entries\` array` };
-    }
-    return { ok: true, entries: parsed.entries };
-  } catch (error) {
-    return {
-      ok: false,
-      problem: `the needs-evidence baseline ${file} is not valid JSON (${String(/** @type {Error} */ (error)?.message ?? error)})`,
-    };
-  }
+export function loadBaseline(directory) {
+  const loaded = loadShardedBaseline(directory);
+  return loaded.ok ? { ok: true, entries: loaded.entries, files: loaded.files } : { ok: false, problem: loaded.problem };
 }
 
 /**
  * @param {Array<Record<string, unknown>>} unproven  from unprovenFrom()
- * @param {ReturnType<typeof loadBaseline>} loaded
+ * @param {{ ok: true, entries: any[] } | { ok: false, problem: string }} loaded  as loadBaseline returns it
  * @param {Date} [now]
  * @returns {{ drift: boolean, problems: string[], matched: number }}
  */

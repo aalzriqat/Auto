@@ -79,13 +79,30 @@ export async function seedFinancedDealership<K extends string>(tag: string, opts
   const customerStatusId = await t.run((ctx) =>
     ctx.db.insert("orgCustomerStatuses", { orgId, label: "Eligible", isActive: true, order: 1 })
   );
+  let supplierId: Id<"suppliers"> | undefined;
+  if (opts.sourced) {
+    supplierId = await t.run((ctx) =>
+      ctx.db.insert("suppliers", {
+        orgId,
+        displayName: "Amman Importer Co",
+        displayNameKey: "amman importer co",
+        status: "ACTIVE",
+        version: 1,
+        origin: "MANUAL",
+        createdBy: owner.userId,
+        createdAt: Date.now(),
+        updatedBy: owner.userId,
+        updatedAt: Date.now(),
+      })
+    );
+  }
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `${opts.vinPrefix}${tag}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
       color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
       sellingPrice: G / SCALE, status: "AVAILABLE",
       ...(opts.sourced
-        ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: 9_000 }
+        ? { sourceType: "SOURCED" as const, sourcedSupplierId: supplierId, sourcedFromName: "Amman Importer Co", sourceCost: 9_000 }
         : { sourceType: "STOCK" as const, purchasePrice: 9_000 }),
     })
   );
@@ -95,7 +112,7 @@ export async function seedFinancedDealership<K extends string>(tag: string, opts
       gracePeriodMonths: 0, isActive: true, defaultLtvPercent: 100, adminFees: 0,
     })
   );
-  return { t, orgId, customerId, customerStatusId, vehicleId, companyId, owner, approver, actors, fiscalYear };
+  return { t, orgId, customerId, customerStatusId, vehicleId, companyId, owner, approver, actors, fiscalYear, supplierId };
 }
 
 /**

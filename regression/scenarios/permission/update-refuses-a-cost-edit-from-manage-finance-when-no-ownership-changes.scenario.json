@@ -1,0 +1,57 @@
+{
+  "id": "update-refuses-a-cost-edit-from-manage-finance-when-no-ownership-changes",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "financeeditor",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "OWNED_CAR",
+        "minimumProfit": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "financeeditor",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicle": "CONSIGNED_CAR",
+        "sourceCost": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusal.code",
+      "value": "VEHICLE_COST_EDIT_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "vehicle.storedRow",
+      "value": "unchanged"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
+    "testName": "manage:finance alone does not unlock a cost edit that changes no ownership"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round5",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "70f3c9e7ecbbb1feabe1eefd2b89cd463965f0de283ef336541304ae35b6e0c6"
+}

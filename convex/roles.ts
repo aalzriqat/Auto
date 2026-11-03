@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import {
   PERMISSIONS,
+  assertRoleMayBeStored,
   dedupePermissions,
   getInvalidPermissions,
   isReservedRoleName,
@@ -20,6 +21,7 @@ import { AppErrorCode, throwAppError } from "./utils/errors";
 const RETIRED_PERMISSION_MESSAGE =
   'The "Finalize financed deal" permission is no longer used. Grant "Record the supplier payment route" or "Cancel a closed financed deal" instead.';
 
+// SCRUM-886 round 13. Translated under ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS; the EN dictionary text equals this string.
 const OWNER_NAMED_ROLE_LOCKED_MESSAGE =
   "This role is named OWNER but is not the system owner role, so its permissions cannot be edited. Rename it to a different name first.";
 
@@ -98,6 +100,8 @@ export const create = mutation({
     if (newlyAddedLegacyPermissions(args.permissions, []).length > 0) {
       throwAppError(AppErrorCode.PERMISSION_RETIRED, RETIRED_PERMISSION_MESSAGE);
     }
+    // SCRUM-886 round 13: a role that completes sales must be able to read vehicle cost (completing a SOURCED car's sale needs it).
+    assertRoleMayBeStored(args.permissions);
 
     // Prevent duplicate role names within the same org
     const existingRoles = await ctx.db
@@ -207,6 +211,11 @@ export const update = mutation({
       }
       patch.permissions = dedupePermissions(args.permissions);
     }
+
+    // SCRUM-886 round 13 / SCRUM-896 R4-F1: validate the FINAL permission set, the submitted one or, for a rename-only save, the
+    // stored one. A stored role in the refused combination is no longer renamable (a rename could make it the ACCOUNTANT the deploy
+    // backfill repairs); the owner repairs it by saving it with view:cost_price.
+    assertRoleMayBeStored(args.permissions ?? role.permissions);
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.roleId, patch);

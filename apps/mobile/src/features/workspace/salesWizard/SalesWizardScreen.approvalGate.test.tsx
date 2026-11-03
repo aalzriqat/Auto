@@ -44,9 +44,18 @@ const BLOCKED_TITLE = "موافقة مطلوبة";
 const APPROVED_NOTE = upliftApprovedText("ar");
 
 let storedApproval: Record<string, unknown> | null = null;
+// SCRUM-886: a role without view:cost_price gets the vehicle without `minimumProfit`.
+let minimumWithheld = false;
 
 function query(ref: unknown) {
-  if (ref === api.vehicles.listAll) return [VEHICLE];
+  if (ref === api.vehicles.listAll) {
+    if (!minimumWithheld) return [VEHICLE];
+    const { minimumProfit: _withheld, ...withoutMinimum } = VEHICLE;
+    return [withoutMinimum];
+  }
+  if (ref === api.approvals.profitApprovalStatus) {
+    return { status: "REQUIRED", margin: 200, minimumProfit: VEHICLE.minimumProfit };
+  }
   if (ref === api.wizardDrafts.getMyDraft) return null;
   if (ref === api.memberships.getMyMembership) return { permissions: [] };
   if (ref === api.approvals.checkPendingApproval) return storedApproval;
@@ -55,6 +64,7 @@ function query(ref: unknown) {
 
 beforeEach(() => {
   storedApproval = null;
+  minimumWithheld = false;
   mockUseQuery.mockImplementation(((ref: unknown, args: unknown) =>
     args === "skip" ? undefined : query(ref)) as unknown as typeof useQuery);
   mockUseMutation.mockImplementation((() => jest.fn()) as unknown as typeof useMutation);
@@ -101,6 +111,20 @@ describe("SalesWizardScreen approval gate follows the server's exact-terms rule 
     const view = await openWithPrice("INSTALLMENT", "12200");
     expect(view.queryByText(BLOCKED_TITLE)).not.toBeNull();
     expect(view.queryByText(APPROVED_NOTE)).toBeNull();
+  });
+
+  test("SCRUM-886: with the vehicle's minimum withheld, the server's verdict still blocks a price below it", async () => {
+    minimumWithheld = true;
+    const view = await openWithPrice("INSTALLMENT", "12200");
+    expect(view.queryByText(BLOCKED_TITLE)).not.toBeNull();
+  });
+
+  test("SCRUM-886: with the vehicle's minimum withheld, an approval for exactly these terms still unblocks", async () => {
+    minimumWithheld = true;
+    storedApproval = { status: "APPROVED", requestedProfit: 200, minimumProfit: 1000 };
+    const view = await openWithPrice("INSTALLMENT", "12200");
+    expect(view.queryByText(APPROVED_NOTE)).not.toBeNull();
+    expect(view.queryByText(BLOCKED_TITLE)).toBeNull();
   });
 
   test("a cash quote is exempt", async () => {

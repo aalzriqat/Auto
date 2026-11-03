@@ -4,8 +4,9 @@ import fs from "node:fs";
 import { parseArgs } from "node:util";
 import ts from "typescript";
 import { resolveCommit, resolveGit, runGitBytes } from "./gitExecutable.mjs";
-import { resolveInside, serializeBaseline, writeBaselineAtomically } from "./baselineFile.mjs";
-import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBaseline, inspectBaselineIdentities, callExpressionAt,
+import { resolveInside } from "./baselineFile.mjs";
+import { writeShardedBaseline } from "./baselineShards.mjs";
+import { DEFAULT_BASELINE, EXIT_IDENTITY_DRIFT, EXIT_UNAVAILABLE, readIdentityBaselineSnapshot, inspectBaselineIdentities, callExpressionAt,
   callKey, describeStranded } from "./baselineIdentity.mjs";
 import { isRunDirectly } from "./runDirectly.mjs";
 
@@ -30,8 +31,7 @@ export function main(argv, io = DEFAULT_IO) {
     if (!git) throw new Error("Git is unavailable; cannot verify the old call expression");
     const base = resolveCommit(git, values.base, root);
     const baselinePath = resolveInside(root, values.baseline, "baseline");
-    const before = fs.readFileSync(baselinePath, "utf8");
-    const entries = readIdentityBaseline(baselinePath);
+    const { entries, files: before } = readIdentityBaselineSnapshot(baselinePath);
     const stranded = inspectBaselineIdentities(entries);
     const occupied = new Set(entries.map(callKey));
     /** @type {Map<string, { base: import("typescript").SourceFile, head: import("typescript").SourceFile }>} */
@@ -75,10 +75,9 @@ export function main(argv, io = DEFAULT_IO) {
       }
     }
     if (values.write && proposals.length > refused) {
-      // Preserve all review metadata; the only semantic edits permitted here are callSiteId values.
-      const document = JSON.parse(before);
-      document.entries = entries;
-      writeBaselineAtomically(baselinePath, serializeBaseline(document, before), before, root);
+      // Preserve all review metadata; the only semantic edits permitted here are callSiteId values. A relocated entry
+      // stays in its client file's shard, so no shard is created or removed; only the shards that moved are rewritten.
+      writeShardedBaseline(baselinePath, entries, { before, root });
     }
     io.log(`${proposals.length - refused} safe relocation(s), ${refused} requiring human review. ${values.write ? "Write requested." : "Dry run; baseline unchanged."}`);
     return refused ? EXIT_IDENTITY_DRIFT : 0;

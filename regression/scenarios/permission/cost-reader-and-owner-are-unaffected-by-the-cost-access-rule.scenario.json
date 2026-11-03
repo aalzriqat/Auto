@@ -1,0 +1,63 @@
+{
+  "id": "cost-reader-and-owner-are-unaffected-by-the-cost-access-rule",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "AT_ENTITLEMENT"
+      }
+    },
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePrice": "BELOW_ENTITLEMENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "atEntitlement.sales.count",
+      "value": "1"
+    },
+    {
+      "observable": "belowEntitlement.refusal.sentence",
+      "value": "detailed-shortfall"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "a view:cost_price holder is unaffected on every door: a sale at the entitlement commits and one below it gets the detailed shortfall sentence"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "db108a1c8674d2fb69355f7a097e9f5bb2c8813fda215f146c739f4756c0fc40"
+}

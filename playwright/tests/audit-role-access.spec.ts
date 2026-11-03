@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { newContainedContext } from "../containedContext";
 import { PILOT_ACCOUNTING_VIEWS, PILOT_G8_ROLE_TAG, PILOT_HUNT_LOCALES, PILOT_HUNT_VIEWPORTS, withLocalePage } from "../fixtures/pilotHunt";
 import { ensureFinanceCompany, ZERO_FEE_COMPANY, CUSTOMER_STATUS } from "../fixtures/financedDeal";
+import { ensureSupplier } from "../fixtures/dealScenarios";
 import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
@@ -41,7 +42,7 @@ async function visit(page: Page, baseURL: string | undefined, route: typeof SCRE
 test("protected role routes render actual authority across audited pages", async ({ page, baseURL }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
-  for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing"] as const) {
+  for (const route of ["expenses", "payroll", "reports", "commissions", "sales", "sales/sales", "tasks", "marketplace/requests", "leads", "social-inbox", "sourcing", "suppliers"] as const) {
     await visit(page, baseURL, route);
   }
   expect(errors).toEqual([]);
@@ -203,13 +204,15 @@ test("pilot Deals opens owned and SOURCED cash and configured financed detail sc
     const status = statuses.find(s => s.label === CUSTOMER_STATUS);
     expect(status).toBeDefined();
     if (!status) throw new Error("Configured QA customer status missing");
+    // SCRUM-868 P2: the consignment supplier travels as a master id; the server writes the name.
+    const consignor = await ensureSupplier(owner, orgId, "QA TEST G8 Supplier");
     for (const sourceType of ["STOCK", "SOURCED"] as const) for (const mode of ["CASH", "CONFIGURED_FINANCE_COMPANY"] as const) {
       const tag = `QA TEST G8 ${sourceType} ${mode} ${testDataSuffix()}`;
       const vehicleId = await owner.mutation(api.vehicles.create, {
         orgId, vin: testVin(), make: "Playwright", model: tag, year: 2024, mileage: 100,
         color: "Black", fuelType: "Petrol", transmission: "Automatic", sellingPrice: 15_000,
         status: "AVAILABLE", sourceType,
-        ...(sourceType === "SOURCED" ? { sourcedFromName: "QA TEST G8 Supplier", sourceCost: 10_000 } : {}),
+        ...(sourceType === "SOURCED" ? { sourcedSupplierId: consignor, sourceCost: 10_000 } : {}),
         idempotencyKey: tag,
       });
       const customerId = await owner.mutation(api.customers.create, { orgId, firstName: "QA TEST", lastName: tag });

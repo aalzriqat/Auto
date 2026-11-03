@@ -1,20 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { cn } from "@/lib/utils";
-import { mainNavigation as navigation, settingsNavigation, navItemPermitted } from "@/lib/navigation";
-import { Badge } from "@/components/ui/badge";
+import { NavSections, PlanCard } from "@/components/layout/NavSections";
 
 export function Sidebar() {
-  const { t, isRtl } = useLanguage();
   const { activeOrgId } = useOrg();
-  const pathname = usePathname();
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
@@ -29,88 +23,32 @@ export function Sidebar() {
     api.approvals.countPending,
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
   );
-  const subscription = useQuery(
-    api.subscriptions.getMySubscription,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  const visibleNav = navigation.filter(item => navItemPermitted(item, permissions));
-
-  const visibleSettings = settingsNavigation.filter(item => {
-    if ((item as { ownerOnly?: boolean }).ownerOnly) return isOwner;
-    if (!item.permission) return true;
-    return permissions.includes(item.permission);
-  });
-
-  const renderNavItem = (item: { name: string; href: string; icon: typeof navigation[0]["icon"] }) => {
-    const href = `/${activeOrgId}${item.href}`;
-    const isActive = pathname.startsWith(href);
-    const isApprovals = item.name === "Approvals";
-
-    return (
-      <Link
-        key={item.name}
-        href={href}
-        className={cn(
-          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
-          isActive
-            ? "bg-primary/10 text-primary"
-            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-        )}
-      >
-        <item.icon className={cn("h-4 w-4 shrink-0", isActive ? "text-primary" : "text-slate-400")} />
-        <span className="flex-1">{t(item.name as any)}</span>
-        {isApprovals && pendingCount != null && pendingCount > 0 && (
-          <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-            {pendingCount}
-          </span>
-        )}
-      </Link>
-    );
-  };
 
   return (
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0">
-      <div className="flex items-center justify-center px-6 py-3 border-b border-slate-200/50 shrink-0">
-        <Link href={`/${activeOrgId}/dashboard`} className="flex items-center justify-center">
+      {/* 64px, the same height as the top bar, so the two borders line up. */}
+      <div className="flex h-16 items-center justify-center px-6 border-b border-slate-200/50 shrink-0">
+        <Link href={`/${activeOrgId}/dashboard`} className="flex items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           {logoUrl ? (
-            <img src={logoUrl} alt="Organization Logo" className="h-24 w-auto max-w-[180px] object-contain" />
+            <img src={logoUrl} alt="Organization Logo" className="h-10 w-auto max-w-[160px] object-contain" />
           ) : (
-            <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-24 w-auto max-w-[180px] object-contain" priority />
+            <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-10 w-auto max-w-[160px] object-contain" priority />
           )}
         </Link>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
-        <nav className="flex flex-col gap-1">
-          {visibleNav.map(renderNavItem)}
-        </nav>
-
-        {visibleSettings.length > 0 && (
-          <div className="mt-4">
-            <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              {t("Settings" as any)}
-            </p>
-            <nav className="flex flex-col gap-1 mt-1">
-              {visibleSettings.map(renderNavItem)}
-            </nav>
-          </div>
-        )}
+      <div className="flex-1 overflow-y-auto px-3 pt-3 pb-4">
+        <NavSections
+          permissions={permissions}
+          isOwner={isOwner}
+          density="desktop"
+          badges={{ Approvals: pendingCount }}
+        />
       </div>
 
-      {isOwner && <div className="p-4 border-t border-slate-200/50">
-        <Link href={activeOrgId ? `/${activeOrgId}/settings/billing` : "#"}>
-          <div className="rounded-xl bg-slate-50 p-4 border border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-medium text-slate-500">{t("AutoFlowPro" as any)}</p>
-              <Badge variant="secondary" className="text-[10px] px-2 py-0 h-4 font-semibold">
-                {(isRtl ? subscription?.planDetails?.nameAr : subscription?.planDetails?.name) ?? (isRtl ? "مجاني" : "Free")}
-              </Badge>
-            </div>
-            <p className="text-[10px] text-slate-400 mt-1">{t("BillingManagePlan" as any)}</p>
-          </div>
-        </Link>
-      </div>}
+      <div className="shrink-0 border-t border-slate-200/50 p-3 empty:hidden">
+        <PlanCard permissions={permissions} isOwner={isOwner} density="desktop" />
+      </div>
     </aside>
   );
 }

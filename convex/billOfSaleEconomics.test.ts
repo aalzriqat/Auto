@@ -20,6 +20,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -238,11 +239,11 @@ describe("getBillOfSaleEconomics - CASH", () => {
 
   test("a consigned DIRECT_TO_SUPPLIER cash sale bills 0 for the car, itemises the fees and says it was paid to the supplier", async () => {
     const s = await seedDealership("cashdirect");
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VIN258DIRECT", make: "Toyota", model: "Camry", year: 2024, mileage: 10,
         color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 13_000,
-        status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 11_000,
+        status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: 11_000,
       })
     );
     const saleId = await s.as.mutation(api.sales.create, {

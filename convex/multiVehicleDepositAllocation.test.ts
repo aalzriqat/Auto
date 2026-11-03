@@ -1223,6 +1223,8 @@ describe("a released share that is refunded or forfeited", () => {
     );
     expect(payments).toHaveLength(1);
     expect(payments[0]!.canonicalPaymentId).toBeTruthy();
+    // SCRUM-264: payOutDepositSlice is driven by deposits.ts with a real moment.
+    expect(payments[0]!.paymentDateKind).toBe("instant");
 
     const posted = await s.t.run(async (ctx) =>
       (await ctx.db.query("accountingEvents").collect()).filter(

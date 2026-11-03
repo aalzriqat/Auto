@@ -1,0 +1,77 @@
+{
+  "id": "p2-supplier-payable-is-bound-to-the-vehicle-supplier-then-settleable",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payable": "WITHOUT_SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OPERATOR",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "phase": "PAYABLES"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payable": "WITHOUT_SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "payable.supplierId",
+      "value": "VEHICLE_LINKED_SUPPLIER"
+    },
+    {
+      "observable": "payable.sourcedFromName.rewritten",
+      "value": false
+    },
+    {
+      "observable": "payable.status",
+      "value": "PAID"
+    }
+  ],
+  "matrixRow": "SCRUM868-P3-supplier-repair",
+  "impl": {
+    "file": "convex/supplierIdentityRepair.test.ts",
+    "testName": "a P2 payable is refused before the repair, bound to the vehicle's supplier by it, and settleable after"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p3-supplier-repair",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "46e10894ce3367b7848fe547e04fdcb5424b3d44c8dcfb924185e9f3fcaedcc5"
+}

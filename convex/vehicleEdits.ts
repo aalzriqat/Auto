@@ -5,6 +5,12 @@ import { v } from "convex/values";
 import { requireTenantAuth } from "./utils/tenancy";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import {
+  canReadVehicleCost,
+  editPayloadCarriesCost,
+  projectOptionalVehicleForRole,
+  projectVehicleEditPayloadForRole,
+} from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
@@ -276,6 +282,15 @@ export const requestUpdate = mutation({
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found.");
     }
+    // SCRUM-886 (OWASP API3:2023, write side): a caller who cannot read vehicle cost cannot propose a
+    // cost change either. They never saw the stored value, and every later check compares the submitted
+    // value with it (the precision check, the "No changes detected" refusal), which would let them
+    // confirm a guessed cost. Refused by which keys are present, before any comparison with the stored
+    // row, so the answer is the same whatever the value. The vehicle form sends none of these fields
+    // for such a caller.
+    if (!canReadVehicleCost(role) && editPayloadCarriesCost(args.payload)) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
     const payload = normalizeVehicleEditPayload(args.payload);
     assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
@@ -414,7 +429,7 @@ export const requestUpdate = mutation({
 export const listPending = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const requests = await ctx.db
       .query("vehicleEdits")
@@ -429,8 +444,9 @@ export const listPending = query({
         const vehicle = req.vehicleId ? await ctx.db.get(req.vehicleId) : null;
         return {
           ...req,
+          payload: projectVehicleEditPayloadForRole(req.payload, role),
           user: user ? { name: user.name || "Unknown", email: user.email } : null,
-          vehicle,
+          vehicle: projectOptionalVehicleForRole(vehicle, role),
         };
       })
     );
@@ -735,7 +751,7 @@ export const getHistory = query({
   },
   handler: async (ctx, args) => {
     // We allow anyone in the org to view history
-    await requireTenantAuth(ctx, args.orgId);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
 
     const edits = await ctx.db
       .query("vehicleEdits")
@@ -751,6 +767,7 @@ export const getHistory = query({
         
         return {
           ...edit,
+          payload: projectVehicleEditPayloadForRole(edit.payload, role),
           requestedByName: requestedBy?.name || "Unknown",
           resolvedByName: resolvedBy?.name,
         };

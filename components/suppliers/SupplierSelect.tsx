@@ -15,8 +15,8 @@
  * one place that decides, so a finance user is never blocked from recording a genuinely different
  * supplier.
  */
-import { Component, useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { Component, useEffect, useState, type ReactNode } from "react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -24,7 +24,8 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
-import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
+import { getLocalizedErrorMessage } from "@/lib/errors";
+import { useSupplierCreateFlow } from "./useSupplierCreateFlow";
 import { interpolate } from "@/lib/i18n/interpolate";
 
 export interface PickedSupplier {
@@ -48,12 +49,6 @@ export interface SupplierSelectProps {
   className?: string;
 }
 
-interface Candidate {
-  supplierId: Id<"suppliers">;
-  displayName: string;
-  status: "ACTIVE" | "INACTIVE";
-}
-
 interface PickerRow {
   _id: Id<"suppliers">;
   displayName: string;
@@ -61,23 +56,6 @@ interface PickerRow {
 }
 
 const LIST_PAGE_SIZE = 50;
-const DUPLICATE_CODE = "SUPPLIER_DUPLICATE_CANDIDATES";
-
-function duplicateCandidates(error: unknown): Candidate[] | null {
-  if (!isConvexError(error)) return null;
-  const data = error.data as { code?: unknown; candidates?: unknown } | null;
-  if (!data || typeof data !== "object" || data.code !== DUPLICATE_CODE || !Array.isArray(data.candidates)) {
-    return null;
-  }
-  return (data.candidates as Candidate[]).filter(
-    (c) => typeof c?.supplierId === "string" && typeof c?.displayName === "string",
-  );
-}
-
-function newIdempotencyKey(): string {
-  return `supplier-create:${globalThis.crypto.randomUUID()}`;
-}
-
 /** A failed supplier query must not take the whole vehicle form down with it. */
 class SupplierQueryBoundary extends Component<
   { fallback: ReactNode; children: ReactNode },
@@ -108,7 +86,6 @@ function SupplierSelectBody({
   const translate = t as (key: string) => string;
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const canCreate = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
-  const createSupplier = useMutation(api.suppliers.create);
 
   const [text, setText] = useState("");
   const query = text.trim();
@@ -127,17 +104,14 @@ function SupplierSelectBody({
     .filter((row) => row.status === "ACTIVE")
     .map((row) => ({ value: row._id as string, label: row.displayName }));
 
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
-  const keyRef = useRef<string | null>(null);
+  const flow = useSupplierCreateFlow(orgId);
+  const { creating, candidates, reset: resetCreate } = flow;
+  const createError = flow.error === null ? null : getLocalizedErrorMessage(flow.error, translate);
 
   // A new search is a new intent: drop the previous create attempt, its error and its key.
   useEffect(() => {
-    setCandidates(null);
-    setCreateError(null);
-    keyRef.current = null;
-  }, [query]);
+    resetCreate();
+  }, [query, resetCreate]);
 
   const pick = (supplier: PickedSupplier, close: () => void) => {
     onChange(supplier);
@@ -145,35 +119,12 @@ function SupplierSelectBody({
   };
 
   async function submitCreate(confirmDistinctFrom: Id<"suppliers">[] | undefined, close: () => void) {
-    if (!orgId || creating) return;
-    setCreating(true);
-    setCreateError(null);
-    // The key identifies this exact request. The confirm list is part of what the server
-    // fingerprints, so the confirmed retry gets a fresh key.
-    keyRef.current ??= newIdempotencyKey();
-    try {
-      const { supplierId } = await createSupplier({
-        orgId,
-        idempotencyKey: keyRef.current,
-        displayName: query,
-        ...(confirmDistinctFrom ? { confirmDistinctFrom } : {}),
-      });
-      keyRef.current = null;
-      setCandidates(null);
-      pick({ id: supplierId, displayName: query }, close);
-    } catch (error) {
-      const found = duplicateCandidates(error);
-      if (found) {
-        setCandidates(found);
-        keyRef.current = null;
-      } else {
-        setCreateError(getLocalizedErrorMessage(error, translate));
-      }
-    } finally {
-      setCreating(false);
-    }
+    if (creating) return;
+    // The key identifies this exact request; the hook drops it after a duplicate answer, so the
+    // confirmed retry (a different payload) gets a fresh one.
+    const supplierId = await flow.submit({ displayName: query }, confirmDistinctFrom ? { confirmDistinctFrom } : {});
+    if (supplierId) pick({ id: supplierId, displayName: query }, close);
   }
-
   const renderFooter = ({ close }: { search: string; close: () => void }) => {
     if (query === "") return null;
     return (

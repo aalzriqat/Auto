@@ -195,6 +195,7 @@ export async function recordHeldDeposit(
     method: args.method,
     amount: args.amount,
     paymentDate: now,
+    paymentDateKind: "instant",
     status: "POSTED",
     idempotencyKey: args.idempotencyKey,
     reference: `Deposit ${depositId}`,

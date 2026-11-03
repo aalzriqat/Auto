@@ -32,6 +32,7 @@ import { IN_FLIGHT_FINANCE_STATUSES } from "./financeStatuses";
 import { isServerDerivedPlanVersion, planVersionOf } from "./financedSalePostingPlan";
 import { isManualFinanceApplication } from "./manualFinancePayer";
 import { denominationOf, toMinorUnits } from "./money";
+import { SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE, SUPPLIER_ERROR, throwSupplierError } from "./supplierRegistry";
 import { isConsignedAgentSale } from "./vehicleOwnership";
 
 /**
@@ -76,6 +77,7 @@ export interface SupplierConcessionBasis {
   contractEntitlementMinor: number;
   currency: string;
   supplierName: string;
+  supplierId?: Id<"suppliers">;
 }
 
 const isSafeMinor = (value: number): boolean => Number.isSafeInteger(value);
@@ -212,13 +214,23 @@ const sameName = (a: string | undefined, b: string): boolean => (a ?? "").trim()
  * At RESOLUTION: the operator's observed supplier terms must equal the vehicle's now. Returns
  * the basis to store. Refuses a stock car, a vehicle with no entitlement, an unobserved
  * basis, and a basis that has moved since the dialog rendered.
+ *
+ * The counterparty is compared by its ID, not by its name (SCRUM-868 P3, Seat 2 B1). A name is
+ * a label two different suppliers can share, so a basis observed for supplier A would otherwise
+ * be recorded against supplier B once the vehicle moved to a same-name, same-terms B, and the
+ * concession would shrink B's payable. The id is the key ERP payables use for the supplier
+ * (Oracle Payables: a supplier's unique identifiers, not its name, key its transactions). The
+ * observed id must be present and equal the vehicle's current id; a vehicle with no id cannot
+ * be bound to a counterparty and is refused. A foreign, deleted or invented observed id fails
+ * the same equality, so the refusal reveals nothing about which ids exist.
  */
 export function assertObservedBasisMatchesVehicle(args: {
-  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName">;
+  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName" | "sourcedSupplierId">;
   currency: string;
   concessionMinor: number;
   observedEntitlementMinor: number | undefined;
   observedSupplierName: string | undefined;
+  observedSupplierId: Id<"suppliers"> | undefined;
 }): SupplierConcessionBasis {
   const { vehicle, currency, concessionMinor } = args;
   if (!isConsignedAgentSale(vehicle)) {
@@ -232,18 +244,24 @@ export function assertObservedBasisMatchesVehicle(args: {
   if (supplierName === "") {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }
-  if (args.observedEntitlementMinor === undefined || args.observedSupplierName === undefined) {
+  if (
+    args.observedEntitlementMinor === undefined ||
+    args.observedSupplierName === undefined ||
+    args.observedSupplierId === undefined
+  ) {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_REQUIRED);
   }
   if (
     args.observedEntitlementMinor !== entitlementMinor ||
-    !sameName(args.observedSupplierName, supplierName)
+    !sameName(args.observedSupplierName, supplierName) ||
+    vehicle.sourcedSupplierId === undefined ||
+    args.observedSupplierId !== vehicle.sourcedSupplierId
   ) {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }
   // Bounds last, so a wrong basis is reported as such before an amount problem.
   effectiveSupplierEntitlementMinor({ entitlementMinor, concessionMinor });
-  return { contractEntitlementMinor: entitlementMinor, currency, supplierName };
+  return { contractEntitlementMinor: entitlementMinor, currency, supplierName, supplierId: vehicle.sourcedSupplierId };
 }
 
 /**
@@ -256,7 +274,7 @@ export function resolveEffectiveEntitlementForCompletion(args: {
     Doc<"financeApplications">,
     "vehicleId" | "vehicleItems" | "supplierGapShareMinor" | "supplierGapBasis"
   >;
-  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName">;
+  vehicle: Pick<Doc<"vehicles">, "sourceType" | "sourceCost" | "sourcedFromName" | "sourcedSupplierId">;
   currency: string;
 }): { concessionMinor: number; contractEntitlementMinor: number | undefined } {
   const concessionMinor = storedConcessionMinor(args.app);
@@ -278,6 +296,15 @@ export function resolveEffectiveEntitlementForCompletion(args: {
     basis.currency !== args.currency ||
     !sameName(args.vehicle.sourcedFromName, basis.supplierName)
   ) {
+    throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+  }
+  // A basis recorded before supplier ids existed is not stale: nothing changed under it, it was never
+  // bound. Re-recording is impossible after handover, so the truthful remedy is the release repair or a
+  // reviewed correction, not "record the concession again".
+  if (!basis.supplierId) {
+    throwSupplierError(SUPPLIER_ERROR.CONCESSION_BASIS_UNBOUND, SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE);
+  }
+  if (basis.supplierId !== args.vehicle.sourcedSupplierId) {
     throw new ConvexError(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
   }
   // Called for its refusal (a concession must stay strictly below the entitlement); the

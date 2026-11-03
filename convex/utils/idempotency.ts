@@ -30,6 +30,24 @@ async function assertReplayable(
   }
 }
 
+/** English text of the SCRUM-886 refusal; `ServerError_COMMAND_IDENTITY_FOREIGN_ACTOR` carries the Arabic. */
+export const COMMAND_IDENTITY_FOREIGN_ACTOR_MESSAGE =
+  "This request was started by a different user and cannot be repeated from this account. Start a new operation.";
+
+/**
+ * A command identity belongs to the actor that minted it (OWASP API3:2023: the outcome of a mutation
+ * is a read channel). The stored fingerprint carries the minting actor's inputs, some of them COST
+ * tier, so a replay by anyone else is refused BEFORE the fingerprint is compared: the same answer for
+ * a matching and a differing request, nothing written, `onFingerprintConflict` not called. The strict
+ * comparison also refuses a stored row with no recorded actor when a user replays it, and an actor-less
+ * (internal) replay of a user's row: unknown ownership never takes the permissive branch.
+ */
+function assertSameActor(existing: { createdBy?: Id<"users"> }, actorId: Id<"users"> | undefined): void {
+  if (existing.createdBy !== actorId) {
+    throwAppError(AppErrorCode.COMMAND_IDENTITY_FOREIGN_ACTOR, COMMAND_IDENTITY_FOREIGN_ACTOR_MESSAGE);
+  }
+}
+
 function normalizeIdempotencyKey(idempotencyKey: string | undefined) {
   if (idempotencyKey === undefined) return undefined;
   const normalized = idempotencyKey.trim();
@@ -143,6 +161,7 @@ export async function runWithIdempotency<T>(
     .unique();
 
   if (existing) {
+    assertSameActor(existing, args.actorId);
     if (args.economic) {
       // Fail CLOSED, including when the stored row carries no fingerprint at
       // all. The previous rule — `args.fingerprint && existing.fingerprint &&

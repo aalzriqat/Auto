@@ -1,0 +1,55 @@
+{
+  "id": "role-save-refuses-removing-view-cost-price-from-a-create-sales-role",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round14",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "storedCompleting": "create:sales",
+        "storedCostAccess": "view:cost_price",
+        "removePermission": "view:cost_price"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "refusal.message",
+      "value": "english-dictionary-text"
+    },
+    {
+      "observable": "role.storedPermissions",
+      "value": "unchanged"
+    },
+    {
+      "observable": "role.changed.notification",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "roles.update refuses removing view:cost_price from a stored role that holds create:sales, with the coded refusal, and leaves the stored permissions alone"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "fingerprint": "98374004f0ad3f45744757b3435352fe9e8493a60183d4558ce8bfd4a1a9d407"
+}

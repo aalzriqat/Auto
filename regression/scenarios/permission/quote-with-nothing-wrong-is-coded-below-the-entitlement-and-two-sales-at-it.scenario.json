@@ -1,0 +1,73 @@
+{
+  "id": "quote-with-nothing-wrong-is-coded-below-the-entitlement-and-two-sales-at-it",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "AVAILABLE_CONSIGNED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "ONE_FILS_SHORT_AND_AT_E_AND_1"
+      }
+    },
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "AVAILABLE_CONSIGNED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "AT_ENTITLEMENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.refusal.belowThreshold.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "nonReader.refusal.identicalAt1OneFilsShortAndEntitlement",
+      "value": "true"
+    },
+    {
+      "observable": "nonReader.world.writtenByRefusedCommand",
+      "value": "nothing"
+    },
+    {
+      "observable": "reader.sales.committedAtEntitlement",
+      "value": "2"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
+    "testName": "a non-reader with nothing wrong on the later line gets the same coded refusal at every price including the entitlement, and a reader gets two sales at it"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round12",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
+  },
+  "fingerprint": "5f8e0a78fa1199837f89f8f22c28155e7f560e9cf43963f7cd8ecaf8ee0a7174"
+}

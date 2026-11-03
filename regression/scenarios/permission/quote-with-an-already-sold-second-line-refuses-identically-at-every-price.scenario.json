@@ -1,0 +1,64 @@
+{
+  "id": "quote-with-an-already-sold-second-line-refuses-identically-at-every-price",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "SOURCED_CAR_GATED",
+        "secondLine": "SOLD_AFTER_SAVE",
+        "route": "DIRECT_TO_SUPPLIER",
+        "firstLinePrice": "PRICES_1_SHORT_AT_E_20000"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.kind",
+      "value": "secondLineAlreadySold"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "absent"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
+    "testName": "a second line already sold after the quote was saved is refused with one response at every price"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round12",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
+  },
+  "fingerprint": "b7d0ad3a001c40be0e5456a47470639ca23c69ed3c0505b45a9805794df24108"
+}

@@ -37,3 +37,8 @@ cec5f13009eda47dbe6e773a7634ed00cd971ef2:lib/offlineSwarmClerk.test.ts:generic-a
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:161
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:270
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:327
+# SCRUM-264: commit 846791bb7 (Seat 2 round-2 fix) listed IANA zone names in the property
+# test; generic-api-key read the "Api" in "Pacific/Apia" as a keyword and the next zone
+# name as its value. Zone names are public identifiers, not credentials. The next commit
+# moved "Pacific/Apia" to the end of the list, so only this historical commit carries it.
+846791bb7c5eb3dec16227222a55284a4ebde891:convex/utils/orgBusinessDayProperty.scrum264.test.ts:generic-api-key:27

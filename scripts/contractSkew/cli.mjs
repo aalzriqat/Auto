@@ -86,6 +86,7 @@
  * kill the process before any JavaScript runs.
  */
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createClientProgram, extractClientCalls } from "./clientPaths.mjs";
@@ -101,7 +102,9 @@ import { classifyBreaking, alertsFor, distinctCallCount } from "./classify.mjs";
 import { resolveGit } from "./gitExecutable.mjs";
 import { missingCurrentFunctions } from "./currentSpec.mjs";
 
-const DEFAULT_BASELINE = fileURLToPath(new URL("./needs-evidence-baseline.json", import.meta.url));
+// The baseline is a directory of shards, one per client file (baselineShards.mjs). `path.resolve` drops the URL's
+// trailing separator so the report names the directory the same way `--baseline <dir>` does.
+const DEFAULT_BASELINE = path.resolve(fileURLToPath(new URL("./needs-evidence-baseline/", import.meta.url)));
 
 const EXIT = {
   OK: 0,

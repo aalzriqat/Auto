@@ -23,6 +23,7 @@ import {
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
+import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
@@ -40,7 +41,7 @@ import {
 } from "./utils/depositRequestGuards";
 import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
-import { completeSale } from "./utils/saleCompletion";
+import { assertActorMayCompleteConsignedSale, completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
 import {
   isForwardPlan,
@@ -1978,7 +1979,7 @@ export const get = query({
        */
       handoverEvidence: await handoverEvidenceFor(ctx, app, role),
       customer,
-      vehicle,
+      vehicle: projectOptionalVehicleForRole(vehicle, role),
       company,
       salesperson,
       quote,
@@ -4814,6 +4815,18 @@ export const finalizeDeal = mutation({
     // redacts for the same caller (SCRUM-414 R1): below the finance tier every
     // readiness refusal is a WITHHELD_* code, no params, generic English.
     const mayReadMoney = mayReadFinanceEconomics(auth.role);
+
+    // SCRUM-886 round 13: finalizing the sale of a SOURCED car needs view:cost_price. The FIRST decision after auth: it depends only
+    // on the car's sourceType and the actor's role, so no readiness, plan or deposit refusal below can answer for a caller who may
+    // not read vehicle cost. An application that cannot be read here is left to the door's own refusal.
+    const applicationForCostAccess = await ctx.db.get(args.applicationId);
+    if (applicationForCostAccess && applicationForCostAccess.orgId === args.orgId) {
+      await assertActorMayCompleteConsignedSale(ctx, {
+        orgId: args.orgId,
+        actorId: auth.user._id,
+        vehicleIds: [applicationForCostAccess.vehicleId],
+      });
+    }
 
     // SCRUM-801: OTHER leaves the liability for a manual journal, which the
     // pilot has switched off. Refused after auth and ahead of every read, so no

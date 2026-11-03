@@ -1,0 +1,77 @@
+{
+  "id": "collections-daily-list-omits-an-unplaceable-payment-and-flags-the-day",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "depositRefund": "OUT_REFUND",
+        "refundDate": "2026-11-01T00:00:00.000Z",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-11-01",
+        "orgTimeZone": "America.New_York"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.paymentDateUncertain",
+      "value": true
+    },
+    {
+      "observable": "step2.incomplete",
+      "value": true
+    },
+    {
+      "observable": "step3.paymentDateUncertain",
+      "value": true
+    },
+    {
+      "observable": "step3.incomplete",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "west of UTC it is on neither day and both reports say they are incomplete"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-2",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "ada2aa207f7b42a82f43ff9e7419ee8fd6cab772c845cdd4975407c35a6d9b0d"
+}

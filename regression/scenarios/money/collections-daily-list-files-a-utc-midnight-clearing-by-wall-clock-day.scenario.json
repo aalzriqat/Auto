@@ -1,0 +1,72 @@
+{
+  "id": "collections-daily-list-files-a-utc-midnight-clearing-by-wall-clock-day",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.clearCheque",
+      "input": {
+        "clearedAt": "2026-11-01T00:00:00.000Z",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-11-01",
+        "orgTimeZone": "America.New_York"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.rowCount",
+      "value": 3
+    },
+    {
+      "observable": "step2.incomplete",
+      "value": false
+    },
+    {
+      "observable": "step3.rowCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "a receipt, a cleared cheque and a cash refund stamped at that instant are on 31 Oct, not 1 Nov"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-2",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "2d6a264ba847e38f63544029228dabfbc986793c9728f55e44724556af8c6b2c"
+}

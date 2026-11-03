@@ -248,7 +248,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // now imports emitted ESM in a child process with an empty environment and
     // a fixed 256 MiB heap. The parent retains its 6144 MiB cap. No trigger,
     // grant, checkout, credential step, timeout or output path changed.
-    "3b6e9a8bf7312b16213dd855a792b33791be877c7dc9121b95c3ff42b26f2b03",
+    // SCRUM-873 baseline shards: only two message strings change (the exit-10
+    // annotation and the failure-issue body now name the baseline shards).
+    // No trigger, grant, checkout, credential step, timeout or output path changed.
+    "a85c50d0de39a660a9e5ffb69b2a6669b13afcd410b13e3a59cde71f0461243b",
   "deal-scenarios-e2e.yml":
     // SCRUM-616/617: the reviewed change opts into the cross-screen oracle.
     // SCRUM-760 G8: job timeout 120 -> 180 minutes for the larger deals/sales

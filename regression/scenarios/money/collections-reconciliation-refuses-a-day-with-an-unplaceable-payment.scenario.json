@@ -1,0 +1,82 @@
+{
+  "id": "collections-reconciliation-refuses-a-day-with-an-unplaceable-payment",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "depositRefund": "OUT_REFUND",
+        "refundDate": "2026-11-01T00:00:00.000Z",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.getReconciliationDraft",
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.submitCashierReconciliation",
+      "input": {
+        "businessDate": "2026-10-31",
+        "countedCash": 0,
+        "orgTimeZone": "America.New_York"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.complete",
+      "value": false
+    },
+    {
+      "observable": "step2.reason",
+      "value": "DATE_UNCERTAIN"
+    },
+    {
+      "observable": "step3.refused",
+      "value": true
+    },
+    {
+      "observable": "cashierReconciliations.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "collectionPayments.attachedToReconciliationCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "the reconciliation refuses both days and names the reason, and nothing is attached"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-2",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "0f64a228138a17fe2e25f122594ea09ca003528c174d4fe12d899cac9205aa1f"
+}

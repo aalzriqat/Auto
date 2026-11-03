@@ -260,7 +260,14 @@ export function SalesWizardScreen({
   const term = parseOptionalNumber(termMonths) ?? 0;
   const effectivePrice = effectiveMobileQuoteVehiclePrice(price, profit);
 
-  const minimumProfit = selectedVehicle?.minimumProfit ?? 0;
+  // SCRUM-886: the vehicle list leaves `minimumProfit` off for a role without cost permission, so
+  // the minimum price uplift also comes from the server's own verdict, which every vehicle
+  // viewer may read. The vehicle's value wins when present; both are the same stored number.
+  const profitVerdict = useQuery(
+    api.approvals.profitApprovalStatus,
+    !isCash && vehicleId && effectivePrice > 0 ? { orgId, vehicleId, salePrice: effectivePrice } : "skip",
+  );
+  const minimumProfit = selectedVehicle?.minimumProfit ?? profitVerdict?.minimumProfit ?? 0;
   // The server compares final price minus list price with the minimum, so the
   // alert, the gate and the approval match use that same figure.
   const uplift = priceUpliftOverList(price, profit, selectedVehicle?.sellingPrice ?? 0);

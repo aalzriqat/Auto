@@ -2,6 +2,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -45,6 +46,8 @@ async function seedSalesOrg(t: ReturnType<typeof convexTestWithComponents>, suff
         "view:vehicles",
         "view:commissions",
         "manage:commissions",
+        // SCRUM-886 round 13: this Admin completes a SOURCED sale below, which needs cost access.
+        "view:cost_price",
       ],
     })
   );
@@ -481,7 +484,7 @@ describe("C3: automatic commission requires a recorded purchase cost", () => {
     const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "c3_sourced");
     await setAutoMemberMode(t, orgId, userId, 10);
     // SOURCED vehicles carry their cost in sourceCost, not purchasePrice.
-    await t.run((ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000 }));
+    await t.run(async (ctx) => ctx.db.patch(vehicleId, { sourceType: "SOURCED", sourceCost: 12000, sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co") }));
 
     const saleId = await asAdmin.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
       orgId,

@@ -1258,6 +1258,130 @@ export function bankRefusalMessage(result: BankRebuildResult): string | null {
   );
 }
 
+export type RegistryStep = { ok: true; value: unknown } | Refusal;
+const REGISTRY_DEPLOYED = "Production is DEPLOYED, but the supplier registry initialisation";
+/** The refusal names at most this many organizations by opaque ref; the count always covers all of them. */
+const MAX_LISTED_MISSING_REFS = 10;
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+type CursorPage = { isDone: boolean; continueCursor: string | null };
+type WalkLimits = { now: () => number; startedAt: number; timeoutMs: number; maxPages: number };
+
+/**
+ * Walks one cursor-paged internal function to its end, handing each validated page to `onPage`. Every rollout phase that
+ * pages by cursor goes through this one loop. `deployed` is the refusal subject ("Production is DEPLOYED, but ..."), so
+ * the wording stays per phase while the deadline, page cap and cursor rules stay in one place.
+ * Stops with a refusal on the deadline (checked before AND after every call, so a call that returns
+ * past the budget is never accepted), the page cap, a failed call, an unrecognised page, or a
+ * cursor that stopped advancing. The cursor lives only in the call arguments and is never logged.
+ */
+function walkCursorPages<T extends CursorPage>(
+  limits: WalkLimits,
+  deployed: string,
+  runPage: (cursor: string | null) => RegistryStep,
+  parse: (value: unknown) => T | null,
+  onPage: (page: T) => void,
+): { ok: true } | Refusal {
+  let cursor: string | null = null;
+  const pastDeadline = () => limits.now() - limits.startedAt > limits.timeoutMs;
+  const deadlineRefusal: Refusal = {
+    ok: false,
+    reason: `${deployed} reached the rollout deadline. A re-run resumes it.`,
+  };
+  for (let pageNumber = 0; pageNumber < limits.maxPages; pageNumber += 1) {
+    if (pastDeadline()) return deadlineRefusal;
+    const result = runPage(cursor);
+    // Checked again AFTER the call: a call that returns past the budget must not be accepted as
+    // complete, or the run would go on to later phases having overrun the deadline (fail closed).
+    if (pastDeadline()) return deadlineRefusal;
+    if (!result.ok) {
+      return { ok: false, reason: `${deployed} call failed. See backend logs; a re-run resumes it.` };
+    }
+    const page = parse(result.value);
+    if (!page) return { ok: false, reason: `${deployed} returned an unrecognised result.` };
+    onPage(page);
+    if (page.isDone) return { ok: true };
+    if (typeof page.continueCursor !== "string" || page.continueCursor === cursor) {
+      return { ok: false, reason: `${deployed} cursor stopped advancing; refusing to page forever.` };
+    }
+    cursor = page.continueCursor;
+  }
+  return { ok: false, reason: `${deployed} reached its page cap. A re-run resumes it.` };
+}
+
+function parseCursorPage(value: unknown): CursorPage | null {
+  if (typeof value !== "object" || value === null) return null;
+  const { isDone, continueCursor } = value as { isDone?: unknown; continueCursor?: unknown };
+  if (typeof isDone !== "boolean") return null;
+  if (continueCursor !== null && typeof continueCursor !== "string") return null;
+  return { isDone, continueCursor };
+}
+
+function parseBackfillPage(value: unknown): (CursorPage & { migrated: number }) | null {
+  const cursor = parseCursorPage(value);
+  const migrated = (value as { migrated?: unknown } | null)?.migrated;
+  return cursor && isCount(migrated) ? { ...cursor, migrated } : null;
+}
+
+function parseCoveragePage(value: unknown): (CursorPage & { checked: number; deleting: number; missing: string[] }) | null {
+  const cursor = parseCursorPage(value);
+  const { checked, deleting, missing } = (value ?? {}) as { checked?: unknown; deleting?: unknown; missing?: unknown };
+  if (!cursor || !isCount(checked) || !isCount(deleting)) return null;
+  if (!Array.isArray(missing) || !missing.every((id) => typeof id === "string")) return null;
+  return { ...cursor, checked, deleting, missing };
+}
+
+/**
+ * SCRUM-888: gives every live organization its `supplierRegistryState` row, then proves it.
+ * Without the row every supplier write refuses with REGISTRY_NOT_INITIALISED, so consigned
+ * (SOURCED) vehicle intake cannot start.
+ *
+ * Phase 1 drives `suppliers:backfillRegistry` one page per call (continueAutomatically: false, so
+ * this script, not the scheduler, observes completion). It is idempotent and skips organizations
+ * being deleted. Phase 2 walks `suppliers:registryCoverageForRelease` and refuses if any live
+ * organization is still missing a row. Organizations being deleted are reported, never refused
+ * (same rule as `ensureRegistryState`). Output is counts and opaque refs only.
+ */
+export function initialiseSupplierRegistry(
+  input: WalkLimits & {
+    backfillPage: (cursor: string | null) => RegistryStep;
+    verifyPage: (cursor: string | null) => RegistryStep;
+  },
+): { ok: true; created: number; checked: number; deleting: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+
+  let created = 0;
+  const backfill = walkCursorPages(limits, REGISTRY_DEPLOYED, input.backfillPage, parseBackfillPage, (page) => {
+    created += page.migrated;
+  });
+  if (!backfill.ok) return backfill;
+
+  let checked = 0;
+  let deleting = 0;
+  const missing: string[] = [];
+  const verify = walkCursorPages(limits, REGISTRY_DEPLOYED, input.verifyPage, parseCoveragePage, (page) => {
+    checked += page.checked;
+    deleting += page.deleting;
+    missing.push(...page.missing.map(opaqueOrgRef));
+  });
+  if (!verify.ok) return verify;
+
+  if (missing.length > 0) {
+    // Every missing org is counted; only the first few refs are listed so the public log stays readable.
+    const listed = missing.slice(0, MAX_LISTED_MISSING_REFS).join(", ");
+    const more = missing.length - MAX_LISTED_MISSING_REFS;
+    return {
+      ok: false,
+      reason:
+        `${REGISTRY_DEPLOYED} is INCOMPLETE: ${missing.length} organization(s) still have no supplier registry ` +
+        `(${listed}${more > 0 ? `, and ${more} more` : ""}). Consigned intake stays blocked for them. A re-run retries.`,
+    };
+  }
+  return { ok: true, created, checked, deleting };
+}
 /** SCRUM-782: same serial, bounded rollout pattern as rebuildBankBalances.
  * The backend persists its own cursor, so a failed CLI call can be retried
  * without losing a committed page or trusting a cursor printed into public logs.
@@ -1289,4 +1413,290 @@ export function recoverSupplierVatHolds(input: {
     if (page.status === "READY") return { ok: true, pages: pageNumber + 1, reclassified };
   }
   return { ok: false, reason: "Production is DEPLOYED, but the supplier VAT hold migration reached its page cap. A re-run resumes it." };
+}
+
+/**
+ * SCRUM-896 (owner ruling SCRUM-886 c24372): after a production deploy, gives `view:cost_price` to every stored, non-deleted role
+ * named ACCOUNTANT that holds a sale-completing permission without it (`completesSalesWithoutCostAccess`), which SOURCED sale
+ * completion now requires. Without it, an organization seeded before the template change has an accountant who is refused at
+ * every SOURCED completion door. Other ACCOUNTANT roles are left alone.
+ *
+ * Drives `migrateRoles:backfillAccountantCostPriceAccess` one page per call, passing `continueCursor` back until `isDone`.
+ * The mutation is idempotent (a role already holding the grant is not written), so a re-run resumes rather than restarts.
+ * A page can be short or empty before `isDone` (Convex does not promise a full page), so only `isDone` ends the walk, and
+ * only a cursor that comes back unchanged is treated as stuck.
+ *
+ * ⚠️ PUBLIC OUTPUT. The page's `updates` array holds one line per patched role: its name and its organization id. It is
+ * checked for shape and length and never copied, and no refusal reason here contains any backend text.
+ */
+export function backfillAccountantCostPriceAccessRollout(input: {
+  runPage: (cursor: string | null) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  /** The `numItems` the script asks the backend for; a page can never report more updates than this. */
+  pageSize: number;
+}): { ok: true; pages: number; updated: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+  let pages = 0;
+  let updated = 0;
+  const walk = walkCursorPages(
+    limits,
+    "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill",
+    input.runPage,
+    (value) => parseAccountantCostPricePage(value, input.pageSize),
+    (page) => {
+      pages += 1;
+      updated += page.updatedCount;
+    },
+  );
+  return walk.ok ? { ok: true, pages, updated } : walk;
+}
+
+/** SCRUM-896: grant `view:cost_price` to stored ACCOUNTANT roles (owner ruling SCRUM-886 c24372). */
+export const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountantCostPriceAccess";
+/** The backend clamps a page to 1..500 roles; 100 is its default. */
+export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
+/** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
+export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
+
+/**
+ * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script
+ * that no test executes in-process (coverage does not follow a child process), so it keeps only the phase skeleton (log,
+ * one call to this, publish the summary) and no branch of its own. The function name, page size, page cap, `numItems`
+ * argument, public summary text and the refusal branch live here, where tests execute them.
+ *
+ * `convex` is the script's CLI runner (the operator key, internal functions only). `fail` is the script's own `fail`, which
+ * prints, writes the job summary and exits 1; on a refusal it is called once with the cursor walker's reason, which never
+ * contains backend text. If a `fail` ever returned, this still throws rather than hand back a summary. The returned summary
+ * is counts and the phase label only: it never names a role or an organization.
+ */
+export function runAccountantCostPricePhase(input: {
+  convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const walk = backfillAccountantCostPriceAccessRollout({
+    runPage: (cursor) =>
+      input.convex([
+        "run",
+        ACCOUNTANT_COST_PRICE_BACKFILL_FN,
+        JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE }),
+      ]),
+    now: input.now,
+    startedAt: input.startedAt,
+    timeoutMs: input.timeoutMs,
+    maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES,
+    pageSize: ACCOUNTANT_COST_PRICE_PAGE_SIZE,
+  });
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The ACCOUNTANT cost-price phase refused and its fail handler returned.");
+  }
+  return (
+    `${walk.updated} stored ACCOUNTANT roles granted view:cost_price in ${walk.pages} page call(s). ` +
+    `Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.`
+  );
+}
+function parseAccountantCostPricePage(
+  value: unknown,
+  pageSize: number,
+): (CursorPage & { updatedCount: number }) | null {
+  const cursor = parseCursorPage(value);
+  // The backend always returns a string cursor, including on the last page; `null` is not a recognised answer here.
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const { updatedCount, updates } = value as { updatedCount?: unknown; updates?: unknown };
+  if (!isCount(updatedCount) || updatedCount > pageSize) return null;
+  // One `updates` line per patched role (patchRoleIfNeeded pushes exactly when it returns true), so the two agree.
+  if (!Array.isArray(updates) || updates.length !== updatedCount) return null;
+  return { ...cursor, updatedCount };
+}
+
+// ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────
+
+/** The row kinds the repair walks, in order. Each is one paginated scan per organization. */
+export const SUPPLIER_IDENTITY_REPAIR_PHASES = ["PAYABLES", "RECEIVABLES", "RECOVERIES", "CONCESSIONS"] as const;
+/** The counts-only check walks the same rows again, plus SOURCED vehicles that carry no supplier link. */
+export const SUPPLIER_IDENTITY_COUNT_PHASES = [...SUPPLIER_IDENTITY_REPAIR_PHASES, "VEHICLES"] as const;
+
+export type SupplierIdentityRepairPhase = (typeof SUPPLIER_IDENTITY_REPAIR_PHASES)[number];
+export type SupplierIdentityCountPhase = (typeof SUPPLIER_IDENTITY_COUNT_PHASES)[number];
+
+export type SupplierIdentityRunResult = { ok: true; value: unknown } | Refusal;
+
+export type SupplierIdentityInput = {
+  orgs: { orgId: string }[];
+  /** One `supplierIdentityRepair:repairPage` call. Writes; idempotent. */
+  repair: (args: {
+    orgId: string;
+    phase: SupplierIdentityRepairPhase;
+    cursor: string | null;
+    numItems: number;
+  }) => SupplierIdentityRunResult;
+  /** One `supplierIdentityRepair:countPage` call. Read-only. */
+  count: (args: {
+    orgId: string;
+    phase: SupplierIdentityCountPhase;
+    cursor: string | null;
+    numItems: number;
+  }) => SupplierIdentityRunResult;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  /** Per organization and phase; stops a cursor that never finishes. */
+  maxPagesPerPhase: number;
+  pageSize: number;
+};
+
+export type SupplierIdentityOutcome =
+  /** Both passes ran to the end. `outstanding` is empty only when nothing is left for a door to refuse. */
+  | { ok: true; orgs: number; repaired: number; pages: number; outstanding: string[] }
+  /** The phase could not finish or could not be trusted; nothing about the counts is known. */
+  | { ok: false; reason: string };
+
+type SupplierIdentityPage = { more: boolean; cursor: string | null; repaired: number; unresolved: number };
+
+/**
+ * Reads one page result strictly. Anything this script does not recognise is a refusal, never zero:
+ * a count that cannot be read must not be mistaken for a count of nothing left to fix.
+ */
+function readSupplierIdentityPage(value: unknown, kind: "repair" | "count"): SupplierIdentityPage | null {
+  if (typeof value !== "object" || value === null) return null;
+  const page = value as Record<string, unknown>;
+  if (page.status !== "MORE" && page.status !== "READY") return null;
+  if (!isCount(page.examined) || !isCount(page.unresolved)) return null;
+  const repaired = kind === "repair" ? page.repaired : 0;
+  if (!isCount(repaired)) return null;
+  const more = page.status === "MORE";
+  if (more && (typeof page.cursor !== "string" || page.cursor === "")) return null;
+  if (!more && page.cursor !== null) return null;
+  return {
+    more,
+    cursor: more ? (page.cursor as string) : null,
+    repaired,
+    unresolved: page.unresolved,
+  };
+}
+
+type PhaseWalk =
+  | { ok: true; repaired: number; unresolved: number; pages: number }
+  | { ok: false; reason: string };
+
+const IDENTITY_STOP = "Production is DEPLOYED, but the supplier identity repair";
+
+/**
+ * Walks one organization's rows of one kind to the end. The cursor comes back from the backend and is
+ * carried only in memory, never printed. A page that returns the cursor it was given would loop forever,
+ * so that is a refusal as well as the page cap.
+ */
+function walkIdentityPhase(
+  input: SupplierIdentityInput,
+  call: (cursor: string | null) => SupplierIdentityRunResult,
+  kind: "repair" | "count",
+  ref: string,
+  label: string,
+): PhaseWalk {
+  let cursor: string | null = null;
+  let repaired = 0;
+  let unresolved = 0;
+  for (let pages = 1; pages <= input.maxPagesPerPhase; pages += 1) {
+    if (input.now() - input.startedAt > input.timeoutMs) {
+      return { ok: false, reason: `${IDENTITY_STOP} reached the rollout deadline at ${ref}. A re-run resumes it.` };
+    }
+    const result = call(cursor);
+    if (!result.ok) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} call failed at ${ref} (${label}). See backend logs; a re-run resumes it.` };
+    }
+    const page = readSupplierIdentityPage(result.value, kind);
+    if (page === null) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} returned a result this script does not recognise at ${ref} (${label}).` };
+    }
+    repaired += page.repaired;
+    unresolved += page.unresolved;
+    if (!page.more) return { ok: true, repaired, unresolved, pages };
+    if (page.cursor === cursor) {
+      return { ok: false, reason: `${IDENTITY_STOP} ${kind} stopped advancing at ${ref} (${label}).` };
+    }
+    cursor = page.cursor;
+  }
+  return { ok: false, reason: `${IDENTITY_STOP} ${kind} reached its page cap at ${ref} (${label}).` };
+}
+
+/**
+ * The post-deploy supplier identity phase. Two passes over every organization, serially:
+ *
+ *   1. REPAIR gives each id-less P2-era row the supplier id of its vehicle's frozen link when the row's
+ *      stored name matches that supplier (see `convex/utils/supplierIdentityRepair.ts`). Idempotent.
+ *   2. CHECK re-counts from the data, independently of what the repair reported: id-less native money
+ *      rows, held concessions whose basis has no supplier id, SOURCED vehicles with no supplier link.
+ *
+ * It fails closed. A call that fails, a result it cannot read, the deadline, or a page cap is a refusal
+ * (`ok: false`); a clean pass with leftover rows is `ok: true` with `outstanding` listing them, which the
+ * caller turns into a failed release. Output is public, so `outstanding` carries only an opaque
+ * organization ref and counts, never a name, an id or backend text.
+ */
+export function repairAndVerifySupplierIdentity(input: SupplierIdentityInput): SupplierIdentityOutcome {
+  let repaired = 0;
+  let pages = 0;
+
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    for (const phase of SUPPLIER_IDENTITY_REPAIR_PHASES) {
+      const walk = walkIdentityPhase(
+        input,
+        (cursor) => input.repair({ orgId: org.orgId, phase, cursor, numItems: input.pageSize }),
+        "repair",
+        ref,
+        phase,
+      );
+      if (!walk.ok) return walk;
+      repaired += walk.repaired;
+      pages += walk.pages;
+    }
+  }
+
+  const outstanding: string[] = [];
+  for (const org of input.orgs) {
+    const ref = opaqueOrgRef(org.orgId);
+    const left: string[] = [];
+    for (const phase of SUPPLIER_IDENTITY_COUNT_PHASES) {
+      const walk = walkIdentityPhase(
+        input,
+        (cursor) => input.count({ orgId: org.orgId, phase, cursor, numItems: input.pageSize }),
+        "count",
+        ref,
+        phase,
+      );
+      if (!walk.ok) return walk;
+      pages += walk.pages;
+      if (walk.unresolved > 0) left.push(`${phase}=${walk.unresolved}`);
+    }
+    if (left.length > 0) outstanding.push(`${ref}: ${left.join(", ")}`);
+  }
+
+  return { ok: true, orgs: input.orgs.length, repaired, pages, outstanding };
+}
+
+/** The "Supplier identity" job-summary text. Counts and opaque refs only. */
+export function renderSupplierIdentitySummary(outcome: SupplierIdentityOutcome): string {
+  if (!outcome.ok) return outcome.reason;
+  const base = `${outcome.repaired} rows bound to their vehicle's supplier across ${outcome.orgs} organization(s) in ${outcome.pages} page call(s).`;
+  if (outcome.outstanding.length === 0) {
+    return `${base} The counts-only check found nothing left for a settlement door to refuse.`;
+  }
+  const list = outcome.outstanding.map((line) => `- ${line}`).join("\n");
+  return `${base} The counts-only check still found rows that stay refused:\n\n${list}`;
+}
+
+/** Why a run must fail after the repair, or null when the check found nothing outstanding. */
+export function supplierIdentityRefusalMessage(outcome: SupplierIdentityOutcome): string | null {
+  if (!outcome.ok) return outcome.reason;
+  if (outcome.outstanding.length === 0) return null;
+  return (
+    `Production is DEPLOYED, but ${outcome.outstanding.length} organization(s) still hold supplier rows with no ` +
+    `supplier identity (counts in the job summary). Their settlement stays refused. Resolve them, then re-run.`
+  );
 }

@@ -1,0 +1,51 @@
+{
+  "id": "payables-close-warning-names-inconsistent-journal-reference",
+  "fingerprint": "ed995cade148e5983b55ada775a391bc89f429e544b075ead1e4df8b92995904",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "lineOwner": "A",
+        "journalParent": "B_POSTED",
+        "closeCutoff": "inside_next_period"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierPayablesWarning",
+      "value": "INCONSISTENT_REFERENCE_TEXT"
+    },
+    {
+      "observable": "tooManyRecordsWarning",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "M1: period close names the inconsistent journal link, not 'too many records'"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "7e947b6f5cd90b60f6f75a13d5bbcac752f3a6ec"
+  }
+}

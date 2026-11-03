@@ -44,6 +44,8 @@ const PERMS = [
   "view:commissions", "manage:commissions",
   "approve:requests",
   "create:expenses",
+  // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;
@@ -100,11 +102,26 @@ async function seed(tag: string) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINSR${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
+      sourcedSupplierId: supplierId,
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
     })
   );
@@ -119,7 +136,7 @@ async function seed(tag: string) {
     ctx.db.query("vehicleSupplierReceivables").collect()
   ))[0]!;
 
-  return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, vehicleId, saleId, receivable };
+  return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, supplierId, vehicleId, saleId, receivable };
 }
 
 /** Net movement per system key across the org's posted ledger. */
@@ -229,6 +246,7 @@ describe("the claim a direct-settled sale opens", () => {
         orgId: s.orgId, vin: "VINSRTHRU2", make: "Kia", model: "Rio", year: 2023, mileage: 5,
         color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedSupplierId: s.supplierId,
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );
@@ -432,7 +450,7 @@ describe("what a supplier still owes", () => {
     expect(summary.totalReceived).toBe(1_000);
     expect(summary.totalOutstanding).toBe(MARGIN - 1_000);
     expect(summary.bySupplier).toEqual([
-      { sourcedFromName: "Amman Importer Co", outstanding: MARGIN - 1_000, claims: 1 },
+      { supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", snapshots: ["Amman Importer Co"], outstanding: MARGIN - 1_000, claims: 1 },
     ]);
 
     // And it reconciles with the ledger account it summarizes.
@@ -457,7 +475,7 @@ describe("what a supplier still owes", () => {
     expect(summary.totalOutstanding).toBe(MARGIN - 1_000 + SUPPLIER_COST);
     expect(summary.costRecoveryOutstanding).toBe(SUPPLIER_COST);
     expect(summary.bySupplier).toEqual([
-      { sourcedFromName: "Amman Importer Co", outstanding: MARGIN - 1_000 + SUPPLIER_COST, claims: 2 },
+      { supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", snapshots: ["Amman Importer Co"], outstanding: MARGIN - 1_000 + SUPPLIER_COST, claims: 2 },
     ]);
 
     const gl = await ledger(s.t, s.orgId);
@@ -520,6 +538,7 @@ describe("a deposit applied to the settlement", () => {
         orgId: base.orgId, vin: "VINSRDEP2", make: "Toyota", model: "Yaris", year: 2024, mileage: 8,
         color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedSupplierId: base.supplierId,
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );

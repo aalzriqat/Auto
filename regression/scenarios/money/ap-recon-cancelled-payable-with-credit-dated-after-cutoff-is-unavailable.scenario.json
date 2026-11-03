@@ -1,0 +1,71 @@
+{
+  "id": "ap-recon-cancelled-payable-with-credit-dated-after-cutoff-is-unavailable",
+  "fingerprint": "fb1c4137d24f9c4cae376c3f523ee949cad8b08102ccfa17eb67e3685f7e2d6f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-2",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCredit",
+      "input": {
+        "creditMajor": 19000,
+        "dated": "afterCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.cancel",
+      "input": {
+        "cancelledAt": "insideEarlierPeriod",
+        "reversalDated": "insideEarlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "a payable cancelled before the cutoff whose AP credit is dated after it is not compared against a GL that shows only the reversal"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

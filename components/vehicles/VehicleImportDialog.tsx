@@ -7,6 +7,8 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import {
   ImportWizard,
   ImportFieldConfig,
@@ -763,6 +765,13 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
   const { activeOrgId } = useOrg();
   const importBulk = useMutation(api.vehicles.importBulk);
+  // SCRUM-886: every import this dialog can send carries an import id, and an import with an id compares
+  // cost with a stored fingerprint (PURCHASE, OPENING_STOCK). `vehicles.importBulk` therefore refuses a
+  // caller without view:cost_price in both modes, so the dialog is not offered to one rather than
+  // walking them through a file that is refused at the last step. The server decides; this only
+  // keeps the screen from offering what it refuses.
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const canImport = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
   const financeCompanies = useQuery(
     api.finance.listCompanies,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -807,6 +816,8 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
     }
     onOpenChange(next);
   };
+
+  if (!canImport) return null;
 
   return (
     <ImportWizard

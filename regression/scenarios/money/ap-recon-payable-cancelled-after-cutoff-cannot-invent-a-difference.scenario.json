@@ -1,0 +1,89 @@
+{
+  "id": "ap-recon-payable-cancelled-after-cutoff-cannot-invent-a-difference",
+  "fingerprint": "f3e8a93714f0de26bc1e932461f337b7340d6439aa2c9e1e6d09e878ec44354a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-2",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCredit",
+      "input": {
+        "creditMajor": 19000,
+        "dated": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.cancel",
+      "input": {
+        "cancelledAt": "afterCutoff",
+        "reversalDated": "afterCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "earlier"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": "EMPTY"
+    },
+    {
+      "observable": "closeChecklist.postCutoffWarning",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "a reconciled January cannot read as a difference once its only payable is cancelled in February"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

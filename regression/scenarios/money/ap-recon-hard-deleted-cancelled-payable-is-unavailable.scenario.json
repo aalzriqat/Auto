@@ -1,0 +1,100 @@
+{
+  "id": "ap-recon-hard-deleted-cancelled-payable-is-unavailable",
+  "fingerprint": "44d7fce1135ea73cb4bca1530b0c2b52ebfb33f23ca7951a8addcd181bb6cb25",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCreditAndMisposting",
+      "input": {
+        "creditMajor": 19000,
+        "misspostedDebitMajor": 19000,
+        "dated": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.cancel",
+      "input": {
+        "cancelledAt": "afterCutoff",
+        "reversalDated": "afterCutoff"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.hardDeletePayable",
+      "input": {
+        "payable": "cancelled"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "earlier"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "closeChecklist.postCutoffWarning",
+      "value": true
+    },
+    {
+      "observable": "closeChecklist.canClose",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "REPRO (Seat 2): a January payable cancelled in February and then hard-deleted is not read as reconciled"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

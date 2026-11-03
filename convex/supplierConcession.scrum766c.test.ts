@@ -22,15 +22,17 @@
  * pin the fail-closed default for one say so in their name.
  */
 import { describe, expect, test, vi } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import schema from "./schema";
 import { registerHandover } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { supplierIdFor } from "../test-utils/supplierFixture";
-import { finalizeAsOwner, newApplication, payForwardAsOwner, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { finalizeAsOwner, newApplication, payForwardAsOwner, refusalDataOf, seedFinancedDealership } from "../test-utils/financedDealFixture";
+import { SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE, SUPPLIER_ERROR } from "./utils/supplierRegistry";
 import { classifyGapResolution, validateGapShares } from "../lib/financingEconomics";
 import { appraisalGapIsSettled } from "./utils/financingEconomics";
+import { SUPPLIER_CONCESSION_REFUSALS } from "./utils/supplierConcession";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -180,8 +182,11 @@ async function approvedDeal(s: Seeded, route: "THROUGH_DEALERSHIP" | "DIRECT_TO_
 
 type Split = {
   customer: number; dealer: number; supplier?: number; cash?: number; financeCompany?: number;
-  /** What the dialog observed, so a stale view is refused. Defaults to the vehicle as seeded. */
-  observed?: { entitlementMinor: number; supplierName: string } | null;
+  /**
+   * What the dialog observed, so a stale view is refused. Defaults to the vehicle as seeded,
+   * including the supplier identity (`supplierId` defaults to the seeded supplier; `null` sends none).
+   */
+  observed?: { entitlementMinor: number; supplierName: string; supplierId?: Id<"suppliers"> | null } | null;
 };
 
 /** Records how the shortfall is shared, as the approver (who is not the deal's salesperson). */
@@ -189,6 +194,8 @@ function resolve(s: Seeded, applicationId: Id<"financeApplications">, split: Spl
   return (async () => {
     const served = await caller.as.query(api.applications.get, { orgId: s.orgId, applicationId });
     const observed = split.observed === undefined ? { entitlementMinor: jod(9_500), supplierName: SUPPLIER } : split.observed;
+    // The identity the dialog observed: the seeded supplier unless the test names another or sends none.
+    const observedSupplierId = observed === null ? undefined : observed.supplierId === undefined ? s.supplierId : observed.supplierId ?? undefined;
     return await caller.as.mutation(api.financingEconomics.resolveAppraisalGap, {
       orgId: s.orgId, applicationId, economicsStamp: served!.economicsStamp as string,
       customerGapShareMinor: jod(split.customer),
@@ -199,7 +206,11 @@ function resolve(s: Seeded, applicationId: Id<"financeApplications">, split: Spl
       customerGapToFinanceCompanyMinor: jod(split.financeCompany ?? 0),
       ...(observed === null || split.supplier === undefined
         ? {}
-        : { observedSupplierEntitlementMinor: observed.entitlementMinor, observedSupplierName: observed.supplierName }),
+        : {
+            observedSupplierEntitlementMinor: observed.entitlementMinor,
+            observedSupplierName: observed.supplierName,
+            ...(observedSupplierId === undefined ? {} : { observedSupplierId }),
+          }),
     });
   })();
 }
@@ -302,7 +313,7 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     expect(app?.supplierGapShareMinor).toBe(jod(400));
     expect(app?.dealerGapShareMinor).toBe(jod(450));
     expect(app?.customerGapShareMinor).toBe(0);
-    expect(app?.supplierGapBasis).toEqual({ contractEntitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER });
+    expect(app?.supplierGapBasis).toEqual({ contractEntitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER, supplierId: s.supplierId });
   });
 
   test("the supplier alone covering the whole 850 is SUPPLIER_ABSORBS, and a second resolution is refused", async () => {
@@ -485,7 +496,7 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     const stock = await seed("r12s", { sourced: false });
     const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
     const basis = await s.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId });
-    expect(basis).toMatchObject({ eligible: true, entitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER });
+    expect(basis).toMatchObject({ eligible: true, entitlementMinor: jod(9_500), currency: "JOD", supplierName: SUPPLIER, supplierId: s.supplierId });
     const stockApplication = await approvedDeal(stock, "THROUGH_DEALERSHIP");
     expect(await stock.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: stock.orgId, applicationId: stockApplication })).toMatchObject({ eligible: false });
     expect((await refusalOf(s.actors.Clerk.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })))?.message).toContain("Missing required permissions");
@@ -753,7 +764,7 @@ describe("PR-C completion: DIRECT_TO_SUPPLIER", () => {
       orgId: s.orgId, applicationId, economicsStamp: served!.economicsStamp as string,
       customerGapShareMinor: 0, dealerGapShareMinor: shortfall - jod(400), supplierGapShareMinor: jod(400),
       customerGapCashToDealerMinor: 0, customerGapInstallmentToDealerMinor: 0, customerGapToFinanceCompanyMinor: 0,
-      observedSupplierEntitlementMinor: jod(9_500), observedSupplierName: SUPPLIER,
+      observedSupplierEntitlementMinor: jod(9_500), observedSupplierName: SUPPLIER, observedSupplierId: s.supplierId,
     });
     // E_eff = 9,100 <= approved 9,200: the mirror check now accepts the route.
     expect(await refusalOf(setRoute())).toBeNull();
@@ -885,6 +896,291 @@ describe("PR-C disclosure: the sale rows do not leak the finance-tier concession
   });
 });
 
+
+/**
+ * SCRUM-868 P3 round 3, Seat 2 B1 (HIGH, money).
+ *
+ * Invariant: a supplier concession is recorded only against the supplier IDENTITY (the id) the operator
+ * observed. The identity the dialog showed, the identity the basis records and the identity the payable
+ * or claim is created for are one id; a different id with the same name and the same entitlement is a
+ * different counterparty, and the concession is refused before any write.
+ */
+describe("SCRUM-868 P3: a concession is bound to the supplier identity the operator observed", () => {
+  type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+  const ROUTES: Route[] = ["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"];
+
+  /** The seeded (sourced) vehicle's supplier; the seed leaves it undefined only for a stock car. */
+  const supplierOf = (s: Seeded): Id<"suppliers"> => {
+    if (!s.supplierId) throw new Error("this seed has no supplier");
+    return s.supplierId;
+  };
+
+  /** A DISTINCT supplier row with the same name and terms: the same-name different-identity party. */
+  async function sameNameOtherSupplier(s: Seeded): Promise<Id<"suppliers">> {
+    const supplierId = supplierOf(s);
+    return await s.t.run(async (ctx) => {
+      const original = (await ctx.db.get(supplierId))!;
+      const { _id, _creationTime, ...fields } = original;
+      return await ctx.db.insert("suppliers", fields);
+    });
+  }
+
+  async function switchVehicleTo(s: Seeded, supplierId: Id<"suppliers">) {
+    await s.owner.as.mutation(api.vehicles.update, {
+      orgId: s.orgId, vehicleId: s.vehicleId, sourceType: "SOURCED", sourcedSupplierId: supplierId, sourceCost: 9_500,
+    });
+  }
+
+  /** What the dialog would observe, read through the real basis query. */
+  async function observedBasis(s: Seeded, applicationId: Id<"financeApplications">) {
+    const basis = await s.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId });
+    if (!basis.eligible) throw new Error("the vehicle is not eligible for a concession");
+    return {
+      entitlementMinor: basis.entitlementMinor,
+      supplierName: basis.supplierName,
+      supplierId: (basis as { supplierId?: Id<"suppliers"> }).supplierId,
+    };
+  }
+
+  /** The supplier obligation completion created for the route, whichever table holds it. */
+  async function obligationOf(s: Seeded, route: Route) {
+    return await s.t.run(async (ctx) => {
+      const table = route === "THROUGH_DEALERSHIP" ? "vehicleSupplierPayables" : "vehicleSupplierReceivables";
+      return (await ctx.db.query(table).collect()).find((row) => row.orgId === s.orgId && row.status !== "CANCELLED");
+    });
+  }
+
+  test.each(ROUTES)("%s control: an unchanged identity records the observed id and completes against it", async (route) => {
+    const s = await seed(`id_ctl_${route}`);
+    const applicationId = await approvedDeal(s, route);
+    const observed = await observedBasis(s, applicationId);
+    expect(observed.supplierId).toBe(s.supplierId);
+
+    await resolve(s, applicationId, { ...V3, observed });
+    expect((await appOf(s, applicationId))?.supplierGapBasis?.supplierId).toBe(s.supplierId);
+
+    await handOver(s, applicationId);
+    await finalizeAsOwner(s, applicationId);
+    const obligation = await obligationOf(s, route);
+    expect(obligation?.supplierId).toBe(s.supplierId);
+    expect(obligation?.amountDue).toBe(route === "THROUGH_DEALERSHIP" ? 9_100 : 2_400);
+  });
+
+  // The swap and missing-identity cases are literal tests, one per route, so each regression scenario can name
+  // exactly one active test (a parameterized registration cannot be bound by the library).
+  async function expectSwappedSupplierRefused(route: Route) {
+    const s = await seed(`id_swap_${route}`);
+    const applicationId = await approvedDeal(s, route);
+    const observedForA = await observedBasis(s, applicationId);
+    const otherId = await sameNameOtherSupplier(s);
+    await switchVehicleTo(s, otherId);
+    const before = await stateOf(s);
+
+    const refusal = await refusalOf(resolve(s, applicationId, { ...V3, observed: observedForA }));
+    expect(refusal?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    // Full-table snapshot: nothing at all was committed by the refused command.
+    expect(await stateOf(s)).toEqual(before);
+    expect((await appOf(s, applicationId))?.supplierGapShareMinor).toBeUndefined();
+
+    // Positive control: re-observing the vehicle as it now is (supplier B) records and completes against B only.
+    const observedForB = await observedBasis(s, applicationId);
+    expect(observedForB.supplierId).toBe(otherId);
+    await resolve(s, applicationId, { ...V3, observed: observedForB });
+    await handOver(s, applicationId);
+    await finalizeAsOwner(s, applicationId);
+    const obligation = await obligationOf(s, route);
+    expect(obligation?.supplierId).toBe(otherId);
+    expect(obligation?.amountDue).toBe(route === "THROUGH_DEALERSHIP" ? 9_100 : 2_400);
+  }
+
+  test("THROUGH_DEALERSHIP: a basis observed for supplier A is refused after the vehicle moves to same-name supplier B, with no write", () => expectSwappedSupplierRefused("THROUGH_DEALERSHIP"));
+  test("DIRECT_TO_SUPPLIER: a basis observed for supplier A is refused after the vehicle moves to same-name supplier B, with no write", () => expectSwappedSupplierRefused("DIRECT_TO_SUPPLIER"));
+
+  async function expectMissingIdentityRefused(route: Route) {
+    const s = await seed(`id_none_${route}`);
+    const applicationId = await approvedDeal(s, route);
+    const before = await stateOf(s);
+
+    const refusal = await refusalOf(resolve(s, applicationId, { ...V3, observed: { entitlementMinor: jod(9_500), supplierName: SUPPLIER, supplierId: null } }));
+    expect(refusal?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_REQUIRED);
+    expect(await stateOf(s)).toEqual(before);
+
+    // Positive control: the same command carrying the identity is accepted, so the refusal was the missing id.
+    await resolve(s, applicationId, V3);
+    expect((await appOf(s, applicationId))?.supplierGapShareMinor).toBe(jod(400));
+  }
+
+  test("THROUGH_DEALERSHIP: a concession that names no observed supplier identity is refused, with no write", () => expectMissingIdentityRefused("THROUGH_DEALERSHIP"));
+  test("DIRECT_TO_SUPPLIER: a concession that names no observed supplier identity is refused, with no write", () => expectMissingIdentityRefused("DIRECT_TO_SUPPLIER"));
+
+  test("an observed id of another organization or of a deleted supplier is refused as a stale basis, indistinguishably", async () => {
+    const s = await seed("id_foreign");
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    // Created in the SAME harness instance as the deal: a second convexTest() hands out ids identical to
+    // this one's, which would make a "foreign" id equal to the seeded supplier's and the test vacuous.
+    const seededSupplierId = supplierOf(s);
+    const foreignId = await s.t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other dealership", createdAt: Date.now() });
+      const { _id, _creationTime, ...fields } = (await ctx.db.get(seededSupplierId))!;
+      return await ctx.db.insert("suppliers", { ...fields, orgId: otherOrgId });
+    });
+    expect(foreignId).not.toBe(s.supplierId);
+    const deletedId = await sameNameOtherSupplier(s);
+    await s.t.run((ctx) => ctx.db.delete(deletedId));
+    const before = await stateOf(s);
+
+    const foreign = await refusalOf(resolve(s, applicationId, { ...V3, observed: { entitlementMinor: jod(9_500), supplierName: SUPPLIER, supplierId: foreignId } }));
+    const deleted = await refusalOf(resolve(s, applicationId, { ...V3, observed: { entitlementMinor: jod(9_500), supplierName: SUPPLIER, supplierId: deletedId } }));
+    expect(foreign?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    expect(deleted?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    expect(await stateOf(s)).toEqual(before);
+  });
+
+  test("a vehicle with no supplier id offers no concession and refuses one, with no write", async () => {
+    const s = await seed("id_legacy");
+    const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourcedSupplierId: undefined }));
+    const before = await stateOf(s);
+
+    expect(await s.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })).toMatchObject({ eligible: false });
+    const refusal = await refusalOf(resolve(s, applicationId, V3));
+    expect(refusal?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    expect(await stateOf(s)).toEqual(before);
+  });
+});
+describe("SCRUM-868 P3 repair: a handed-over deal with a concession basis recorded before supplier ids existed", () => {
+  type Route = "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER";
+  const ROUTES: Route[] = ["THROUGH_DEALERSHIP", "DIRECT_TO_SUPPLIER"];
+
+  /** The basis exactly as main's `resolveAppraisalGap` stored it: no supplier id. */
+  async function stripBasisId(s: Seeded, applicationId: Id<"financeApplications">) {
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      const { supplierId: _dropped, supplierIdentityRepair: _stamp, ...mainShaped } = app.supplierGapBasis!;
+      await ctx.db.patch(applicationId, { supplierGapBasis: mainShaped });
+    });
+  }
+
+  async function repairConcessions(s: Seeded) {
+    let cursor: string | null = null;
+    const total = { repaired: 0, unresolved: 0 };
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page: { status: "MORE" | "READY"; cursor: string | null; repaired: number; unresolved: number } =
+        await s.t.mutation(internal.supplierIdentityRepair.repairPage, { orgId: s.orgId, phase: "CONCESSIONS", cursor });
+      total.repaired += page.repaired;
+      total.unresolved += page.unresolved;
+      if (page.status === "READY") return total;
+      cursor = page.cursor;
+    }
+    throw new Error("the repair never finished");
+  }
+
+  async function handedOverMainShapedDeal(tag: string, route: Route) {
+    const s = await seed(tag);
+    const applicationId = await approvedDeal(s, route);
+    await resolve(s, applicationId, V3);
+    await handOver(s, applicationId);
+    await stripBasisId(s, applicationId);
+    return { s, applicationId };
+  }
+
+  async function obligation(s: Seeded, route: Route) {
+    return await s.t.run(async (ctx) => {
+      const table = route === "THROUGH_DEALERSHIP" ? "vehicleSupplierPayables" : "vehicleSupplierReceivables";
+      return (await ctx.db.query(table).collect()).find((row) => row.orgId === s.orgId && row.status !== "CANCELLED");
+    });
+  }
+
+  async function expectRepairedThenCompletes(route: Route) {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_${route}`, route);
+
+    // Before the repair: refused, with the truthful coded refusal, and the refused finalize wrote nothing.
+    await payForwardAsOwner(s, applicationId);
+    const before = await stateOf(s);
+    const refusal = await refusalDataOf(finalizeAsOwner(s, applicationId));
+    expect(refusal?.code).toBe(SUPPLIER_ERROR.CONCESSION_BASIS_UNBOUND);
+    expect(refusal?.message).toBe(SUPPLIER_CONCESSION_BASIS_UNBOUND_MESSAGE);
+    expect(await stateOf(s)).toEqual(before);
+
+    // The remedy the message names exists: the repair binds the basis to the vehicle's frozen supplier link.
+    expect(await repairConcessions(s)).toEqual({ repaired: 1, unresolved: 0 });
+    const app = await appOf(s, applicationId);
+    expect(app?.supplierGapBasis?.supplierId).toBe(s.supplierId);
+    expect(app?.supplierGapBasis?.supplierIdentityRepair).toMatchObject({ source: "VEHICLE_LINK", nameMatchedOn: "DISPLAY_NAME" });
+
+    await finalizeAsOwner(s, applicationId);
+    const row = await obligation(s, route);
+    expect(row?.supplierId).toBe(s.supplierId);
+    expect(row?.amountDue).toBe(route === "THROUGH_DEALERSHIP" ? 9_100 : 2_400);
+  }
+
+  test("THROUGH_DEALERSHIP: refused with the coded refusal until the repair binds the basis, then completes against the vehicle's supplier", () =>
+    expectRepairedThenCompletes("THROUGH_DEALERSHIP"));
+  test("DIRECT_TO_SUPPLIER: refused with the coded refusal until the repair binds the basis, then completes against the vehicle's supplier", () =>
+    expectRepairedThenCompletes("DIRECT_TO_SUPPLIER"));
+
+  test.each(ROUTES)("%s: a basis whose recorded supplier name is not the vehicle supplier's stays unbound, counted, and refused", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_name_${route}`, route);
+    await s.t.run(async (ctx) => {
+      const app = (await ctx.db.get(applicationId))!;
+      await ctx.db.patch(applicationId, { supplierGapBasis: { ...app.supplierGapBasis!, supplierName: "Some Other Importer" } });
+    });
+    const before = await stateOf(s);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await stateOf(s)).toEqual(before);
+    expect((await refusalDataOf(finalizeAsOwner(s, applicationId)))?.message).toBe(SUPPLIER_CONCESSION_REFUSALS.BASIS_STALE);
+    expect((await appOf(s, applicationId))?.finalizedSaleId).toBeUndefined();
+  });
+
+  test.each(ROUTES)("%s: a vehicle with no supplier link leaves the basis unbound, counted, and refused", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`rep_basis_nolink_${route}`, route);
+    await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { sourcedSupplierId: undefined }));
+    const before = await stateOf(s);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await stateOf(s)).toEqual(before);
+    expect((await refusalDataOf(finalizeAsOwner(s, applicationId)))?.code).toBeDefined();
+  });
+
+  test.each(ROUTES)("%s: a basis already bound to a supplier, even a wrong one, is never rewritten by the repair", async (route) => {
+    const s = await seed(`rep_basis_bound_${route}`);
+    const applicationId = await approvedDeal(s, route);
+    await resolve(s, applicationId, V3);
+    const before = await appOf(s, applicationId);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 0 });
+    expect((await appOf(s, applicationId))?.supplierGapBasis).toEqual(before?.supplierGapBasis);
+  });
+
+  async function countConcessions(s: Seeded) {
+    let cursor: string | null = null;
+    let unresolved = 0;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page: { status: "MORE" | "READY"; cursor: string | null; unresolved: number } = await s.t.query(
+        internal.supplierIdentityRepair.countPage,
+        { orgId: s.orgId, phase: "CONCESSIONS", cursor }
+      );
+      unresolved += page.unresolved;
+      if (page.status === "READY") return unresolved;
+      cursor = page.cursor;
+    }
+    throw new Error("the count never finished");
+  }
+
+  test.each(ROUTES)("%s: the counts-only check counts a held concession whose basis has no id, and no longer after the repair", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`cnt_basis_${route}`, route);
+    expect(await countConcessions(s)).toBe(1);
+    await repairConcessions(s);
+    expect(await countConcessions(s)).toBe(0);
+    expect((await appOf(s, applicationId))?.supplierGapBasis?.supplierId).toBe(s.supplierId);
+  });
+
+  test.each(ROUTES)("%s: a held concession with NO recorded basis at all is counted and stays unrepaired", async (route) => {
+    const { s, applicationId } = await handedOverMainShapedDeal(`cnt_nobasis_${route}`, route);
+    await s.t.run((ctx) => ctx.db.patch(applicationId, { supplierGapBasis: undefined }));
+    expect(await countConcessions(s)).toBe(1);
+    expect(await repairConcessions(s)).toEqual({ repaired: 0, unresolved: 1 });
+    expect(await countConcessions(s)).toBe(1);
+  });
+});
 // RT11-DOORS: historical lifecycle mechanics with the pilot doors explicitly open.
 // Shipped-state refusals and controls live in rt11DoorContainment.test.ts.
 vi.mock("./utils/rt11DoorContainment", async (importOriginal) =>

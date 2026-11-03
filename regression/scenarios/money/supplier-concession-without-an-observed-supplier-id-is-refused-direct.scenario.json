@@ -1,0 +1,54 @@
+{
+  "id": "supplier-concession-without-an-observed-supplier-id-is-refused-direct",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum868-p3-review-fixes",
+    "hunter": "scripted",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "action": "financingEconomics.resolveAppraisalGap",
+      "actor": {
+        "org": "A",
+        "role": "approver"
+      },
+      "input": {
+        "observedEntitlementMinor": 9500000,
+        "observedSupplierId": "ABSENT",
+        "supplierShareMinor": 400000,
+        "route": "DIRECT_TO_SUPPLIER",
+        "dealerShareMinor": 450000,
+        "netShortfallMinor": 850000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "resolve.refusal",
+      "value": "supplier-concession-basis-required"
+    },
+    {
+      "observable": "db.rowsChanged",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67",
+      "id": "SCRUM-868#c23794"
+    },
+    {
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44",
+      "id": "SCRUM-760#c23812"
+    }
+  ],
+  "impl": {
+    "testName": "DIRECT_TO_SUPPLIER: a concession that names no observed supplier identity is refused, with no write",
+    "file": "convex/supplierConcession.scrum766c.test.ts"
+  },
+  "matrixRow": "pilot-supplier-concession-refusals",
+  "fingerprint": "510f6345f939dbecbecbf8d9fcb670b802fec27bc572a22f2128643bbaf354b5"
+}

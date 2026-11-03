@@ -5,7 +5,6 @@ import { openFeedbackPanel } from "@/components/feedback/feedbackWidgetStore";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-import Link from "next/link";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { WhatsNewButton } from "@/components/layout/WhatsNewButton";
@@ -18,13 +17,13 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
-import { mainNavigation, settingsNavigation, navItemPermitted, tabTitleNavItem, type NavItem } from "@/lib/navigation";
+import { mainNavigation, settingsNavigation, tabTitleNavItem } from "@/lib/navigation";
+import { NavSections, PlanCard } from "@/components/layout/NavSections";
 
 // Flat list (main + settings) used only to resolve the current page title —
-// the drawer itself renders the two sections separately, same as the desktop Sidebar.
+// the drawer renders the grouped sections through the same NavSections as the desktop Sidebar.
 const navigation = [...mainNavigation, ...settingsNavigation];
 
 export function TopNav() {
@@ -62,41 +61,6 @@ export function TopNav() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const visibleMainNavigation = mainNavigation.filter(item => navItemPermitted(item, permissions));
-
-  const visibleSettingsNavigation = settingsNavigation.filter(item => {
-    if (item.ownerOnly) return isOwner;
-    if (!item.permission) return true;
-    return permissions.includes(item.permission);
-  });
-
-  const renderMobileNavItem = (item: NavItem) => {
-    const href = `/${activeOrgId}${item.href}`;
-    const isActive = pathname.startsWith(href);
-    const isApprovals = item.name === "Approvals";
-    return (
-      <Link
-        key={item.name}
-        href={href}
-        onClick={() => setIsMobileMenuOpen(false)}
-        className={cn(
-          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-          isActive
-            ? "bg-primary/10 text-primary"
-            : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"
-        )}
-      >
-        <item.icon className={cn("h-4 w-4 shrink-0", isActive ? "text-primary" : "text-slate-400")} />
-        <span className="flex-1">{t(item.name as any)}</span>
-        {isApprovals && pendingCount != null && pendingCount > 0 && (
-          <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-            {pendingCount}
-          </span>
-        )}
-      </Link>
-    );
-  };
-
   return (
     <header className="sticky top-0 z-30 w-full border-b border-slate-200/50 bg-white/95 backdrop-blur shadow-sm shrink-0">
       <GlobalSearchModal open={searchOpen} onOpenChange={setSearchOpen} />
@@ -113,41 +77,40 @@ export function TopNav() {
               </Button>
             </SheetTrigger>
             <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0 flex flex-col">
-              <SheetHeader className="p-4 border-b border-slate-100 text-start shrink-0">
+              <SheetHeader className="h-16 justify-center space-y-0 px-4 py-0 border-b border-slate-100 text-start shrink-0">
                 <SheetTitle className="flex items-center justify-center">
                   {logoUrl ? (
-                    <img src={logoUrl} alt="Organization Logo" className="h-20 w-auto max-w-[180px] object-contain" />
+                    <img src={logoUrl} alt="Organization Logo" className="h-10 w-auto max-w-[160px] object-contain" />
                   ) : (
-                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-20 w-auto max-w-[180px] object-contain" priority />
+                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-10 w-auto max-w-[160px] object-contain" priority />
                   )}
                 </SheetTitle>
               </SheetHeader>
-              <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-1">
-                <nav className="flex flex-col gap-1">
-                  {visibleMainNavigation.map(renderMobileNavItem)}
-                </nav>
-
-                {visibleSettingsNavigation.length > 0 && (
-                  <div className="mt-4">
-                    <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      {t("Settings" as any)}
-                    </p>
-                    <nav className="flex flex-col gap-1 mt-1">
-                      {visibleSettingsNavigation.map(renderMobileNavItem)}
-                    </nav>
-                  </div>
-                )}
+              <div className="flex-1 overflow-y-auto px-3 pt-3 pb-4">
+                <NavSections
+                  permissions={permissions}
+                  isOwner={isOwner}
+                  density="drawer"
+                  badges={{ Approvals: pendingCount }}
+                  onNavigate={() => setIsMobileMenuOpen(false)}
+                />
               </div>
-              <div className="shrink-0 border-t border-slate-100 p-3">
+              <div className="shrink-0 border-t border-slate-100 p-3 flex flex-col gap-2">
+                <PlanCard
+                  permissions={permissions}
+                  isOwner={isOwner}
+                  density="drawer"
+                  onNavigate={() => setIsMobileMenuOpen(false)}
+                />
                 <button
                   type="button"
                   onClick={() => {
                     setIsMobileMenuOpen(false);
                     openFeedbackPanel();
                   }}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                  className="flex h-11 w-full items-center gap-3 px-3 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
                 >
-                  <MessageSquarePlus className="h-4 w-4 shrink-0 text-slate-400" />
+                  <MessageSquarePlus className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
                   <span className="flex-1 text-start">{t("FeedbackWidgetTitle" as any)}</span>
                 </button>
               </div>

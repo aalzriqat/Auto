@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { Id } from "@/convex/_generated/dataModel";
 import { RadioCardGroup } from "./RadioCardGroup";
 import { validateGapShares } from "@/lib/financingEconomics";
 import { parseMajorToMinor } from "@/lib/financeFeeTemplateForm";
@@ -41,6 +42,12 @@ export type SupplierConcessionBasis = {
   entitlementMinor: number;
   currency: string;
   supplierName: string;
+  /**
+   * The supplier's ID, the identity the concession is agreed with. Sent back as
+   * `observedSupplierId` so the server refuses a concession observed for one
+   * supplier once the vehicle belongs to another, even one with the same name.
+   */
+  supplierId: Id<"suppliers">;
 };
 
 /**
@@ -188,6 +195,7 @@ export function ResolveGapDialog({
     supplierGapShareMinor?: number;
     observedSupplierEntitlementMinor?: number;
     observedSupplierName?: string;
+    observedSupplierId?: Id<"suppliers">;
     notes: string;
     economicsStamp: string | undefined;
   }) => Promise<void>;
@@ -424,6 +432,7 @@ export function ResolveGapDialog({
               supplierGapShareMinor: supplierShareMinor,
               observedSupplierEntitlementMinor: offeredBasis.entitlementMinor,
               observedSupplierName: offeredBasis.supplierName,
+              observedSupplierId: offeredBasis.supplierId,
             }
           : {}),
         notes: draft.notes.trim(),

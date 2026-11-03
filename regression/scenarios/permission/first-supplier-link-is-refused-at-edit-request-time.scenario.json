@@ -1,0 +1,72 @@
+{
+  "id": "first-supplier-link-is-refused-at-edit-request-time",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierPayable",
+      "input": {
+        "vehicleId": "VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "EDITOR",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.refusal",
+      "value": "SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "audit.firstLinkRows",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P4-first-link",
+  "impl": {
+    "file": "convex/vehicleSupplierFirstLink.scrum868.test.ts",
+    "testName": "requestUpdate by an editor is refused before a request is stored"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4-first-link",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "df4daa84e3cfbf0904d9fe28da25c2b1311fe190491cf8e7c1ee4282865d3af1"
+}

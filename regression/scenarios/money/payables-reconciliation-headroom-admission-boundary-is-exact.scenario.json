@@ -1,0 +1,63 @@
+{
+  "id": "payables-reconciliation-headroom-admission-boundary-is-exact",
+  "fingerprint": "e0a2268b3a116d8eb144b05f3914df120498064f20d690ecea1e88025fd8a96f",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountSnapshots.getCumulativeBalancesAsOfChecked",
+      "input": {
+        "apLines": "2",
+        "edgeRemainingBytes": "3MiB",
+        "belowRemainingBytes": "3MiB-1",
+        "edgeRemainingDocuments": "2001",
+        "belowRemainingDocuments": "2000",
+        "edgeRemainingQueries": "257",
+        "belowRemainingQueries": "256"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "edge.status",
+      "value": "OK"
+    },
+    {
+      "observable": "oneBelowEdge.status",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "ample.status",
+      "value": "OK"
+    },
+    {
+      "observable": "ample.creditMinor",
+      "value": "246800"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 headroom: a read is admitted at exactly 1 MiB + 2 MiB of bytes, 1 + 2,000 documents and 1 + 256 queries, and refused one below any of them"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "57b7bd09f0c5fcbc09f4d3e7f4b2d8cfd46d7217"
+  }
+}

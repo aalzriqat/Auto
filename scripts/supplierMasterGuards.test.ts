@@ -3453,7 +3453,7 @@ describe("supplier master schema", () => {
     expect(fieldsOf("suppliers")).toEqual(
       [
         "orgId", "displayName", "displayNameKey", "legalName", "status", "contact", "taxId", "taxIdKey", "taxJurisdiction",
-        "sharedLegalIdentityOf", "sharedLegalIdentityReason", "version", "origin", "createdBy", "createdAt", "updatedBy",
+        "sharedLegalIdentityOf", "sharedLegalIdentityReason", "version", "editRevision", "origin", "createdBy", "createdAt", "updatedBy",
         "updatedAt", "deactivatedBy", "deactivatedAt", "deactivatedReason",
       ].sort(),
     );
