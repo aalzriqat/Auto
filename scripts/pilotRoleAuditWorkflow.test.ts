@@ -170,9 +170,10 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       .toBe("node scripts/localConvexBackend.mjs mark");
     const verify = stepNamed(steps, "Verify the local backend was not changed during the run");
     expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
-    // The tripwire must be able to fail the job and must run whenever `mark` ran.
-    // Exact text: a weakened condition (e.g. `== 'never'`) would silently skip it.
-    expect(verify.if).toBe("always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''");
+    // The tripwire must be able to fail the job and must always run. Plain always():
+    // verifyBackend refuses a missing baseline (localConvexBackend.test.ts), so a cleared
+    // fingerprint turns the job red; a conditional `if` could skip it instead.
+    expect(verify.if).toBe("always()");
     expect(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline").if).toBeUndefined();
     const tripwireSpan = steps.slice(
       steps.indexOf(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline")),
@@ -200,7 +201,7 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     ["working-directory", "step: runs the same script from another tree"],
   ];
   const EXPECTED_IF: Readonly<Record<string, string | undefined>> = {
-    "Verify the local backend was not changed during the run": "always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''",
+    "Verify the local backend was not changed during the run": "always()",
     "Stop the local Convex backend": "always()",
     "Upload encrypted role audit evidence": "always()",
   };
@@ -229,6 +230,148 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       ["Mint the disposable-preview marker and record the tripwire baseline", "mark"],
       ["Verify the local backend was not changed during the run", "verify"],
     ] as const) expect(stepNamed(workflow.jobs.roles.steps, name).run).toBe(`node scripts/localConvexBackend.mjs ${command}`);
+  });
+
+  // Round 3 (both seats): stop excluding bypass keys one by one. The whole job is an
+  // exact literal, so a changed, added, removed or reordered step, `env` key, `run`
+  // text, `uses` pin or `if` fails here, including env injection (NODE_OPTIONS,
+  // BASH_ENV) and a step that writes GITHUB_ENV or GITHUB_PATH. Updating the workflow
+  // means updating this literal, which is the review point.
+  const EXPECTED_STEPS = [
+    {
+      "uses": "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+      "with": {
+        "persist-credentials": false
+      }
+    },
+    {
+      "uses": "pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa",
+      "with": {
+        "version": "11.13.0"
+      }
+    },
+    {
+      "name": "Use Node.js",
+      "uses": "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+      "with": {
+        "node-version": "22.21.1",
+        "cache": "pnpm"
+      }
+    },
+    {
+      "name": "Install dependencies",
+      "run": "pnpm install --frozen-lockfile --ignore-scripts"
+    },
+    {
+      "name": "Install Playwright browsers",
+      "run": "pnpm exec playwright install --with-deps chromium"
+    },
+    {
+      "name": "Start the local Convex backend",
+      "run": "node scripts/localConvexBackend.mjs start"
+    },
+    {
+      "name": "Set and verify the local backend environment allowlist",
+      "run": "node scripts/localConvexBackend.mjs env",
+      "env": {
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+        "NEXT_PUBLIC_APP_URL": "http://127.0.0.1:3000"
+      }
+    },
+    {
+      "name": "Deploy main to the local Convex backend",
+      "run": "pnpm exec convex deploy --typecheck enable --yes",
+      "env": {
+        "CONVEX_SELF_HOSTED_URL": "${{ env.CONVEX_SELF_HOSTED_URL }}",
+        "CONVEX_SELF_HOSTED_ADMIN_KEY": "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}"
+      }
+    },
+    {
+      "name": "Mint the disposable-preview marker and record the tripwire baseline",
+      "run": "node scripts/localConvexBackend.mjs mark",
+      "env": {
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+        "NEXT_PUBLIC_APP_URL": "http://127.0.0.1:3000"
+      }
+    },
+    {
+      "name": "Seed the QA dealership on the local backend",
+      "run": "node scripts/e2ePreviewBootstrap.mjs",
+      "env": {
+        "CONVEX_SELF_HOSTED_URL": "${{ env.CONVEX_SELF_HOSTED_URL }}",
+        "CONVEX_SELF_HOSTED_ADMIN_KEY": "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}",
+        "NEXT_PUBLIC_CONVEX_URL": "${{ env.NEXT_PUBLIC_CONVEX_URL }}",
+        "CLERK_SECRET_KEY": "${{ secrets.CLERK_SECRET_KEY }}",
+        "E2E_LOGIN_USER": "${{ secrets.E2E_LOGIN_USER }}",
+        "E2E_APPROVER_USER": "${{ secrets.E2E_APPROVER_USER }}"
+      }
+    },
+    {
+      "name": "Set exact product role templates on the local backend",
+      "run": "set -euo pipefail\nnode scripts/e2ePreviewBootstrap.mjs --set-role approver MANAGER\nnode scripts/e2ePreviewBootstrap.mjs --set-role approver \"$AUDIT_ROLE\"\n",
+      "env": {
+        "AUDIT_ROLE": "${{ matrix.role }}",
+        "CONVEX_SELF_HOSTED_URL": "${{ env.CONVEX_SELF_HOSTED_URL }}",
+        "CONVEX_SELF_HOSTED_ADMIN_KEY": "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}",
+        "NEXT_PUBLIC_CONVEX_URL": "${{ env.NEXT_PUBLIC_CONVEX_URL }}",
+        "CLERK_SECRET_KEY": "${{ secrets.CLERK_SECRET_KEY }}",
+        "E2E_LOGIN_USER": "${{ secrets.E2E_LOGIN_USER }}",
+        "E2E_APPROVER_USER": "${{ secrets.E2E_APPROVER_USER }}"
+      }
+    },
+    {
+      "name": "Run the attested role, locale and viewport matrix",
+      "run": "node scripts/pilotRoleAuditEvidence.mjs",
+      "env": {
+        "NEXT_PUBLIC_CONVEX_URL": "${{ env.NEXT_PUBLIC_CONVEX_URL }}",
+        "HUNT_AUDIT_ROLE": "${{ matrix.role }}",
+        "AUTOFLOW_LOCAL_CONVEX_CI": "1",
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+        "NEXT_PUBLIC_TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
+        "CLERK_SECRET_KEY": "${{ secrets.CLERK_SECRET_KEY }}",
+        "NEXT_PUBLIC_APP_URL": "${{ secrets.NEXT_PUBLIC_APP_URL }}",
+        "E2E_LOGIN_USER": "${{ secrets.E2E_LOGIN_USER }}",
+        "E2E_LOGIN_PASSWORD": "${{ secrets.E2E_LOGIN_PASSWORD }}",
+        "E2E_LOGIN_VERIFICATION_CODE": "${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}",
+        "E2E_APPROVER_USER": "${{ secrets.E2E_APPROVER_USER }}",
+        "E2E_APPROVER_PASSWORD": "${{ secrets.E2E_APPROVER_PASSWORD }}",
+        "CI": true
+      }
+    },
+    {
+      "name": "Verify the local backend was not changed during the run",
+      "if": "always()",
+      "run": "node scripts/localConvexBackend.mjs verify",
+      "env": {
+        "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+        "NEXT_PUBLIC_APP_URL": "http://127.0.0.1:3000"
+      }
+    },
+    {
+      "name": "Stop the local Convex backend",
+      "if": "always()",
+      "run": "node scripts/localConvexBackend.mjs stop"
+    },
+    {
+      "name": "Upload encrypted role audit evidence",
+      "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+      "if": "always()",
+      "with": {
+        "name": "pilot-role-audit-${{ matrix.role }}",
+        "path": "${{ runner.temp }}/pilot-role-audit-public/role-evidence.tar.gpg\n${{ runner.temp }}/pilot-role-audit-public/results.json\n",
+        "if-no-files-found": "error",
+        "retention-days": 14
+      }
+    }
+  ];
+
+  test("SCRUM-892: every step of the job is an exact literal, so no step or env key can be added, changed or reordered", () => {
+    expect(workflow.jobs.roles.steps).toStrictEqual(EXPECTED_STEPS);
+    const raw = parse(source) as { env?: unknown; jobs: { roles: { env?: unknown } } };
+    expect(raw.env, "workflow-level env reaches every step").toBeUndefined();
+    expect(raw.jobs.roles.env, "job-level env reaches every step").toBeUndefined();
+    // Nothing in the file may reach the runner's env or PATH for later steps.
+    expect(source).not.toMatch(/GITHUB_ENV|GITHUB_PATH|NODE_OPTIONS|BASH_ENV|LD_PRELOAD|ACTIONS_STEP_DEBUG/);
   });
 
   test("SCRUM-892: the browser helpers name only the exact local backend, nothing else on loopback", () => {

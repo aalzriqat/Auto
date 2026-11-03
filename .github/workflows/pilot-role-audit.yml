@@ -124,9 +124,10 @@ jobs:
           CI: true
 
       # Trusted tripwire (PR #757 round 5): fails the job unless the backend still
-      # equals what `mark` recorded. always(): a red matrix still gets its check.
+      # equals what `mark` recorded. Plain always(): verifyBackend refuses a missing
+      # baseline, so a cleared fingerprint turns the job red instead of skipping this step.
       - name: Verify the local backend was not changed during the run
-        if: always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''
+        if: always()
         run: node scripts/localConvexBackend.mjs verify
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
