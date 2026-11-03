@@ -39,15 +39,27 @@ concurrency:
 #
 # Security delta, stated plainly. Candidate backend code used to run in Convex's
 # cloud, on a deployment holding a project-wide credential's reach. It now runs
-# in a container on the runner. That container receives only its own INSTANCE_*
-# and origin variables, no runner secret and no GitHub token; its ports are bound
-# to loopback; and the CLI that deploys the staged candidate is the trusted one,
-# in the same read-only, no-capability container as before. Candidate code
-# already runs on runners (playwright.yml builds and serves it), so this adds no
-# new class of exposure; it removes the cloud project credential from the swarm.
-# Accepted residuals: the per-run admin key reaches later steps of the SAME job
-# through GITHUB_ENV (it controls only that job's throwaway backend), and the
-# backend container has default bridge egress because it fetches Clerk's JWKS.
+# in a container on the runner. That container receives only its own INSTANCE_*,
+# origin and telemetry-off variables, no runner secret and no GitHub token; its ports are
+# published on the runner's 127.0.0.1 only, which limits inbound traffic, not
+# outbound; and the CLI that deploys the staged candidate is the trusted one, in
+# the same read-only, no-capability container as before. It removes the cloud
+# project credential from the swarm.
+# Accepted residuals:
+# - the per-run admin key reaches later steps of the SAME job through GITHUB_ENV
+#   (it controls only that job's throwaway backend);
+# - candidate "use node" code runs as root inside the backend container, can
+#   read the per-run INSTANCE_SECRET and mint an admin key for that backend.
+#   Nothing prevents this; the mark/verify tripwire only detects a change still
+#   in place when verify runs (owner ruling, SCRUM-892 option A);
+# - the backend container sits on Docker's default bridge, because it fetches
+#   Clerk's JWKS, and the deploy container shares its network namespace. From
+#   there, any runner service listening on all interfaces is reachable through
+#   the bridge gateway, including the trusted `next start` webServer during the
+#   auth steps, whose environment holds secrets. So is whatever the bridge
+#   routes to beyond the runner, which may include the cloud metadata endpoint
+#   (not probed). Services bound to 127.0.0.1 (the egress proxy, the candidate
+#   relay) are not reachable.
 #
 # Semantic change: each attack worker attacks a freshly seeded backend of its own
 # (its accounting period opened by its own setup step before the missions), not
@@ -672,8 +684,10 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
-      # SCRUM-350: the preview credential is project-wide, so the candidate
-      # backend is never deployed by candidate code. This step holds no secret:
+      # SCRUM-350: the trusted CLI, never a deploy the candidate runs itself,
+      # deploys the staged candidate backend. Once deployed, candidate code can
+      # mint an admin key and push again (see the file header); the mark/verify
+      # tripwire detects that, it does not prevent it. This step holds no secret:
       # it copies convex/ and lib/ as data, refuses links, .wasm and nested
       # package.json, and requires the candidate's dependency files to be
       # byte-identical to trusted's.
@@ -1231,8 +1245,10 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
-      # SCRUM-350: the preview credential is project-wide, so the candidate
-      # backend is never deployed by candidate code. This step holds no secret:
+      # SCRUM-350: the trusted CLI, never a deploy the candidate runs itself,
+      # deploys the staged candidate backend. Once deployed, candidate code can
+      # mint an admin key and push again (see the file header); the mark/verify
+      # tripwire detects that, it does not prevent it. This step holds no secret:
       # it copies convex/ and lib/ as data, refuses links, .wasm and nested
       # package.json, and requires the candidate's dependency files to be
       # byte-identical to trusted's.
@@ -1769,8 +1785,10 @@ jobs:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
-      # SCRUM-350: the preview credential is project-wide, so the candidate
-      # backend is never deployed by candidate code. This step holds no secret:
+      # SCRUM-350: the trusted CLI, never a deploy the candidate runs itself,
+      # deploys the staged candidate backend. Once deployed, candidate code can
+      # mint an admin key and push again (see the file header); the mark/verify
+      # tripwire detects that, it does not prevent it. This step holds no secret:
       # it copies convex/ and lib/ as data, refuses links, .wasm and nested
       # package.json, and requires the candidate's dependency files to be
       # byte-identical to trusted's.

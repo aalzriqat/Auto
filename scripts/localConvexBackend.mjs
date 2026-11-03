@@ -24,7 +24,7 @@
  *
  * ## THE SAFETY PROPERTY THIS FILE EXISTS TO KEEP
  *
- * It can only ever talk to `http://127.0.0.1:3210`, and it refuses to run at
+ * Every Convex call it makes goes to `http://127.0.0.1:3210`, and it refuses to run at
  * all while a cloud credential (`CONVEX_DEPLOY_KEY`, `CONVEX_DEPLOYMENT`,
  * `CONVEX_PREVIEW_DEPLOY_KEY`) is present in its environment. The Convex CLI
  * resolves its target from those variables, so "no cloud credential in the
@@ -64,8 +64,9 @@
  * - a change restored before `verify` runs, such as a variable changed and
  *   changed back;
  * - code replaced before `mark`, which `mark` then records as the baseline;
- * - direct writes to the backend's own storage from inside the container,
- *   which no admin read observes.
+ * - anything done from inside the container below the admin API: root code
+ *   there can write the backend's storage or replace the process that answers
+ *   `verify`'s reads, so those reads can be made to report the marked state.
  * Restoring code by redeploying is itself a push, so it is expected to leave a
  * new push record that `verify` would see. That is read from the source and
  * has not been run.
@@ -148,7 +149,8 @@ export class LocalConvexRefusal extends Error {
 // ─── Pure guards ─────────────────────────────────────────────────────────────
 
 /**
- * Refuses unless this process could only reach the local backend.
+ * Refuses unless the local backend is the only Convex target this process can
+ * resolve.
  *
  * @param {Record<string, string | undefined>} env
  */
@@ -308,14 +310,30 @@ export function compareCodeUnits(a, b) {
   return a > b ? 1 : 0;
 }
 
+const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * Splits `convex env list` output into its lines with nothing normalised but
+ * the line terminator: one `\r` before each `\n`, and the empty string after
+ * the final `\n`. The pinned CLI prints one `NAME=value` (or `NAME`) line per
+ * variable and prints the value verbatim unless it needs quoting
+ * (node_modules/convex/dist/esm/cli/lib/env.js:131-141 and
+ * formatEnvValueForDotfile.js:2-36, convex 1.42.1), so whitespace inside a
+ * line is the backend's own value and is compared as written.
+ */
+function envListLines(stdout) {
+  const lines = String(stdout ?? "")
+    .split("\n")
+    .map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
 /** `convex env list --names-only` output to a sorted list of names. */
 export function parseEnvNames(stdout) {
-  const names = String(stdout ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const names = envListLines(stdout);
   for (const name of names) {
-    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+    if (!ENV_NAME.test(name)) {
       throw new LocalConvexRefusal("The backend's variable listing contained an unexpected value.");
     }
   }
@@ -339,21 +357,25 @@ export function assertEnvMatchesAllowlist(actualNames) {
 /**
  * `convex env list` output must be exactly the plan's `NAME=value` lines, in
  * any order. Values are compared too, not just names: a candidate holding an
- * admin key can rewrite a value without changing the name set. The refusal
- * names variables only.
+ * admin key can rewrite a value without changing the name set. Lines are
+ * compared exactly and counted, so a value with added whitespace differs and a
+ * duplicated line cannot stand in for a missing one. A plan value the CLI
+ * would print quoted never matches, which fails closed. The refusal names
+ * variables only.
  */
 export function assertEnvMatchesPlan(stdout, plan) {
-  const actual = String(stdout ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const expected = plan.map(([name, value]) => `${name}=${value}`);
-  const nameOf = (line) => line.slice(0, Math.max(0, line.indexOf("=")));
-  const differing = [
-    ...expected.filter((line) => !actual.includes(line)).map(nameOf),
-    ...actual.filter((line) => !expected.includes(line)).map((line) => nameOf(line) || "<unparseable line>"),
-  ];
-  if (differing.length > 0 || actual.length !== expected.length) {
+  const counts = new Map();
+  for (const [name, value] of plan) {
+    const line = `${name}=${value}`;
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  for (const line of envListLines(stdout)) counts.set(line, (counts.get(line) ?? 0) - 1);
+  const nameOf = (line) => {
+    const name = line.slice(0, Math.max(0, line.indexOf("=")));
+    return ENV_NAME.test(name) ? name : "<unparseable line>";
+  };
+  const differing = [...counts].filter(([, count]) => count !== 0).map(([line]) => nameOf(line));
+  if (differing.length > 0) {
     const names = [...new Set(differing)].sort(compareCodeUnits);
     throw new LocalConvexRefusal(
       `The local backend environment differs from the trusted plan. Variables that differ: [${names.join(", ")}].`,

@@ -321,9 +321,18 @@ describe("buildEnvPlan refusals", () => {
 
 describe("environment allowlist comparison", () => {
   test("parses names and refuses anything that is not a variable name", () => {
-    expect(parseEnvNames("B\nA\n\n")).toEqual(["A", "B"]);
+    expect(parseEnvNames("B\nA\n")).toEqual(["A", "B"]);
+    expect(parseEnvNames("B\r\nA\r\n")).toEqual(["A", "B"]);
+    expect(parseEnvNames("")).toEqual([]);
     expect(() => parseEnvNames("lowercase_value")).toThrow(/unexpected/);
     expect(() => parseEnvNames("A=1")).toThrow(/unexpected/);
+  });
+
+  test("compares names exactly: no trimming, no dropped lines", () => {
+    expect(() => parseEnvNames("A \nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames(" A\nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames("A\t\nB\n")).toThrow(/unexpected/);
+    expect(() => parseEnvNames("A\n\nB\n")).toThrow(/unexpected/);
   });
 
   test("orders by UTF-16 code unit, never by locale", () => {
@@ -611,6 +620,36 @@ describe("assertEnvMatchesPlan (round 5: values, not only names)", () => {
     }
     expect(message).toMatch(/differs from the trusted plan/);
     expect(message).not.toContain("evil.example");
+  });
+
+  // Round 9: the pinned CLI prints each value verbatim unless it needs quoting
+  // (node_modules/convex/dist/esm/cli/lib/env.js:136-140 and
+  // formatEnvValueForDotfile.js:2-36, convex 1.42.1), so whitespace a candidate
+  // writes into a value reaches stdout and must not be normalised away.
+  const withLine = (index: number, line: string) => PLAN_LINES.map((l, i) => (i === index ? line : l));
+  test.each([
+    ["a trailing space in a value", withLine(0, "AUTOFLOW_DEPLOYMENT_CLASS=preview ")],
+    ["a trailing tab in a value", withLine(0, "AUTOFLOW_DEPLOYMENT_CLASS=preview\t")],
+    ["a leading space before a line", withLine(0, " AUTOFLOW_DEPLOYMENT_CLASS=preview")],
+    ["a leading space in a value", withLine(0, "AUTOFLOW_DEPLOYMENT_CLASS= preview")],
+    ["an extra '=' in a value", withLine(3, "NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000=x")],
+    // How the CLI prints a value containing a newline (formatEnvValueForDotfile.js:9-11).
+    ["a value containing a newline", [...withLine(0, "AUTOFLOW_DEPLOYMENT_CLASS='preview"), "'"]],
+    ["an empty line between variables", [...PLAN_LINES.slice(0, 2), "", ...PLAN_LINES.slice(2)]],
+    ["a duplicate standing in for a missing line", withLine(1, PLAN_LINES[0]!)],
+    ["a duplicated line on top of the plan", [...PLAN_LINES, PLAN_LINES[4]!]],
+  ])("refuses %s", (_label, lines) => {
+    expect(() => assertEnvMatchesPlan(`${lines.join("\n")}\n`, plan)).toThrow(/differs from the trusted plan/);
+  });
+
+  test("names the duplicated variable when the lines are equal as a set", () => {
+    expect(() => assertEnvMatchesPlan([...PLAN_LINES, PLAN_LINES[4]!].join("\n"), plan)).toThrow(/\[TURNSTILE_SECRET_KEY\]/);
+  });
+
+  test("accepts CRLF line endings and one trailing line terminator, and nothing looser", () => {
+    expect(() => assertEnvMatchesPlan(`${PLAN_LINES.join("\r\n")}\r\n`, plan)).not.toThrow();
+    expect(() => assertEnvMatchesPlan(PLAN_LINES.join("\n"), plan)).not.toThrow();
+    expect(() => assertEnvMatchesPlan(`${PLAN_LINES.join("\n")}\n\n`, plan)).toThrow(/differs from the trusted plan/);
   });
 
   test("a name-only check would have passed the rewritten value: the allowlist comparison alone is blind to it", () => {
