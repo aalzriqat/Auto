@@ -348,8 +348,8 @@ const roleTitles = [
   "pilot Deals opens owned and SOURCED cash and configured financed detail screens",
 ];
 
-// The shapes Playwright 1.61 emits (computeTestCaseOutcome in lib/common/index.js): a test.skip or
-// test.fixme case has expectedStatus "skipped"; everything else is expected to pass.
+// The shapes Playwright 1.61 emits (computeTestCaseOutcome in lib/common/index.js): a declared skip
+// case has expectedStatus "skipped"; everything else is expected to pass.
 function caseShape(status: string) {
   if (status === "skipped") return { expectedStatus: "skipped", status: "skipped", results: [{ status: "skipped" }] };
   return { expectedStatus: "passed", status: status === "passed" ? "expected" : status, results: [{ status }] };

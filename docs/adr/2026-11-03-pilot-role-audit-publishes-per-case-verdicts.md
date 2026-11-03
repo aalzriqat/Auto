@@ -21,18 +21,23 @@ each exactly once.
   `wrong-project` (observed under a project other than the one the constant names).
 - `passed` is the same exact shape that `roleRegressionsVerified` already required: the spec is `ok`, expected to pass, its
   test status is `expected` and it has one attempt whose status is `passed`.
-- `skipped` means only that Playwright expected the case to skip (`expectedStatus` `skipped`: `test.skip`, `test.fixme` or a
-  runtime skip) and it did. Playwright 1.61 (`computeTestCaseOutcome`) also reports test status `skipped` for an
-  interrupted-only test, a test with no attempt, and a skipped attempt of a test expected to pass. Those cases could not
-  run, so they are `failed` (the pilot gate says a case that cannot run is a failure, never a skip). Everything else,
-  including a status Playwright 1.61 does not define, is `failed`, never `passed`.
-- `location` is `"<repo-relative path>:<line>"` for a `failed` case, otherwise `null`. It comes only from the last failing
-  attempt's `errorLocation`, or else its first `errors[].location`, in the Playwright JSON report. The path is normalised to
-  `/` and cut at the last `playwright/` segment. It is published only if the result matches
-  `^playwright/[A-Za-z0-9_\-./]+\.(ts|tsx|js|mjs)$`, no segment is `..` or `node_modules`, and `line` is a positive safe
-  integer. Otherwise it is `null`. The runner's absolute path, the column and all other report text are never published, and a
-  malformed location becomes `null` without making the report absent.
-- `roleRegressionsUnlistedCount` is the number of observed cases whose title is not on the allowlist. Their titles are not
+- `skipped` means Playwright expected the case to skip (`expectedStatus` `skipped`: a declared skip, a declared fixme or a
+  runtime skip) and the case has at least one attempt and every attempt's status is `skipped`. Playwright 1.61 records one
+  skipped attempt for each genuine skip (`skipWholeJob` in `playwright/lib/runner/index.js`, the worker's `testEnd` in
+  `playwright/lib/worker/workerProcessEntry.js`), so this rule never turns a real skip red. `computeTestCaseOutcome` also
+  reports test status `skipped` for an interrupted-only test, a test with no attempt, `[skipped, interrupted]` and a skipped
+  attempt of a test expected to pass. Those cases could not run, so they are `failed` (the pilot gate says a case that
+  cannot run is a failure, never a skip). Everything else, including a status Playwright 1.61 does not define, is `failed`,
+  never `passed`.
+- `location` is `"<repo path>:<line>"` for a `failed` case, otherwise `null`. It comes only from the last failing attempt's
+  `errorLocation`, or else its first `errors[].location`, in the Playwright JSON report. The path is normalised to `/` and
+  each suffix that starts at a `playwright` segment is looked up in the set of files `git ls-files -z -- playwright` lists in
+  the checked-out repository at packaging time. It is published only when that repo-relative path is a member of the set
+  (semantic validation, as the OWASP Input Validation Cheat Sheet distinguishes it from checking a path's syntax) and `line`
+  is a positive safe integer. The published path is the set member. A dot, empty, `..` or `node_modules` segment cannot
+  equal a tracked path, so such paths never match. If git cannot list the files, or the list is empty, every location is
+  `null` and the status is unaffected. The runner's absolute path, the column and all other report text are never published,
+  and a malformed location becomes `null` without making the report absent.- `roleRegressionsUnlistedCount` is the number of observed cases whose title is not on the allowlist. Their titles are not
   published. It was named "unexpected" before release, which is Playwright's word for a failure.
 - When the report is absent, unparseable or carries global errors, every case is `missing`.
 - `roleRegressionsVerified` is true only if every case is `passed` and the unlisted count is zero. No existing field,
