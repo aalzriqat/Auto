@@ -19,33 +19,76 @@ import scenariosConfig from "../playwright.scenarios.config";
  * permissions are pinned here to their exact values.
  */
 const source = readFileSync(path.resolve(".github/workflows/trusted-main-e2e.yml"), "utf8");
-const stepSchema = z.object({
-  name: z.string().optional(),
-  id: z.string().optional(),
-  uses: z.string().optional(),
-  run: z.string().optional(),
-  if: z.string().optional(),
-  with: z.record(z.string(), z.unknown()).optional(),
-  env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional(),
-});
+const raw: unknown = parse(source);
+
+/*
+ * Every schema below is a .strict() allowlist: a key it does not name fails the
+ * parse. A plain z.object strips unknown keys, so `continue-on-error`, `shell`
+ * or `defaults` would pass unseen (Seat 1 and Seat 2 on #760).
+ *
+ * Keys that can turn a red tripwire green, and what refuses each one:
+ *
+ * | Level    | Key                       | Effect                                  | Refused by                                    |
+ * |----------|---------------------------|-----------------------------------------|-----------------------------------------------|
+ * | workflow | defaults.run.shell        | a shell that swallows the exit code     | strict workflow schema; explicit no-defaults  |
+ * | workflow | env (e.g. BASH_ENV)       | a sourced file that traps EXIT to 0     | strict workflow schema (no env key)           |
+ * | job      | continue-on-error         | a failed job reports success            | strict job schema; explicit assertion         |
+ * | job      | defaults.run.shell        | as the workflow key                     | strict job schema; explicit no-defaults       |
+ * | job      | env, strategy, container  | BASH_ENV, a matrix with continue-on-error, a different shell | strict job schema         |
+ * | step     | continue-on-error         | a failed step does not fail the job     | strict step schema; explicit assertion        |
+ * | step     | shell                     | `bash -c '...; exit 0'` hides exit 7    | strict step schema; explicit mark..verify     |
+ * | step     | if                        | verify never runs, or mark is skipped   | exact verify.if; mark..suite unconditional    |
+ * | step     | env (BASH_ENV)            | as the workflow key                     | verify env pinned with toEqual                |
+ * | step     | run                       | a different command                     | exact command list and order                  |
+ *
+ * Not covered by this file: a trusted step writing BASH_ENV into GITHUB_ENV.
+ * Only localConvexBackend.mjs start writes GITHUB_ENV here, and it writes only
+ * the three backend variables (localConvexBackend.test.ts).
+ */
+const stepSchema = z
+  .object({
+    name: z.string().optional(),
+    id: z.string().optional(),
+    uses: z.string().optional(),
+    run: z.string().optional(),
+    if: z.string().optional(),
+    with: z.record(z.string(), z.unknown()).optional(),
+    env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional(),
+  })
+  .strict();
 type Step = z.infer<typeof stepSchema>;
-const workflowSchema = z.object({
-  name: z.string(),
-  on: z.record(z.string(), z.unknown()),
-  permissions: z.record(z.string(), z.string()),
-  concurrency: z.object({ group: z.string(), "cancel-in-progress": z.boolean() }).strict(),
-  jobs: z.record(
-    z.string(),
-    z.object({
-      if: z.string(),
-      "runs-on": z.string(),
-      "timeout-minutes": z.number(),
-      steps: z.array(stepSchema),
-    }),
-  ),
-});
-const workflow = workflowSchema.parse(parse(source));
+const jobSchema = z
+  .object({
+    if: z.string(),
+    "runs-on": z.string(),
+    "timeout-minutes": z.number(),
+    steps: z.array(stepSchema),
+  })
+  .strict();
+const workflowSchema = z
+  .object({
+    name: z.string(),
+    on: z.record(z.string(), z.unknown()),
+    permissions: z.record(z.string(), z.string()),
+    concurrency: z.object({ group: z.string(), "cancel-in-progress": z.boolean() }).strict(),
+    jobs: z.record(z.string(), jobSchema),
+  })
+  .strict();
+type Workflow = z.infer<typeof workflowSchema>;
+const strictParse = workflowSchema.safeParse(raw);
+// When the allowlist refuses the file, the allowlist test below fails with the
+// offending keys, and the other tests still read the raw document so each one
+// reports its own result instead of the whole file failing to load.
+const workflow: Workflow = strictParse.success ? strictParse.data : (raw as Workflow);
 const steps = workflow.jobs.playwright?.steps ?? [];
+
+/** The raw YAML, unfiltered, for explicit key checks. */
+const rawDoc = z
+  .object({
+    jobs: z.record(z.string(), z.object({ steps: z.array(z.record(z.string(), z.unknown())) }).passthrough()),
+  })
+  .passthrough()
+  .parse(raw);
 
 function stepNamed(name: string): Step {
   const step = steps.find((item) => item.name === name);
@@ -82,15 +125,28 @@ describe("SCRUM-892 trusted main E2E: required-check identity is unchanged", () 
     expect(workflow.jobs.playwright?.["timeout-minutes"]).toBe(35);
   });
 
-  test("no job or step sets continue-on-error, so a red verify fails the required check", () => {
-    // Read the raw YAML: the zod step schema strips keys it does not declare.
-    const raw = z
-      .object({ jobs: z.record(z.string(), z.object({ steps: z.array(z.record(z.string(), z.unknown())) }).passthrough()) })
-      .parse(parse(source));
-    for (const job of Object.values(raw.jobs)) {
+  test("the workflow, the job and every step use only allowlisted keys", () => {
+    const unknownKeys = strictParse.success ? [] : strictParse.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+    expect(unknownKeys).toEqual([]);
+  });
+
+  test("no defaults and no continue-on-error, at the workflow, the job or any step", () => {
+    expect(rawDoc).not.toHaveProperty("defaults");
+    for (const job of Object.values(rawDoc.jobs)) {
       expect(job).not.toHaveProperty("continue-on-error");
+      expect(job).not.toHaveProperty("defaults");
       for (const step of job.steps) expect(step).not.toHaveProperty("continue-on-error");
     }
+  });
+
+  test("no step from mark through verify overrides the shell", () => {
+    const rawSteps = rawDoc.jobs.playwright?.steps ?? [];
+    const at = (run: string) => rawSteps.findIndex((step) => typeof step.run === "string" && step.run.trim() === run);
+    const mark = at(`${LOCAL_BACKEND} mark`);
+    const verify = at(`${LOCAL_BACKEND} verify`);
+    expect(mark).toBeGreaterThanOrEqual(0);
+    expect(verify).toBeGreaterThan(mark);
+    for (const step of rawSteps.slice(mark, verify + 1)) expect(step).not.toHaveProperty("shell");
   });
 });
 
