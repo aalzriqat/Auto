@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
+import { buildContentSecurityPolicy } from "./lib/security/contentSecurityPolicy";
+
+// Byte-identical to the cloud-only policy unless the explicit CI switch is set
+// (SCRUM-892); a misconfigured switch throws and fails the build.
+const contentSecurityPolicy = buildContentSecurityPolicy(process.env);
 
 const nextConfig: NextConfig = {
   // SCRUM-350 builds a self-contained runtime exactly once in the trusted
@@ -33,17 +38,7 @@ const nextConfig: NextConfig = {
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           {
             key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://clerk.accounts.dev https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://challenges.cloudflare.com https://static.cloudflareinsights.com",
-              "worker-src 'self' blob:",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-              "font-src 'self' https://fonts.gstatic.com",
-              "img-src 'self' data: blob: https://*.convex.cloud https://img.clerk.com https://lh3.googleusercontent.com https://*.googleusercontent.com",
-              "connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://*.convex.site https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://clerk-telemetry.com https://vpic.nhtsa.dot.gov https://o4511556361715712.ingest.de.sentry.io https://cloudflareinsights.com https://vitals.vercel-insights.com",
-              "frame-src https://challenges.cloudflare.com",
-              "frame-ancestors 'none'",
-            ].join("; "),
+            value: contentSecurityPolicy,
           },
         ],
       },

@@ -15,6 +15,10 @@ import {
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  SWARM_LOCAL_CONVEX_ORIGIN,
+  isSwarmLocalConvexUrl,
+} from "./swarmConvexOrigin.mjs";
 
 export const BUILD_MANIFEST_FILE = "browser-swarm-candidate-build.json";
 export const MAX_BROWSER_BUILD_FILES = 30_000;
@@ -64,6 +68,9 @@ function safePreviewName(value) {
 }
 
 function convexOrigin(value) {
+  // SCRUM-892: the swarm's backend is the runner-local self-hosted Convex. Only
+  // that exact origin is accepted besides a bare https *.convex.cloud origin.
+  if (isSwarmLocalConvexUrl(value)) return SWARM_LOCAL_CONVEX_ORIGIN;
   let parsed;
   try {
     parsed = new URL(value ?? "");
@@ -80,7 +87,9 @@ function convexOrigin(value) {
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error("convexCloudUrl must be a bare HTTPS convex.cloud origin.");
+    throw new Error(
+      "convexCloudUrl must be a bare HTTPS convex.cloud origin or the exact local Convex origin.",
+    );
   }
   return parsed.origin;
 }

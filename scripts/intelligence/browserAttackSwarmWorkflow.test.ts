@@ -9,6 +9,7 @@ import {
   OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET,
 } from "../../lib/offlineSwarmClerk";
 import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
+import { ENV_ALLOWLIST, buildDockerRunArgs, waitForBackend } from "../localConvexBackend.mjs";
 
 type WorkflowStep = {
   id?: string;
@@ -238,7 +239,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
     for (const later of [
       "Download triggering E2E preview descriptor",
-      "Recreate disposable Convex preview from trusted main",
+      "Record the runner-local Convex authority",
       "Generate bounded Jev browser exploration once",
       "Assemble trusted run and fail closed on unsupported impact",
     ]) {
@@ -380,8 +381,8 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     for (const [jobName, stepName, before, env] of [
       [
         "prepare",
-        "Refuse a superseded PR head before creating the disposable preview",
-        "Recreate disposable Convex preview from trusted main",
+        "Refuse a superseded PR head before the paid Jev call",
+        "Record the runner-local Convex authority",
         {
           GITHUB_TOKEN: "${{ github.token }}",
           PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
@@ -391,14 +392,32 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       ],
       [
         "trusted-e2e",
-        "Refuse a superseded PR head before touching the disposable preview",
-        "Scrub disposable preview environment before candidate execution",
+        "Refuse a superseded PR head before starting the local Convex backend",
+        "Start the local Convex backend",
+        fromPlan,
+      ],
+      [
+        "attack-worker",
+        "Refuse a superseded PR head before starting the local Convex backend",
+        "Start the local Convex backend",
         fromPlan,
       ],
       [
         "attack-worker",
         "Refuse a superseded PR head before attacking",
         "Execute trusted browser missions",
+        fromPlan,
+      ],
+      [
+        "opening-proof",
+        "Refuse a superseded PR head before starting the local Convex backend",
+        "Start the local Convex backend",
+        fromPlan,
+      ],
+      [
+        "opening-proof",
+        "Refuse a superseded PR head before attacking",
+        "Execute the two terminal opening browser witnesses",
         fromPlan,
       ],
     ] as const) {
@@ -417,13 +436,18 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
 
     // prepare's check closes the gap after its one-time provenance fetch: it is
-    // the step immediately before the first preview write, with nothing between.
+    // the step immediately before the paid Jev call's preconditions (the local
+    // authority record), with nothing between. SCRUM-892: there is no preview to
+    // write any more, so the check guards the one paid call that remains.
     const prepareNames = (job("prepare").steps ?? []).map((entry) => entry.name);
     const prepareCheck = prepareNames.indexOf(
-      "Refuse a superseded PR head before creating the disposable preview",
+      "Refuse a superseded PR head before the paid Jev call",
     );
-    expect(prepareNames.indexOf("Recreate disposable Convex preview from trusted main")).toBe(
+    expect(prepareNames.indexOf("Record the runner-local Convex authority")).toBe(
       prepareCheck + 1,
+    );
+    expect(prepareNames.indexOf("Generate bounded Jev browser exploration once")).toBe(
+      prepareCheck + 2,
     );
     expect(prepareCheck).toBeGreaterThan(
       prepareNames.indexOf("Fetch and verify exact PR head and tested merge commit as data only"),
@@ -511,7 +535,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
-  it.each(["candidate-build", "opening-build"])("%s builds its Preview-bound frontend once without reusable credentials", (buildJob) => {
+  // SCRUM-892: the backend origin is the fixed runner-local one, so the single
+  // candidate-build artifact serves the swarm AND the terminal opening proof.
+  // The separate opening-build (and its bound Preview URL) no longer exists.
+  it.each(["candidate-build"])("%s builds its backend-bound frontend once without reusable credentials", (buildJob) => {
     const build = step(
       buildJob,
       "Build exact tested candidate once in isolated container",
@@ -529,6 +556,9 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "${{ needs.prepare.outputs.tested_sha }}",
     );
     expect(buildEnv).toHaveProperty("AUTOFLOW_SWARM_STANDALONE", "1");
+    // SCRUM-892: the CSP's local-origin switch reaches the build container.
+    expect(buildEnv).toHaveProperty("AUTOFLOW_LOCAL_CONVEX_CI", "1");
+    expect(String(build.run ?? "")).toContain("--env AUTOFLOW_LOCAL_CONVEX_CI");
     expect(String(build.run ?? "")).toContain("pnpm build");
     expect(String(build.run ?? "")).toContain("--cap-drop ALL");
     expect(String(build.run ?? "")).not.toContain("actions/cache");
@@ -556,134 +586,320 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     const source = readFileSync(workflowPath, "utf8");
     expect(
       source.match(/Build exact tested candidate once in isolated container/g) ?? [],
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    expect(buildEnv).toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.prepare.outputs.convex_cloud_url }}");
     expect(source).not.toContain("Build exact candidate frontend in isolated container");
   });
 
-  it("refuses to scrub the swarm preview unless its cleanup pin was recorded", () => {
-    const scrub = step(
-      "trusted-e2e",
-      "Scrub disposable preview environment before candidate execution",
-    );
-    // The pin step only warns when it fails, and preview-cleanup runs only for a
-    // recorded cleanup_preview_created_at. Without it, changing the preview would
-    // leave one nothing retires.
-    expect(scrub.env?.CONVEX_PREVIEW_CREATED_AT).toBe(
-      "${{ needs.prepare.outputs.cleanup_preview_created_at }}",
-    );
-    const run = String(scrub.run ?? "");
-    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
-    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the scrub step").toBeGreaterThanOrEqual(0);
-    const claim = run.indexOf("resolveConvexPreviewCredentials");
-    expect(claim).toBeGreaterThanOrEqual(0);
-    expect(run.slice(guard, claim)).toContain("exit 1");
-    expect(guard).toBeLessThan(claim);
-    // Every change to the preview, removals and sets alike, comes after the guard.
-    const changes = [...run.matchAll(/convex env (remove|set)/g)].map((m) => m.index ?? -1);
-    expect(changes.length).toBeGreaterThan(0);
-    for (const at of changes) expect(guard).toBeLessThan(at);
-    expect([job("trusted-e2e").needs].flat()).toContain("prepare");
-
-    // The guard is only as good as its source: the output must come from the pin
-    // step, and that step must be the one that publishes `preview_created_at`.
-    const pinStep = (job("prepare").steps ?? []).find(
-      (entry) => entry.name === "Pin the disposable preview for cleanup",
-    );
-    expect(pinStep?.id).toBe("pin");
-    expect(String(pinStep?.run ?? "")).toContain("previewDeploymentLifecycle.mjs pin");
-    expect(job("prepare").outputs?.cleanup_preview_created_at).toBe(
-      "${{ steps.pin.outputs.preview_created_at }}",
-    );
-    expect(readFileSync(path.resolve(process.cwd(), "scripts/previewDeploymentLifecycle.mjs"), "utf8")).toContain(
-      '[env.GITHUB_OUTPUT, "preview_created_at"]',
-    );
-  });
-
-  it("stops the prepare job before it claims the preview when the cleanup pin was not recorded", () => {
-    const steps = job("prepare").steps ?? [];
-    const at = (name: string) => steps.findIndex((entry) => entry.name === name);
-    const pin = at("Pin the disposable preview for cleanup");
-    const guard = at("Refuse to continue without a recorded cleanup pin");
-    const claim = at("Resolve named Convex preview from trusted control plane");
-    expect(pin).toBeGreaterThanOrEqual(0);
-    expect(guard).toBeGreaterThan(pin);
-    expect(claim).toBeGreaterThan(guard);
-    const refuse = steps[guard];
-    // No `if:`, so the guard runs on every path that reaches it.
-    expect(refuse?.if).toBeUndefined();
-    expect(refuse?.env?.CONVEX_PREVIEW_CREATED_AT).toBe("${{ steps.pin.outputs.preview_created_at }}");
-    const run = String(refuse?.run ?? "");
-    expect(run).toContain('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
-    expect(run).toContain("exit 1");
-    // Nothing between the pin and the guard may claim the preview.
-    for (const entry of steps.slice(pin + 1, guard)) {
-      expect(JSON.stringify(entry)).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
-    }
-  });
-
-  it("scrubs the disposable preview to an explicit non-sensitive environment allowlist before candidate backend execution", () => {
-    const trustedSteps = job("trusted-e2e").steps ?? [];
-    const scrubIndex = trustedSteps.findIndex(
-      (entry) =>
-        entry.name ===
-        "Scrub disposable preview environment before candidate execution",
-    );
-    const deployIndex = trustedSteps.findIndex(
-      (entry) =>
-        entry.name === "Deploy staged candidate backend with trusted Convex CLI",
-    );
-    expect(scrubIndex).toBeGreaterThanOrEqual(0);
-    expect(deployIndex).toBeGreaterThan(scrubIndex);
-
-    const scrub = step(
-      "trusted-e2e",
-      "Scrub disposable preview environment before candidate execution",
-    );
-    const run = String(scrub.run ?? "");
-    expect(scrub.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
-    expect(run).toContain("resolveConvexPreviewCredentials");
-    expect(run).toContain("convex env list --names-only");
-    expect(run).toContain("convex env remove");
-    expect(run).toContain(
-      "1x0000000000000000000000000000000AA",
-    );
-    for (const allowed of [
-      "AUTOFLOW_DEPLOYMENT_CLASS",
-      "CLERK_DEV_JWT_ISSUER_DOMAIN",
-      "CLERK_JWT_ISSUER_DOMAIN",
-      "NEXT_PUBLIC_APP_URL",
-      "TURNSTILE_SECRET_KEY",
+  // SCRUM-892: replaces the cloud-preview pin/scrub/claim tests. A preview no
+  // longer exists, so there is nothing to pin, resolve or retire; what must stay
+  // true is that prepare provisions nothing, and that every job which owns a
+  // backend brings it up before any candidate byte is staged and removes it
+  // whatever happened.
+  it("SCRUM-892: prepare creates, pins and resolves no deployment and exposes no cleanup identity", () => {
+    const names = (job("prepare").steps ?? []).map((entry) => String(entry.name));
+    for (const gone of [
+      "Recreate disposable Convex preview from trusted main",
+      "Pin the disposable preview for cleanup",
+      "Refuse to continue without a recorded cleanup pin",
+      "Resolve named Convex preview from trusted control plane",
     ]) {
-      expect(run).toContain(allowed);
+      expect(names, gone).not.toContain(gone);
     }
-    expect(run).toContain(
-      "Disposable preview environment does not match the trusted allowlist.",
-    );
-    expect(run).toContain('--url "$NEXT_PUBLIC_CONVEX_URL"');
-    expect(run).toContain('--admin-key "$ADMIN_KEY"');
+    expect(Object.keys(job("prepare").outputs ?? {}).filter((key) => key.startsWith("cleanup_"))).toEqual([]);
+    expect(JSON.stringify(job("prepare"))).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(JSON.stringify(job("prepare"))).not.toContain("CONVEX_DEPLOY_KEY");
+
+    const authority = step("prepare", "Record the runner-local Convex authority");
+    expect(authority.run).toBe("node scripts/intelligence/localConvexAuthority.mjs");
+    expect(authority.env).toEqual({
+      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+    });
+    expect(JSON.stringify(authority.env)).not.toContain("secrets.");
+    expect(job("prepare").outputs?.convex_cloud_url).toBe("${{ steps.plan.outputs.convex_cloud_url }}");
   });
 
-  it("deploys the candidate backend only as staged data through the trusted Convex CLI (SCRUM-350)", () => {
-    // The claim key is project-wide (run 36114902831), so it never reaches a
-    // candidate-controlled install or CLI. Mounts, flags and ordering across
-    // every workflow are pinned in convexCredentialBoundary.test.ts.
-    const stage = step("trusted-e2e", "Stage exact candidate backend as data");
-    expect(JSON.stringify(stage.env ?? {})).not.toContain("secrets.");
-    const deploy = step(
-      "trusted-e2e",
-      "Deploy staged candidate backend with trusted Convex CLI",
+  it("SCRUM-892: the removed cloud-preview jobs and their verdict inputs are gone", () => {
+    for (const gone of ["opening-prepare", "opening-build", "opening-cleanup", "preview-cleanup"]) {
+      expect(workflow.jobs, gone).not.toHaveProperty(gone);
+    }
+    expect(JSON.stringify(job("verdict").needs)).not.toMatch(/cleanup|opening-prepare|opening-build/);
+    const verdict = step("verdict", "Publish authoritative trusted swarm verdict");
+    expect(Object.keys(verdict.env ?? {})).not.toContain("OPENING_CLEANUP_RESULT");
+    expect(String(verdict.run ?? "")).not.toContain("OPENING_CLEANUP_RESULT");
+  });
+
+  // SCRUM-892: these literals are copied from origin/main's workflow and are
+  // pinned verbatim rather than derived. Branch protection, the release guard
+  // and the PR-head gate identify checks by these exact names; converting the
+  // backend must not rename, drop or duplicate any of them.
+  it("SCRUM-892: keeps every required check name, the verdict status context and the gate job names byte-identical to main", () => {
+    const names = Object.fromEntries(
+      Object.entries(workflow.jobs ?? {}).map(([id, entry]) => [id, (entry as { name?: string }).name]),
     );
-    const deployRun = String(deploy.run ?? "");
-    expect(deploy.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
-    expect(deployRun).toContain("resolveConvexPreviewCredentials");
-    expect(deployRun).toContain('"$RUNNER_TEMP/candidate-backend:/app:ro"');
-    expect(deployRun).not.toContain("$GITHUB_WORKSPACE/candidate");
-    expect(deployRun).not.toMatch(/\bpnpm\b/);
-    expect(deployRun).toContain("--typecheck disable");
-    expect(deployRun).not.toContain("--env CONVEX_PREVIEW_DEPLOY_KEY");
-    expect(deployRun).not.toContain("--env CLERK_SECRET_KEY");
-    expect(deployRun).toContain("--cap-drop ALL");
-    expect(deployRun).toContain("--security-opt no-new-privileges");
+    expect(names).toEqual({
+      "e2e-gate-begin": "authenticated-pr-e2e-start",
+      prepare: "trusted-plan",
+      "candidate-source": "exact-candidate-source-data",
+      "candidate-build": "exact-candidate-build",
+      "trusted-e2e": "trusted-e2e",
+      "attack-worker": "attack-worker-${{ matrix.worker_index }}",
+      "opening-proof": "terminal-opening-proof",
+      verdict: "trusted-browser-swarm-verdict",
+      "e2e-gate-finish": "authenticated-pr-e2e-publish",
+    });
+    const source = readFileSync(workflowPath, "utf8");
+    // Pending (prepare) and final (verdict) post to the same one context.
+    expect(source.match(/autoflow\/trusted-browser-swarm/g) ?? []).toHaveLength(2);
+    expect((workflow as { name?: string }).name).toBe("Trusted Browser Attack Swarm");
+    expect(workflow.on?.workflow_run?.workflows).toEqual(["E2E Tests (Playwright)"]);
+  });
+
+  it("SCRUM-892: the verdict still demands every proof, including at least one attack worker whenever the plan requires any", () => {
+    const verdict = step("verdict", "Publish authoritative trusted swarm verdict");
+    const run = String(verdict.run ?? "");
+    const success = run.split("\n").find((line) => line.includes('"$FRESH_CURRENT" = "true"')) ?? "";
+    for (const required of [
+      '[ "$FRESH_CURRENT" = "true" ]',
+      '[ "$PREPARE_RESULT" = "success" ]',
+      '[ "$TRUSTED_E2E_RESULT" = "success" ]',
+      '[ "$OPENING_RESULT" = "success" ]',
+      '[ "$OPENING_CHECKED" = "true" ]',
+    ]) {
+      expect(success, required).toContain(required);
+    }
+    // should_run=true must see attack workers succeed; should_run=false must
+    // see them skipped. A required worker that never ran is never a pass.
+    expect(run).toContain('[ "$SHOULD_RUN" = "true" ] && [ "$ATTACK_RESULT" = "success" ]');
+    expect(run).toContain('[ "$SHOULD_RUN" = "false" ]');
+    expect(verdict.env).toMatchObject({
+      FRESH_CURRENT: "${{ steps.freshness.outputs.fresh }}",
+      PREPARE_RESULT: "${{ needs.prepare.result }}",
+      TRUSTED_E2E_RESULT: "${{ needs.trusted-e2e.result }}",
+      ATTACK_RESULT: "${{ needs.attack-worker.result }}",
+      OPENING_RESULT: "${{ needs.opening-proof.result }}",
+      OPENING_CHECKED: "${{ needs.opening-proof.outputs.checked }}",
+      SHOULD_RUN: "${{ needs.prepare.outputs.should_run }}",
+    });
+    expect([job("verdict").needs].flat().sort()).toEqual(
+      ["attack-worker", "candidate-build", "opening-proof", "prepare", "trusted-e2e"],
+    );
+    expect(String(job("attack-worker").if)).toContain("needs.prepare.outputs.should_run == 'true'");
+    expect(job("attack-worker").permissions).toEqual({ contents: "read" });
+  });
+
+  it("SCRUM-892: the swarm workflow contains no cloud-preview creation and no preview or deploy key", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    expect(source).not.toContain("--preview-create");
+    expect(source).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+    expect(source).not.toContain("CONVEX_DEPLOY_KEY");
+    expect(source).not.toContain("convexPreviewAuthority");
+    expect(source).not.toContain("previewDeploymentLifecycle");
+    expect(source).not.toMatch(/\.convex\.cloud/);
+  });
+
+  describe.each(["trusted-e2e", "attack-worker", "opening-proof"] as const)(
+    "SCRUM-892: %s owns a runner-local Convex backend",
+    (jobName) => {
+      const BACKEND = [
+        "Start the local Convex backend",
+        "Set and verify the local backend environment allowlist before candidate execution",
+        "Stage exact candidate backend as data",
+        "Audit staged backend inputs without credentials",
+        "Deploy staged candidate backend with trusted Convex CLI",
+        "Mint the disposable-preview marker with the trusted CLI",
+        "Seed and assert the QA dealership from trusted main",
+      ];
+
+      it("brings the backend up in this order, after the freshness check and before the candidate build is used", () => {
+        const names = (job(jobName).steps ?? []).map((entry) => String(entry.name));
+        const at = BACKEND.map((name) => names.indexOf(name));
+        for (const [index, name] of BACKEND.entries()) expect(at[index], name).toBeGreaterThan(-1);
+        for (let i = 1; i < at.length; i += 1) expect(at[i], BACKEND[i]).toBeGreaterThan(at[i - 1]);
+        const freshness = names.indexOf("Refuse a superseded PR head before starting the local Convex backend");
+        expect(freshness).toBeGreaterThan(-1);
+        expect(freshness).toBeLessThan(at[0]);
+        expect(at[at.length - 1]).toBeLessThan(names.indexOf("Start verified exact-SHA candidate frontend artifact"));
+        // Candidate source is only ever data from the candidate-source job.
+        expect([job(jobName).needs].flat()).toContain("candidate-source");
+        expect(names.indexOf("Extract candidate data outside trusted code")).toBeLessThan(at[2]);
+      });
+
+      it("starts the backend with no step environment, so no runner secret can reach it", () => {
+        const start = step(jobName, "Start the local Convex backend");
+        expect(start.run).toBe("node scripts/localConvexBackend.mjs start");
+        expect(start["working-directory"]).toBe("trusted");
+        expect(start.env).toBeUndefined();
+        expect(start.if).toBeUndefined();
+      });
+
+      it("sets and verifies exactly the allowlisted backend environment before the candidate deploys", () => {
+        const env = step(jobName, "Set and verify the local backend environment allowlist before candidate execution");
+        expect(env.run).toBe("node scripts/localConvexBackend.mjs env");
+        expect(env["working-directory"]).toBe("trusted");
+        expect(env.env).toEqual({
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+        });
+        expect([...ENV_ALLOWLIST]).toEqual([
+          "AUTOFLOW_DEPLOYMENT_CLASS",
+          "CLERK_DEV_JWT_ISSUER_DOMAIN",
+          "CLERK_JWT_ISSUER_DOMAIN",
+          "NEXT_PUBLIC_APP_URL",
+          "TURNSTILE_SECRET_KEY",
+        ]);
+      });
+
+      it("mints the marker with the trusted CLI, not with the candidate, after the deploy and before the seed", () => {
+        const mark = step(jobName, "Mint the disposable-preview marker with the trusted CLI");
+        expect(mark.run).toBe("node scripts/localConvexBackend.mjs mark");
+        expect(mark["working-directory"]).toBe("trusted");
+        // Round 5: the inputs of the trusted env plan, so `mark` checks VALUES;
+        // public values only, and never the admin key.
+        expect(mark.env).toEqual({
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+        });
+      });
+
+      // PR #757 round 5: candidate "use node" actions can mint an admin key
+      // inside the backend container. The tripwire re-reads the backend from the
+      // runner after the last test step and before the backend is removed, and a
+      // failure there fails this job (no `if:`, no continue-on-error).
+      it("verifies the backend was not changed, after every test step and right before the backend stops", () => {
+        const steps = job(jobName).steps ?? [];
+        const names = steps.map((entry) => String(entry.name));
+        const verifyAt = names.indexOf("Verify the local backend was not changed during the run");
+        const stopAt = names.indexOf("Stop the local Convex backend");
+        expect(verifyAt).toBeGreaterThan(names.indexOf("Mint the disposable-preview marker with the trusted CLI"));
+        expect(verifyAt).toBe(stopAt - 1);
+        const verify = steps[verifyAt];
+        expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
+        expect(verify["working-directory"]).toBe("trusted");
+        expect(verify.if).toBeUndefined();
+        expect(Object.keys(verify)).not.toContain("continue-on-error");
+        expect(verify.env).toEqual({
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+        });
+        // Every step that drives tests or missions runs before the tripwire.
+        const lastTest = Math.max(
+          ...steps.map((entry, index) => (/playwright test|verifyOpeningBrowserProof/.test(String(entry.run ?? "")) ? index : -1)),
+        );
+        expect(lastTest).toBeGreaterThan(-1);
+        expect(lastTest).toBeLessThan(verifyAt);
+      });
+
+      it("always stops the backend, and nothing that needs it runs after the stop", () => {
+        const steps = job(jobName).steps ?? [];
+        const stopAt = steps.findIndex((entry) => entry.name === "Stop the local Convex backend");
+        expect(stopAt).toBeGreaterThan(-1);
+        const stop = steps[stopAt];
+        expect(stop.if).toBe("always()");
+        expect(stop.run).toBe("node scripts/localConvexBackend.mjs stop");
+        expect(stop["working-directory"]).toBe("trusted");
+        // Only the evidence uploads (which touch no backend) may follow the stop.
+        for (const later of steps.slice(stopAt + 1)) {
+          expect(String(later.uses ?? ""), String(later.name)).toMatch(/^actions\/upload-artifact@/);
+        }
+        // The seeding step is the last one that talks to the backend by admin key.
+        const adminKeyUsers = steps
+          .map((entry, index) => ({ entry, index }))
+          .filter(({ entry }) => JSON.stringify(entry.env ?? {}).includes("CONVEX_SELF_HOSTED_ADMIN_KEY"));
+        expect(adminKeyUsers.length).toBeGreaterThan(0);
+        for (const { entry, index } of adminKeyUsers) {
+          expect(index, String(entry.name)).toBeLessThan(stopAt);
+        }
+      });
+
+      it("passes the admin key only by reference to the trusted steps that need it, never to candidate-reachable steps", () => {
+        for (const entry of job(jobName).steps ?? []) {
+          const text = JSON.stringify(entry.env ?? {});
+          if (!text.includes("CONVEX_SELF_HOSTED_ADMIN_KEY")) continue;
+          expect(
+            [
+              "Deploy staged candidate backend with trusted Convex CLI",
+              "Seed and assert the QA dealership from trusted main",
+              "Assert the seeded local backend",
+            ],
+            String(entry.name),
+          ).toContain(String(entry.name));
+          expect(text).toContain("${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}");
+        }
+        for (const name of [
+          "Start verified exact-SHA candidate frontend artifact",
+          "Run full trusted E2E suite against exact candidate",
+          "Execute trusted browser missions",
+          "Execute the two terminal opening browser witnesses",
+        ]) {
+          const entry = (job(jobName).steps ?? []).find((candidate) => candidate.name === name);
+          if (!entry) continue;
+          expect(JSON.stringify(entry.env ?? {}), name).not.toContain("ADMIN_KEY");
+          expect(String(entry.run ?? ""), name).not.toContain("ADMIN_KEY");
+        }
+      });
+    },
+  );
+
+  it("SCRUM-892: the backend container publishes on loopback only and receives only its own instance variables", () => {
+    const args = buildDockerRunArgs({ containerName: "autoflow-local-convex-test" });
+    const published = args.filter((_, index) => args[index - 1] === "--publish");
+    expect(published).toEqual(["127.0.0.1:3210:3210", "127.0.0.1:3211:3211"]);
+    const envEntries = args.filter((_, index) => args[index - 1] === "--env");
+    expect(envEntries.map((entry) => entry.split("=")[0]).sort()).toEqual([
+      "CONVEX_CLOUD_ORIGIN",
+      "CONVEX_SITE_ORIGIN",
+      "DISABLE_BEACON",
+      "DISABLE_METRICS_ENDPOINT",
+      "INSTANCE_NAME",
+      "INSTANCE_SECRET",
+    ]);
+    // The instance secret is inherited by name, never written into argv.
+    expect(envEntries).toContain("INSTANCE_SECRET");
+    expect(args).toContain("no-new-privileges");
+    expect(args).not.toContain("--privileged");
+    expect(args).not.toContain("host");
+    expect(args.join(" ")).not.toMatch(/--volume|-v\s|docker\.sock/);
+  });
+
+  it("deploys the candidate backend only as staged data through the trusted Convex CLI (SCRUM-350, SCRUM-892)", () => {
+    // Mounts, flags and ordering across every workflow are pinned in
+    // convexCredentialBoundary.test.ts.
+    for (const jobName of ["trusted-e2e", "attack-worker", "opening-proof"] as const) {
+      const stage = step(jobName, "Stage exact candidate backend as data");
+      expect(JSON.stringify(stage.env ?? {}), jobName).not.toContain("secrets.");
+      const deploy = step(jobName, "Deploy staged candidate backend with trusted Convex CLI");
+      // Comments explain the network choice and name the rejected option; only
+      // live shell lines count as evidence.
+      const deployRun = String(deploy.run ?? "")
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("#"))
+        .join("\n");
+      expect(deploy.env, jobName).toEqual({
+        CONVEX_SELF_HOSTED_URL: "${{ env.CONVEX_SELF_HOSTED_URL }}",
+        CONVEX_SELF_HOSTED_ADMIN_KEY: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}",
+      });
+      expect(deployRun, jobName).toContain('"$RUNNER_TEMP/candidate-backend:/app:ro"');
+      expect(deployRun, jobName).not.toContain("$GITHUB_WORKSPACE/candidate");
+      expect(deployRun, jobName).not.toMatch(/\bpnpm\b/);
+      expect(deployRun, jobName).toContain("--typecheck disable");
+      expect(deployRun, jobName).toContain("--codegen disable");
+      expect(deployRun, jobName).toContain("--read-only");
+      expect(deployRun, jobName).toContain("--cap-drop ALL");
+      expect(deployRun, jobName).toContain("--security-opt no-new-privileges");
+      // The URL and key are inherited by NAME so neither lands in argv.
+      expect(deployRun, jobName).toMatch(/--env CONVEX_SELF_HOSTED_URL\s/);
+      expect(deployRun, jobName).toMatch(/--env CONVEX_SELF_HOSTED_ADMIN_KEY\s/);
+      expect(deployRun, jobName).not.toMatch(/CONVEX_SELF_HOSTED_ADMIN_KEY=/);
+      expect(deployRun, jobName).not.toContain("--env CLERK_SECRET_KEY");
+      expect(deployRun, jobName).not.toContain("CONVEX_PREVIEW_DEPLOY_KEY");
+      // Network: join ONLY the backend container's namespace. `--network host`
+      // would expose the runner's loopback (egress proxy, relay) to the CLI.
+      expect(deployRun, jobName).toContain('--network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}"');
+      expect(deployRun, jobName).not.toMatch(/--network[= ]+"?host/);
+      expect(deployRun, jobName).not.toContain("--publish");
+      expect(deployRun, jobName).toContain("autoflow-local-convex-*");
+    }
   });
 
   it("keeps the one candidate build isolated and never gives workers candidate source or a mutable candidate cache", () => {
@@ -765,7 +981,7 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(upload.with?.["include-hidden-files"]).toBe(true);
     expect(upload.with?.["retention-days"]).toBe(1);
 
-    for (const jobName of ["trusted-e2e", "attack-worker"]) {
+    for (const jobName of ["trusted-e2e", "attack-worker", "opening-proof"]) {
       const download = step(jobName, "Download immutable exact-SHA candidate build");
       expect(download.uses).toBe(
         "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
@@ -797,18 +1013,29 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     }
   });
 
-  it("spends the paid Jev call only after the disposable preview exists, just before its one consumer (SCRUM-376)", () => {
+  it("spends the paid Jev call exactly once, in prepare, after the freshness check and the local authority record, just before its one consumer (SCRUM-376, SCRUM-892)", () => {
     // Every failed run between 2026-09-18 and 09-25 paid for a TypeSafe
     // request and then died recreating the preview (Convex deployment quota).
+    // SCRUM-892: no preview is created any more, but the order is kept: nothing
+    // that can still refuse the run may come AFTER the paid call.
     const names = (job("prepare").steps ?? []).map((entry) => entry.name);
     const jevIndex = names.indexOf("Generate bounded Jev browser exploration once");
-    const recreateIndex = names.indexOf("Recreate disposable Convex preview from trusted main");
-    const resolveIndex = names.indexOf("Resolve named Convex preview from trusted control plane");
+    const freshIndex = names.indexOf("Refuse a superseded PR head before the paid Jev call");
+    const authorityIndex = names.indexOf("Record the runner-local Convex authority");
     const assembleIndex = names.indexOf("Assemble trusted run and fail closed on unsupported impact");
-    expect(recreateIndex).toBeGreaterThanOrEqual(0);
-    expect(resolveIndex).toBeGreaterThan(recreateIndex);
-    expect(jevIndex).toBeGreaterThan(resolveIndex);
+    expect(freshIndex).toBeGreaterThanOrEqual(0);
+    expect(authorityIndex).toBeGreaterThan(freshIndex);
+    expect(jevIndex).toBeGreaterThan(authorityIndex);
     expect(assembleIndex).toBe(jevIndex + 1);
+    // The paid call is made once per workflow: the script and its key appear
+    // in exactly one step of exactly one job, and never in a worker.
+    const holders = Object.entries(workflow.jobs ?? {}).flatMap(([jobName, entry]) =>
+      (entry.steps ?? [])
+        .filter((candidate) => JSON.stringify(candidate).includes("TYPESAFE_API_KEY"))
+        .map((candidate) => `${jobName} :: ${candidate.name}`),
+    );
+    expect(holders).toEqual(["prepare :: Generate bounded Jev browser exploration once"]);
+    expect(readFileSync(workflowPath, "utf8").match(/browser-swarm:jev-exploration/g) ?? []).toHaveLength(1);
   });
 
   it("calls Jev once in the trusted prepare job and gives workers only sanitized additive suggestions", () => {
@@ -837,20 +1064,27 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(job("attack-worker").needs).toEqual([
       "prepare",
       "candidate-build",
+      "candidate-source",
       "trusted-e2e",
     ]);
   });
 
-  it("revalidates the named preview before each worker and exact PR merge again before a success verdict", () => {
-    const preview = step(
-      "attack-worker",
-      "Assert seeded preview from trusted control plane",
-    );
-    const previewRun = String(preview.run ?? "");
-    expect(previewRun).toContain("resolveConvexPreviewAuthority");
-    expect(previewRun).toContain(
-      "Named preview was recreated underneath this swarm",
-    );
+  it("attests the freshly seeded local backend before each worker and exact PR merge again before a success verdict", () => {
+    // SCRUM-892: the backend was deployed, marked and seeded by this very job,
+    // so there is no control plane to ask whether it was recreated; the
+    // read-only bootstrap assertion replaces "Assert seeded preview from
+    // trusted control plane" and runs against the job's own backend.
+    for (const jobName of ["attack-worker", "opening-proof"] as const) {
+      const preview = step(jobName, "Assert the seeded local backend");
+      const previewRun = String(preview.run ?? "");
+      expect(previewRun).toContain("node scripts/e2ePreviewBootstrap.mjs --assert-only");
+      expect(previewRun).toContain("BROWSER_SWARM_PREVIEW_ATTESTED=1");
+      expect(previewRun).not.toContain("resolveConvexPreviewAuthority");
+      const names = (job(jobName).steps ?? []).map((entry) => entry.name);
+      expect(names.indexOf("Assert the seeded local backend")).toBeGreaterThan(
+        names.indexOf("Seed and assert the QA dealership from trusted main"),
+      );
+    }
 
     const fresh = step(
       "verdict",
@@ -893,20 +1127,13 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(descriptor.env).not.toHaveProperty("NEXT_PUBLIC_CONVEX_URL");
     expect(descriptor.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
 
-    const recreate = step(
-      "prepare",
-      "Recreate disposable Convex preview from trusted main",
-    );
-    expect(recreate.env).toHaveProperty("CONVEX_DEPLOY_KEY");
-    expect(String(recreate.run ?? "")).toContain("--preview-create");
-
-    const authority = step(
-      "prepare",
-      "Resolve named Convex preview from trusted control plane",
-    );
-    expect(authority.run).toContain("convexPreviewAuthority.mjs");
-    expect(authority.env).toHaveProperty("CONVEX_PREVIEW_DEPLOY_KEY");
+    // SCRUM-892: the URL is no longer resolved from a control plane; it is the
+    // fixed runner-local origin, recorded by a trusted script that holds no
+    // credential and read from nothing the candidate or the descriptor controls.
+    const authority = step("prepare", "Record the runner-local Convex authority");
+    expect(authority.run).toContain("localConvexAuthority.mjs");
     expect(authority.env).toHaveProperty("PR_NUMBER");
+    expect(Object.keys(authority.env ?? {})).toEqual(["PR_NUMBER"]);
 
     const publish = step("prepare", "Publish trusted plan evidence");
     expect(String(publish.with?.path ?? "")).toContain(
@@ -935,11 +1162,10 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       "http://localhost:3000",
     );
 
-    const attest = step(
-      "attack-worker",
-      "Assert seeded preview from trusted control plane",
-    );
-    expect(attest.env).toHaveProperty("CONVEX_DEPLOY_KEY");
+    const attest = step("attack-worker", "Assert the seeded local backend");
+    expect(attest.env).not.toHaveProperty("CONVEX_DEPLOY_KEY");
+    expect(attest.env).toHaveProperty("CONVEX_SELF_HOSTED_ADMIN_KEY", "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}");
+    expect(attest.env).toHaveProperty("CONVEX_SELF_HOSTED_URL", "${{ env.CONVEX_SELF_HOSTED_URL }}");
     expect(attest.env).toHaveProperty("CLERK_SECRET_KEY");
     expect(String(attest.run ?? "")).toContain("--assert-only");
     expect(String(attest.run ?? "")).toContain(
@@ -1196,64 +1422,84 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     expect(verdictRun).toContain('if [ "$STATE" != "success" ]');
   });
 
-  it("opening creation retries its identical native invocation within the existing five-attempt bound", () => {
-    const parent = realpathSync(tmpdir());
-    const directory = realpathSync(mkdtempSync(path.join(parent, "opening-retry-")));
-    if (path.dirname(directory) !== parent) throw new Error("Retry fixture escaped its workspace");
-    const counter = path.join(directory, "count"), args = path.join(directory, "args"), delays = path.join(directory, "delays");
-    const shell = process.platform === "win32" ? "C:/Program Files/Git/bin/bash.exe" : "/bin/bash";
-    const run = String(step("opening-prepare", "Recreate disposable opening Preview from trusted main").run);
-    // Only the external CLI and sleep boundaries are replaced; naming and actual workflow control flow run natively.
-    const boundary = `pnpm() {
-      count=0; if [ -f "$COUNTER" ]; then read -r count < "$COUNTER" || true; fi
-      count=$((count + 1)); printf '%s\\n' "$count" > "$COUNTER"
-      printf '%q ' "$@" >> "$ARGS"; printf '\\n' >> "$ARGS"
-      if [ "$count" -lt "$SUCCEED_ON" ]; then return 75; fi
-    }
-    sleep() { printf '%s\\n' "$1" >> "$DELAYS"; }`;
-    try {
-      for (const successOn of [3, 9]) {
-        writeFileSync(counter, "0\n"); writeFileSync(args, ""); writeFileSync(delays, "");
-        const result = spawnSync(shell, ["-c", `${boundary}\n${run}`], { encoding: "utf8", timeout: 30000,
-          env: { NODE_ENV: "test", PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-            COUNTER: counter, ARGS: args, DELAYS: delays, SUCCEED_ON: String(successOn),
-            PR_NUMBER: "672", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1",
-            GITHUB_ENV: path.join(directory, "env"), GITHUB_OUTPUT: path.join(directory, "output") } });
-        expect(result.status).toBe(successOn === 3 ? 0 : 1);
-        expect(Number(readFileSync(counter, "utf8"))).toBe(Math.min(successOn, 5));
-        const invocations = readFileSync(args, "utf8").trim().split("\n").map(line => line.trimEnd());
-        expect(new Set(invocations).size).toBe(1);
-        expect(invocations[0]).toContain("--preview-create");
-        expect(readFileSync(delays, "utf8").trim().split("\n")).toEqual(successOn === 3 ? ["2", "4"] : ["2", "4", "8", "16"]);
+  // SCRUM-892 replaces "opening creation retries its identical native
+  // invocation within the existing five-attempt bound" (it ran the opening
+  // preview creation step in a bash harness; that step no longer exists). The
+  // property it protected, a bounded and identical retry that cannot spend
+  // without limit, now lives in two places: the workflow runs each bring-up
+  // command as ONE native invocation with no shell loop around it, and the
+  // retrying part (the image pull, the health wait) is the tested helper's.
+  it("bounds backend bring-up: one native invocation per step, no shell retry loop, fail-closed deadline in the helper", async () => {
+    for (const jobName of ["trusted-e2e", "attack-worker", "opening-proof"] as const) {
+      for (const name of [
+        "Start the local Convex backend",
+        "Set and verify the local backend environment allowlist before candidate execution",
+        "Mint the disposable-preview marker with the trusted CLI",
+        "Verify the local backend was not changed during the run",
+        "Stop the local Convex backend",
+      ]) {
+        const run = String(step(jobName, name).run ?? "").trim();
+        expect(run, `${jobName} :: ${name}`).toMatch(/^node scripts\/localConvexBackend\.mjs (start|env|mark|verify|stop)$/);
+        expect(run).not.toMatch(/\b(for|while|until)\b|sleep|retry/);
       }
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+      const deploy = String(step(jobName, "Deploy staged candidate backend with trusted Convex CLI").run ?? "");
+      expect(deploy.match(/^docker run /gm) ?? [], jobName).toHaveLength(1);
+      expect(deploy, jobName).not.toMatch(/^\s*(for|while|until)\b|sleep|retry/m);
+    }
+
+    let clock = 0;
+    const attempts: string[] = [];
+    const result = await waitForBackend({
+      deps: {
+        now: () => clock,
+        sleep: async (ms: number) => {
+          clock += ms;
+        },
+        fetchImpl: async (url: string) => {
+          attempts.push(url);
+          throw new Error("not listening");
+        },
+      },
+      isRunning: () => true,
+      timeoutMs: 10_000,
+      intervalMs: 1_000,
+    });
+    expect(result.ok).toBe(false);
+    expect(attempts.length).toBeGreaterThan(1);
+    expect(attempts.length).toBeLessThanOrEqual(11);
+    expect(new Set(attempts)).toEqual(new Set(["http://127.0.0.1:3210/version"]));
   });
 
-  it("terminal opening owns fresh seeded state, a matching baked build and failure-bound cleanup", () => {
-    // B672-2: a successful TENANT_ESCAPE leaves an approver membership on the hunter Preview.
-    expect(step("opening-proof", "Assert seeded preview from trusted control plane").env)
-      .toHaveProperty("CONVEX_PREVIEW_NAME", "${{ needs.opening-prepare.outputs.preview_name }}");
-    const preparation = job("opening-prepare");
-    expect(String(preparation.needs)).toContain("attack-worker");
-    const create = step("opening-prepare", "Recreate disposable opening Preview from trusted main");
-    expect(String(create.run)).toContain('refs/pull/${PR_NUMBER}/merge/opening-proof/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}');
-    expect(String(create.run)).toContain("--preview-create");
-    expect(String(create.run)).toContain('attempted=true');
-    expect(String(step("opening-prepare", "Pin the opening Preview for cleanup").run)).toContain("pin --strict");
-    const build = step("opening-build", "Build exact tested candidate once in isolated container");
-    expect(build.env).toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
-    expect(step("opening-build", "Stage and hash exact-SHA candidate runtime artifact").env)
-      .toHaveProperty("NEXT_PUBLIC_CONVEX_URL", "${{ needs.opening-prepare.outputs.convex_cloud_url }}");
-    expect(step("opening-proof", "Download immutable exact-SHA candidate build").with)
-      .toHaveProperty("artifact-ids", "${{ needs.opening-build.outputs.artifact_id }}");
-    const cleanup = job("opening-cleanup");
-    expect(String(cleanup.if)).toContain("always()");
-    expect(String(cleanup.if)).toContain("needs.opening-prepare.outputs.creation_attempted == 'true'");
-    expect(String(cleanup.if)).not.toContain("result == 'success'");
-    expect(String(step("opening-cleanup", "Delete the disposable opening Preview").run)).toContain("delete --strict");
-    expect([job("verdict").needs].flat()).toContain("opening-cleanup");
-    expect(String(step("verdict", "Publish authoritative trusted swarm verdict").run))
-      .toContain('[ "$OPENING_CLEANUP_RESULT" = "success" ]');
+  it("terminal opening owns its own freshly seeded local backend, the shared baked build and failure-bound cleanup", () => {
+    // B672-2: a successful TENANT_ESCAPE leaves an approver membership on the
+    // hunter backend. SCRUM-892: that backend is the opening job's own, started
+    // here and removed here, so nothing can leak into another job's state.
+    const opening = job("opening-proof");
+    expect(String(opening.needs)).toContain("attack-worker");
+    expect(String(opening.needs)).toContain("candidate-build");
+    expect(String(opening.needs)).toContain("candidate-source");
+    expect(String(opening.if)).toContain("needs.candidate-source.result == 'success'");
+    expect(String(opening.if)).toContain("needs.candidate-build.result == 'success'");
+    expect(step("opening-proof", "Assert the seeded local backend").env).toHaveProperty(
+      "NEXT_PUBLIC_CONVEX_URL",
+      "${{ needs.prepare.outputs.convex_cloud_url }}",
+    );
+    // The one candidate build is baked with the fixed local origin and reused.
+    expect(step("candidate-build", "Build exact tested candidate once in isolated container").env).toHaveProperty(
+      "NEXT_PUBLIC_CONVEX_URL",
+      "${{ needs.prepare.outputs.convex_cloud_url }}",
+    );
+    expect(step("opening-proof", "Download immutable exact-SHA candidate build").with).toHaveProperty(
+      "artifact-ids",
+      "${{ needs.candidate-build.outputs.artifact_id }}",
+    );
+    // Nothing is left to clean up in the control plane: the verdict neither
+    // needs nor reads a cleanup result, and still requires the checked proof.
+    expect([job("verdict").needs].flat()).toContain("opening-proof");
+    const verdictRun = String(step("verdict", "Publish authoritative trusted swarm verdict").run);
+    expect(verdictRun).not.toContain("OPENING_CLEANUP_RESULT");
+    expect(verdictRun).toContain('[ "$OPENING_RESULT" = "success" ]');
+    expect(verdictRun).toContain('[ "$OPENING_CHECKED" = "true" ]');
   });
 
   describe("SCRUM-350 G4 offline Clerk candidate", () => {
@@ -1603,8 +1849,57 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
       });
     });
 
-    it("is never run by an attack worker or the ordinary PR E2E workflow", () => {
-      for (const entry of job("attack-worker").steps ?? []) {
+    // SCRUM-892 (replaces "is never run by an attack worker or the ordinary PR
+    // E2E workflow"). Before, every worker attacked the ONE preview that
+    // trusted-e2e had already opened a period on, so a worker had no reason to
+    // open one and was forbidden to. Now each worker attacks its OWN freshly
+    // seeded local backend, where no period exists; without one every posting
+    // stays QUEUED and ACC-2 cannot judge reversal. So the worker must run the
+    // period setup itself, after the seed and before any mission, unskippable.
+    // The ordinary PR E2E workflow still never runs it.
+    it("is run by each attack worker on its own backend, after the seed and before any mission, unskippable", () => {
+      const WORKER_SETUP = "Open the swarm accounting period and drain its pending outbox";
+      const names = (job("attack-worker").steps ?? []).map((entry) => entry.name);
+      expect(names.filter((name) => name === WORKER_SETUP)).toHaveLength(1);
+      const setupAt = names.indexOf(WORKER_SETUP);
+      expect(setupAt).toBeGreaterThan(names.indexOf("Seed and assert the QA dealership from trusted main"));
+      expect(setupAt).toBeGreaterThan(names.indexOf("Assert the seeded local backend"));
+      expect(setupAt).toBeGreaterThan(names.indexOf("Prove browser egress containment before authenticated traffic"));
+      expect(setupAt).toBeLessThan(names.indexOf("Refuse a superseded PR head before attacking"));
+      expect(setupAt).toBeLessThan(names.indexOf("Execute trusted browser missions"));
+      expect(setupAt).toBeLessThan(names.indexOf("Stop the local Convex backend"));
+
+      const setup = step("attack-worker", WORKER_SETUP);
+      expect(setup.if).toBeUndefined();
+      expect(setup).not.toHaveProperty("continue-on-error");
+      expect(setup["working-directory"]).toBe("trusted");
+      expect(String(setup.run ?? "").replace(/\s+/g, " ")).toContain(
+        `playwright test ${SPEC} --project=chromium --no-deps --output=test-results-swarm-period`,
+      );
+      expect(setup.env).toMatchObject({
+        BROWSER_SWARM_PERIOD_SETUP: "1",
+        BROWSER_EGRESS_REQUIRED: "1",
+        PLAYWRIGHT_SKIP_WEBSERVER: "1",
+        PLAYWRIGHT_HTML_REPORT: "playwright-report-swarm-period",
+        NEXT_PUBLIC_CONVEX_URL: "${{ needs.prepare.outputs.convex_cloud_url }}",
+      });
+      for (const forbidden of CANDIDATE_FORBIDDEN_ENV) {
+        expect(setup.env, forbidden).not.toHaveProperty(forbidden);
+      }
+      expect(JSON.stringify(setup.env ?? {})).not.toContain("ADMIN_KEY");
+      // The worker's missions never carry the period flag themselves.
+      const missions = step("attack-worker", "Execute trusted browser missions");
+      expect(JSON.stringify(missions)).not.toContain("BROWSER_SWARM_PERIOD_SETUP");
+      expect(JSON.stringify(missions)).not.toContain("browser-swarm-accounting-period");
+      // Its evidence is uploaded with the worker's.
+      const upload = step("attack-worker", "Upload trusted swarm evidence");
+      expect(String(upload.with?.path ?? "")).toContain("trusted/playwright-report-swarm-period/");
+      expect(String(upload.with?.path ?? "")).toContain("trusted/test-results-swarm-period/");
+      expect(upload.if).toBe("always()");
+    });
+
+    it("is never run by the terminal opening job or the ordinary PR E2E workflow", () => {
+      for (const entry of job("opening-proof").steps ?? []) {
         const text = JSON.stringify(entry);
         expect(text, String(entry.name)).not.toContain("browser-swarm-accounting-period");
         expect(text, String(entry.name)).not.toContain("BROWSER_SWARM_PERIOD_SETUP");
@@ -1634,5 +1929,21 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         "scripts/intelligence/browserSwarmAccountingPeriod.test.ts",
       );
     });
+  });
+});
+
+describe("SCRUM-892 local-backend CSP switch on the trusted frontend", () => {
+  it("sets AUTOFLOW_LOCAL_CONVEX_CI on every auth-setup step, or the CSP blocks the local backend", () => {
+    const authSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobName, entry]) =>
+      (entry.steps ?? [])
+        .filter((candidate) => String(candidate.run ?? "").includes("playwright/tests/auth.setup.ts"))
+        .map((candidate) => ({ jobName, candidate })),
+    );
+    expect(authSteps.map(({ jobName }) => jobName).sort()).toEqual(
+      ["attack-worker", "opening-proof", "trusted-e2e"].sort(),
+    );
+    for (const { candidate } of authSteps) {
+      expect(candidate.env).toHaveProperty("AUTOFLOW_LOCAL_CONVEX_CI", "1");
+    }
   });
 });

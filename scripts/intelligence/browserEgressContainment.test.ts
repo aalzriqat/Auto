@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -56,6 +57,55 @@ describe("buildEgressAllowlist", () => {
       "happy-animal-123.convex.cloud:443",
       "localhost:3000",
     ]);
+  });
+
+  // SCRUM-892: the swarm's backend is a self-hosted Convex inside the runner.
+  it("allows exactly 127.0.0.1:3210 for the runner-local Convex backend, besides the candidate and Clerk", () => {
+    expect(
+      buildEgressAllowlist({ convexUrl: "http://127.0.0.1:3210", clerkPublishableKey: PK }),
+    ).toEqual([
+      "127.0.0.1:3000",
+      "127.0.0.1:3210",
+      "example.clerk.accounts.dev:443",
+      "localhost:3000",
+    ]);
+    // A trailing slash is the same origin, still exactly one entry.
+    expect(
+      buildEgressAllowlist({ convexUrl: "http://127.0.0.1:3210/", clerkPublishableKey: PK }),
+    ).toContain("127.0.0.1:3210");
+  });
+
+  it.each([
+    ["another loopback port", "http://127.0.0.1:3211"],
+    ["the localhost name", "http://localhost:3210"],
+    ["https on the local port", "https://127.0.0.1:3210"],
+    ["another loopback address", "http://127.0.0.2:3210"],
+    ["the local origin with a path", "http://127.0.0.1:3210/api"],
+    ["the local origin with credentials", "http://u:p@127.0.0.1:3210"],
+    ["the IPv6 loopback", "http://[::1]:3210"],
+    ["the local origin without a port", "http://127.0.0.1"],
+  ])("refuses %s as the Convex deployment", (_label, convexUrl) => {
+    expect(() =>
+      buildEgressAllowlist({ convexUrl, clerkPublishableKey: PK }),
+    ).toThrow();
+  });
+
+  it("never lets the local Convex origin widen loopback: an extra 127.0.0.1:3210 is still refused", () => {
+    expect(() =>
+      buildEgressAllowlist({ convexUrl: CONVEX, clerkPublishableKey: PK, extra: ["127.0.0.1:3210"] }),
+    ).toThrow();
+  });
+
+  it("pins the swarm local origin constant to the local backend runner's URL", async () => {
+    const { SWARM_LOCAL_CONVEX_ORIGIN, SWARM_LOCAL_CONVEX_AUTHORITY, isSwarmLocalConvexUrl } = await import(
+      "./swarmConvexOrigin.mjs"
+    );
+    const { LOCAL_CONVEX_URL } = await import("../localConvexBackend.mjs");
+    expect(SWARM_LOCAL_CONVEX_ORIGIN).toBe(LOCAL_CONVEX_URL);
+    expect(SWARM_LOCAL_CONVEX_AUTHORITY).toBe(new URL(LOCAL_CONVEX_URL).host);
+    expect(isSwarmLocalConvexUrl(LOCAL_CONVEX_URL)).toBe(true);
+    expect(isSwarmLocalConvexUrl(undefined)).toBe(false);
+    expect(isSwarmLocalConvexUrl("http://127.0.0.1:3210//")).toBe(false);
   });
 
   it.each([
@@ -181,6 +231,53 @@ describe("egress proxy semantics", () => {
 
   it("allows CONNECT to an allowlisted authority", async () => {
     expect(await connectVia(`127.0.0.1:${upstreamPort}`)).toContain("200");
+  });
+
+  // SCRUM-892: the browser really opens ws://127.0.0.1:3210 (Convex sync).
+  // Chromium tunnels ws:// through CONNECT, so an allowlisted loopback
+  // authority must carry a complete WebSocket upgrade and its frames both ways.
+  it("tunnels a WebSocket upgrade and its frames through CONNECT to an allowlisted loopback authority", async () => {
+    const wsServer = http.createServer();
+    wsServer.on("upgrade", (_req, socket) => {
+      socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+      socket.on("data", (chunk) => socket.write(Buffer.concat([Buffer.from("echo:"), chunk])));
+    });
+    const wsPort = await listen(wsServer);
+    const wsProxy = await startEgressProxy({ allow: [`127.0.0.1:${wsPort}`], port: 0 });
+    try {
+      const authority = `127.0.0.1:${wsPort}`;
+      // RFC 6455 §4.1: a fresh base64-encoded 16-byte nonce per handshake.
+      const wsKey = randomBytes(16).toString("base64");
+      const transcript = await new Promise<string>((resolve, reject) => {
+        let seen = "";
+        const socket = net.connect(wsProxy.port, "127.0.0.1", () => {
+          socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
+        });
+        socket.on("data", (chunk) => {
+          seen += chunk.toString();
+          if (seen.includes("200 Connection Established") && !seen.includes("Upgrade: websocket")) {
+            socket.write(
+              `GET /api/1.31.0/sync HTTP/1.1\r\nHost: ${authority}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+                `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${wsKey}\r\n\r\n`,
+            );
+          } else if (seen.includes("101 Switching Protocols") && !seen.includes("echo:")) {
+            socket.write("frame-1");
+          }
+          if (seen.includes("echo:frame-1")) {
+            resolve(seen);
+            socket.destroy();
+          }
+        });
+        socket.on("error", reject);
+      });
+      expect(transcript).toContain("200 Connection Established");
+      expect(transcript).toContain("101 Switching Protocols");
+      expect(transcript).toContain("echo:frame-1");
+      expect(wsProxy.denied).toEqual([]);
+    } finally {
+      wsProxy.stop();
+      wsServer.close();
+    }
   });
 
   it("denies non-absolute-form requests and plain upgrades", async () => {

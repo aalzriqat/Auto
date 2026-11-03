@@ -81,6 +81,45 @@ describe("SCRUM-350 immutable candidate build artifact", () => {
     }
   });
 
+  // SCRUM-892: the swarm's frontend is built for the runner-local Convex backend.
+  it("binds the artifact to the exact local Convex origin and refuses every other loopback target", async () => {
+    const f = await fixture();
+    const local = { ...identity, convexCloudUrl: "http://127.0.0.1:3210" };
+    try {
+      const manifest = await createBrowserSwarmBuildArtifact({
+        candidateRoot: f.candidateRoot,
+        artifactRoot: f.artifactRoot,
+        identity: local,
+      });
+      expect(manifest.convexCloudUrl).toBe("http://127.0.0.1:3210");
+      await expect(
+        verifyBrowserSwarmBuildArtifact({ artifactRoot: f.artifactRoot, expected: local }),
+      ).resolves.toMatchObject({ convexCloudUrl: "http://127.0.0.1:3210" });
+      // A build baked for the local origin is not a build for a cloud preview, and vice versa.
+      await expect(
+        verifyBrowserSwarmBuildArtifact({ artifactRoot: f.artifactRoot, expected: identity }),
+      ).rejects.toThrow(/convexCloudUrl/);
+      for (const refused of [
+        "http://127.0.0.1:3211",
+        "http://localhost:3210",
+        "https://127.0.0.1:3210",
+        "http://127.0.0.2:3210",
+        "http://127.0.0.1:3210/api",
+      ]) {
+        await expect(
+          createBrowserSwarmBuildArtifact({
+            candidateRoot: f.candidateRoot,
+            artifactRoot: path.join(f.root, "refused"),
+            identity: { ...identity, convexCloudUrl: refused },
+          }),
+          refused,
+        ).rejects.toThrow(/convexCloudUrl/);
+      }
+    } finally {
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
+
   it("hoists pnpm's virtual-store dependencies so the materialized tree can resolve them (SCRUM-376)", async () => {
     // Materializing pnpm's symlinked node_modules turns node_modules/next into a
     // real copy whose sibling dependencies (e.g. @swc/helpers) are no longer
