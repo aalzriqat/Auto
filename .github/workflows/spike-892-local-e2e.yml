@@ -1,0 +1,124 @@
+name: SPIKE SCRUM-892 local Convex E2E (never merged)
+
+# Full credential-backed browser regression runs only after code is on main.
+# Pull requests are exercised by the immutable workflow_run controller instead.
+on:
+  push:
+    branches: ["claude/scrum892-spike"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike-892-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spike-e2e:
+    if: github.ref == 'refs/heads/claude/scrum892-spike'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install Playwright browsers
+        # webkit: the static visual gate proves the deals list's whole-row hit
+        # target in WebKit too (playwright.visual.config.ts, SCRUM-694 M3).
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Deal cockpit visual gate
+        run: |
+          set -euo pipefail
+          pnpm run test:visual:deal-cockpit
+          # The frame census is shared with playwright.yml (SCRUM-489).
+          node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual
+          node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual
+        env:
+          CI: true
+
+      # SCRUM-892: the backend is a disposable self-hosted Convex container on this
+      # runner, not a cloud preview deployment, so no Convex cloud credential,
+      # deployment quota or cleanup identity exists in this job. The container is
+      # pinned by digest in scripts/localConvexBackend.mjs, listens on 127.0.0.1
+      # only, and is removed by the always() step at the end of the job.
+      - name: Start the local Convex backend
+        run: node scripts/localConvexBackend.mjs start
+
+      # Set BEFORE deploy: convex/auth.config.ts is evaluated at deploy time. The
+      # command sets exactly five names and then fails unless `convex env list`
+      # reports exactly those five.
+      - name: Set the local backend environment
+        run: node scripts/localConvexBackend.mjs env
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      - name: Deploy to the local Convex backend
+        run: node scripts/localConvexBackend.mjs deploy
+
+      - name: Seed the QA dealership
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
+
+      - name: Run full Playwright suite
+        id: playwright
+        run: pnpm exec playwright test
+        env:
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+          E2E_APPROVER_PASSWORD: ${{ secrets.E2E_APPROVER_PASSWORD }}
+          CI: true
+
+      # SCRUM-795: the approve-door test is registered only when the seed flag is
+      # "1". Fail the lane if it did not run and pass, so dropping the flag from the
+      # run step cannot go green. Skipped only if the suite step never started.
+      - name: Assert the approve-door proof ran
+        if: always() && steps.playwright.conclusion != 'skipped'
+        run: node scripts/assertApproveDoorRan.mjs playwright-json/results.json
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: spike-892-playwright-report
+          path: |
+            playwright-report/
+            playwright-json/
+            test-results/deal-cockpit-visual/artifacts/
+          retention-days: 14
+
+      - name: Stop the local Convex backend
+        if: always()
+        run: node scripts/localConvexBackend.mjs stop
