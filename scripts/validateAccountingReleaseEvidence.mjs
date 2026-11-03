@@ -15,10 +15,17 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
   if (!fullSha.test(expected.testedSha ?? "") || evidence.testedSha !== expected.testedSha) {
     errors.push("Evidence does not name the exact tested SHA.");
   }
-  if (evidence.deploymentType !== "preview" ||
-      evidence.previewName !== expected.previewName ||
-      evidence.convexUrl !== expected.previewUrl ||
-      !/^https:\/\/[^/]+\.convex\.cloud$/.test(evidence.convexUrl ?? "")) {
+  // SCRUM-892: a rehearsal on the runner-local backend names that backend, not a cloud preview.
+  const targetMatches = expected.localBackend === true
+    ? evidence.deploymentType === "local-self-hosted" &&
+      evidence.previewName === expected.previewName &&
+      evidence.convexUrl === expected.previewUrl &&
+      evidence.convexUrl === "http://127.0.0.1:3210"
+    : evidence.deploymentType === "preview" &&
+      evidence.previewName === expected.previewName &&
+      evidence.convexUrl === expected.previewUrl &&
+      /^https:\/\/[^/]+\.convex\.cloud$/.test(evidence.convexUrl ?? "");
+  if (!targetMatches) {
     errors.push("Evidence does not match the created disposable preview.");
   }
   if (evidence.targetVerification !== "assertE2EBootstrap agreed: preview marker present, cloud URL matches" ||
@@ -65,6 +72,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       testedSha: process.env.EXPECTED_TESTED_SHA,
       previewName: process.env.EXPECTED_PREVIEW_NAME,
       previewUrl: process.env.EXPECTED_PREVIEW_URL,
+      localBackend: process.env.EXPECTED_LOCAL_BACKEND === "1",
       runId: process.env.GITHUB_RUN_ID,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT,
     });

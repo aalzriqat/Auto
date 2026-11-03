@@ -40,7 +40,8 @@ async function run() {
   // against the wrong deployment — must produce a refusal, not a credential
   // delivered somewhere unintended. Moving the URL out of argv removed one way
   // to set it wrongly; it did not remove the need to check.
-  const targetMatch = /^https:\/\/[a-z0-9-]{1,64}\.convex\.cloud$/.exec(
+  // SCRUM-892: also exactly the runner-local backend, nothing else on loopback.
+  const targetMatch = /^(?:https:\/\/[a-z0-9-]{1,64}\.convex\.cloud|http:\/\/127\.0\.0\.1:3210)$/.exec(
     typeof convexUrl === "string" ? convexUrl : ""
   );
   if (targetMatch === null) {

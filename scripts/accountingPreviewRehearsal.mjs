@@ -56,7 +56,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { createHash } from "node:crypto";
-import { assertPreviewTargeting, buildConvexRunArgs, isPreviewDeployKey, runConvex } from "./e2ePreviewBootstrap.mjs";
+import {
+  assertLocalTargeting,
+  assertPreviewTargeting,
+  buildConvexRunArgs,
+  isPreviewDeployKey,
+  runConvex,
+} from "./e2ePreviewBootstrap.mjs";
+import { LOCAL_CONVEX_URL } from "./localConvexBackend.mjs";
+
+/** SCRUM-892: the `previewName` the evidence carries when the backend is the runner-local one. */
+export const LOCAL_REHEARSAL_TARGET_NAME = "local-self-hosted";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +85,43 @@ export class RehearsalError extends Error {
  * to somebody else's database.
  */
 export function assertRehearsalEnv(env) {
+  // SCRUM-892: LOCAL MODE. Selected by the self-hosted pair, exactly as the E2E
+  // bootstrap selects it; a deploy key or CONVEX_DEPLOYMENT beside the pair is
+  // refused by `assertLocalTargeting`, and `--preview-name` is never used.
+  const hasSelfHosted = [env.CONVEX_SELF_HOSTED_URL, env.CONVEX_SELF_HOSTED_ADMIN_KEY].some(
+    (value) => value && String(value).trim() !== "",
+  );
+  if (hasSelfHosted) {
+    const missingLocal = [
+      "CONVEX_SELF_HOSTED_URL",
+      "CONVEX_SELF_HOSTED_ADMIN_KEY",
+      "NEXT_PUBLIC_CONVEX_URL",
+      "CLERK_SECRET_KEY",
+      "E2E_LOGIN_USER",
+      "E2E_APPROVER_USER",
+    ].filter((key) => !env[key] || String(env[key]).trim() === "");
+    if (missingLocal.length > 0) {
+      throw new RehearsalError(
+        `The local rehearsal cannot run without ${missingLocal.join(", ")}. It refuses rather than falling back to any other deployment.`,
+      );
+    }
+    assertLocalTargeting({
+      local: { url: env.CONVEX_SELF_HOSTED_URL, adminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY },
+      env,
+    });
+    if (String(env.NEXT_PUBLIC_CONVEX_URL).trim() !== LOCAL_CONVEX_URL) {
+      throw new RehearsalError(`NEXT_PUBLIC_CONVEX_URL is not exactly ${LOCAL_CONVEX_URL}. Refusing rather than guessing.`);
+    }
+    return {
+      local: { url: LOCAL_CONVEX_URL, adminKey: String(env.CONVEX_SELF_HOSTED_ADMIN_KEY) },
+      deployKey: undefined,
+      previewName: LOCAL_REHEARSAL_TARGET_NAME,
+      convexUrl: LOCAL_CONVEX_URL,
+      clerkSecret: env.CLERK_SECRET_KEY,
+      salesEmail: env.E2E_LOGIN_USER,
+      approverEmail: env.E2E_APPROVER_USER,
+    };
+  }
   const missing = [];
   for (const key of [
     "CONVEX_DEPLOY_KEY",
@@ -368,7 +415,7 @@ export async function resolveIdentity(email, secretKey) {
  *   spawnCli?: (command: string, args: string[], options: object) => { status: number | null, error?: Error },
  * }} options
  */
-export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env, spawnCli = spawnSync }) {
+export async function runPreviewFunction({ functionName, args, previewName, deployKey, local, env = process.env, spawnCli = spawnSync }) {
   const { buildConvexRunArgs, runConvex } = await import("./e2ePreviewBootstrap.mjs");
   const argv = buildConvexRunArgs({
     functionName,
@@ -376,6 +423,8 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
     previewName,
     deployKey,
     env,
+    // SCRUM-892: when set, the argv is `--url <local> --admin-key <key>` and never `--preview-name`.
+    ...(local ? { local } : {}),
   });
   // The assertion returns bootstrap JSON on stdout. The release workflow
   // reserves this process's stdout for its single evidence document; letting
@@ -518,11 +567,19 @@ function cleanupReceipt(result, functionName, expectedSplitPhase) {
  * @param {{env?:Record<string,string|undefined>,spawnCli?:(command:string,args:string[],options:object)=>CleanupCliResult,diagnostics?:CleanupDiagnostics}} dependencies
  */
 export function createCleanupPreviewCall(config, { env = process.env, spawnCli = spawnSync, diagnostics } = {}) {
-  const { deployKey, previewName, convexUrl } = config;
-  const childEnv = { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
+  const { deployKey, previewName, convexUrl, local } = config;
+  // SCRUM-892: in local mode the child gets the loopback pair and NO deploy key / preview name.
+  const childEnv = local
+    ? { ...env, NEXT_PUBLIC_CONVEX_URL: convexUrl }
+    : { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
   try {
-    assertPreviewTargeting({ deployKey, previewName, env: childEnv });
-    if (!isPreviewCloudUrl(convexUrl)) throw cleanupUnavailable();
+    if (local) {
+      assertLocalTargeting({ local, env: childEnv });
+      if (convexUrl !== LOCAL_CONVEX_URL) throw cleanupUnavailable();
+    } else {
+      assertPreviewTargeting({ deployKey, previewName, env: childEnv });
+      if (!isPreviewCloudUrl(convexUrl)) throw cleanupUnavailable();
+    }
   } catch { throw cleanupUnavailable(); }
 
   /**
@@ -546,7 +603,7 @@ export function createCleanupPreviewCall(config, { env = process.env, spawnCli =
       try {
         const argsJson = JSON.stringify(payload);
         if (Buffer.byteLength(argsJson) > 65_536) throw cleanupUnavailable();
-        const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv });
+        const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv, ...(local ? { local } : {}) });
         runConvex(argv, functionName, (command, commandArgs, options) => {
           result = spawnCli(command, commandArgs, { ...options, env: childEnv, stdio: ["ignore", "pipe", "pipe"],
             timeout: 60_000, maxBuffer: CLEANUP_OUTPUT_LIMIT, encoding: "utf8", windowsHide: true });
@@ -750,7 +807,7 @@ export async function main(env = process.env) {
     testedSha: env.REHEARSAL_TESTED_SHA ?? null,
     previewName: config.previewName,
     convexUrl: config.convexUrl,
-    deploymentType: "preview",
+    deploymentType: config.local ? "local-self-hosted" : "preview",
     workflowRunId: env.GITHUB_RUN_ID ?? null,
     workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
@@ -780,6 +837,7 @@ export async function main(env = process.env) {
     },
     previewName: config.previewName,
     deployKey: config.deployKey,
+    ...(config.local ? { local: config.local } : {}),
     env,
   });
   evidence.targetVerification = "assertE2EBootstrap agreed: preview marker present, cloud URL matches";
