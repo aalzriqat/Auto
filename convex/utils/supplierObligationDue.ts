@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
+import { OPEN_RECOVERY_STATUSES } from "./costBearer";
 import {
   agingFor,
   ammanDateString,
@@ -338,6 +339,22 @@ function statementSection(rows: ObligationRow[], complete: boolean): StatementSe
   return { rows, totals: [...byCurrency.values()], complete };
 }
 
+// Exhaustive on purpose: a status added to the schema fails typecheck until it is classified here,
+// so a new open status cannot silently drop out of the statement. Settled statuses are false.
+const PAYABLE_STATEMENT_OPEN = {
+  PENDING: true, NOT_YET_DUE: true, DUE_ON_SALE: true, PARTIALLY_PAID: true, DISPUTED: true, PAID: false, CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierPayables">["status"], boolean>;
+const RECEIVABLE_STATEMENT_OPEN = {
+  OPEN: true, PARTIALLY_PAID: true, DISPUTED: true, PAID: false, CANCELLED: false,
+} satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
+const openStatuses = <S extends string>(map: Record<S, boolean>): S[] => (Object.keys(map) as S[]).filter((status) => map[status]);
+const OPEN_PAYABLE_STATUSES = openStatuses(PAYABLE_STATEMENT_OPEN);
+const OPEN_RECEIVABLE_STATUSES = openStatuses(RECEIVABLE_STATEMENT_OPEN);
+
+/** One bounded read per open status, run together and concatenated; callers compare the length with the limit. */
+async function openByStatus<S extends string, D>(statuses: readonly S[], read: (status: S) => Promise<D[]>): Promise<D[]> {
+  return (await Promise.all(statuses.map(read))).flat();
+}
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding obligations as two sections that are never
  * combined: `payable` (A/P, what the dealership owes) and `receivable` (A/R, what the supplier
@@ -350,21 +367,27 @@ export async function readSupplierOutstanding(
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; nowMs: number }
 ): Promise<{ payable: StatementSection; receivable: StatementSection }> {
   const { orgId, supplierId, nowMs } = args;
-  const take = STATEMENT_FAMILY_LIMIT + 1;
-
-  const payableDocs = await ctx.db
-    .query("vehicleSupplierPayables")
-    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
-    .take(take);
-  const receivableDocs = await ctx.db
-    .query("vehicleSupplierReceivables")
-    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
-    .take(take);
-  const recoveryDocs = await ctx.db
-    .query("supplierCostRecoveries")
-    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
-    .take(take);
-
+  // Settled families are left out by index, not read and discarded, so a supplier with a long
+  // paid history cannot push open rows past the bound. A row whose stored status says settled
+  // while its amounts say otherwise is a data defect for the reconciliation slice, not this read.
+  const payableDocs = await openByStatus(OPEN_PAYABLE_STATUSES, (status) =>
+    ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
+      .take(STATEMENT_FAMILY_LIMIT + 1)
+  );
+  const receivableDocs = await openByStatus(OPEN_RECEIVABLE_STATUSES, (status) =>
+    ctx.db
+      .query("vehicleSupplierReceivables")
+      .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
+      .take(STATEMENT_FAMILY_LIMIT + 1)
+  );
+  const recoveryDocs = await openByStatus(OPEN_RECOVERY_STATUSES, (status) =>
+    ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
+      .take(STATEMENT_FAMILY_LIMIT + 1)
+  );
   const payableRows: ObligationRow[] = [];
   for (const row of payableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
     const read = await readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), undefined);

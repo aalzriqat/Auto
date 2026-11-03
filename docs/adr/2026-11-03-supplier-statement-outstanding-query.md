@@ -17,7 +17,9 @@ Add one read-only query, `api.supplierStatement.outstanding`, in a new `convex/s
 - Args: `orgId`, `supplierId`, `nowMs` (validated within a day of the server clock, as `supplierDueAging.list` does).
 - Auth: `requireTenantAuth(VIEW_FINANCE)` and the `accounting` feature, the same gate as the aging list. The organisation
   comes from `ctx.auth`; the supplier is read with `requireOwnedRow`, so another organisation's id is "not found".
-- Reads: the three families through `by_org_and_supplierId_and_status` (prefix `orgId`, `supplierId`), each bounded to
+- Reads: the three families through `by_org_and_supplierId_and_status`, one bounded read per OPEN status only (PAID,
+  CANCELLED, RECOVERED and REVERSED are excluded by the index, so settled history cannot consume the bound; amended
+  2026-11-03 after a failing-first test showed 101 PAID rows made the statement report incomplete). Each family is bounded to
   `STATEMENT_FAMILY_LIMIT + 1` rows. A family with more rows reports `complete: false`; a partial sum is never presented as a
   total (SCRUM-869 W14).
 - Rows reuse the S3a row reader (`payableFacts`, `receivableFacts`, `recoveryFacts`, `toRow`), so the due date, rule,
@@ -51,3 +53,5 @@ Convex pagination and bounded reads: https://docs.convex.dev/database/pagination
 `convex/supplierDueAging.ts`. Subledger-with-control-account pattern (subledger totals shown beside, never merged into, the
 control account) is the standard AP/AR practice; the design packet `docs/architecture/scrum869-supplier-workspace-design.md`
 on branch `claude/scrum869-design` holds the full invariants W1 to W16.
+
+Known limit: a row stored as PAID/RECOVERED whose amounts still show a remainder is not read here; that data defect belongs to per-supplier GL reconciliation (gap 4).

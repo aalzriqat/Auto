@@ -10,6 +10,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { STATEMENT_FAMILY_LIMIT } from "./utils/supplierObligationDue";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const DAY = 86_400_000;
@@ -167,5 +168,17 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     const noFinance = await seed("tc", ["view:vehicles"]);
     await expect(statement(noFinance), "no finance").rejects.toThrow();
     await expect(statement(a, a.supplierId, { nowMs: NOW + 5 * DAY }), "stale clock").rejects.toThrow(/nowMs/);
+  });
+  test("settled history never eats the read bound: 101 PAID rows plus one open row still gives a complete statement", async () => {
+    const s = await seed("hist");
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addReceivable(s, { status: "PAID", amountReceived: 3_000 });
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addRecovery(s, { status: "RECOVERED", amountRecoveredMinor: 200_000 });
+    await addPayable(s, { amountDue: 700 });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.totals).toEqual([{ currency: "JOD", grossMinor: 700_000, disputedMinor: 0, overdueMinor: 700_000 }]);
+    expect(r.receivable.complete).toBe(true);
+    expect(r.receivable.rows).toEqual([]);
   });
 });
