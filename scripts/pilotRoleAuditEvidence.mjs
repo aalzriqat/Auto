@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes.ts";
 import { diagnosePreviewAttestation } from "./previewAttestationDiagnostic.mjs";
+import { resolveGit } from "./contractSkew/gitExecutable.mjs";
 
 const ROLES = ["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"];
 const LOCALES = ["en", "ar"];
@@ -117,12 +118,15 @@ function roleCaseStatus(item) {
 /** Repository files under playwright/ that git tracks, as repo-relative POSIX paths. This is the
  * semantic check on a report-derived path (OWASP Input Validation Cheat Sheet): a path is
  * publishable only when it names a file of this checkout. Empty when git cannot list them, so
- * every location is then withheld.
+ * every location is then withheld. Git is run by absolute path, never a PATH lookup (Sonar S4036).
  * @param {string} repoRoot
+ * @param {() => string | undefined} [findGit]
  * @returns {Set<string>} */
-export function trustedPlaywrightFiles(repoRoot) {
+export function trustedPlaywrightFiles(repoRoot, findGit = resolveGit) {
+  const git = findGit();
+  if (!git) return new Set();
   try {
-    const listing = execFileSync("git", ["ls-files", "-z", "--", "playwright"],
+    const listing = execFileSync(git, ["ls-files", "-z", "--", "playwright"],
       { cwd: repoRoot, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
     return new Set(listing.split("\0").filter((entry) => entry !== ""));
   } catch { return new Set(); }

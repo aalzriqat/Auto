@@ -664,6 +664,7 @@ test("trustedPlaywrightFiles lists the tracked playwright files of a checkout an
   try { expect(trustedPlaywrightFiles(notARepository).size).toBe(0); }
   finally { rmSync(notARepository, { recursive: true, force: true }); }
   expect(trustedPlaywrightFiles(path.join(notARepository, "missing")).size).toBe(0);
+  expect(trustedPlaywrightFiles(repoRoot, () => undefined).size).toBe(0);
 });
 
 test("passed, skipped, missing, duplicate and wrong-project cases never carry a location", () => {
