@@ -60,9 +60,9 @@
  *
  * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): this is a
  * tripwire. It detects tampering that is still in place when `verify` runs; it
- * does not prevent tampering. A change that is restored before `verify` goes
- * unseen. That covers:
- * - a variable changed and changed back before `verify` runs;
+ * does not prevent tampering. What it does not see:
+ * - a change restored before `verify` runs, such as a variable changed and
+ *   changed back;
  * - code replaced before `mark`, which `mark` then records as the baseline;
  * - direct writes to the backend's own storage from inside the container,
  *   which no admin read observes.

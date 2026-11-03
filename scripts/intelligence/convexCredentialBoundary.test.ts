@@ -96,7 +96,9 @@ const CANONICAL_STAGED_COMMAND: Record<string, string> = {
 
 // SCRUM-892: the local-backend form of the same step. The CLI runs in the
 // BACKEND container's own network namespace (`--network container:<name>`),
-// so it reaches the backend at 127.0.0.1:3210 and nothing else on the runner.
+// so it reaches the backend at 127.0.0.1:3210. That namespace is on Docker's
+// default bridge: runner services bound to 127.0.0.1 are out of reach, but
+// services listening on all interfaces and outbound networking are reachable.
 // The URL and the admin key are inherited by NAME, never written into argv.
 // Same image, same hardening, same two read-only mounts, same flags: the only
 // differences from the cloud form are how the target is reached and named.
@@ -285,7 +287,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // loopback app URL; no admin key, no other secret), `verify` runs right
     // before the backend stops, and the deploy comment no longer claims the key
     // is out of candidate reach. No trigger, checkout or candidate path changed.
-    "ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10",
+    // PR #757 round 8: re-pinned for shell comments only. The three deploy
+    // steps' network comment no longer claims nothing else on the runner is
+    // reachable: it discloses bridge reachability. Every changed line is a `#`
+    // comment inside `run:`; no command, env, trigger or checkout changed.
+    // Previous pin ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10.
+    "515e2cd2124f4107e504465d2694601c8802ef931e0a77090868e06471089714",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,

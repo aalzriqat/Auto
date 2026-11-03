@@ -738,7 +738,14 @@ jobs:
           # BACKEND container's own network namespace (`--network container:`, the
           # documented container network mode) gives the CLI exactly one thing it
           # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
-          # literal everywhere. Nothing else on the runner is reachable from it.
+          # literal everywhere. That names what the CLI is offered, not what it can
+          # reach: the shared namespace sits on Docker's default bridge, and publishing
+          # on 127.0.0.1 limits only inbound traffic. Outbound traffic reaches the
+          # bridge gateway, so any runner service listening on all interfaces (the
+          # trusted `next start` webServer during the auth steps) is reachable, and so
+          # is whatever the bridge routes to beyond the runner, which may include the
+          # cloud metadata endpoint (not probed). Runner services bound to 127.0.0.1
+          # (the egress proxy, the candidate relay) are not reachable.
           # The URL and admin key are inherited by NAME (`--env NAME`), so neither
           # is in argv. Nothing from the runner environment besides these two
           # names enters the container, and the key controls only a backend that
@@ -1290,7 +1297,14 @@ jobs:
           # BACKEND container's own network namespace (`--network container:`, the
           # documented container network mode) gives the CLI exactly one thing it
           # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
-          # literal everywhere. Nothing else on the runner is reachable from it.
+          # literal everywhere. That names what the CLI is offered, not what it can
+          # reach: the shared namespace sits on Docker's default bridge, and publishing
+          # on 127.0.0.1 limits only inbound traffic. Outbound traffic reaches the
+          # bridge gateway, so any runner service listening on all interfaces (the
+          # trusted `next start` webServer during the auth steps) is reachable, and so
+          # is whatever the bridge routes to beyond the runner, which may include the
+          # cloud metadata endpoint (not probed). Runner services bound to 127.0.0.1
+          # (the egress proxy, the candidate relay) are not reachable.
           # The URL and admin key are inherited by NAME (`--env NAME`), so neither
           # is in argv. Nothing from the runner environment besides these two
           # names enters the container, and the key controls only a backend that
@@ -1821,7 +1835,14 @@ jobs:
           # BACKEND container's own network namespace (`--network container:`, the
           # documented container network mode) gives the CLI exactly one thing it
           # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
-          # literal everywhere. Nothing else on the runner is reachable from it.
+          # literal everywhere. That names what the CLI is offered, not what it can
+          # reach: the shared namespace sits on Docker's default bridge, and publishing
+          # on 127.0.0.1 limits only inbound traffic. Outbound traffic reaches the
+          # bridge gateway, so any runner service listening on all interfaces (the
+          # trusted `next start` webServer during the auth steps) is reachable, and so
+          # is whatever the bridge routes to beyond the runner, which may include the
+          # cloud metadata endpoint (not probed). Runner services bound to 127.0.0.1
+          # (the egress proxy, the candidate relay) are not reachable.
           # The URL and admin key are inherited by NAME (`--env NAME`), so neither
           # is in argv. Nothing from the runner environment besides these two
           # names enters the container, and the key controls only a backend that
