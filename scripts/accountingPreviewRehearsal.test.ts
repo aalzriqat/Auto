@@ -544,6 +544,16 @@ describe("local mode targets only this job's loopback backend", () => {
     expect(childEnv).not.toHaveProperty("CONVEX_PREVIEW_NAME");
   });
 
+  test("cleanup output decodes a Buffer to the same text as the string, invalid UTF-8 included", async () => {
+    const bytes = Buffer.from([...Buffer.from('{"s":"a'), 0xff, ...Buffer.from('b"}\n')]);
+    const config = assertRehearsalEnv({ ...LOCAL });
+    const receipt = (stdout: string | Buffer) =>
+      createCleanupPreviewCall(config, { env: { ...LOCAL }, spawnCli: vi.fn<CleanupSpawn>(() => ({ status: 0, stdout, stderr: "" })) })
+        ("e2eBootstrap:observeOpeningCleanupFixture", { orgId: "synthetic" });
+    expect(await receipt(bytes)).toEqual({ ok: true, value: { s: "a�b" } });
+    expect(await receipt(bytes.toString("utf8"))).toEqual({ ok: true, value: { s: "a�b" } });
+  });
+
   // Found by the first local run: the concurrency worker accepted only cloud
   // URLs, so C1/C2 were UNPROVEN on the local backend.
   test.each([

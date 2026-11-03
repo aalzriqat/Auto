@@ -549,7 +549,8 @@ function cleanupOutput(value) {
   if (value === undefined || value === null) return "";
   let text;
   if (typeof value === "string") text = value;
-  else if (Buffer.isBuffer(value)) text = value.toString("utf8");
+  // WHATWG decoding, as Buffer's utf8 toString: U+FFFD for invalid bytes, BOM kept.
+  else if (Buffer.isBuffer(value)) text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(value);
   else throw cleanupUnavailable("STREAM_UNAVAILABLE");
   if (Buffer.byteLength(value) > CLEANUP_OUTPUT_LIMIT) throw cleanupUnavailable("STREAM_UNAVAILABLE");
   return stripVTControlCharacters(text).trim();
