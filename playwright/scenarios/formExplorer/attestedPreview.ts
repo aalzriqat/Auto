@@ -58,6 +58,19 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   return undefined;
 }
 
+/** The deployment name the single runner-local Convex backend reports as. */
+export const LOCAL_CONVEX_DEPLOYMENT = "local-127.0.0.1-3210";
+
+function isLocalConvexOrigin(parsed: URL): boolean {
+  return (
+    (parsed.protocol === "http:" || parsed.protocol === "ws:") &&
+    parsed.hostname === "127.0.0.1" &&
+    parsed.port === "3210" &&
+    parsed.username === "" &&
+    parsed.password === ""
+  );
+}
+
 /**
  * The Convex deployment a URL's host names, or undefined. The whole host must
  * be `<name>.convex.cloud`: `<preview>.convex.cloud.example.com` names nothing.
@@ -72,19 +85,6 @@ export function convexDeploymentOf(url: string | undefined): string | undefined 
   } catch {
     return undefined;
   }
-}
-
-/** The deployment name the single runner-local Convex backend reports as. */
-export const LOCAL_CONVEX_DEPLOYMENT = "local-127.0.0.1-3210";
-
-function isLocalConvexOrigin(parsed: URL): boolean {
-  return (
-    (parsed.protocol === "http:" || parsed.protocol === "ws:") &&
-    parsed.hostname === "127.0.0.1" &&
-    parsed.port === "3210" &&
-    parsed.username === "" &&
-    parsed.password === ""
-  );
 }
 
 export function sameUrl(a: string | undefined, b: string | undefined): boolean {

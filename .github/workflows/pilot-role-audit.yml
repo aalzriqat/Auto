@@ -31,7 +31,8 @@ jobs:
         role: [OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT, SENIOR_ACCOUNTANT]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Setup and all route cells use one browser worker; every role has its own local Convex backend (pinned by digest, 127.0.0.1 only, removed by the always() stop step).
+    # Each matrix job has its own runner, so each can bind the fixed port 127.0.0.1:3210.
+    # Do not merge roles onto one runner.
     timeout-minutes: 120
 
     steps:
@@ -145,4 +146,3 @@ jobs:
             ${{ runner.temp }}/pilot-role-audit-public/results.json
           if-no-files-found: error
           retention-days: 14
-

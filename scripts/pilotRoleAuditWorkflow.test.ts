@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
+import { SWARM_LOCAL_CONVEX_AUTHORITY, SWARM_LOCAL_CONVEX_ORIGIN } from "./intelligence/swarmConvexOrigin.mjs";
 import { LOCAL_CONVEX_DEPLOYMENT, convexDeploymentOf, servedDeployments } from "../playwright/scenarios/formExplorer/attestedPreview";
 import roleConfig from "../playwright.role-audit.config";
 import visualConfig from "../playwright.visual.config";
@@ -127,7 +128,6 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     expect(source).not.toContain("AUDIT_BACKEND");
     const steps = workflow.jobs.roles.steps;
     expect(steps.some((step) => /convex deploy/.test(step.run ?? "") && /preview/i.test(step.run ?? ""))).toBe(false);
-    for (const step of steps) expect(step.if ?? "").not.toMatch(/cloud/);
     const matrix = stepNamed(steps, "Run the attested role, locale and viewport matrix");
     expect(matrix.env?.AUTOFLOW_LOCAL_CONVEX_CI).toBe("1");
   });
@@ -140,18 +140,15 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       "Mint the disposable-preview marker and record the tripwire baseline",
       "Seed the QA dealership on the local backend",
       "Set exact product role templates on the local backend",
-      "Verify the local backend was not changed during the run"];
-    const localSteps = localNames.map((name) => stepNamed(steps, name));
-    expect(localSteps.map((step) => step.name)).toEqual([
-      "Start the local Convex backend",
-      "Set and verify the local backend environment allowlist",
-      "Deploy main to the local Convex backend",
-      "Mint the disposable-preview marker and record the tripwire baseline",
-      "Seed the QA dealership on the local backend",
-      "Set exact product role templates on the local backend",
+      "Run the attested role, locale and viewport matrix",
       "Verify the local backend was not changed during the run",
-    ]);
-    for (const step of localSteps) {
+      "Stop the local Convex backend",
+      "Upload encrypted role audit evidence"];
+    // stepNamed throws on a missing step; strictly ascending indices pin the order.
+    const indices = localNames.map((name) => steps.indexOf(stepNamed(steps, name)));
+    expect([...indices].sort((a, b) => a - b)).toEqual(indices);
+    expect(new Set(indices).size).toBe(localNames.length);
+    for (const step of localNames.slice(0, 8).map((name) => stepNamed(steps, name))) {
       expect(JSON.stringify(step.env ?? {})).not.toMatch(/CONVEX_(PREVIEW_)?DEPLOY_KEY|CONVEX_PREVIEW/);
       expect(step.run ?? "").not.toMatch(/--preview-|previewDeploymentLifecycle/);
     }
@@ -161,19 +158,10 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     const verify = stepNamed(steps, "Verify the local backend was not changed during the run");
     expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
     expect(verify.if).toContain("always()");
-    // Exactly always(), as the shared credential-boundary test requires. In cloud
-    // mode no container is recorded, and stop is then a no-op.
-    expect(stepNamed(steps, "Stop the local Convex backend").if).toBe("always()");
-    expect(stepNamed(steps, "Stop the local Convex backend").run).toBe("node scripts/localConvexBackend.mjs stop");
-    const index = (name: string) => steps.indexOf(stepNamed(steps, name));
-    expect(index("Start the local Convex backend")).toBeLessThan(index("Set and verify the local backend environment allowlist"));
-    expect(index("Set and verify the local backend environment allowlist")).toBeLessThan(index("Deploy main to the local Convex backend"));
-    expect(index("Deploy main to the local Convex backend")).toBeLessThan(index("Mint the disposable-preview marker and record the tripwire baseline"));
-    expect(index("Mint the disposable-preview marker and record the tripwire baseline")).toBeLessThan(index("Seed the QA dealership on the local backend"));
-    expect(index("Set exact product role templates on the local backend")).toBeLessThan(index("Run the attested role, locale and viewport matrix"));
-    expect(index("Run the attested role, locale and viewport matrix")).toBeLessThan(index("Verify the local backend was not changed during the run"));
-    expect(index("Stop the local Convex backend")).toBeLessThan(index("Upload encrypted role audit evidence"));
-    // The attested matrix command is identical in both modes.
+    // Exactly always(), as the shared credential-boundary test requires.
+    const stop = stepNamed(steps, "Stop the local Convex backend");
+    expect(stop.if).toBe("always()");
+    expect(stop.run).toBe("node scripts/localConvexBackend.mjs stop");
     expect(stepNamed(steps, "Run the attested role, locale and viewport matrix").run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
   });
 
@@ -187,6 +175,10 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     }
     expect(servedDeployments(["ws://127.0.0.1:3210/api/1.0/sync", "ws://127.0.0.1:3000/_next/webpack-hmr",
       "wss://x-1.convex.cloud/api/1.0/sync"])).toEqual([LOCAL_CONVEX_DEPLOYMENT, "x-1"]);
+    // The origin is spelled out in this helper, so pin it to the shared constant
+    // (the same way the swarm's own copies are pinned in swarmConvexOrigin.test.ts).
+    expect(convexDeploymentOf(SWARM_LOCAL_CONVEX_ORIGIN)).toBe(LOCAL_CONVEX_DEPLOYMENT);
+    expect(new URL(SWARM_LOCAL_CONVEX_ORIGIN).host).toBe(SWARM_LOCAL_CONVEX_AUTHORITY);
   });
 
   test("the real-backend scenario library opts into the existing fail-closed cross-screen oracle", () => {

@@ -50,8 +50,8 @@ export async function openHuntPage(page: Page, baseURL: string | undefined, rout
 }
 
 export function readHuntAttestation(): Attestation {
-  // SCRUM-892: a disposable backend is either a named cloud preview or the
-  // runner-local self-hosted one (both self-hosted variables, no preview name).
+  // SCRUM-892: the role audit runs on the runner-local backend (both self-hosted
+  // variables set, no preview name). A named cloud preview is still accepted here.
   const local = Boolean(process.env.CONVEX_SELF_HOSTED_URL && process.env.CONVEX_SELF_HOSTED_ADMIN_KEY);
   expect(
     local || process.env.CONVEX_PREVIEW_NAME,
