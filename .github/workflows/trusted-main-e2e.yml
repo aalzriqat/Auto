@@ -128,10 +128,11 @@ jobs:
         if: always() && steps.playwright.conclusion != 'skipped'
         run: node scripts/assertApproveDoorRan.mjs playwright-json/results.json
 
-      # Trusted tripwire (PR #757 round 5): fails the job unless the backend still
-      # equals what `mark` recorded. always(): a red suite still gets its check.
+      # Trusted tripwire: fails the job unless the backend still equals what
+      # `mark` recorded. Exactly always(): a red suite still gets its check, and
+      # a missing or emptied baseline makes verify refuse instead of skipping it.
       - name: Verify the local backend was not changed during the run
-        if: always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''
+        if: always()
         run: node scripts/localConvexBackend.mjs verify
         env:
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}

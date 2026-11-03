@@ -346,8 +346,9 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // concurrency and permissions are unchanged (trustedMainE2eWorkflow.test.ts).
     // The suite step gains the AUTOFLOW_LOCAL_CONVEX_CI switch. No trigger, grant,
     // checkout or secret other than the Clerk keys the suite already read.
+    // Verify now runs exactly always(), so a missing baseline refuses (#760 round 3).
     // Previous pin 3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437.
-    "e436b52e622a86cf7a381a6da4e272b935da69dd0c54f069390d8dc8bc93eca6",
+    "4022cb739d446ac59dc204737ebbc5eb1bf08dda9c586b9a079ed754a016baa1",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {

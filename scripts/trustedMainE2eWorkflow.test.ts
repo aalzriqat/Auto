@@ -37,13 +37,16 @@ const raw: unknown = parse(source);
  * | job      | env, strategy, container  | BASH_ENV, a matrix with continue-on-error, a different shell | strict job schema         |
  * | step     | continue-on-error         | a failed step does not fail the job     | strict step schema; explicit assertion        |
  * | step     | shell                     | `bash -c '...; exit 0'` hides exit 7    | strict step schema; explicit mark..verify     |
- * | step     | if                        | verify never runs, or mark is skipped   | exact verify.if; mark..suite unconditional    |
- * | step     | env (BASH_ENV)            | as the workflow key                     | verify env pinned with toEqual                |
- * | step     | run                       | a different command                     | exact command list and order                  |
+ * | step     | if                        | verify never runs, or mark is skipped   | verify.if exactly always(); step literal      |
+ * | step     | env (BASH_ENV, NODE_OPTIONS) | a preloaded process.exit(0) or EXIT trap | whole-step literal for every step          |
+ * | step     | run, uses, with, name     | a different command or action           | whole-step literal for every step             |
+ * | step     | a new step anywhere       | writes an empty fingerprint to          | whole-step literal (count and order);         |
+ * |          |                           | $GITHUB_ENV, or a shim to $GITHUB_PATH  | verify always() refuses a missing baseline    |
+ * | workflow, job | env                  | as the step env                         | no env at either level                        |
  *
- * Not covered by this file: a trusted step writing BASH_ENV into GITHUB_ENV.
- * Only localConvexBackend.mjs start writes GITHUB_ENV here, and it writes only
- * the three backend variables (localConvexBackend.test.ts).
+ * Not covered by this file: what the pinned commands themselves write. Only
+ * localConvexBackend.mjs start and mark write GITHUB_ENV here; they write the
+ * backend variables and the fingerprint (localConvexBackend.test.ts).
  */
 const stepSchema = z
   .object({
@@ -123,6 +126,90 @@ describe("SCRUM-892 trusted main E2E: required-check identity is unchanged", () 
     expect(workflow.jobs.playwright?.if).toBe("github.ref == 'refs/heads/main'");
     expect(workflow.jobs.playwright?.["runs-on"]).toBe("ubuntu-latest");
     expect(workflow.jobs.playwright?.["timeout-minutes"]).toBe(35);
+  });
+
+  test("no env at the workflow or the job level (BASH_ENV, NODE_OPTIONS or a fingerprint would reach every step)", () => {
+    expect(rawDoc).not.toHaveProperty("env");
+    expect(rawDoc.jobs.playwright).not.toHaveProperty("env");
+  });
+
+  test("every step of the playwright job equals this literal: keys, values, count and order", () => {
+    // Whole objects, read from the raw YAML. A shell, an env entry (BASH_ENV,
+    // NODE_OPTIONS), an `if`, a $GITHUB_ENV or $GITHUB_PATH write, or an extra
+    // step anywhere in the job changes this list. Every edit to the job is a
+    // reviewed edit to this literal.
+    const secret = (name: string) => `\${{ secrets.${name} }}`;
+    const fromEnv = (name: string) => `\${{ env.${name} }}`;
+    const backendEnv = { NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"), NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000" };
+    const selfHosted = { CONVEX_SELF_HOSTED_URL: fromEnv("CONVEX_SELF_HOSTED_URL"), CONVEX_SELF_HOSTED_ADMIN_KEY: fromEnv("CONVEX_SELF_HOSTED_ADMIN_KEY") };
+    expect(rawDoc.jobs.playwright?.steps).toEqual([
+      { uses: "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5", with: { "persist-credentials": false } },
+      { uses: "pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa", with: { version: "11.13.0" } },
+      { name: "Use Node.js", uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020", with: { "node-version": "22.21.1", cache: "pnpm" } },
+      { name: "Install dependencies", run: "pnpm install --frozen-lockfile --ignore-scripts" },
+      { name: "Install Playwright browsers", run: "pnpm exec playwright install --with-deps chromium webkit" },
+      {
+        name: "Deal cockpit visual gate",
+        run: [
+          "set -euo pipefail",
+          "pnpm run test:visual:deal-cockpit",
+          "# The frame census is shared with playwright.yml (SCRUM-489).",
+          "node scripts/assertDealCockpitVisualFrames.mjs test-results/deal-cockpit-visual",
+          "node scripts/assertRoleAccessVisualFrames.mjs test-results/deal-cockpit-visual",
+          "",
+        ].join("\n"),
+        env: { CI: true },
+      },
+      { name: "Start the local Convex backend", run: `${LOCAL_BACKEND} start` },
+      { name: "Set and verify the local backend environment allowlist", run: `${LOCAL_BACKEND} env`, env: backendEnv },
+      { name: "Deploy main to the local Convex backend", run: "pnpm exec convex deploy --typecheck enable --yes", env: selfHosted },
+      { name: "Mint the disposable-preview marker and record the tripwire baseline", run: `${LOCAL_BACKEND} mark`, env: backendEnv },
+      {
+        name: "Seed the QA dealership on the local backend",
+        run: "node scripts/e2ePreviewBootstrap.mjs",
+        env: {
+          ...selfHosted,
+          NEXT_PUBLIC_CONVEX_URL: fromEnv("NEXT_PUBLIC_CONVEX_URL"),
+          CLERK_SECRET_KEY: secret("CLERK_SECRET_KEY"),
+          E2E_LOGIN_USER: secret("E2E_LOGIN_USER"),
+          E2E_APPROVER_USER: secret("E2E_APPROVER_USER"),
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1",
+        },
+      },
+      {
+        name: "Run full Playwright suite",
+        id: "playwright",
+        run: SUITE,
+        env: {
+          AUTOFLOW_LOCAL_CONVEX_CI: "1",
+          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1",
+          NEXT_PUBLIC_CONVEX_URL: fromEnv("NEXT_PUBLIC_CONVEX_URL"),
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"),
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+          CLERK_SECRET_KEY: secret("CLERK_SECRET_KEY"),
+          NEXT_PUBLIC_APP_URL: secret("NEXT_PUBLIC_APP_URL"),
+          E2E_LOGIN_USER: secret("E2E_LOGIN_USER"),
+          E2E_LOGIN_PASSWORD: secret("E2E_LOGIN_PASSWORD"),
+          E2E_LOGIN_VERIFICATION_CODE: secret("E2E_LOGIN_VERIFICATION_CODE"),
+          E2E_APPROVER_USER: secret("E2E_APPROVER_USER"),
+          E2E_APPROVER_PASSWORD: secret("E2E_APPROVER_PASSWORD"),
+          CI: true,
+        },
+      },
+      { name: "Assert the approve-door proof ran", if: "always() && steps.playwright.conclusion != 'skipped'", run: ASSERT_APPROVE },
+      { name: "Verify the local backend was not changed during the run", if: "always()", run: `${LOCAL_BACKEND} verify`, env: backendEnv },
+      { name: "Stop the local Convex backend", if: "always()", run: `${LOCAL_BACKEND} stop` },
+      {
+        name: "Upload Playwright report",
+        uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        if: "always()",
+        with: {
+          name: "trusted-main-playwright-report",
+          path: "playwright-report/\nplaywright-json/\ntest-results/deal-cockpit-visual/artifacts/\n",
+          "retention-days": 14,
+        },
+      },
+    ]);
   });
 
   test("the workflow, the job and every step use only allowlisted keys", () => {
@@ -230,9 +317,10 @@ describe("SCRUM-892 trusted main E2E: a per-job local backend and no cloud crede
     expect(suite?.env?.CI).toBe(true);
   });
 
-  test("verify runs always() once a fingerprint was recorded; stop runs always() and exactly so", () => {
+  test("verify and stop run exactly always(); a missing or emptied baseline makes verify refuse, never skip", () => {
+    // verifyBackend refuses without a 64-hex baseline (localConvexBackend.test.ts).
     const verify = steps[indexOfRun(`${LOCAL_BACKEND} verify`)];
-    expect(verify?.if).toBe("always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''");
+    expect(verify?.if).toBe("always()");
     expect(verify?.env).toEqual({
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
       NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
