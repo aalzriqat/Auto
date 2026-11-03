@@ -45,11 +45,15 @@ import { appendFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { clerkTestFrontendApiOrigin } from "./intelligence/clerkPublicJwtKey.mjs";
+import {
+  SWARM_LOCAL_CONVEX_DEPLOYMENT_NAME,
+  SWARM_LOCAL_CONVEX_ORIGIN,
+} from "./intelligence/swarmConvexOrigin.mjs";
 
 // ─── Fixed facts ─────────────────────────────────────────────────────────────
 
 /** The one URL every command here may talk to. Compared by exact equality. */
-export const LOCAL_CONVEX_URL = "http://127.0.0.1:3210";
+export const LOCAL_CONVEX_URL = SWARM_LOCAL_CONVEX_ORIGIN;
 export const LOCAL_CONVEX_SITE_URL = "http://127.0.0.1:3211";
 
 /**
@@ -63,7 +67,7 @@ export const LOCAL_CONVEX_IMAGE =
   "ghcr.io/convex/convex-backend:72ce13c379fe6dbdfc305bc8ad699c5663c68c2a" +
   "@sha256:294944b33dc55e8f68b2feda11c5e7b195f7778b9ad2951f1bea2744ad392e5a";
 
-export const INSTANCE_NAME = "autoflow-ci";
+export const INSTANCE_NAME = SWARM_LOCAL_CONVEX_DEPLOYMENT_NAME;
 /** Exported to GITHUB_ENV so an always() step can find and remove the container. */
 export const CONTAINER_ENV_VAR = "AUTOFLOW_LOCAL_CONVEX_CONTAINER";
 const CONTAINER_NAME_PATTERN = /^autoflow-local-convex-[a-z0-9][a-z0-9-]{0,62}$/;

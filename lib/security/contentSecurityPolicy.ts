@@ -34,7 +34,7 @@ export function localConvexCspSources(env: Env): LocalConvexCspSources {
     );
   }
   return {
-    connect: [LOCAL_CONVEX_URL, "ws://127.0.0.1:3210"],
+    connect: [LOCAL_CONVEX_URL, LOCAL_CONVEX_URL.replace(/^http:/, "ws:")],
     // File storage URLs are served from the backend origin.
     img: [LOCAL_CONVEX_URL],
   };

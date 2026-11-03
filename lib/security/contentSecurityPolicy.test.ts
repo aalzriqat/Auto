@@ -5,6 +5,13 @@ import {
   LOCAL_CONVEX_URL,
   localConvexCspSources,
 } from "./contentSecurityPolicy";
+import { SWARM_LOCAL_CONVEX_ORIGIN } from "../../scripts/intelligence/swarmConvexOrigin.mjs";
+
+describe("local Convex origin", () => {
+  it("is the same origin the CI backend runner and the swarm validators use", () => {
+    expect(LOCAL_CONVEX_URL).toBe(SWARM_LOCAL_CONVEX_ORIGIN);
+  });
+});
 
 /**
  * The exact header value origin/main shipped before SCRUM-892 (next.config.ts
