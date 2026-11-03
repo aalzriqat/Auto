@@ -15,6 +15,7 @@ import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { parseArgs } from "node:util";
 
 const codeUnitCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const normalise = file => file.replaceAll("\\", "/");
 
 /** @param {string} dir @param {string[]} out */
 function collect(dir, out) {
@@ -36,7 +37,7 @@ export function loadRecords(root) {
     try {
       records.push(JSON.parse(readFileSync(file, "utf8")));
     } catch {
-      problems.push(`UNREADABLE_RECORD ${path.relative(root, file).replaceAll("\\", "/")}`);
+      problems.push(`UNREADABLE_RECORD ${normalise(path.relative(root, file))}`);
     }
   }
   return { records, problems };
@@ -74,10 +75,10 @@ export function selectForPr(records, changedFiles = null) {
 
 /** Files changed between `base` and HEAD (three-dot: since the merge base). Throws when Git cannot say. */
 export function changedFilesSince(root, base) {
-  const out = execFileSync(resolveTrustedGitExecutable(), ["diff", "--name-only", "-z", `${base}...HEAD`], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  return out.split("\0").filter(Boolean).map(file => file.replaceAll("\\", "/"));
+  const out = execFileSync(resolveTrustedGitExecutable(), ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", `${base}...HEAD`], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  return out.split("\0").filter(Boolean).map(normalise);
 }
-const normalise = file => file.replaceAll("\\", "/");
+
 
 /**
  * One verdict per selected record from Vitest's JSON report (assertionResults are the executed tests).
@@ -109,17 +110,18 @@ export function evaluate(selected, report, root) {
 /** Counts only. Failing ids are listed because the records are already public in the repository. */
 export function summarise(selection, verdicts, extraIssues) {
   const counts = {};
-  for (const verdict of verdicts) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
-  if (selection.browserSelected.length) counts.BROWSER_REPLAY_NOT_EXECUTED = selection.browserSelected.length;
-  const failures = [...verdicts, ...selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }))].filter(verdict => verdict.code !== "PASS");
+  // A browser record this PR requires cannot be executed here, so it is a failed verdict, not a skip.
+  const all = [...verdicts, ...selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }))];
+  for (const verdict of all) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
+  const failures = all.filter(verdict => verdict.code !== "PASS");
   const issues = [...extraIssues];
-  if (verdicts.length === 0 && selection.browserSelected.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
+  if (all.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
   if (selection.cloud.length) issues.push(`CLOUD_RECORDS_HAVE_NO_RUNNER:${selection.cloud.length}`);
   if (selection.browserSelected.length) issues.push(`SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:${selection.browserSelected.length}`);
   if (selection.changedFilesUnavailable) issues.push("PR_DIFF_UNAVAILABLE");
   return {
     verdict: failures.length === 0 && issues.length === 0 ? "PASS" : "FAIL",
-    selected: verdicts.length + selection.browserSelected.length,
+    selected: all.length,
     passed: counts.PASS ?? 0,
     failed: failures.length,
     failureCodes: Object.fromEntries(Object.entries(counts).filter(([code]) => code !== "PASS")),
