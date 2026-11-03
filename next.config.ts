@@ -2,6 +2,17 @@ import type { NextConfig } from "next";
 import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
 
+// SCRUM-892: the trusted browser swarm talks to a self-hosted Convex backend
+// that runs inside the CI runner (http/ws on 127.0.0.1:3210), not to
+// *.convex.cloud. The browser enforces connect-src, so that exact origin must be
+// allowed or the app cannot reach its backend at all. It is added ONLY for the
+// swarm's standalone build (AUTOFLOW_SWARM_STANDALONE=1, set by no deploy):
+// the Vercel and production CSP below is byte-for-byte what it was.
+const swarmLocalConvexSources =
+  process.env.AUTOFLOW_SWARM_STANDALONE === "1"
+    ? " http://127.0.0.1:3210 ws://127.0.0.1:3210"
+    : "";
+
 const nextConfig: NextConfig = {
   // SCRUM-350 builds a self-contained runtime exactly once in the trusted
   // browser controller. Normal development/production builds keep their
@@ -39,8 +50,10 @@ const nextConfig: NextConfig = {
               "worker-src 'self' blob:",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
-              "img-src 'self' data: blob: https://*.convex.cloud https://img.clerk.com https://lh3.googleusercontent.com https://*.googleusercontent.com",
-              "connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://*.convex.site https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://clerk-telemetry.com https://vpic.nhtsa.dot.gov https://o4511556361715712.ingest.de.sentry.io https://cloudflareinsights.com https://vitals.vercel-insights.com",
+              "img-src 'self' data: blob: https://*.convex.cloud https://img.clerk.com https://lh3.googleusercontent.com https://*.googleusercontent.com" +
+                (swarmLocalConvexSources ? " http://127.0.0.1:3210" : ""),
+              "connect-src 'self' https://*.convex.cloud wss://*.convex.cloud https://*.convex.site https://*.clerk.accounts.dev https://clerk.autoflowdealer.com https://clerk-telemetry.com https://vpic.nhtsa.dot.gov https://o4511556361715712.ingest.de.sentry.io https://cloudflareinsights.com https://vitals.vercel-insights.com" +
+                swarmLocalConvexSources,
               "frame-src https://challenges.cloudflare.com",
               "frame-ancestors 'none'",
             ].join("; "),
