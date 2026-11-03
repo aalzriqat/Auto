@@ -24,10 +24,27 @@
  * The same reasoning covers the key: `--preview-create` is refused outright by
  * the CLI for a non-preview key, but `convex run` is not, so the key shape is
  * checked here before any argument is assembled.
+ *
+ * ## LOCAL MODE (SCRUM-892)
+ *
+ * When `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` are both
+ * set, the target is the throwaway Convex backend that
+ * scripts/localConvexBackend.mjs runs in a container on the runner. `convex
+ * run` then gets NEITHER `--preview-name` NOR a target flag: the CLI selects the
+ * self-hosted backend from those two variables in its own environment, so the
+ * admin key is never in argv (where `/proc/<pid>/cmdline` and process listings
+ * show it; PR #757 round 5).
+ * The preview-safety argument above does not apply (there is no shared dev
+ * deployment to fall through to), so the equivalent refusals are different and
+ * just as strict: the URL must be exactly the loopback backend, the key must
+ * have an admin key's shape, and a deploy key or `CONVEX_DEPLOYMENT` beside
+ * them is refused rather than guessed between. Setting only one of the two
+ * variables is refused too, never silently treated as preview mode.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { ADMIN_KEY_PATTERN, LOCAL_CONVEX_URL } from "./localConvexBackend.mjs";
 
 /** Marks refusals raised by this module, so the CLI entry can print them plainly. */
 export class PreviewTargetingError extends Error {
@@ -163,17 +180,96 @@ export function assertPreviewTargeting({ deployKey, previewName, env = {} }) {
 }
 
 /**
- * The argv for one preview-targeted `convex run`.
+ * ⚠️ FAIL CLOSED for the local backend (SCRUM-892). Every refusal is a case
+ * where the command would still have run, against something other than the
+ * disposable backend this job started.
  *
- * The target flag is appended by this function rather than by any caller, so
- * there is no code path that can build the command and forget it.
+ * @param {{ local: { url?: string, adminKey?: string },
+ *           env?: Record<string, string | undefined> }} target
  */
-export function buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env = {} }) {
-  assertPreviewTargeting({ deployKey, previewName, env });
+export function assertLocalTargeting({ local, env = {} }) {
+  if (env.CONVEX_DEPLOY_KEY && String(env.CONVEX_DEPLOY_KEY).trim()) {
+    throw new PreviewTargetingError(
+      "CONVEX_DEPLOY_KEY is set beside the local backend variables. The target is ambiguous, so nothing runs.",
+    );
+  }
+  if (env.CONVEX_DEPLOYMENT && String(env.CONVEX_DEPLOYMENT).trim()) {
+    throw new PreviewTargetingError(
+      "CONVEX_DEPLOYMENT is set beside the local backend variables. It names a dev or production deployment, " +
+        "so nothing runs.",
+    );
+  }
+  if (local?.url !== LOCAL_CONVEX_URL) {
+    throw new PreviewTargetingError(
+      `CONVEX_SELF_HOSTED_URL is not exactly ${LOCAL_CONVEX_URL}. Seeding only ever targets the loopback backend.`,
+    );
+  }
+  if (typeof local?.adminKey !== "string" || !ADMIN_KEY_PATTERN.test(local.adminKey)) {
+    throw new PreviewTargetingError("CONVEX_SELF_HOSTED_ADMIN_KEY does not have the shape of an admin key.");
+  }
+  return true;
+}
+
+/**
+ * Which backend this run seeds: the local one (both self-hosted variables) or a
+ * named preview (neither). Exactly one of the two variables is a refusal.
+ *
+ * In local mode `CONVEX_PREVIEW_NAME` is not consulted: `--preview-name` is
+ * never passed there.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {{ mode: "local", url: string, adminKey: string } |
+ *           { mode: "preview", deployKey: string | undefined, previewName: string | undefined }}
+ */
+export function resolveConvexTarget(env) {
+  const url = env.CONVEX_SELF_HOSTED_URL;
+  const adminKey = env.CONVEX_SELF_HOSTED_ADMIN_KEY;
+  const hasUrl = Boolean(url && String(url).trim());
+  const hasKey = Boolean(adminKey && String(adminKey).trim());
+
+  if (!hasUrl && !hasKey) {
+    const deployKey = env.CONVEX_DEPLOY_KEY;
+    const previewName = env.CONVEX_PREVIEW_NAME;
+    assertPreviewTargeting({ deployKey, previewName, env });
+    return { mode: "preview", deployKey, previewName };
+  }
+  if (hasUrl !== hasKey) {
+    throw new PreviewTargetingError(
+      "Only one of CONVEX_SELF_HOSTED_URL and CONVEX_SELF_HOSTED_ADMIN_KEY is set. Local mode needs both; " +
+        "refusing rather than falling back to preview mode.",
+    );
+  }
+  assertLocalTargeting({ local: { url, adminKey }, env });
+  return { mode: "local", url: /** @type {string} */ (url), adminKey: /** @type {string} */ (adminKey) };
+}
+
+/**
+ * The argv for one targeted `convex run`: a named preview, or (SCRUM-892) the
+ * local backend when `local` is supplied.
+ *
+ * The target flags are appended by this function rather than by any caller, so
+ * there is no code path that can build the command and forget them.
+ *
+ * @param {{ functionName?: string, argsJson?: string, previewName?: string,
+ *           deployKey?: string, env?: Record<string, string | undefined>,
+ *           local?: { url?: string, adminKey?: string } }} target
+ * @returns {string[]}
+ */
+export function buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env = {}, local }) {
+  if (local) {
+    assertLocalTargeting({ local, env });
+  } else {
+    assertPreviewTargeting({ deployKey, previewName, env });
+  }
   if (!functionName || !/^[\w/]+:\w+$/.test(functionName)) {
     throw new PreviewTargetingError(
       `Refusing to run ${JSON.stringify(functionName)}: expected a "module:function" reference.`,
     );
+  }
+  if (local) {
+    // The target travels in the child environment (CONVEX_SELF_HOSTED_*), which
+    // runConvex re-validates; never in argv.
+    return ["exec", "convex", "run", functionName, argsJson ?? "{}"];
   }
   return [
     "exec",
@@ -363,15 +459,17 @@ export function maskEmail(email) {
  * @param {(command: string, args: string[], options: object) =>
  *          { status: number | null, error?: Error | undefined }} [spawn]
  *        the seam the failure-path tests drive; only `status` and `error` are read
+ * @param {Record<string, string | undefined>} [env] the CLI child's environment; in local
+ *        mode it carries the target and is validated before the spawn
  */
-export function runConvex(args, label, spawn = spawnSync) {
+export function runConvex(args, label, spawn = spawnSync, env = process.env) {
   // ⚠️ RE-VALIDATED AT THE CALL SITE, not merely where the argv was built.
   // `buildConvexRunArgs` is the only intended producer and it validates every
   // element, but this is the line that actually executes a process, and a
   // second producer added later would inherit no guarantee from the first. An
-  // argument that is not a string, or that opens with `-` without being one of
-  // the two flags this command legitimately passes, is refused rather than
-  // handed to the CLI as an option.
+  // argument that is not a string, or that opens with `-` without being the one
+  // flag this command legitimately passes, is refused rather than handed to the
+  // CLI as an option.
   const ALLOWED_FLAGS = new Set(["--preview-name"]);
   for (const arg of args) {
     if (typeof arg !== "string") {
@@ -383,9 +481,13 @@ export function runConvex(args, label, spawn = spawnSync) {
       );
     }
   }
+  // SCRUM-892: with no `--preview-name` the CLI targets whatever its
+  // environment selects, so that environment is checked here, at the spawn.
+  const local = !args.includes("--preview-name");
+  if (local) assertLocalSpawnEnv(env, label);
 
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const result = spawn(pnpm, args, { stdio: "inherit" });
+  const result = spawn(pnpm, args, local ? { stdio: "inherit", env } : { stdio: "inherit" });
   if (result.error) {
     throw new Error(`Could not start the Convex CLI for ${label}: ${result.error.message}`);
   }
@@ -393,6 +495,25 @@ export function runConvex(args, label, spawn = spawnSync) {
     throw new Error(
       `${label} failed with exit code ${result.status}. The Convex CLI's own output is above.`,
     );
+  }
+}
+
+/**
+ * Local mode: the CLI child's environment must name exactly the loopback
+ * backend with an admin key, and carry no cloud credential.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @param {string} label
+ */
+function assertLocalSpawnEnv(env, label) {
+  try {
+    assertLocalTargeting({
+      local: { url: env.CONVEX_SELF_HOSTED_URL, adminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY },
+      env,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "the local target is invalid";
+    throw new PreviewTargetingError(`Refusing to run ${label}: ${reason}`);
   }
 }
 
@@ -425,6 +546,7 @@ export function runConvex(args, label, spawn = spawnSync) {
  *   onResolved?: (context: {
  *     deployKey: string | undefined,
  *     previewName: string | undefined,
+ *     local: { url: string, adminKey: string } | undefined,
  *     primaryEmail: string,
  *     approverEmail: string,
  *     primaryClerkUserId: string,
@@ -434,9 +556,9 @@ export function runConvex(args, label, spawn = spawnSync) {
  * }} options
  */
 async function resolveE2EPreviewContext(env, options) {
-  const deployKey = env.CONVEX_DEPLOY_KEY;
-  const previewName = env.CONVEX_PREVIEW_NAME;
-  assertPreviewTargeting({ deployKey, previewName, env });
+  const target = resolveConvexTarget(env);
+  const deployKey = target.mode === "preview" ? target.deployKey : undefined;
+  const previewName = target.mode === "preview" ? target.previewName : undefined;
 
   const primaryEmail = env.E2E_LOGIN_USER;
   const approverEmail = env.E2E_APPROVER_USER;
@@ -458,9 +580,17 @@ async function resolveE2EPreviewContext(env, options) {
   // so the accounting rehearsal preview must stay unseeded.
   const seedLegacyManualJournalDraft = env.E2E_SEED_LEGACY_MANUAL_JOURNAL === "1";
 
+  // The browser must drive the same loopback backend the seed lands on.
+  if (target.mode === "local" && expectedCloudUrl && expectedCloudUrl !== LOCAL_CONVEX_URL) {
+    throw new PreviewTargetingError(
+      `NEXT_PUBLIC_CONVEX_URL is not exactly ${LOCAL_CONVEX_URL}, so the browser would drive a different backend than the one seeded.`,
+    );
+  }
+
   const resolved = {
     deployKey,
     previewName,
+    local: target.mode === "local" ? { url: target.url, adminKey: target.adminKey } : undefined,
     primaryEmail,
     approverEmail,
     primaryClerkUserId,
@@ -506,6 +636,7 @@ export async function assertExistingE2EPreview(
   const {
     deployKey,
     previewName,
+    local,
     primaryClerkUserId,
     approverClerkUserId,
     expectedCloudUrl,
@@ -527,6 +658,7 @@ export async function assertExistingE2EPreview(
       }),
       previewName,
       deployKey,
+      local,
       env,
     }),
     "e2eBootstrap:assertE2EBootstrap",
@@ -563,14 +695,16 @@ export async function main(
       "will drive. Run this after the deploy step that captures it.",
     onResolved: ({
       previewName,
+      local,
       expectedCloudUrl,
       primaryEmail,
       approverEmail,
       primaryClerkUserId,
       approverClerkUserId,
     }) => {
+      const where = local ? "the local Convex backend" : `preview "${safeForLog(previewName)}"`;
       log(
-        `Seeding preview "${safeForLog(previewName)}" at ${safeForLog(expectedCloudUrl)}: ` +
+        `Seeding ${where} at ${safeForLog(expectedCloudUrl)}: ` +
           `${safeForLog(maskEmail(primaryEmail))} -> ${safeForLog(primaryClerkUserId)}, ` +
           `${safeForLog(maskEmail(approverEmail))} -> ${safeForLog(approverClerkUserId)}`,
       );
@@ -580,6 +714,7 @@ export async function main(
   const {
     deployKey,
     previewName,
+    local,
     primaryEmail,
     approverEmail,
     primaryClerkUserId,
@@ -607,6 +742,7 @@ export async function main(
       }),
       previewName,
       deployKey,
+      local,
       env,
     }),
     "e2eBootstrap:bootstrapE2EOrganization",
@@ -622,6 +758,7 @@ export async function main(
       }),
       previewName,
       deployKey,
+      local,
       env,
     }),
     "e2eBootstrap:assertE2EBootstrap",
@@ -655,7 +792,7 @@ export async function assertHuntPreview(primaryRole, approverRole, env = process
     throw new PreviewTargetingError("Unknown expected hunt role.");
   }
   const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
-  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+  const { deployKey, previewName, local, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
     await resolveE2EPreviewContext(env, {
       resolveId,
       identityError: "Both Clerk seats are required for hunt attestation.",
@@ -664,7 +801,7 @@ export async function assertHuntPreview(primaryRole, approverRole, env = process
   run(buildConvexRunArgs({
     functionName: "e2eBootstrap:assertHuntSeats",
     argsJson: JSON.stringify({ primaryClerkUserId, approverClerkUserId, primaryRole, approverRole, expectedCloudUrl }),
-    previewName, deployKey, env,
+    previewName, deployKey, local, env,
   }), "e2eBootstrap:assertHuntSeats");
 }
 
@@ -679,7 +816,7 @@ export async function isolateHuntApprover(env = process.env, deps = {}) {
     throw new PreviewTargetingError("The isolation fixture requires an explicit expected hunt role.");
   }
   const { run = runConvex, resolveClerkUserId: resolveId = resolveClerkUserId } = deps;
-  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+  const { deployKey, previewName, local, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
     await resolveE2EPreviewContext(env, {
       resolveId, identityError: "Both seeded Clerk seats are required for isolation.",
       missingUrlError: "The isolation fixture requires the explicit preview URL.",
@@ -687,7 +824,7 @@ export async function isolateHuntApprover(env = process.env, deps = {}) {
   run(buildConvexRunArgs({
     functionName: "e2eBootstrap:isolateHuntApprover",
     argsJson: JSON.stringify({ primaryClerkUserId, approverClerkUserId, expectedApproverRole, expectedCloudUrl }),
-    previewName, deployKey, env,
+    previewName, deployKey, local, env,
   }), "e2eBootstrap:isolateHuntApprover");
 }
 
@@ -721,7 +858,7 @@ export async function setHuntSeatRole(
     throw new PreviewTargetingError(`Unknown hunt role. Allowed: ${HUNT_SEAT_ROLES.join(", ")}.`);
   }
 
-  const { deployKey, previewName, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
+  const { deployKey, previewName, local, primaryClerkUserId, approverClerkUserId, expectedCloudUrl } =
     await resolveE2EPreviewContext(env, {
       resolveId,
       identityError: "E2E_LOGIN_USER and E2E_APPROVER_USER must both be set before a hunt seat can be re-roled.",
@@ -729,7 +866,8 @@ export async function setHuntSeatRole(
         "NEXT_PUBLIC_CONVEX_URL is not set, so the hunt preview being re-roled cannot be checked against the one the browser drives.",
     });
 
-  log(`Re-roling hunt seat ${seat} on preview "${safeForLog(previewName)}" to ${role}.`);
+  const target = local ? "the local Convex backend" : `preview "${safeForLog(previewName)}"`;
+  log(`Re-roling hunt seat ${seat} on ${target} to ${role}.`);
   run(
     buildConvexRunArgs({
       functionName: "e2eBootstrap:setHuntSeatRole",
@@ -741,6 +879,7 @@ export async function setHuntSeatRole(
       }),
       previewName,
       deployKey,
+      local,
       env,
     }),
     "e2eBootstrap:setHuntSeatRole",

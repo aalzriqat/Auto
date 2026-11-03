@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { previewNameForRef } from "../e2ePreviewBootstrap.mjs";
 import { validateE2EPreviewDescriptor } from "./e2ePreviewDescriptor.mjs";
-import { validateConvexPreviewAuthority } from "./convexPreviewAuthority.mjs";
+import { validateLocalConvexAuthority } from "./localConvexAuthority.mjs";
 import { validateTrustedBrowserJevArtifact } from "./trustedBrowserJevSuggestions.mjs";
 import {
   assertBrowserSwarmMissionsExecutable,
@@ -112,7 +112,7 @@ export function assembleTrustedBrowserSwarmRun(input) {
     expectedPrNumber: prNumber,
     expectedPreviewName,
   });
-  const convexAuthority = validateConvexPreviewAuthority(
+  const convexAuthority = validateLocalConvexAuthority(
     input.authorityArtifact,
     expectedPreviewName,
   );

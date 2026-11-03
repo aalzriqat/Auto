@@ -14,7 +14,9 @@ import {
   PreviewTargetingError,
   assertExistingE2EPreview,
   assertHuntPreview,
+  assertLocalTargeting,
   isolateHuntApprover,
+  resolveConvexTarget,
   assertPreviewTargeting,
   buildConvexRunArgs,
   isPreviewDeployKey,
@@ -406,7 +408,9 @@ describe("runConvex — failure reporting", () => {
 
   test("returns quietly on success", () => {
     const spawn = vi.fn(() => ({ status: 0, error: undefined }));
-    expect(() => runConvex(["exec"], "label", spawn)).not.toThrow();
+    // No `--preview-name`, so local mode: the child env must name the loopback backend.
+    const env = { CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3210", CONVEX_SELF_HOSTED_ADMIN_KEY: `autoflow-ci|${"c3".repeat(24)}` };
+    expect(() => runConvex(["exec"], "label", spawn, env)).not.toThrow();
   });
 });
 
@@ -869,5 +873,256 @@ describe("setHuntSeatRole (SCRUM-768)", () => {
 
   test("mirrors the backend's hunt role list exactly", () => {
     expect(HUNT_SEAT_ROLES).toEqual(DEFAULT_ROLE_TEMPLATES.map((r) => r.name));
+  });
+});
+
+/**
+ * SCRUM-892 — LOCAL mode. The seed runs against the throwaway Convex backend a
+ * job starts on its own runner. Every refusal below is a case where
+ * `convex run` would still have succeeded, against something that is not that
+ * backend.
+ */
+describe("local mode (SCRUM-892)", () => {
+  const LOCAL_URL = "http://127.0.0.1:3210";
+  // Assembled, not written out, for the same gitleaks reason as TOKEN above.
+  const LOCAL_ADMIN_KEY = `autoflow-ci|${"b2".repeat(24)}`;
+  const LOCAL_ENV = {
+    CONVEX_SELF_HOSTED_URL: LOCAL_URL,
+    CONVEX_SELF_HOSTED_ADMIN_KEY: LOCAL_ADMIN_KEY,
+    NEXT_PUBLIC_CONVEX_URL: LOCAL_URL,
+    CLERK_SECRET_KEY: "sk_test_x",
+    E2E_LOGIN_USER: "primary-secret@example.com",
+    E2E_APPROVER_USER: "approver-secret@example.com",
+  };
+
+  function deps() {
+    const calls: { fn: string; args: string[] }[] = [];
+    return {
+      calls,
+      run: vi.fn((args: string[], label: string) => {
+        calls.push({ fn: label, args });
+      }),
+      resolveClerkUserId: vi.fn(async ({ email }: { email: string }) =>
+        email.startsWith("primary") ? "user_primary" : "user_approver",
+      ),
+      log: vi.fn(),
+    };
+  }
+
+  describe("resolveConvexTarget", () => {
+    test("selects local mode only when both variables are set", () => {
+      expect(resolveConvexTarget(LOCAL_ENV)).toEqual({ mode: "local", url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY });
+    });
+
+    test("selects preview mode, unchanged, when neither is set", () => {
+      const target = resolveConvexTarget({ CONVEX_DEPLOY_KEY: PREVIEW_KEY, CONVEX_PREVIEW_NAME: "e2e-pr-1-0123456789" });
+      expect(target).toEqual({ mode: "preview", deployKey: PREVIEW_KEY, previewName: "e2e-pr-1-0123456789" });
+      expect(() => resolveConvexTarget({ CONVEX_DEPLOY_KEY: PROD_KEY, CONVEX_PREVIEW_NAME: "e2e-x" })).toThrow(
+        /not a PREVIEW deploy key/,
+      );
+    });
+
+    test.each([
+      ["only the URL", { CONVEX_SELF_HOSTED_URL: LOCAL_URL }],
+      ["only the admin key", { CONVEX_SELF_HOSTED_ADMIN_KEY: LOCAL_ADMIN_KEY }],
+    ])("refuses %s rather than falling back to preview mode", (_label, partial) => {
+      expect(() => resolveConvexTarget({ ...partial, CONVEX_DEPLOY_KEY: PREVIEW_KEY, CONVEX_PREVIEW_NAME: "e2e-x" })).toThrow(
+        /Only one of/,
+      );
+    });
+
+    test.each([
+      ["a preview deploy key", { CONVEX_DEPLOY_KEY: PREVIEW_KEY }, /CONVEX_DEPLOY_KEY is set/],
+      ["a production deploy key", { CONVEX_DEPLOY_KEY: PROD_KEY }, /CONVEX_DEPLOY_KEY is set/],
+      ["CONVEX_DEPLOYMENT", { CONVEX_DEPLOYMENT: "dev:vibrant-cat-418" }, /CONVEX_DEPLOYMENT is set/],
+    ])("refuses beside %s", (_label, extra, message) => {
+      expect(() => resolveConvexTarget({ ...LOCAL_ENV, ...extra })).toThrow(message);
+    });
+
+    test.each([
+      "http://127.0.0.1:3210/",
+      "http://localhost:3210",
+      "http://127.0.0.1:3211",
+      "https://clever-mockingbird-719.convex.cloud",
+      "http://0.0.0.0:3210",
+    ])("refuses the URL %s: exactly the loopback backend, nothing else", (url) => {
+      expect(() => resolveConvexTarget({ ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: url })).toThrow(/exactly/);
+    });
+
+    test("refuses a value that does not have an admin key's shape", () => {
+      expect(() => resolveConvexTarget({ ...LOCAL_ENV, CONVEX_SELF_HOSTED_ADMIN_KEY: "not a key" })).toThrow(/shape/);
+    });
+
+    test("ignores CONVEX_PREVIEW_NAME: --preview-name is never passed in local mode", () => {
+      const target = resolveConvexTarget({ ...LOCAL_ENV, CONVEX_PREVIEW_NAME: "e2e-leftover" });
+      expect(target.mode).toBe("local");
+    });
+  });
+
+  describe("buildConvexRunArgs", () => {
+    test("puts no target flag in argv: the admin key never reaches a command line", () => {
+      const args = buildConvexRunArgs({
+        functionName: "e2eBootstrap:assertE2EBootstrap",
+        argsJson: "{}",
+        local: { url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY },
+        env: {},
+      });
+      expect(args).toEqual(["exec", "convex", "run", "e2eBootstrap:assertE2EBootstrap", "{}"]);
+      expect(args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
+      expect(args).not.toContain("--preview-name");
+    });
+    test("refuses an unsafe local target before building anything", () => {
+      const build = (local: { url?: string; adminKey?: string }, env = {}) =>
+        buildConvexRunArgs({ functionName: "m:f", local, env });
+      expect(() => build({ url: "https://x.convex.cloud", adminKey: LOCAL_ADMIN_KEY })).toThrow(/exactly/);
+      expect(() => build({ url: LOCAL_URL, adminKey: "nope" })).toThrow(/shape/);
+      expect(() => build({ url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY }, { CONVEX_DEPLOY_KEY: PREVIEW_KEY })).toThrow(
+        /CONVEX_DEPLOY_KEY/,
+      );
+      expect(() => assertLocalTargeting({ local: {}, env: {} })).toThrow(/exactly/);
+    });
+
+    test("still validates the function reference in local mode", () => {
+      expect(() =>
+        buildConvexRunArgs({ functionName: "--prod", local: { url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY } }),
+      ).toThrow(/module:function/);
+    });
+  });
+
+  describe("runConvex re-validation of the local target", () => {
+    const ok = () => ({ status: 0, error: undefined });
+    const localArgs = ["exec", "convex", "run", "m:f", "{}"];
+
+    test("accepts exactly what buildConvexRunArgs builds and hands the target over in the child env", () => {
+      const spawn = vi.fn(ok);
+      const args = buildConvexRunArgs({ functionName: "m:f", local: { url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY } });
+      expect(() => runConvex(args, "m:f", spawn, LOCAL_ENV)).not.toThrow();
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const [, spawnedArgs, options] = spawn.mock.calls[0] as unknown as [string, string[], { env?: Record<string, string> }];
+      expect(spawnedArgs).not.toContain(LOCAL_ADMIN_KEY);
+      expect(options.env?.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_URL);
+      expect(options.env?.CONVEX_SELF_HOSTED_ADMIN_KEY).toBe(LOCAL_ADMIN_KEY);
+    });
+
+    test.each([
+      ["a cloud URL", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: "https://x.convex.cloud" }],
+      ["no URL", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: undefined }],
+      ["no key", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_ADMIN_KEY: undefined }],
+      ["a malformed key", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_ADMIN_KEY: "x" }],
+      ["a deploy key beside the local pair", { ...LOCAL_ENV, CONVEX_DEPLOY_KEY: PREVIEW_KEY }],
+      ["CONVEX_DEPLOYMENT beside the local pair", { ...LOCAL_ENV, CONVEX_DEPLOYMENT: "prod:clever-mockingbird-719" }],
+    ])("refuses %s in the child env before starting a process", (_label, env) => {
+      const spawn = vi.fn(ok);
+      expect(() => runConvex(localArgs, "m:f", spawn, env)).toThrow(PreviewTargetingError);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["--url", [...localArgs, "--url", LOCAL_URL]],
+      ["--admin-key", [...localArgs, "--admin-key", LOCAL_ADMIN_KEY]],
+    ])("refuses %s in argv: it is no longer a flag this command passes", (_label, args) => {
+      const spawn = vi.fn(ok);
+      expect(() => runConvex(args, "m:f", spawn, LOCAL_ENV)).toThrow(/unexpected option-shaped argument/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    test("a refusal or a failure never reproduces the admin key", () => {
+      const messages: string[] = [];
+      for (const [spawn, env] of [
+        [vi.fn(() => ({ status: 1, error: undefined })), LOCAL_ENV],
+        [vi.fn(ok), { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: "https://x.convex.cloud" }],
+      ] as const) {
+        try {
+          runConvex(localArgs, "m:f", spawn, env);
+        } catch (error) {
+          messages.push(String(error));
+        }
+      }
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatch(/exit code 1/);
+      for (const message of messages) expect(message).not.toContain(LOCAL_ADMIN_KEY);
+    });
+  });
+  describe("the flows", () => {
+    test("main seeds then verifies, both with the local target and no preview name", async () => {
+      const d = deps();
+      await main(LOCAL_ENV, d);
+      expect(d.calls.map((c) => c.fn)).toEqual([
+        "e2eBootstrap:bootstrapE2EOrganization",
+        "e2eBootstrap:assertE2EBootstrap",
+      ]);
+      for (const call of d.calls) {
+        expect(call.args).toHaveLength(5);
+        expect(call.args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
+        expect(call.args).not.toContain("--preview-name");
+        expect(JSON.parse(call.args[4]!).expectedCloudUrl).toBe(LOCAL_URL);
+      }
+      const progress = String(d.log.mock.calls[0]![0]);
+      expect(progress).toContain("the local Convex backend");
+      expect(progress).not.toContain(LOCAL_ADMIN_KEY);
+      expect(progress).not.toContain("primary-secret@example.com");
+    });
+
+    test("main refuses when the browser URL is not the local backend", async () => {
+      const d = deps();
+      await expect(
+        main({ ...LOCAL_ENV, NEXT_PUBLIC_CONVEX_URL: "https://impressive-ox-948.convex.cloud" }, d),
+      ).rejects.toThrow(/browser would drive a different backend/);
+      expect(d.run).not.toHaveBeenCalled();
+    });
+
+    test("main refuses a missing browser URL in local mode too", async () => {
+      const d = deps();
+      await expect(main({ ...LOCAL_ENV, NEXT_PUBLIC_CONVEX_URL: "" }, d)).rejects.toThrow(/cannot be checked/);
+      expect(d.run).not.toHaveBeenCalled();
+    });
+
+    test("every other entry point takes the local target", async () => {
+      const d = deps();
+      await assertExistingE2EPreview(LOCAL_ENV, d);
+      await assertHuntPreview("SALES", "MANAGER", LOCAL_ENV, d);
+      await isolateHuntApprover({ ...LOCAL_ENV, HUNT_AUDIT_ROLE: "SALES" }, d);
+      await setHuntSeatRole("approver", "MANAGER", LOCAL_ENV, d);
+      expect(d.calls.map((c) => c.fn)).toEqual([
+        "e2eBootstrap:assertE2EBootstrap",
+        "e2eBootstrap:assertHuntSeats",
+        "e2eBootstrap:isolateHuntApprover",
+        "e2eBootstrap:setHuntSeatRole",
+      ]);
+      for (const call of d.calls) {
+        expect(call.args.slice(0, 3)).toEqual(["exec", "convex", "run"]);
+        expect(call.args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
+        expect(call.args).not.toContain("--preview-name");
+      }
+    });
+
+    test("a deploy key beside the local pair stops every flow before Clerk is contacted", async () => {
+      const d = deps();
+      const env = { ...LOCAL_ENV, CONVEX_DEPLOY_KEY: PREVIEW_KEY };
+      await expect(main(env, d)).rejects.toThrow(/CONVEX_DEPLOY_KEY is set/);
+      await expect(assertExistingE2EPreview(env, d)).rejects.toThrow(/CONVEX_DEPLOY_KEY is set/);
+      expect(d.resolveClerkUserId).not.toHaveBeenCalled();
+      expect(d.run).not.toHaveBeenCalled();
+    });
+
+    test("preview mode is untouched: the preview flag is still appended and the local flags never are", async () => {
+      const d = deps();
+      await main(
+        {
+          CONVEX_DEPLOY_KEY: PREVIEW_KEY,
+          CONVEX_PREVIEW_NAME: "e2e-pr-278-0123456789",
+          NEXT_PUBLIC_CONVEX_URL: "https://impressive-ox-948.convex.cloud",
+          CLERK_SECRET_KEY: "sk_test_x",
+          E2E_LOGIN_USER: "primary-secret@example.com",
+          E2E_APPROVER_USER: "approver-secret@example.com",
+        },
+        d,
+      );
+      for (const call of d.calls) {
+        expect(call.args.slice(-2)).toEqual(["--preview-name", "e2e-pr-278-0123456789"]);
+        expect(call.args).not.toContain("--url");
+        expect(call.args).not.toContain("--admin-key");
+      }
+    });
   });
 });

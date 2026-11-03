@@ -68,6 +68,17 @@ export async function withLocalePage<T>(
   }
 }
 
+/**
+ * The Accounting traversal's section panel, as an XPath (no `xpath=` prefix) so a
+ * unit test can evaluate the same expression against the rendered shell.
+ *
+ * Radix Tabs 1.1.x renders every TabsContent element and marks the inactive ones
+ * `hidden` / `data-state="inactive"` (Presence force-mounts function children), so
+ * the section's panel is the ACTIVE tabpanel that is not nested in another one.
+ */
+export const PILOT_ACCOUNTING_SECTION_PANEL_XPATH =
+  '//main//*[@role="tabpanel"][@data-state="active"][not(ancestor::*[@role="tabpanel"])]';
+
 /** Tag that routes the G8 role-audit journeys to their own Playwright project. */
 export const PILOT_G8_ROLE_TAG = "@pilot-g8";
 export const PILOT_G8_ROLE_PROJECT = "pilot-g8-role-hunt";

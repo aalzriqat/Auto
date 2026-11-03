@@ -67,7 +67,7 @@ Two gates now exist and must not be confused:
   full receipt, refund and correction lifecycle is **not** required to launch.
   The gate passes only when the narrow scope is independently verified (the
   three bug hunters, the scenario library run against a real backend under
-  SCRUM-762, and the trusted cloud rehearsal). The verifier is two independent
+  SCRUM-762, and the trusted exact-SHA rehearsal). The verifier is two independent
   agent seats (Codex and Opus), never the implementing session; there is no
   second person and no human review is claimed. The evidence required is:
   - every enabled workflow preserves the accounting invariants;
@@ -100,27 +100,49 @@ is necessary but not sufficient for the pilot: independent verification,
 server-side block evidence and the exact-SHA rehearsal are still required, and
 it never satisfies full-lifecycle certification.
 
-### Exact-SHA cloud rehearsal before a release
+### Exact-SHA rehearsal before a release
 
 `Accounting Cloud Rehearsal` validates case definitions. The release operator
 also dispatches the typed `autoflow-release-accounting-rehearsal` repository
 event with `client_payload.commit_sha` equal to main's full current SHA. GitHub
-loads `Trusted Accounting Cloud Rehearsal` from the default branch; that
+loads `Trusted Accounting Cloud Rehearsal` from the default branch. That
 controller refuses if the requested SHA, live main, workflow SHA and event SHA
-differ. It creates a disposable Convex preview with `--preview-create`, stages
-the backend at that SHA as data, runs the public API cases and deletes the
-preview. The result is the producer-bound
+differ.
+
+Since owner ruling SCRUM-892 c24441, the release rehearsal runs on the same
+runner-local backend as the pull-request rehearsal, and no Convex preview is
+created. The job starts a disposable self-hosted Convex container
+(`scripts/localConvexBackend.mjs start`), sets its environment allowlist,
+stages the backend at that SHA as data, and deploys it with the trusted CLI.
+`mark` then records the tripwire baseline. The job runs the public API cases,
+and `verify` fails the job unless the backend still matches that baseline. The
+evidence check requires `deploymentType: "local"` and the URL
+`http://127.0.0.1:3210`. An `always()` step removes the container.
+
+The result is the producer-bound
 `github-actions/trusted-accounting-release-verdict` check at that exact SHA.
 The release gate requires it in addition to the definition check. Missing,
-zero-case, skipped, failed, mismatched-preview, wrong-SHA, or duplicate
-same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
-cleanup step; a green unit harness or PR rehearsal does not replace them.
+zero-case, skipped, failed, wrong-target, wrong-SHA, or duplicate same-SHA
+attempts refuse the release. Inspect the run's uploaded evidence and its
+`verify` step. A green unit harness or PR rehearsal does not replace them.
 An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
-The cloud gate passed at the 2026-10-21 releases (SCRUM-759's FD1 failure no
-longer blocks it): Accounting Cloud Rehearsal run 39628786851 and trusted
-verdict run 39628833593 at a6086d11, released by Deploy production runs
-39608097817 (3a31e4b8) and 39634067343 (a6086d11). Any red result is a blocker.
+
+⚠️ **Accepted residual gap (owner ruling SCRUM-892 option A, c24422, extended to
+the release by c24441).** Once deployed, candidate `"use node"` actions can mint
+an admin key for the local backend and change it. The `mark`/`verify` tripwire
+detects a change to the items it records (`TRIPWIRE.verified` in
+`scripts/localConvexBackend.mjs`). It prevents nothing, and it cannot see a
+change made inside the container below the admin API. A cloud preview did not
+have this gap. A local rehearsal also does not exercise Convex cloud behaviour,
+such as its limits and its scheduling under real load.
+
+The cloud form of this gate last passed at the 2026-10-21 releases:
+Accounting Cloud Rehearsal run 39628786851 and trusted verdict run 39628833593
+at a6086d11, released by Deploy production runs 39608097817 (3a31e4b8) and
+39634067343 (a6086d11). The local form has not yet run in CI: the workflow is
+loaded from the default branch, so its first run is the first release after
+this change merges. Any red result is a blocker.
 
 ### Release order at the tip (learned 2026-10-21)
 
@@ -135,8 +157,10 @@ more than one result shares the same producer and name. So, in this order:
    duplicate result. To retry a failed run, use Re-run on the push run.
 2. Wait for `Trusted Main E2E` to be green at the exact tip.
 3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
-   repository event for the full tip SHA, and confirm both are green (a red
-   rehearsal refuses the release; see above).
+   repository event for the full tip SHA, and confirm both are green. The
+   repository event runs the rehearsal on a runner-local Convex backend, not a
+   cloud preview, so it uses no Convex quota. A red rehearsal, or a red `verify`
+   step, refuses the release (see above).
 4. Wait for SonarCloud to report on the tip. `Sonar Main` does not run on the push
    itself: it starts when the `Tests` run for that push completes, reuses the
    coverage that `Tests` produced (it runs no tests of its own), then scans. It
@@ -485,8 +509,8 @@ The gate is evaluated twice — in `authorize`, and again after approval — so 
 flake in either window refuses the release. That is fail-closed and correct. It
 does mean a release can need a CI re-run for reasons that have nothing to do with
 the release, and the right response is to re-run the job and read the result, not
-to loosen the required list. `unit-and-integration` is an aggregator over four
-`unit-and-integration slice N/4` jobs (SCRUM-359): after a flaky slice use
+to loosen the required list. `unit-and-integration` is an aggregator over eight
+`unit-and-integration slice N/8` jobs (SCRUM-359): after a flaky slice use
 "Re-run failed jobs", because re-running only the aggregator repeats the
 slice's failure. Slice coverage blobs are kept for one day, so after 24 hours
 use "Re-run all jobs".

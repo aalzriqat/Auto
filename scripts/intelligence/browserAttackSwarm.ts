@@ -647,6 +647,10 @@ function assertSwarmPreviewIdentity(
       "Browser swarm previewName must be an explicit e2e-* disposable preview identifier",
     );
   }
+  // SCRUM-892: the swarm's backend is the runner-local self-hosted Convex. This
+  // literal is pinned equal to SWARM_LOCAL_CONVEX_ORIGIN (swarmConvexOrigin.mjs)
+  // by a test; it is inlined because Playwright loads this module as CommonJS.
+  if (expectedCloudUrl === "http://127.0.0.1:3210") return;
   let parsed: URL;
   try {
     parsed = new URL(expectedCloudUrl);
@@ -664,7 +668,7 @@ function assertSwarmPreviewIdentity(
     parsed.pathname !== "/"
   ) {
     throw new Error(
-      "Browser swarm expectedCloudUrl must be a bare HTTPS deployment origin on convex.cloud",
+      "Browser swarm expectedCloudUrl must be a bare HTTPS deployment origin on convex.cloud or the exact local Convex origin",
     );
   }
 }
