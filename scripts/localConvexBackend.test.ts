@@ -9,6 +9,8 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   ADMIN_KEY_PATTERN,
+  COMPONENTS_QUERY,
+  COMPONENT_MODULES_QUERY,
   CONTAINER_ENV_VAR,
   ENV_ALLOWLIST,
   FINGERPRINT_ENV_VAR,
@@ -79,11 +81,7 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
       if (args.includes("list")) return ok(`${PLAN_LINES.join("\n")}\n`);
       return ok();
     }),
-    fetchImpl: vi.fn(async (url: RequestInfo | URL) =>
-      String(url).endsWith("/api/get_config_hashes")
-        ? ({ ok: true, status: 200, json: async () => configHashes() } as unknown as Response)
-        : ({ ok: true } as Response),
-    ),
+    fetchImpl: vi.fn(answering(deployedState())),
     sleep: vi.fn(async (ms: number) => {
       clock += ms;
     }),
@@ -101,7 +99,11 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
   return { deps, calls, logs, appended };
 }
 
-/** What `/api/get_config_hashes` answers for a deployed backend; `hash` varies the code. */
+/**
+ * What `/api/get_config_hashes` answers at the pinned backend: exactly
+ * `config`, `moduleHashes`, `udfServerVersion` and `nodeVersion`
+ * (crates/local_backend/src/deploy_config.rs:76-81). `hash` varies the code.
+ */
 function configHashes(hash = "h1") {
   return {
     config: { functions: "convex/", authInfo: [] },
@@ -109,8 +111,47 @@ function configHashes(hash = "h1") {
       { path: "b.js", hash: "hb", environment: "isolate" },
       { path: "a.js", hash, environment: "node" },
     ],
-    nodeDependencies: [],
     udfServerVersion: "1.42.1",
+    nodeVersion: "22",
+  };
+}
+
+/**
+ * The three admin reads the fingerprint covers, shaped as the pinned system
+ * queries return them: `_system/frontend/components:list` and
+ * `_system/frontend/modules:listForAllComponents`. `componentPackage` is the
+ * source package of the mounted component's module, which the backend renews
+ * whenever that module's contents change.
+ */
+function deployedState({ rootHash = "h1", componentPackage = "pkg-c1" } = {}) {
+  return {
+    configHashes: configHashes(rootHash),
+    components: [
+      { id: "root", name: null, path: "", args: {}, state: "active", httpPrefix: null },
+      { id: "cmp-rl", name: "rateLimiter", path: "rateLimiter", args: {}, state: "active", httpPrefix: null },
+    ],
+    componentModules: [
+      [null, [["a.js", { functions: [{ name: "f", udfType: "Query", visibility: { kind: "public" } }], sourcePackageId: "pkg-r1" }]]],
+      ["cmp-rl", [["lib.js", { functions: [{ name: "limit", udfType: "Mutation", visibility: { kind: "public" } }], sourcePackageId: componentPackage }]]],
+    ],
+  };
+}
+type DeployedState = ReturnType<typeof deployedState>;
+
+/** A fetch fake that answers the health probe and the three admin reads from `state`. */
+function answering(state: DeployedState) {
+  return async (url: RequestInfo | URL, init?: RequestInit) => {
+    const href = String(url);
+    if (href.endsWith("/api/get_config_hashes")) {
+      return { ok: true, status: 200, json: async () => state.configHashes } as unknown as Response;
+    }
+    if (href.endsWith("/api/query")) {
+      const { path } = JSON.parse(String(init?.body)) as { path: string };
+      const value = path === COMPONENTS_QUERY ? state.components : path === COMPONENT_MODULES_QUERY ? state.componentModules : undefined;
+      const body = value === undefined ? { status: "error", errorMessage: "no such function" } : { status: "success", value };
+      return { ok: true, status: 200, json: async () => body } as unknown as Response;
+    }
+    return { ok: true } as Response;
   };
 }
 
@@ -564,24 +605,64 @@ describe("assertEnvMatchesPlan (round 5: values, not only names)", () => {
 });
 
 describe("codeFingerprint", () => {
-  test("is independent of key order and module order, and changes with any module hash", () => {
-    const base = configHashes();
-    const reordered = { ...base, moduleHashes: [...base.moduleHashes].reverse() };
+  const withRoot = (configHashes: Record<string, unknown>) => ({ ...deployedState(), configHashes });
+
+  test("is independent of key order and module order, and changes with any root module hash", () => {
+    const base = deployedState();
+    const reordered = {
+      ...base,
+      configHashes: { ...base.configHashes, moduleHashes: [...base.configHashes.moduleHashes].reverse() },
+      components: [...base.components].reverse(),
+      componentModules: [...base.componentModules].reverse(),
+    };
     expect(codeFingerprint(reordered)).toBe(codeFingerprint(base));
-    expect(codeFingerprint(configHashes("h2"))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(deployedState({ rootHash: "h2" }))).not.toBe(codeFingerprint(base));
     expect(codeFingerprint(base)).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  test("changes with the config or the node dependencies", () => {
-    const base = configHashes();
-    expect(codeFingerprint({ ...base, config: { functions: "other/" } })).not.toBe(codeFingerprint(base));
-    expect(codeFingerprint({ ...base, nodeDependencies: [{ name: "x", version: "1" }] })).not.toBe(codeFingerprint(base));
+  test("changes with the config, the Node version or the UDF server version", () => {
+    const base = deployedState();
+    expect(codeFingerprint(withRoot({ ...base.configHashes, config: { functions: "other/" } }))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(withRoot({ ...base.configHashes, nodeVersion: "20" }))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(withRoot({ ...base.configHashes, udfServerVersion: "1.0.0" }))).not.toBe(codeFingerprint(base));
+  });
+
+  test("does not read a nodeDependencies field: the pinned endpoint never sends one", () => {
+    const base = deployedState();
+    const invented = withRoot({ ...base.configHashes, nodeDependencies: [{ name: "x", version: "1" }] });
+    expect(codeFingerprint(invented)).toBe(codeFingerprint(base));
+  });
+
+  test("changes when a mounted component's module is redeployed, though the root is untouched", () => {
+    const base = deployedState();
+    expect(codeFingerprint(deployedState({ componentPackage: "pkg-c2" }))).not.toBe(codeFingerprint(base));
+    const [root, component] = base.componentModules as [unknown, [string, [string, Record<string, unknown>][]]];
+    const [, [[path, module]]] = component;
+    const otherFunctions = [root, [component[0], [[path, { ...module, functions: [] }]]]];
+    expect(codeFingerprint({ ...base, componentModules: otherFunctions })).not.toBe(codeFingerprint(base));
+  });
+
+  test("changes when a component's mount arguments change or a component disappears", () => {
+    const base = deployedState();
+    const reconfigured = base.components.map((c) => (c.path === "" ? c : { ...c, args: { limit: 1 } }));
+    expect(codeFingerprint({ ...base, components: reconfigured })).not.toBe(codeFingerprint(base));
+    expect(() => codeFingerprint({ ...base, components: base.components.slice(0, 1) })).toThrow(/component/);
   });
 
   test("refuses a backend that reports no modules, so an empty backend never matches", () => {
-    expect(() => codeFingerprint({ moduleHashes: [] })).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({ moduleHashes: [] }))).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({}))).toThrow(/no module hashes/);
+    expect(() => codeFingerprint(withRoot({ moduleHashes: [{ path: "a.js" }] }))).toThrow(/no module hashes/);
     expect(() => codeFingerprint({})).toThrow(/no module hashes/);
-    expect(() => codeFingerprint({ moduleHashes: [{ path: "a.js" }] })).toThrow(/no module hashes/);
+  });
+
+  test("refuses when any mounted component's modules are missing or unversioned", () => {
+    const base = deployedState();
+    expect(() => codeFingerprint({ ...base, componentModules: base.componentModules.slice(0, 1) })).toThrow(/component/);
+    expect(() => codeFingerprint({ ...base, componentModules: undefined })).toThrow(/component/);
+    expect(() => codeFingerprint({ ...base, components: undefined })).toThrow(/component/);
+    const unversioned = [base.componentModules[0], ["cmp-rl", [["lib.js", { functions: [] }]]]];
+    expect(() => codeFingerprint({ ...base, componentModules: unversioned })).toThrow(/component/);
   });
 
   test("stableStringify sorts keys at every depth", () => {
@@ -599,10 +680,39 @@ describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed e
     ]);
     expect(h.calls.some((call) => call.args[1] === "deploy")).toBe(false);
     for (const call of h.calls) expect(call.env.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_CONVEX_URL);
-    expect(h.appended).toEqual([`${FINGERPRINT_ENV_VAR}=${codeFingerprint(configHashes())}\n`]);
+    expect(h.appended).toEqual([`${FINGERPRINT_ENV_VAR}=${codeFingerprint(deployedState())}\n`]);
     const [url, init] = h.deps.fetchImpl.mock.calls.find(([u]) => String(u).endsWith("/api/get_config_hashes"))! as unknown as [string, RequestInit];
     expect(url).toBe(`${LOCAL_CONVEX_URL}/api/get_config_hashes`);
     expect(init.redirect).toBe("error");
+  });
+
+  test("reads every mounted component through the backend's own system queries, as admin", async () => {
+    const h = harness();
+    await markBackend(READY_ENV, h.deps);
+    const queries = (h.deps.fetchImpl.mock.calls as unknown as [string, RequestInit][]).filter(([u]) => u.endsWith("/api/query"));
+    expect(queries.map(([, init]) => JSON.parse(String(init.body)))).toEqual([
+      { path: COMPONENTS_QUERY, format: "convex_encoded_json", args: [{}] },
+      { path: COMPONENT_MODULES_QUERY, format: "convex_encoded_json", args: [{}] },
+    ]);
+    for (const [url, init] of queries) {
+      expect(url).toBe(`${LOCAL_CONVEX_URL}/api/query`);
+      expect(init.redirect).toBe("error");
+      expect((init.headers as Record<string, string>).authorization).toBe(`Convex ${ADMIN_KEY}`);
+    }
+  });
+
+  test("does not mint the marker when a component read fails, and never echoes the backend's message", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) =>
+      String(url).endsWith("/api/query")
+        ? ({ ok: true, status: 200, json: async () => ({ status: "error", errorMessage: `leak ${ADMIN_KEY}` }) } as unknown as Response)
+        : answering(deployedState())(url, init),
+    );
+    const error = await markBackend(READY_ENV, h.deps).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(LocalConvexRefusal);
+    expect(String((error as Error).message)).toMatch(new RegExp(COMPONENTS_QUERY));
+    expect(String((error as Error).message)).not.toContain(ADMIN_KEY);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
   });
 
   test("does not mint the marker when a value differs from the trusted plan", async () => {
@@ -640,7 +750,7 @@ describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed e
 });
 
 describe("verifyBackend (round 5 tripwire)", () => {
-  const MARKED_ENV = { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) };
+  const MARKED_ENV = { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(deployedState()) };
 
   test("passes when the variables equal the plan and the code fingerprint is unchanged", async () => {
     const h = harness();
@@ -665,11 +775,13 @@ describe("verifyBackend (round 5 tripwire)", () => {
 
   test("fails when the deployed code changed after mark", async () => {
     const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (url: RequestInfo | URL) =>
-      String(url).endsWith("/api/get_config_hashes")
-        ? ({ ok: true, status: 200, json: async () => configHashes("swapped") } as unknown as Response)
-        : ({ ok: true } as Response),
-    );
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ rootHash: "swapped" })));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
+  });
+
+  test("fails when only a mounted component was redeployed after mark", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(answering(deployedState({ componentPackage: "pkg-c2" })));
     await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
   });
 
@@ -729,7 +841,7 @@ describe("main", () => {
     const h = harness();
     await main(["stop"], {}, h.deps);
     await main(["mark"], READY_ENV, h.deps);
-    await main(["verify"], { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) }, h.deps);
+    await main(["verify"], { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(deployedState()) }, h.deps);
     await expect(main(["deploy-prod"], {}, h.deps)).rejects.toThrow(/Usage/);
     await expect(main([], {}, h.deps)).rejects.toThrow(/Usage/);
   });

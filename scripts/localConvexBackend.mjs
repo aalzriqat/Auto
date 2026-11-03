@@ -52,9 +52,13 @@
  * What holds instead: `mark` checks every backend variable's value against the
  * trusted plan and records a fingerprint of the deployed code, and `verify`
  * re-reads both from the host after the tests and fails the job on any change.
- * The container keeps no Linux capability. Residuals are recorded on
- * SCRUM-892: a change undone before `verify` runs, and component code outside
- * the module hashes.
+ * The fingerprint covers the root's module content hashes and every mounted
+ * component's modules by source package (see `codeFingerprint`). The container
+ * keeps no Linux capability. Residuals recorded on SCRUM-892, for the owner:
+ * - a variable changed and changed back before `verify` runs;
+ * - code replaced before `mark`, which `mark` then records as the baseline;
+ * - direct writes to the backend's own storage from inside the container,
+ *   which no admin read observes.
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -359,21 +363,68 @@ export function stableStringify(value) {
 }
 
 /**
- * SHA-256 over what `/api/get_config_hashes` reports about the deployed code:
- * the config, one hash per module, and the Node dependencies. Served by the
- * backend binary from the pinned image, not by deployed functions, so candidate
- * code cannot answer it. Refuses a response with no module hashes: an empty
- * fingerprint would match an empty backend.
+ * The two system queries that cover mounted components (round 6). Both are
+ * compiled into the backend binary: a push cannot define a `_system/` module
+ * (crates/model/src/modules/mod.rs:120 at the pinned revision), so deployed
+ * candidate code cannot answer them.
  */
-export function codeFingerprint(body) {
-  const modules = Array.isArray(body?.moduleHashes) ? body.moduleHashes : [];
+export const COMPONENTS_QUERY = "_system/frontend/components:list";
+export const COMPONENT_MODULES_QUERY = "_system/frontend/modules:listForAllComponents";
+
+function rootModuleHashes(configHashes) {
+  const modules = Array.isArray(configHashes?.moduleHashes) ? configHashes.moduleHashes : [];
   if (modules.length === 0 || modules.some((m) => typeof m?.path !== "string" || typeof m?.hash !== "string")) {
     throw new LocalConvexRefusal("The backend reported no module hashes; the deployed code cannot be fingerprinted.");
   }
+  return [...modules].sort((a, b) => compareCodeUnits(a.path, b.path));
+}
+
+const isVersionedModule = (entry) =>
+  Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1]?.sourcePackageId === "string";
+
+/**
+ * Every component's modules, each with the source package the backend renews
+ * whenever that module's contents change. Refuses unless every mounted
+ * component (every component but the root, whose path is "") has a listing.
+ */
+function componentModuleListings(components, componentModules) {
+  const malformed = () =>
+    new LocalConvexRefusal("The backend's component listing is incomplete; mounted component code cannot be fingerprinted.");
+  if (!Array.isArray(components) || !Array.isArray(componentModules)) throw malformed();
+  const mounted = components.filter((c) => c?.path !== "").length;
+  const listed = componentModules.filter((entry) => Array.isArray(entry) && entry[0] !== null).length;
+  const wellFormed = componentModules.every((entry) => Array.isArray(entry?.[1]) && entry[1].every(isVersionedModule));
+  if (listed !== mounted || !wellFormed) throw malformed();
+  return componentModules
+    .map(([id, modules]) => stableStringify([id, [...modules].sort((a, b) => compareCodeUnits(a[0], b[0]))]))
+    .sort(compareCodeUnits);
+}
+
+/**
+ * SHA-256 over the deployed code, read from the backend binary on the host:
+ * - the root's config, one content hash per module, the UDF server version and
+ *   the Node version, from `/api/get_config_hashes`. That endpoint reads the
+ *   root component only and reports no Node dependencies
+ *   (crates/local_backend/src/deploy_config.rs:76-81 and :231);
+ * - every component (id, path, mount arguments, state) and every component's
+ *   modules with their analysed functions and source package, from the two
+ *   system queries above. A module's source package changes when its contents
+ *   change (crates/model/src/modules/mod.rs:329-353), so a component redeploy
+ *   changes the fingerprint even though no content hash is exposed for it.
+ * Refuses a backend with no root module hashes, so an empty backend never
+ * matches.
+ */
+export function codeFingerprint(state) {
+  const root = state?.configHashes;
+  const moduleHashes = rootModuleHashes(root);
+  const componentModules = componentModuleListings(state.components, state.componentModules);
   const material = {
-    config: body.config ?? null,
-    moduleHashes: [...modules].sort((a, b) => compareCodeUnits(a.path, b.path)),
-    nodeDependencies: body.nodeDependencies ?? null,
+    config: root.config ?? null,
+    moduleHashes,
+    udfServerVersion: root.udfServerVersion ?? null,
+    nodeVersion: root.nodeVersion ?? null,
+    components: state.components.map((c) => stableStringify(c)).sort(compareCodeUnits),
+    componentModules,
   };
   return createHash("sha256").update(stableStringify(material)).digest("hex");
 }
@@ -658,36 +709,60 @@ function assertEnvMatchesTrustedPlan(deps, env, adminKey) {
   assertEnvMatchesPlan(listed.stdout, plan);
 }
 
-/** The deployed-code fingerprint, read from the backend's admin API on the host. */
-async function fetchCodeFingerprint(deps, adminKey) {
-  const version = deps.cliVersion();
+/**
+ * One admin POST to the backend on the host. `what` names the read in every
+ * refusal; nothing from the request or the response body is echoed.
+ */
+async function postAdmin(deps, adminKey, endpoint, payload, what) {
   let response;
   try {
-    response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}/api/get_config_hashes`, {
+    response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}${endpoint}`, {
       method: "POST",
       headers: {
         authorization: `Convex ${adminKey}`,
         "content-type": "application/json",
-        "convex-client": `npm-cli-${version}`,
+        "convex-client": `npm-cli-${deps.cliVersion()}`,
       },
-      body: JSON.stringify({ version, adminKey }),
+      body: JSON.stringify(payload),
       redirect: "error",
       signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS * 6),
     });
   } catch {
     // A fetch error can echo request details, and the request carries the key.
-    throw new LocalConvexRefusal("The local backend did not answer the deployed-code fingerprint request.");
+    throw new LocalConvexRefusal(`The local backend did not answer ${what}.`);
   }
   if (!response.ok) {
-    throw new LocalConvexRefusal(`The deployed-code fingerprint request failed with HTTP ${response.status}.`);
+    throw new LocalConvexRefusal(`${what} failed with HTTP ${response.status}.`);
   }
-  let body;
   try {
-    body = await response.json();
+    return await response.json();
   } catch {
-    throw new LocalConvexRefusal("The deployed-code fingerprint response was not JSON.");
+    throw new LocalConvexRefusal(`${what} did not return JSON.`);
   }
-  return codeFingerprint(body);
+}
+
+/** A system query, posted the way the pinned CLI's ConvexHttpClient posts one. */
+async function systemQuery(deps, adminKey, functionPath) {
+  const what = `the ${functionPath} read`;
+  const body = await postAdmin(deps, adminKey, "/api/query", { path: functionPath, format: "convex_encoded_json", args: [{}] }, what);
+  if (body?.status !== "success") {
+    throw new LocalConvexRefusal(`${what} did not succeed.`);
+  }
+  return body.value;
+}
+
+/** The deployed-code fingerprint, read from the backend's admin API on the host. */
+async function fetchCodeFingerprint(deps, adminKey) {
+  const configHashes = await postAdmin(
+    deps,
+    adminKey,
+    "/api/get_config_hashes",
+    { version: deps.cliVersion(), adminKey },
+    "the deployed-code fingerprint request",
+  );
+  const components = await systemQuery(deps, adminKey, COMPONENTS_QUERY);
+  const componentModules = await systemQuery(deps, adminKey, COMPONENT_MODULES_QUERY);
+  return codeFingerprint({ configHashes, components, componentModules });
 }
 
 /**
