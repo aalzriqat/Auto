@@ -6,6 +6,10 @@ import { pathToFileURL } from "node:url";
 import { REQUIRED_REHEARSAL_CASE_IDS } from "./accountingRehearsalCases.mjs";
 
 const fullSha = /^[0-9a-f]{40}$/;
+// The runner-local backend's only URL. Kept here rather than imported, because
+// localConvexBackend.mjs has top-level await and this file must stay loadable
+// through require(); a test pins it equal to that module's LOCAL_CONVEX_URL.
+export const LOCAL_BACKEND_URL = "http://127.0.0.1:3210";
 
 export function validateAccountingReleaseEvidence(evidence, expected) {
   const errors = [];
@@ -15,13 +19,32 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
   if (!fullSha.test(expected.testedSha ?? "") || evidence.testedSha !== expected.testedSha) {
     errors.push("Evidence does not name the exact tested SHA.");
   }
-  if (evidence.deploymentType !== "preview" ||
+  // SCRUM-892 option A: a pull request may certify on the runner-local backend;
+  // the release event never may. Anything but an explicit "local" is the cloud check.
+  const local = expected.deploymentType === "local";
+  if (local && expected.eventName !== "workflow_run") {
+    errors.push("Local backend evidence is accepted only for a pull-request rehearsal, never for the release.");
+  }
+  if (expected.deploymentType !== undefined && expected.deploymentType !== "preview" && !local) {
+    errors.push("Unknown expected deployment type.");
+  }
+  if (local) {
+    if (evidence.deploymentType !== "local" ||
+        evidence.previewName !== null ||
+        evidence.convexUrl !== expected.previewUrl ||
+        evidence.convexUrl !== LOCAL_BACKEND_URL) {
+      errors.push("Evidence does not match this job's local backend.");
+    }
+  } else if (evidence.deploymentType !== "preview" ||
       evidence.previewName !== expected.previewName ||
       evidence.convexUrl !== expected.previewUrl ||
       !/^https:\/\/[^/]+\.convex\.cloud$/.test(evidence.convexUrl ?? "")) {
     errors.push("Evidence does not match the created disposable preview.");
   }
-  if (evidence.targetVerification !== "assertE2EBootstrap agreed: preview marker present, cloud URL matches" ||
+  const attestation = local
+    ? "assertE2EBootstrap agreed: preview marker present, local backend URL matches"
+    : "assertE2EBootstrap agreed: preview marker present, cloud URL matches";
+  if (evidence.targetVerification !== attestation ||
       String(evidence.workflowRunId ?? "") !== expected.runId ||
       String(evidence.workflowRunAttempt ?? "") !== expected.runAttempt) {
     errors.push("Trusted preview identity or workflow run attestation is absent.");
@@ -67,9 +90,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       previewUrl: process.env.EXPECTED_PREVIEW_URL,
       runId: process.env.GITHUB_RUN_ID,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+      deploymentType: process.env.EXPECTED_DEPLOYMENT_TYPE,
+      eventName: process.env.GITHUB_EVENT_NAME,
     });
     if (errors.length > 0) throw new Error(errors.join(" "));
-    console.log(`Verified ${evidence.cases.length} executed cloud scenarios at the exact release SHA.`);
+    console.log(process.env.EXPECTED_DEPLOYMENT_TYPE === "local"
+      ? `Verified ${evidence.cases.length} executed local-backend scenarios at the exact tested PR merge.`
+      : `Verified ${evidence.cases.length} executed cloud scenarios at the exact release SHA.`);
   } catch (error) {
     console.error(`Trusted accounting release evidence refused: ${error.message}`);
     process.exitCode = 1;

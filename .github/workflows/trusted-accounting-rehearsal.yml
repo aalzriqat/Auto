@@ -216,8 +216,13 @@ jobs:
         working-directory: trusted
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      # SCRUM-892 (owner ruling option A, c24422): only the RELEASE rehearsal
+      # (repository_dispatch) uses a cloud preview. Every cloud step below runs
+      # for that event alone, with its command unchanged; the pull-request path
+      # runs the same stage, audit, deploy, seed, cases and evidence check against
+      # a runner-local self-hosted backend in the block after these steps.
       - name: Name and recreate disposable rehearsal preview from trusted main
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         working-directory: trusted
         env:
           CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
@@ -275,7 +280,7 @@ jobs:
           fi
 
       - name: Scrub disposable rehearsal preview environment
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         working-directory: trusted
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
@@ -360,7 +365,7 @@ jobs:
       # package.json, and requires the candidate's dependency files to be
       # byte-identical to trusted's.
       - name: Stage exact candidate backend as data
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
         env:
           CANDIDATE_ROOT: ${{ github.workspace }}/candidate
@@ -376,7 +381,7 @@ jobs:
       # file the audit models them reading must lie inside the stage or trusted
       # node_modules. A model, not a proof: unknown read channels are SCRUM-745.
       - name: Audit staged backend inputs without credentials
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         run: |
           set -euo pipefail
           docker run --rm \
@@ -395,7 +400,7 @@ jobs:
             node /audit/auditStagedBackendInputs.mjs
 
       - name: Deploy staged candidate backend with trusted Convex CLI
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         env:
           CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
         run: |
@@ -446,7 +451,7 @@ jobs:
             sh -c 'exec node /app/node_modules/convex/bin/main.js deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck disable --codegen disable'
 
       - name: Seed synthetic QA dealership from trusted main
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         working-directory: trusted
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
@@ -456,7 +461,7 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Run cloud accounting rehearsal from trusted main
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         working-directory: trusted
         run: |
           REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
@@ -469,12 +474,169 @@ jobs:
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Refuse incomplete or wrong-target cloud evidence
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'
         working-directory: trusted
         run: node scripts/validateAccountingReleaseEvidence.mjs rehearsal-evidence.json
         env:
           EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
           EXPECTED_PREVIEW_NAME: ${{ env.CONVEX_PREVIEW_NAME }}
+          EXPECTED_PREVIEW_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+
+      # ── SCRUM-892: the pull-request path, on a runner-local backend ──────────
+      # Owner ruling SCRUM-892 option A (c24422) accepts local certification for
+      # pull requests only. The backend is a disposable self-hosted Convex
+      # container on this runner, pinned by digest in
+      # scripts/localConvexBackend.mjs, published on 127.0.0.1 only, given no
+      # runner secret, and removed by the always() step at the end of this job.
+      # No cloud preview is created, so a PR rehearsal costs no Convex quota.
+      # Same cases, same 39-case evidence contract, same check names.
+      - name: Start the local Convex backend
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs start
+
+      # Set BEFORE the candidate deploy: convex/auth.config.ts is evaluated at
+      # deploy time. Sets exactly the allowlisted names (public origins or
+      # Cloudflare's published test secret), then fails unless the backend
+      # reports exactly those names. Replaces the cloud "scrub" step.
+      - name: Set and verify the local backend environment allowlist before candidate execution
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs env
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      # SCRUM-350: the same staging and credential-free audit as the release
+      # path, immediately before the deploy that consumes them.
+      - name: Stage exact candidate backend as data
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
+        env:
+          CANDIDATE_ROOT: ${{ github.workspace }}/candidate
+          TRUSTED_ROOT: ${{ github.workspace }}/trusted
+          STAGE_ROOT: ${{ runner.temp }}/candidate-backend
+          STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
+          TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
+
+      - name: Audit staged backend inputs without credentials
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --name autoflow-staged-backend-input-audit \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/scripts/intelligence/auditStagedBackendInputs.mjs:/audit/auditStagedBackendInputs.mjs:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /audit/auditStagedBackendInputs.mjs
+
+      - name: Deploy staged candidate backend with trusted Convex CLI
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+
+          case "${AUTOFLOW_LOCAL_CONVEX_CONTAINER:-}" in
+            autoflow-local-convex-*) ;;
+            *)
+              echo "No local Convex container was recorded by the start step." >&2
+              exit 1
+              ;;
+          esac
+
+          # The TRUSTED Convex CLI from the trusted lockfile, in a container that
+          # sees exactly the staged backend and trusted node_modules, read-only,
+          # with no package manager, typecheck or codegen. It joins the BACKEND
+          # container's network namespace (the form browser-attack-swarm.yml
+          # uses), so it reaches the backend at 127.0.0.1:3210; that namespace is
+          # on Docker's default bridge, so runner services listening on all
+          # interfaces and outbound networking stay reachable, while services
+          # bound to the runner's 127.0.0.1 do not. URL and admin key are
+          # inherited by NAME, never in argv; the key controls only this job's
+          # backend. Once deployed, candidate "use node" actions can mint an
+          # admin key (PR #757 round 5): the mark/verify tripwire detects the
+          # TRIPWIRE.verified changes, it prevents nothing (option A).
+          docker run --rm \
+            --name autoflow-trusted-staged-backend-deploy \
+            --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env CONVEX_SELF_HOSTED_URL \
+            --env CONVEX_SELF_HOSTED_ADMIN_KEY \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes
+
+      # The disposable-preview marker is minted by the TRUSTED CLI after the
+      # candidate deploy, and `mark` records the tripwire baseline first.
+      - name: Mint the disposable-preview marker with the trusted CLI
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      - name: Seed synthetic QA dealership on the local backend from trusted main
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      - name: Run local accounting rehearsal from trusted main
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: |
+          REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
+          cat rehearsal-evidence.json
+          exit "${status:-0}"
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
+      # PR #757 round 5: re-reads the backend from the runner after the last
+      # case and fails the job unless every TRIPWIRE.verified item
+      # (scripts/localConvexBackend.mjs) still equals what `mark` recorded.
+      - name: Verify the local backend was not changed during the run
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      - name: Refuse incomplete or wrong-target local evidence
+        if: github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'
+        working-directory: trusted
+        run: node scripts/validateAccountingReleaseEvidence.mjs rehearsal-evidence.json
+        env:
+          EXPECTED_DEPLOYMENT_TYPE: local
+          EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
           EXPECTED_PREVIEW_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
 
       - name: Upload trusted rehearsal evidence
@@ -487,6 +649,14 @@ jobs:
             trusted/backend-input-evidence.json
           if-no-files-found: warn
           retention-days: 14
+
+      # SCRUM-892: always on the PR path, so a failed or cancelled job leaves no
+      # container behind. Idempotent when the start step never ran. It sits
+      # before the preview delete, which stays this job's final step.
+      - name: Stop the local Convex backend
+        if: always() && github.event_name == 'workflow_run'
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs stop
 
       - name: Delete the disposable rehearsal preview
         if: always() && env.CONVEX_PREVIEW_CREATED_AT != ''
@@ -559,7 +729,7 @@ jobs:
           description="Trusted accounting rehearsal did not complete successfully."
           if [ "$REHEARSAL_RESULT" = "success" ]; then
             state=success
-            description="Trusted accounting cloud rehearsal passed."
+            description="Trusted accounting rehearsal passed on the local Convex backend."
           fi
           payload="$(node -e '
             const [state, context, description, targetUrl] = process.argv.slice(1);

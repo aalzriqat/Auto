@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { createRequire } from "node:module";
 
 // Load the actual CLI module through Node, preserving its native shebang boundary.
-const { validateAccountingReleaseEvidence } = createRequire(import.meta.url)(
+const { validateAccountingReleaseEvidence, LOCAL_BACKEND_URL } = createRequire(import.meta.url)(
   "./validateAccountingReleaseEvidence.mjs",
 ) as typeof import("./validateAccountingReleaseEvidence.mjs");
 import { REQUIRED_REHEARSAL_CASE_IDS } from "./accountingRehearsalCases.mjs";
@@ -159,6 +159,66 @@ test("opening cutover is a required named cloud gate and an old29-only result ca
   ).toContain(
     "The required cloud scenario set is incomplete or contains an unexpected case.",
   );
+});
+
+// SCRUM-892 option A: a pull request certifies on the runner-local backend; the release never does.
+describe("pull-request evidence from the runner-local backend", () => {
+  const LOCAL_URL = "http://127.0.0.1:3210";
+  test("its loopback URL is the one the local backend binds", async () => {
+    const { LOCAL_CONVEX_URL } = await import("./localConvexBackend.mjs");
+    expect(LOCAL_BACKEND_URL).toBe(LOCAL_CONVEX_URL);
+    expect(LOCAL_BACKEND_URL).toBe(LOCAL_URL);
+  });
+  const localExpected = { ...expected, previewName: undefined, previewUrl: LOCAL_URL, deploymentType: "local", eventName: "workflow_run" };
+  const localEvidence = () => ({
+    ...valid(),
+    deploymentType: "local",
+    previewName: null,
+    convexUrl: LOCAL_URL,
+    targetVerification: "assertE2EBootstrap agreed: preview marker present, local backend URL matches",
+  });
+
+  test("accepts exact local evidence for a pull-request rehearsal", () => {
+    expect(validateAccountingReleaseEvidence(localEvidence(), localExpected)).toEqual([]);
+  });
+
+  test("requires the same complete 39-case set as the release", () => {
+    const { caseIds: _fixtureOverride, ...production } = localExpected;
+    expect(validateAccountingReleaseEvidence(localEvidence(), production))
+      .toContain("The required cloud scenario set is incomplete or contains an unexpected case.");
+  });
+
+  test.each([
+    ["the release event", { eventName: "repository_dispatch" }],
+    ["an unnamed event", { eventName: undefined }],
+  ])("refuses local evidence under %s", (_label, override) => {
+    expect(validateAccountingReleaseEvidence(localEvidence(), { ...localExpected, ...override }))
+      .toContain("Local backend evidence is accepted only for a pull-request rehearsal, never for the release.");
+  });
+
+  test("the release default (no expected type) still refuses local evidence", () => {
+    expect(validateAccountingReleaseEvidence(localEvidence(), { ...expected, previewUrl: LOCAL_URL }))
+      .toContain("Evidence does not match the created disposable preview.");
+  });
+
+  test.each([
+    ["cloud-typed evidence", () => ({ ...localEvidence(), deploymentType: "preview" })],
+    ["a named preview", () => ({ ...localEvidence(), previewName: "rehearsal-main-42" })],
+    ["another loopback port", () => ({ ...localEvidence(), convexUrl: "http://127.0.0.1:3211" })],
+    ["the cloud attestation", () => ({ ...localEvidence(), targetVerification: valid().targetVerification })],
+  ])("refuses %s on the local path", (_label, mutate) => {
+    expect(validateAccountingReleaseEvidence(mutate(), localExpected)).not.toEqual([]);
+  });
+
+  test("refuses a URL the job did not start, even when it is the loopback backend's", () => {
+    expect(validateAccountingReleaseEvidence(localEvidence(), { ...localExpected, previewUrl: "http://127.0.0.1:9999" }))
+      .toContain("Evidence does not match this job's local backend.");
+  });
+
+  test("refuses an unknown expected deployment type", () => {
+    expect(validateAccountingReleaseEvidence(valid(), { ...expected, deploymentType: "harness" }))
+      .toContain("Unknown expected deployment type.");
+  });
 });
 
 test.each(["S858-CLEANUP-HISTORY", "S858-CLEANUP-SPLIT", "U-RET", "CC-CASH"])("cloud evidence refuses the missing native callback %s", missing => {

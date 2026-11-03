@@ -56,7 +56,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { createHash } from "node:crypto";
-import { assertPreviewTargeting, buildConvexRunArgs, isPreviewDeployKey, runConvex } from "./e2ePreviewBootstrap.mjs";
+import { assertPreviewTargeting, buildConvexRunArgs, isPreviewDeployKey, resolveConvexTarget, runConvex } from "./e2ePreviewBootstrap.mjs";
+import { LOCAL_CONVEX_URL, assertLocalOnly } from "./localConvexBackend.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -75,6 +76,7 @@ export class RehearsalError extends Error {
  * to somebody else's database.
  */
 export function assertRehearsalEnv(env) {
+  if (hasLocalTarget(env)) return assertLocalRehearsalEnv(env);
   const missing = [];
   for (const key of [
     "CONVEX_DEPLOY_KEY",
@@ -106,12 +108,98 @@ export function assertRehearsalEnv(env) {
     );
   }
   return {
+    mode: /** @type {const} */ ("preview"),
     deployKey: env.CONVEX_DEPLOY_KEY,
     previewName: env.CONVEX_PREVIEW_NAME,
     convexUrl: url.replace(/\/$/, ""),
     clerkSecret: env.CLERK_SECRET_KEY,
     salesEmail: env.E2E_LOGIN_USER,
     approverEmail: env.E2E_APPROVER_USER,
+  };
+}
+
+/** Either self-hosted variable selects local mode; `resolveConvexTarget` refuses a half-set pair. */
+function hasLocalTarget(env) {
+  return [env.CONVEX_SELF_HOSTED_URL, env.CONVEX_SELF_HOSTED_ADMIN_KEY].some((value) => value && String(value).trim() !== "");
+}
+
+/** The release rehearsal's event. Local mode refuses it (owner ruling SCRUM-892, option A). */
+export const RELEASE_REHEARSAL_EVENT = "repository_dispatch";
+
+/**
+ * SCRUM-892: the PULL-REQUEST rehearsal against the runner-local self-hosted
+ * backend that scripts/localConvexBackend.mjs started for this job.
+ *
+ * Owner ruling SCRUM-892 option A accepts local certification for pull
+ * requests only. The release rehearsal stays on a cloud preview, so local mode
+ * refuses the release event, whichever event variable names it. The cloud
+ * preconditions (1)-(4) in the file header become their local equivalents: the
+ * URL is exactly the loopback backend, the key has an admin key's shape, no
+ * cloud target is present beside them, and (unchanged) the deployment carries
+ * the preview marker recording that same URL.
+ */
+function assertLocalRehearsalEnv(env) {
+  if (env.EVENT_NAME === RELEASE_REHEARSAL_EVENT || env.GITHUB_EVENT_NAME === RELEASE_REHEARSAL_EVENT) {
+    throw new RehearsalError(
+      "The release rehearsal runs only on a cloud preview (owner ruling SCRUM-892, option A). " +
+        "Local mode is for pull requests and refuses the release event."
+    );
+  }
+  const missing = [
+    "CONVEX_SELF_HOSTED_URL",
+    "CONVEX_SELF_HOSTED_ADMIN_KEY",
+    "NEXT_PUBLIC_CONVEX_URL",
+    "CLERK_SECRET_KEY",
+    "E2E_LOGIN_USER",
+    "E2E_APPROVER_USER",
+  ].filter((key) => !env[key] || String(env[key]).trim() === "");
+  if (missing.length > 0) {
+    throw new RehearsalError(
+      `The local rehearsal cannot run without ${missing.join(", ")}. It refuses rather than falling back to any other deployment.`
+    );
+  }
+  if (env.CONVEX_PREVIEW_NAME && String(env.CONVEX_PREVIEW_NAME).trim()) {
+    throw new RehearsalError("CONVEX_PREVIEW_NAME is set beside the local backend variables. The target is ambiguous, so nothing runs.");
+  }
+  let target;
+  try {
+    assertLocalOnly(env);
+    target = resolveConvexTarget(env);
+  } catch (error) {
+    throw new RehearsalError(String(error?.message ?? error));
+  }
+  if (target.mode !== "local" || env.NEXT_PUBLIC_CONVEX_URL !== LOCAL_CONVEX_URL) {
+    throw new RehearsalError(
+      `NEXT_PUBLIC_CONVEX_URL is not exactly ${LOCAL_CONVEX_URL}, so the cases would drive a different backend than the one seeded.`
+    );
+  }
+  return {
+    mode: /** @type {const} */ ("local"),
+    local: { url: target.url, adminKey: target.adminKey },
+    deployKey: undefined,
+    previewName: null,
+    convexUrl: LOCAL_CONVEX_URL,
+    clerkSecret: env.CLERK_SECRET_KEY,
+    salesEmail: env.E2E_LOGIN_USER,
+    approverEmail: env.E2E_APPROVER_USER,
+  };
+}
+
+/** The evidence fields that name the target. validateAccountingReleaseEvidence compares them exactly. */
+export function targetEvidence(config) {
+  if (config.mode === "local") {
+    return {
+      previewName: null,
+      convexUrl: config.convexUrl,
+      deploymentType: "local",
+      targetVerification: "assertE2EBootstrap agreed: preview marker present, local backend URL matches",
+    };
+  }
+  return {
+    previewName: config.previewName,
+    convexUrl: config.convexUrl,
+    deploymentType: "preview",
+    targetVerification: "assertE2EBootstrap agreed: preview marker present, cloud URL matches",
   };
 }
 
@@ -362,13 +450,14 @@ export async function resolveIdentity(email, secretKey) {
  * @param {{
  *   functionName: string,
  *   args: Record<string, unknown>,
- *   previewName: string,
- *   deployKey: string,
+ *   previewName?: string,
+ *   deployKey?: string,
+ *   local?: { url: string, adminKey: string },
  *   env?: Record<string, string | undefined>,
  *   spawnCli?: (command: string, args: string[], options: object) => { status: number | null, error?: Error },
  * }} options
  */
-export async function runPreviewFunction({ functionName, args, previewName, deployKey, env = process.env, spawnCli = spawnSync }) {
+export async function runPreviewFunction({ functionName, args, previewName, deployKey, local, env = process.env, spawnCli = spawnSync }) {
   const { buildConvexRunArgs, runConvex } = await import("./e2ePreviewBootstrap.mjs");
   const argv = buildConvexRunArgs({
     functionName,
@@ -376,6 +465,7 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
     previewName,
     deployKey,
     env,
+    local,
   });
   // The assertion returns bootstrap JSON on stdout. The release workflow
   // reserves this process's stdout for its single evidence document; letting
@@ -383,7 +473,7 @@ export async function runPreviewFunction({ functionName, args, previewName, depl
   // after all 22 cloud cases passed. Keep stderr visible and retain runConvex's
   // argument/exit checks while capturing only this child command's stdout.
   runConvex(argv, functionName, (command, commandArgs, options) =>
-    spawnCli(command, commandArgs, { ...options, stdio: ["inherit", "pipe", "inherit"] }));
+    spawnCli(command, commandArgs, { ...options, stdio: ["inherit", "pipe", "inherit"] }), env);
 }
 
 /** @typedef {"DISCOVERY" | "REFERENCE"} CleanupSplitPhase */
@@ -510,19 +600,35 @@ function cleanupReceipt(result, functionName, expectedSplitPhase) {
   return { ok: false, refusal: "OPENING_CLEANUP_SPLIT_REQUIRED", phase: expectedSplitPhase, exitCode: result.status };
 }
 
+/** A local call's child environment carries no cloud target of any kind. */
+function withoutCloudTargets(env) {
+  const { CONVEX_DEPLOY_KEY, CONVEX_DEPLOYMENT, CONVEX_PREVIEW_DEPLOY_KEY, CONVEX_PREVIEW_NAME, ...rest } = env;
+  return rest;
+}
+
 /**
  * Trusted closure: callback arguments cannot supply a CLI target or environment.
  * Both output streams are bounded. Only typed receipts and anonymous invocation
  * diagnostics cross back into the rehearsal's public evidence document.
- * @param {{deployKey:string,previewName:string,convexUrl:string}} config
+ * @param {{mode?:"preview"|"local",deployKey?:string,previewName?:string|null,convexUrl:string,local?:{url:string,adminKey:string}}} config
  * @param {{env?:Record<string,string|undefined>,spawnCli?:(command:string,args:string[],options:object)=>CleanupCliResult,diagnostics?:CleanupDiagnostics}} dependencies
  */
 export function createCleanupPreviewCall(config, { env = process.env, spawnCli = spawnSync, diagnostics } = {}) {
   const { deployKey, previewName, convexUrl } = config;
-  const childEnv = { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
+  // SCRUM-892: in local mode the target travels in the child environment, the
+  // loopback URL is the only one accepted, and no cloud target survives in it.
+  const local = config.mode === "local" ? { url: config.local?.url, adminKey: config.local?.adminKey } : undefined;
+  const childEnv = local
+    ? { ...withoutCloudTargets(env), CONVEX_SELF_HOSTED_URL: local.url, CONVEX_SELF_HOSTED_ADMIN_KEY: local.adminKey, NEXT_PUBLIC_CONVEX_URL: convexUrl }
+    : { ...env, CONVEX_DEPLOY_KEY: deployKey, CONVEX_PREVIEW_NAME: previewName, NEXT_PUBLIC_CONVEX_URL: convexUrl };
   try {
-    assertPreviewTargeting({ deployKey, previewName, env: childEnv });
-    if (!isPreviewCloudUrl(convexUrl)) throw cleanupUnavailable();
+    if (local) {
+      buildConvexRunArgs({ functionName: "e2eBootstrap:assertE2EBootstrap", local, env: childEnv });
+      if (convexUrl !== LOCAL_CONVEX_URL) throw cleanupUnavailable();
+    } else {
+      assertPreviewTargeting({ deployKey, previewName, env: childEnv });
+      if (!isPreviewCloudUrl(convexUrl)) throw cleanupUnavailable();
+    }
   } catch { throw cleanupUnavailable(); }
 
   /**
@@ -546,12 +652,12 @@ export function createCleanupPreviewCall(config, { env = process.env, spawnCli =
       try {
         const argsJson = JSON.stringify(payload);
         if (Buffer.byteLength(argsJson) > 65_536) throw cleanupUnavailable();
-        const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv });
+        const argv = buildConvexRunArgs({ functionName, argsJson, previewName, deployKey, env: childEnv, local });
         runConvex(argv, functionName, (command, commandArgs, options) => {
           result = spawnCli(command, commandArgs, { ...options, env: childEnv, stdio: ["ignore", "pipe", "pipe"],
             timeout: 60_000, maxBuffer: CLEANUP_OUTPUT_LIMIT, encoding: "utf8", windowsHide: true });
           return result;
-        });
+        }, childEnv);
       } catch {
         if (!result || result.status === 0) throw cleanupUnavailable();
       }
@@ -748,9 +854,9 @@ export async function main(env = process.env) {
   const cleanupInvocations = { records: [], truncated: false, terminal: null, lastUnavailable: null };
   const evidence = {
     testedSha: env.REHEARSAL_TESTED_SHA ?? null,
-    previewName: config.previewName,
-    convexUrl: config.convexUrl,
-    deploymentType: "preview",
+    previewName: targetEvidence(config).previewName,
+    convexUrl: targetEvidence(config).convexUrl,
+    deploymentType: targetEvidence(config).deploymentType,
     workflowRunId: env.GITHUB_RUN_ID ?? null,
     workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
@@ -778,11 +884,12 @@ export async function main(env = process.env) {
       approverClerkUserId: approverUserId,
       expectedCloudUrl: config.convexUrl,
     },
-    previewName: config.previewName,
+    previewName: config.previewName ?? undefined,
     deployKey: config.deployKey,
+    local: config.local,
     env,
   });
-  evidence.targetVerification = "assertE2EBootstrap agreed: preview marker present, cloud URL matches";
+  evidence.targetVerification = targetEvidence(config).targetVerification;
 
   const sales = await mintConvexToken({ userId: salesUserId, secretKey: config.clerkSecret });
   const approver = await mintConvexToken({ userId: approverUserId, secretKey: config.clerkSecret });
