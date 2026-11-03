@@ -460,8 +460,8 @@ describe("the rehearsal refuses rather than degrades", () => {
   });
 });
 
-// SCRUM-892 option A: pull requests rehearse on the runner-local backend; the release never does.
-describe("local mode targets only this job's loopback backend, and never for the release", () => {
+// SCRUM-892: pull requests and the release rehearse on the runner-local backend (owner ruling c24441).
+describe("local mode targets only this job's loopback backend", () => {
   const LOCAL_URL = "http://127.0.0.1:3210";
   const ADMIN_KEY = "autoflow-local|" + "k".repeat(40);
   const LOCAL = {
@@ -489,8 +489,10 @@ describe("local mode targets only this job's loopback backend, and never for the
       targetVerification: "assertE2EBootstrap agreed: preview marker present, cloud URL matches" });
   });
 
-  test.each(["EVENT_NAME", "GITHUB_EVENT_NAME"])("refuses the release event named by %s", (key) => {
-    expect(() => assertRehearsalEnv({ ...LOCAL, [key]: "repository_dispatch" })).toThrow(/only on a cloud preview/);
+  // Owner ruling SCRUM-892 c24441: the release rehearsal runs on the local backend too.
+  test("accepts the release event, named by both variables, on the same loopback backend", () => {
+    const config = assertRehearsalEnv({ ...LOCAL, EVENT_NAME: "repository_dispatch", GITHUB_EVENT_NAME: "repository_dispatch" });
+    expect(config).toMatchObject({ mode: "local", convexUrl: LOCAL_URL, previewName: null });
   });
 
   test.each(["CONVEX_SELF_HOSTED_ADMIN_KEY", "NEXT_PUBLIC_CONVEX_URL", "CLERK_SECRET_KEY", "E2E_LOGIN_USER", "E2E_APPROVER_USER"])(
@@ -552,7 +554,7 @@ describe("local mode targets only this job's loopback backend, and never for the
     ["https://127.0.0.1:3210", /Refusing to send/],
   ])("the concurrency worker's target check for %s", (url, outcome) => {
     const worker = spawnSync(process.execPath, ["scripts/rehearsalReleaseWorker.mjs", "0", "{}"], {
-      env: { PATH: process.env.PATH, REHEARSAL_CONVEX_URL: url }, encoding: "utf8", timeout: 10_000,
+      env: { NODE_ENV: "test", PATH: process.env.PATH, REHEARSAL_CONVEX_URL: url }, encoding: "utf8", timeout: 10_000,
     });
     expect(worker.status).toBe(1);
     expect(JSON.parse(worker.stdout).error).toMatch(outcome);

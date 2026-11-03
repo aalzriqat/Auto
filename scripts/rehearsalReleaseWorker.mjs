@@ -41,10 +41,9 @@ async function run() {
   // delivered somewhere unintended. Moving the URL out of argv removed one way
   // to set it wrongly; it did not remove the need to check.
   //
-  // SCRUM-892 option A: a pull-request rehearsal runs on the runner-local
-  // backend, whose only URL is exactly http://127.0.0.1:3210
-  // (localConvexBackend.mjs LOCAL_CONVEX_URL). That one origin is accepted too;
-  // the parent's assertRehearsalEnv already refuses it for the release event.
+  // SCRUM-892: the trusted rehearsal runs on the runner-local backend, whose
+  // only URL is exactly http://127.0.0.1:3210 (localConvexBackend.mjs
+  // LOCAL_CONVEX_URL). That one origin is accepted too.
   const targetMatch = /^(?:https:\/\/[a-z0-9-]{1,64}\.convex\.cloud|http:\/\/127\.0\.0\.1:3210)$/.exec(
     typeof convexUrl === "string" ? convexUrl : ""
   );

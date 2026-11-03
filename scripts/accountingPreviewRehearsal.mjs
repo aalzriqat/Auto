@@ -123,28 +123,17 @@ function hasLocalTarget(env) {
   return [env.CONVEX_SELF_HOSTED_URL, env.CONVEX_SELF_HOSTED_ADMIN_KEY].some((value) => value && String(value).trim() !== "");
 }
 
-/** The release rehearsal's event. Local mode refuses it (owner ruling SCRUM-892, option A). */
-export const RELEASE_REHEARSAL_EVENT = "repository_dispatch";
-
 /**
- * SCRUM-892: the PULL-REQUEST rehearsal against the runner-local self-hosted
- * backend that scripts/localConvexBackend.mjs started for this job.
+ * SCRUM-892: the rehearsal against the runner-local self-hosted backend that
+ * scripts/localConvexBackend.mjs started for this job.
  *
- * Owner ruling SCRUM-892 option A accepts local certification for pull
- * requests only. The release rehearsal stays on a cloud preview, so local mode
- * refuses the release event, whichever event variable names it. The cloud
- * preconditions (1)-(4) in the file header become their local equivalents: the
- * URL is exactly the loopback backend, the key has an admin key's shape, no
- * cloud target is present beside them, and (unchanged) the deployment carries
- * the preview marker recording that same URL.
+ * Owner ruling SCRUM-892 c24441 moves both the pull-request and the release
+ * rehearsal here. The cloud preconditions (1)-(4) in the file header become
+ * their local equivalents: the URL is exactly the loopback backend, the key has
+ * an admin key's shape, no cloud target is present beside them, and
+ * (unchanged) the deployment carries the preview marker recording that same URL.
  */
 function assertLocalRehearsalEnv(env) {
-  if (env.EVENT_NAME === RELEASE_REHEARSAL_EVENT || env.GITHUB_EVENT_NAME === RELEASE_REHEARSAL_EVENT) {
-    throw new RehearsalError(
-      "The release rehearsal runs only on a cloud preview (owner ruling SCRUM-892, option A). " +
-        "Local mode is for pull requests and refuses the release event."
-    );
-  }
   const missing = [
     "CONVEX_SELF_HOSTED_URL",
     "CONVEX_SELF_HOSTED_ADMIN_KEY",
@@ -852,11 +841,12 @@ export async function main(env = process.env) {
   const config = assertRehearsalEnv(env);
   /** @type {CleanupDiagnostics} */
   const cleanupInvocations = { records: [], truncated: false, terminal: null, lastUnavailable: null };
+  const target = targetEvidence(config);
   const evidence = {
     testedSha: env.REHEARSAL_TESTED_SHA ?? null,
-    previewName: targetEvidence(config).previewName,
-    convexUrl: targetEvidence(config).convexUrl,
-    deploymentType: targetEvidence(config).deploymentType,
+    previewName: target.previewName,
+    convexUrl: target.convexUrl,
+    deploymentType: target.deploymentType,
     workflowRunId: env.GITHUB_RUN_ID ?? null,
     workflowRunAttempt: env.GITHUB_RUN_ATTEMPT ?? null,
     workflowJob: env.GITHUB_JOB ?? null,
@@ -889,7 +879,7 @@ export async function main(env = process.env) {
     local: config.local,
     env,
   });
-  evidence.targetVerification = targetEvidence(config).targetVerification;
+  evidence.targetVerification = target.targetVerification;
 
   const sales = await mintConvexToken({ userId: salesUserId, secretKey: config.clerkSecret });
   const approver = await mintConvexToken({ userId: approverUserId, secretKey: config.clerkSecret });

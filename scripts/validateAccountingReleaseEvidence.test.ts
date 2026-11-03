@@ -161,7 +161,7 @@ test("opening cutover is a required named cloud gate and an old29-only result ca
   );
 });
 
-// SCRUM-892 option A: a pull request certifies on the runner-local backend; the release never does.
+// SCRUM-892: pull requests and the release certify on the runner-local backend (owner ruling c24441).
 describe("pull-request evidence from the runner-local backend", () => {
   const LOCAL_URL = "http://127.0.0.1:3210";
   test("its loopback URL is the one the local backend binds", async () => {
@@ -188,12 +188,18 @@ describe("pull-request evidence from the runner-local backend", () => {
       .toContain("The required cloud scenario set is incomplete or contains an unexpected case.");
   });
 
+  // Owner ruling SCRUM-892 c24441: the release rehearsal runs on the local backend too.
+  test("accepts exact local evidence for the release rehearsal", () => {
+    expect(validateAccountingReleaseEvidence(localEvidence(), { ...localExpected, eventName: "repository_dispatch" })).toEqual([]);
+  });
+
   test.each([
-    ["the release event", { eventName: "repository_dispatch" }],
     ["an unnamed event", { eventName: undefined }],
+    ["a push", { eventName: "push" }],
+    ["a hand dispatch", { eventName: "workflow_dispatch" }],
   ])("refuses local evidence under %s", (_label, override) => {
     expect(validateAccountingReleaseEvidence(localEvidence(), { ...localExpected, ...override }))
-      .toContain("Local backend evidence is accepted only for a pull-request rehearsal, never for the release.");
+      .toContain("Local backend evidence is accepted only from the trusted rehearsal's pull-request or release event.");
   });
 
   test("the release default (no expected type) still refuses local evidence", () => {

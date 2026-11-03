@@ -412,17 +412,18 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     // SCRUM-892: browser-attack-swarm.yml left this census when it moved to a
     // runner-local Convex backend. It no longer creates, pins or deletes any
     // cloud Preview, so it owes no cleanup; the next test keeps it out.
+    // trusted-accounting-rehearsal.yml left it too (owner ruling SCRUM-892
+    // c24441): its pull-request and release rehearsals both run locally.
     expect(creators.map((w) => w.file).sort()).toEqual([
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
       "pilot-role-audit.yml",
-      "trusted-accounting-rehearsal.yml",
       "trusted-main-e2e.yml",
     ]);
   });
 
-  it("SCRUM-892: the browser attack swarm owns no Preview: it creates, pins and deletes none", () => {
-    const swarmText = readFileSync(path.join(dir, "browser-attack-swarm.yml"), "utf8");
+  it.each(["browser-attack-swarm.yml", "trusted-accounting-rehearsal.yml"])("SCRUM-892: %s owns no Preview: it creates, pins and deletes none", (file) => {
+    const swarmText = readFileSync(path.join(dir, file), "utf8");
     const swarmJobs = workflowSchema.parse(parse(swarmText)).jobs;
     for (const [id, job] of Object.entries(swarmJobs)) {
       for (const entry of job.steps ?? []) {

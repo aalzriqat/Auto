@@ -95,19 +95,17 @@ type Workflow = { on: Record<string, unknown>; jobs: Record<string, {
 const source = readFileSync(".github/workflows/trusted-accounting-rehearsal.yml", "utf8");
 const workflow: Workflow = parse(source);
 
-test("PR path decision precedes preview creation; release bypasses it and retains its distinct verdict", () => {
+test("PR path decision precedes backend start; release bypasses it and retains its distinct verdict", () => {
   const steps = workflow.jobs.rehearsal.steps;
   const gate = steps.findIndex(step => step.id === "backend_inputs");
-  const create = steps.findIndex(step => step.name?.startsWith("Name and recreate"));
   expect(gate).toBeGreaterThan(steps.findIndex(step => step.id === "provenance"));
-  expect(gate).toBeLessThan(create);
   expect(steps[gate]?.if).toContain("github.event_name == 'workflow_run'");
   expect(steps[gate]?.run).toBe("node scripts/accountingRehearsalPathGateCli.mjs");
-  // SCRUM-892: the cloud preview is the release's alone; the PR path starts a local backend behind the gate.
-  expect(steps[create]?.if).toBe("steps.provenance.outputs.stale == 'false' && github.event_name == 'repository_dispatch'");
+  // SCRUM-892 c24441: no cloud preview remains; both events start a local backend, the PR only behind the gate.
+  expect(steps.some(step => step.name?.startsWith("Name and recreate"))).toBe(false);
   const start = steps.findIndex(step => step.run === "node scripts/localConvexBackend.mjs start");
   expect(gate).toBeLessThan(start);
-  expect(steps[start]?.if).toBe("github.event_name == 'workflow_run' && steps.provenance.outputs.stale == 'false' && steps.backend_inputs.outputs.run_rehearsal == 'true'");
+  expect(steps[start]?.if).toBe("steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')");
   expect(workflow.on).not.toHaveProperty("schedule");
   expect(workflow.jobs.release_verdict.if).toBe("always() && github.event_name == 'repository_dispatch'");
   expect(workflow.jobs.release_verdict.name).toContain("trusted-accounting-release-not-dispatched");

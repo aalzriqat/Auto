@@ -18,7 +18,7 @@ const REHEARSAL_WORKFLOW_CONTRACT = {
   trigger: "workflow_run",
   jobId: "rehearsal",
   runsOn: "ubuntu-latest",
-  stepName: "Run cloud accounting rehearsal from trusted main",
+  stepName: "Run local accounting rehearsal from trusted main",
 } as const;
 
 const REQUIRED_INVARIANT_IDS = [
@@ -371,7 +371,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run cloud accounting rehearsal from trusted main
+            - name: Run local accounting rehearsal from trusted main
               run: |
                 # REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
@@ -393,12 +393,12 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run cloud accounting rehearsal from trusted main
+            - name: Run local accounting rehearsal from trusted main
               run: echo "decoy"
         unrelated:
           runs-on: ubuntu-latest
           steps:
-            - name: Run cloud accounting rehearsal from trusted main
+            - name: Run local accounting rehearsal from trusted main
               run: |
                 REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;
@@ -442,7 +442,7 @@ describe("SCRUM-342 invariant catalog — validator negative controls", () => {
         rehearsal:
           runs-on: ubuntu-latest
           steps:
-            - name: Run cloud accounting rehearsal from trusted main
+            - name: Run local accounting rehearsal from trusted main
               run: |
                 REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?
     `;

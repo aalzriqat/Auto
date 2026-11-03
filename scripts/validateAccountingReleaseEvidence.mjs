@@ -4,12 +4,13 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { REQUIRED_REHEARSAL_CASE_IDS } from "./accountingRehearsalCases.mjs";
+import { SWARM_LOCAL_CONVEX_ORIGIN } from "./intelligence/swarmConvexOrigin.mjs";
 
 const fullSha = /^[0-9a-f]{40}$/;
-// The runner-local backend's only URL. Kept here rather than imported, because
+// The runner-local backend's only URL, from the dependency-free leaf module.
 // localConvexBackend.mjs has top-level await and this file must stay loadable
 // through require(); a test pins it equal to that module's LOCAL_CONVEX_URL.
-export const LOCAL_BACKEND_URL = "http://127.0.0.1:3210";
+export const LOCAL_BACKEND_URL = SWARM_LOCAL_CONVEX_ORIGIN;
 
 export function validateAccountingReleaseEvidence(evidence, expected) {
   const errors = [];
@@ -19,11 +20,12 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
   if (!fullSha.test(expected.testedSha ?? "") || evidence.testedSha !== expected.testedSha) {
     errors.push("Evidence does not name the exact tested SHA.");
   }
-  // SCRUM-892 option A: a pull request may certify on the runner-local backend;
-  // the release event never may. Anything but an explicit "local" is the cloud check.
+  // SCRUM-892 (owner ruling c24441): the pull-request and the release rehearsal
+  // both certify on the runner-local backend, and no other event may. Anything
+  // but an explicit "local" is the cloud check.
   const local = expected.deploymentType === "local";
-  if (local && expected.eventName !== "workflow_run") {
-    errors.push("Local backend evidence is accepted only for a pull-request rehearsal, never for the release.");
+  if (local && expected.eventName !== "workflow_run" && expected.eventName !== "repository_dispatch") {
+    errors.push("Local backend evidence is accepted only from the trusted rehearsal's pull-request or release event.");
   }
   if (expected.deploymentType !== undefined && expected.deploymentType !== "preview" && !local) {
     errors.push("Unknown expected deployment type.");
@@ -95,7 +97,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     });
     if (errors.length > 0) throw new Error(errors.join(" "));
     console.log(process.env.EXPECTED_DEPLOYMENT_TYPE === "local"
-      ? `Verified ${evidence.cases.length} executed local-backend scenarios at the exact tested PR merge.`
+      ? `Verified ${evidence.cases.length} executed local-backend scenarios at the exact tested SHA.`
       : `Verified ${evidence.cases.length} executed cloud scenarios at the exact release SHA.`);
   } catch (error) {
     console.error(`Trusted accounting release evidence refused: ${error.message}`);

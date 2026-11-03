@@ -335,10 +335,13 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
   // SCRUM-892 option A: the pull-request path runs on the runner-local backend
   // (start, staged deploy, mark, cases, verify, stop) and creates no preview;
-  // the cloud steps run only for repository_dispatch, their bodies unchanged
-  // (pinned in trustedAccountingRehearsalReleasePath.test.ts).
+  // the cloud steps run only for repository_dispatch, their bodies unchanged.
+  // SCRUM-892 c24441: the release runs the same local lifecycle; every cloud
+  // step and the preview credential are gone. The release refusals (preflight,
+  // provenance, release verdict) stay byte-identical, pinned in
+  // trustedAccountingRehearsalReleasePath.test.ts.
   "trusted-accounting-rehearsal.yml":
-    "31d5e0a82ccfd370b1556fef00476e5eae52838a41248b0b4f54f30bb3054f15",
+    "e3fe315c9c8fb4d4fba7c361457bef01890b6aad141ca4dd564eca9be3a728e9",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
@@ -697,8 +700,7 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       "browser-attack-swarm.yml :: attack-worker",
       "browser-attack-swarm.yml :: opening-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
-      // SCRUM-892 option A: the release (cloud) and pull-request (local) forms.
-      "trusted-accounting-rehearsal.yml :: rehearsal",
+      // SCRUM-892 c24441: one local form for the pull request and the release.
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);
   });
