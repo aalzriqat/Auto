@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
+import { z } from "zod";
 
 type Step = { id?: string; name?: string; if?: string; run?: string; uses?: string; env?: Record<string, string> };
 type Job = { name?: string; if?: string; env?: unknown; outputs?: unknown; permissions?: unknown; steps?: Step[] };
@@ -104,6 +105,69 @@ describe("both events run the same local lifecycle", () => {
     const guarded = steps.slice(localStart, -1);
     expect(guarded.map((step) => step.run)).toContain("node scripts/localConvexBackend.mjs verify");
     for (const step of guarded) expect(step, String(step.name)).not.toHaveProperty("continue-on-error");
+  });
+
+  // PR #760 Seat 2: the class is "a key that turns a red tripwire green". It is
+  // closed by mechanism: every workflow, job and step key must be on an
+  // allowlist (.strict()), so a new key fails here before anyone reasons about
+  // it. The table names each known key and the assertion that covers it.
+  //
+  // | key that can turn red into green            | covered by                                   |
+  // |---------------------------------------------|----------------------------------------------|
+  // | step `continue-on-error`                    | strict step schema; mark/verify pinned whole |
+  // | job `continue-on-error`                     | strict job schema                            |
+  // | step `shell` (e.g. `bash ... ; exit 0`)     | strict step schema; mark/verify pinned whole |
+  // | job `defaults.run.shell`                    | strict job schema                            |
+  // | workflow `defaults.run.shell`               | strict workflow schema                       |
+  // | verify `if` that never fires                | mark/verify pinned whole; lifecycle order    |
+  // | verify `run` that swallows the exit code    | mark/verify pinned whole                     |
+  // | verify `working-directory` outside trusted/ | mark/verify pinned whole                     |
+  // | `timeout-minutes` (cancel, not success)     | not red-to-green: a timeout fails the job    |
+  test("the workflow, every job and every step use only allowlisted keys", () => {
+    const stepSchema = z
+      .object({
+        id: z.string(), name: z.string(), if: z.string(), uses: z.string(), with: z.record(z.string(), z.unknown()),
+        run: z.string(), env: z.record(z.string(), z.unknown()), "working-directory": z.string(),
+      })
+      .partial()
+      .strict();
+    const jobSchema = z
+      .object({
+        name: z.string(), needs: z.unknown(), if: z.string(), "runs-on": z.string(), "timeout-minutes": z.number(),
+        permissions: z.record(z.string(), z.string()), outputs: z.record(z.string(), z.string()),
+        env: z.record(z.string(), z.unknown()), steps: z.array(stepSchema),
+      })
+      .partial()
+      .strict();
+    const workflowSchema = z
+      .object({
+        name: z.string(), on: z.record(z.string(), z.unknown()), permissions: z.record(z.string(), z.string()),
+        concurrency: z.unknown(), jobs: z.record(z.string(), jobSchema),
+      })
+      .strict();
+    const result = workflowSchema.safeParse(parse(source));
+    expect(result.success ? [] : result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`)).toEqual([]);
+  });
+
+  test("mark and verify are pinned whole: no shell, no continue-on-error, exact if, run and directory", () => {
+    const tripwire = {
+      if: RUN_IF,
+      "working-directory": "trusted",
+      env: {
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+        NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+      },
+    };
+    expect(steps.find((step) => step.run === "node scripts/localConvexBackend.mjs mark")).toEqual({
+      name: "Mint the disposable-preview marker with the trusted CLI",
+      run: "node scripts/localConvexBackend.mjs mark",
+      ...tripwire,
+    });
+    expect(steps.find((step) => step.run === "node scripts/localConvexBackend.mjs verify")).toEqual({
+      name: "Verify the local backend was not changed during the run",
+      run: "node scripts/localConvexBackend.mjs verify",
+      ...tripwire,
+    });
   });
 
   test("the stop step runs whatever happened, and is the job's final step", () => {
