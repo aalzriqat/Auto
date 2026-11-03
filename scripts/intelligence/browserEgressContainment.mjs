@@ -3,6 +3,7 @@ import http from "node:http";
 import net from "node:net";
 import { pathToFileURL } from "node:url";
 import { clerkTestFrontendApiOrigin } from "./clerkPublicJwtKey.mjs";
+import { SWARM_LOCAL_CONVEX_AUTHORITY, isSwarmLocalConvexUrl } from "./swarmConvexOrigin.mjs";
 
 /**
  * SCRUM-784 browser egress containment.
@@ -142,10 +143,19 @@ export function buildEgressAllowlist({
   } catch {
     throw new Error("NEXT_PUBLIC_CONVEX_URL must be a valid URL for the egress allowlist.");
   }
-  if (convex.protocol !== "https:" || !/^[a-z0-9-]+\.convex\.cloud$/.test(convex.hostname)) {
-    throw new Error("Egress allowlist requires an exact https *.convex.cloud preview deployment.");
+  if (isSwarmLocalConvexUrl(convexUrl)) {
+    // SCRUM-892: the swarm's backend is the runner-local self-hosted Convex.
+    // Exactly this one loopback authority; the candidate-origin entries above
+    // stay the only other loopback entries, and no other loopback port is ever
+    // added (the proof's 127.0.0.2 collector stays denied).
+    entries.add(SWARM_LOCAL_CONVEX_AUTHORITY);
+  } else if (convex.protocol !== "https:" || !/^[a-z0-9-]+\.convex\.cloud$/.test(convex.hostname)) {
+    throw new Error(
+      "Egress allowlist requires an exact https *.convex.cloud deployment or the exact local Convex origin.",
+    );
+  } else {
+    entries.add(`${convex.hostname}:${convex.port || "443"}`);
   }
-  entries.add(`${convex.hostname}:${convex.port || "443"}`);
 
   const clerk = new URL(clerkTestFrontendApiOrigin(clerkPublishableKey));
   entries.add(`${clerk.hostname}:${clerk.port || "443"}`);

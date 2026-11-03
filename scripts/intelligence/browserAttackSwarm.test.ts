@@ -371,6 +371,31 @@ describe("SCRUM-350 browser attack swarm control plane", () => {
     ).toThrow(/runId/);
   });
 
+  // SCRUM-892: the runner-local self-hosted Convex is the swarm's backend now.
+  it("accepts exactly the runner-local Convex origin and no other loopback target", () => {
+    const plan = planBrowserAttackSwarm({ impactedInvariants: [] });
+    const manifest = (expectedCloudUrl: string) =>
+      buildBrowserSwarmRunManifest({
+        plan,
+        workerCount: 1,
+        runId: "pr-350-abcdef1234",
+        previewName: "e2e-pr-350-abcdef1234",
+        expectedCloudUrl,
+      });
+
+    expect(manifest("http://127.0.0.1:3210").expectedCloudUrl).toBe("http://127.0.0.1:3210");
+    for (const refused of [
+      "http://127.0.0.1:3211",
+      "http://localhost:3210",
+      "https://127.0.0.1:3210",
+      "http://127.0.0.2:3210",
+      "http://127.0.0.1:3210/",
+      "http://127.0.0.1",
+    ]) {
+      expect(() => manifest(refused), refused).toThrow(/exact local Convex origin|valid URL/);
+    }
+  });
+
   it("rejects evidence path traversal", () => {
     const mission: BrowserAttackMission = {
       id: "det::UI-1::RTL_PARITY",
