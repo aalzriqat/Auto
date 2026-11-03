@@ -3,10 +3,11 @@
  * times that the Tests slices upload into per-file scheduling costs. These pin
  * the arithmetic, and that the rebuild changes scheduling inputs only.
  */
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
-import { buildWorkload, fitFileSeconds, parseTimingLines } from "./rebuildCoverageWorkload.mjs";
+import { afterEach, describe, expect, test } from "vitest";
+import { buildWorkload, fitFileSeconds, main, parseTimingLines, timingFiles } from "./rebuildCoverageWorkload.mjs";
 
 const PROCESS = { unit: 15, sonar: 25 };
 const row = (mode: "unit" | "sonar", files: string[], wallSeconds: number, status = 0) => ({
@@ -104,5 +105,138 @@ describe("rebuildCoverageWorkload", () => {
     const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
     const totalWall = sum(modelled.map((m) => m.wall));
     expect(Math.abs(sum(modelled.map((m) => m.modelled)) - totalWall) / totalWall).toBeLessThanOrEqual(0.1);
+  });
+
+  test("a timing line is kept only for a successful unit or sonar process that lists its files", () => {
+    const lines = [
+      row("unit", ["a"], 30),
+      { mode: "other", files: ["b"], wallSeconds: 30, status: 0 },
+      { mode: "unit", files: "c", wallSeconds: 30, status: 0 },
+      row("sonar", ["d"], 30, 1),
+    ].map((timing) => JSON.stringify(timing));
+    expect(parseTimingLines(lines.join("\n")).map((timing: { files: string[] }) => timing.files)).toEqual([["a"]]);
+  });
+
+  test("with no file cheaper than the listing threshold the previous default is kept", () => {
+    const previous = { defaultFileSeconds: 7, files: {} };
+    const next = buildWorkload(previous, new Map([["big.test.ts", 90]]), () => true);
+    expect(next.defaultFileSeconds).toBe(7);
+    expect(next.files).toEqual({ "big.test.ts": 90 });
+  });
+
+  test("files that cost the same seconds are listed in path order", () => {
+    const cost = new Map([
+      ["b.test.ts", 50],
+      ["a.test.ts", 50],
+      ["c.test.ts", 80],
+    ]);
+    const next = buildWorkload({ defaultFileSeconds: 2, files: {} }, cost, () => true);
+    expect(Object.keys(next.files)).toEqual(["c.test.ts", "a.test.ts", "b.test.ts"]);
+  });
+});
+
+describe("rebuildCoverageWorkload command line", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  const PREVIOUS = {
+    $comment: "keep",
+    defaultFileSeconds: 4,
+    isolateAtSeconds: 40,
+    processSeconds: PROCESS,
+    files: { "stale.test.ts": 99 },
+  };
+
+  // A project root with real files, a workload to rebuild and two timing
+  // directories (one nested) holding .jsonl and other files.
+  function project() {
+    const root = mkdtempSync(path.join(tmpdir(), "rebuild-workload-"));
+    roots.push(root);
+    writeFileSync(path.join(root, "heavy.test.ts"), "");
+    writeFileSync(path.join(root, "light.test.ts"), "");
+    const workload = path.join(root, "workload.json");
+    writeFileSync(workload, `${JSON.stringify(PREVIOUS)}\n`);
+    const timings = path.join(root, "timings");
+    mkdirSync(path.join(timings, "coverage-timings-1"), { recursive: true });
+    writeFileSync(
+      path.join(timings, "coverage-timings-1", "slice-1.jsonl"),
+      `${[row("unit", ["heavy.test.ts"], 215), row("sonar", ["light.test.ts", "gone.test.ts"], 29)].map((r) => JSON.stringify(r)).join("\n")}\n`,
+    );
+    writeFileSync(path.join(timings, "readme.txt"), "not a timing file");
+    return { root, workload, timings };
+  }
+
+  function run(argv: string[], root: string, workload?: string) {
+    let out = "";
+    let err = "";
+    main(argv, {
+      cwd: root,
+      env: workload ? { AUTOFLOW_COVERAGE_WORKLOAD: workload } : {},
+      stdout: {
+        write: (text: string) => {
+          out += text;
+          return true;
+        },
+      },
+      stderr: {
+        write: (text: string) => {
+          err += text;
+          return true;
+        },
+      },
+    });
+    return { out, err };
+  }
+
+  test("timingFiles walks nested directories and returns only .jsonl files", () => {
+    const { timings } = project();
+    mkdirSync(path.join(timings, "deep", "er"), { recursive: true });
+    writeFileSync(path.join(timings, "deep", "er", "slice-9.jsonl"), "");
+    const found = timingFiles(timings).map((file: string) => path.relative(timings, file).split(path.sep).join("/"));
+    expect(found.sort()).toEqual(["coverage-timings-1/slice-1.jsonl", "deep/er/slice-9.jsonl"]);
+  });
+
+  test("without --write the rebuilt workload goes to stdout and the file is untouched", () => {
+    const { root, workload, timings } = project();
+    const { out, err } = run([timings], root, workload);
+    const next = JSON.parse(out);
+    expect(next.files["heavy.test.ts"]).toBe(200);
+    expect(next.files["stale.test.ts"]).toBeUndefined();
+    expect(next.$comment).toBe("keep");
+    expect(err).toMatch(/2 timing lines -> 1 listed files/);
+    expect(JSON.parse(readFileSync(workload, "utf8"))).toEqual(PREVIOUS);
+  });
+
+  test("with --write the workload file is replaced and nothing goes to stdout", () => {
+    const { root, workload, timings } = project();
+    const { out } = run([timings, "--write"], root, workload);
+    expect(out).toBe("");
+    expect(JSON.parse(readFileSync(workload, "utf8")).files["heavy.test.ts"]).toBe(200);
+  });
+
+  test("the default workload path is scripts/coverageWorkload.json under the working directory", () => {
+    const { root, timings } = project();
+    mkdirSync(path.join(root, "scripts"));
+    writeFileSync(path.join(root, "scripts", "coverageWorkload.json"), `${JSON.stringify(PREVIOUS)}\n`);
+    const { out } = run([timings], root);
+    expect(JSON.parse(out).files["heavy.test.ts"]).toBe(200);
+  });
+
+  test("no directory, or a directory that does not exist, is a usage error", () => {
+    const { root, timings } = project();
+    expect(() => run([], root)).toThrow(/Usage: node scripts\/rebuildCoverageWorkload\.mjs/);
+    expect(() => run(["--write"], root)).toThrow(/Usage:/);
+    expect(() => run([path.join(root, "missing")], root)).toThrow(/Usage:/);
+    expect(() => run([path.join(timings, "readme.txt")], root)).toThrow(/Usage:/);
+  });
+
+  test("a directory without a successful timing line is refused", () => {
+    const { root, workload } = project();
+    const empty = path.join(root, "empty");
+    mkdirSync(empty);
+    writeFileSync(path.join(empty, "slice-1.jsonl"), `${JSON.stringify(row("unit", ["a"], 30, 1))}\n`);
+    expect(() => run([empty], root, workload)).toThrow("No successful timing lines found.");
   });
 });

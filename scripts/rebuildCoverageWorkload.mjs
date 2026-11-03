@@ -81,7 +81,7 @@ export function buildWorkload(previous, cost, fileExists) {
   return { ...previous, defaultFileSeconds: Math.max(1, Math.round(median)), files };
 }
 
-function timingFiles(directory) {
+export function timingFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name);
     if (entry.isDirectory()) return timingFiles(full);
@@ -89,20 +89,26 @@ function timingFiles(directory) {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  const write = args.includes("--write");
-  const directories = args.filter((arg) => arg !== "--write");
+/**
+ * `cwd` resolves the workload path and the test-file paths the timings name.
+ * @param {string[]} argv
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, stdout?: { write(text: string): unknown }, stderr?: { write(text: string): unknown } }} [io]
+ */
+export function main(argv, { cwd = process.cwd(), env = process.env, stdout = process.stdout, stderr = process.stderr } = {}) {
+  const write = argv.includes("--write");
+  const directories = argv.filter((arg) => arg !== "--write").map((arg) => path.resolve(cwd, arg));
   if (directories.length === 0 || directories.some((d) => !existsSync(d) || !statSync(d).isDirectory())) {
     throw new Error("Usage: node scripts/rebuildCoverageWorkload.mjs <timings-dir> [<timings-dir> ...] [--write]");
   }
-  const workloadPath = path.resolve(process.env.AUTOFLOW_COVERAGE_WORKLOAD ?? "scripts/coverageWorkload.json");
+  const workloadPath = path.resolve(cwd, env.AUTOFLOW_COVERAGE_WORKLOAD ?? "scripts/coverageWorkload.json");
   const previous = JSON.parse(readFileSync(workloadPath, "utf8"));
   const rows = directories.flatMap(timingFiles).flatMap((file) => parseTimingLines(readFileSync(file, "utf8")));
   if (rows.length === 0) throw new Error("No successful timing lines found.");
-  const next = buildWorkload(previous, fitFileSeconds(rows, previous.processSeconds), (file) => existsSync(file));
+  const next = buildWorkload(previous, fitFileSeconds(rows, previous.processSeconds), (file) => existsSync(path.resolve(cwd, file)));
   const text = `${JSON.stringify(next, null, 2)}\n`;
   if (write) writeFileSync(workloadPath, text);
-  else process.stdout.write(text);
-  process.stderr.write(`${rows.length} timing lines -> ${Object.keys(next.files).length} listed files (default ${next.defaultFileSeconds}s)\n`);
+  else stdout.write(text);
+  stderr.write(`${rows.length} timing lines -> ${Object.keys(next.files).length} listed files (default ${next.defaultFileSeconds}s)\n`);
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main(process.argv.slice(2));
