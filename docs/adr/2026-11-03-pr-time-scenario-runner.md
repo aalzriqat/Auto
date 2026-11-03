@@ -45,10 +45,7 @@ The discarded Vitest console output is not printed: it carries test titles, file
 
 ## Not covered, stated plainly
 
-- `active` browser-level records (screen audits and replays) need Playwright and a backend. The runner counts them as
-  `browserDeferred`; it does not run them and does not claim them. Their PR execution stays with the existing
-  Playwright jobs and `jevImpact`. SCRUM-762 closes the gap by running them against a real backend.
-  Open policy question for the owner: under " a scenario that cannot run is a FAIL ", these records are not executed at PR time. This job reports them as `notRunHere.browserDeferred` and does not claim a green result for them; it does not turn the run red for them, because that would make the advisory job permanently red until SCRUM-762 lands.
+- Browser-level records follow SCRUM-760 item 3: at PR time a record is required only when the PR touches its screen (a changed file matches the record's `sourceGlobs`, or its own bound spec changed); the rest belong to the nightly and release runs and are counted as `notRequiredAtPrTime`. A required record cannot be executed here (it needs a browser and a backend, SCRUM-762), so it FAILS with `BROWSER_REPLAY_NOT_EXECUTED` and the summary names the reason. The job is therefore red for a PR that touches such a screen until SCRUM-762 lands. Records with no `sourceGlobs` (38 of 49 at 2026-11-03) cannot be mapped to a screen; they are reported as `unmappedToAScreen`, not guessed. Mapping them is follow-up work. If the PR diff cannot be read, every active browser record counts as selected and the run fails.
 - The JSON reporter does not expose `test.fails`. An expected-failure test would report `passed`; the record validator
   refuses it statically, and the runner relies on that.
 - Execution is local convex-test, serial. It is not platform or production certification.

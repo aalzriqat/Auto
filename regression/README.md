@@ -5,6 +5,10 @@ public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
 `scripts/regression/scenarioRecord.ts`; run `pnpm test:regression-library`.
 
+## PR-time runner (SCRUM-761 R3)
+
+`node scripts/regression/prRunner.mjs [--base <ref>]` (`pnpm test:regression-pr`) runs every active backend record at its bound test and fails on any record that cannot be shown to have run and passed. It also fails when the PR touches the screen of an active browser record (`sourceGlobs`), because that replay cannot be executed there. Design, failure codes and limits: `docs/adr/2026-11-03-pr-time-scenario-runner.md`.
+
 ## Supplier payment amount display (SCRUM-880)
 
 Four `supplier-payment-currency-scale-*` screen records bind the EN/AR JOD/USD

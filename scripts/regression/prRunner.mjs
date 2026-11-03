@@ -4,12 +4,14 @@
 // the bound files, one worker, no retry), and gives each record a verdict. A scenario that cannot run is a FAIL, never
 // a skip: a missing binding, a missing file, a test that is not found, found twice, skipped or failing all fail.
 // The output is counts and scenario ids only; the repository and its Actions logs are public.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { globMatches } from "../intelligence/jevImpact.mjs";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { parseArgs } from "node:util";
 
 const codeUnitCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -41,21 +43,40 @@ export function loadRecords(root) {
 }
 
 /**
- * Active backend records run here. Active browser records need a browser and a backend, so they are counted as
- * deferred and are not claimed as run. An active cloud record has no runner (SCRUM-762), so it fails.
+ * Active backend records run here. An active browser record is required at PR time only when the PR touches its
+ * screen: a changed file matches one of its `sourceGlobs`, or its own bound spec changed. A selected browser record
+ * cannot be executed here (it needs a browser and a backend, SCRUM-762), so it FAILS. Browser records without
+ * `sourceGlobs` cannot be mapped to a screen; they are listed as a gap, never guessed at. The rest belong to the nightly
+ * and release runs. An active cloud record has no runner, so it fails.
+ * @param {object[]} records
+ * @param {string[] | null} changedFiles repo-relative paths of the PR diff; null when they could not be determined
  */
-export function selectForPr(records) {
-  const selection = { run: [], browserDeferred: [], cloud: [], candidate: 0, retired: 0 };
+export function selectForPr(records, changedFiles = null) {
+  const selection = { run: [], browserSelected: [], browserNotRequired: [], browserUnmapped: [], changedFilesUnavailable: false, cloud: [], candidate: 0, retired: 0 };
   for (const record of records) {
     if (record.status === "retired") selection.retired += 1;
     else if (record.status === "candidate") selection.candidate += 1;
-    else if (record.level === "browser") selection.browserDeferred.push(record);
     else if (record.level === "cloud") selection.cloud.push(record);
-    else selection.run.push(record);
+    else if (record.level !== "browser") selection.run.push(record);
+    else if (changedFiles === null) {
+      selection.changedFilesUnavailable = true;
+      selection.browserSelected.push(record);
+    } else {
+      const globs = Array.isArray(record.sourceGlobs) ? record.sourceGlobs : [];
+      const touched = changedFiles.some(file => file === record.impl?.file || globs.some(glob => globMatches(glob, file)));
+      if (touched) selection.browserSelected.push(record);
+      else if (globs.length === 0) selection.browserUnmapped.push(record);
+      else selection.browserNotRequired.push(record);
+    }
   }
   return selection;
 }
 
+/** Files changed between `base` and HEAD (three-dot: since the merge base). Throws when Git cannot say. */
+export function changedFilesSince(root, base) {
+  const out = execFileSync(resolveTrustedGitExecutable(), ["diff", "--name-only", "-z", `${base}...HEAD`], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  return out.split("\0").filter(Boolean).map(file => file.replaceAll("\\", "/"));
+}
 const normalise = file => file.replaceAll("\\", "/");
 
 /**
@@ -89,18 +110,22 @@ export function evaluate(selected, report, root) {
 export function summarise(selection, verdicts, extraIssues) {
   const counts = {};
   for (const verdict of verdicts) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
-  const failures = verdicts.filter(verdict => verdict.code !== "PASS");
+  if (selection.browserSelected.length) counts.BROWSER_REPLAY_NOT_EXECUTED = selection.browserSelected.length;
+  const failures = [...verdicts, ...selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }))].filter(verdict => verdict.code !== "PASS");
   const issues = [...extraIssues];
-  if (verdicts.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
+  if (verdicts.length === 0 && selection.browserSelected.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
   if (selection.cloud.length) issues.push(`CLOUD_RECORDS_HAVE_NO_RUNNER:${selection.cloud.length}`);
+  if (selection.browserSelected.length) issues.push(`SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:${selection.browserSelected.length}`);
+  if (selection.changedFilesUnavailable) issues.push("PR_DIFF_UNAVAILABLE");
   return {
     verdict: failures.length === 0 && issues.length === 0 ? "PASS" : "FAIL",
-    selected: verdicts.length,
+    selected: verdicts.length + selection.browserSelected.length,
     passed: counts.PASS ?? 0,
     failed: failures.length,
     failureCodes: Object.fromEntries(Object.entries(counts).filter(([code]) => code !== "PASS")),
     failedIds: failures.map(verdict => `${verdict.id} ${verdict.code}`),
-    notRunHere: { browserDeferred: selection.browserDeferred.length, candidate: selection.candidate, retired: selection.retired },
+    browser: { selectedForThisPr: selection.browserSelected.length, notRequiredAtPrTime: selection.browserNotRequired.length, unmappedToAScreen: selection.browserUnmapped.length },
+    notRunHere: { candidate: selection.candidate, retired: selection.retired },
     issues,
   };
 }
@@ -122,10 +147,10 @@ export function runVitest(root, files, config) {
   }
 }
 
-/** @param {{ root: string, config?: string, execute?: typeof runVitest }} options */
-export function runPrScenarios({ root, config, execute = runVitest }) {
+/** @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null }} options */
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null }) {
   const { records, problems } = loadRecords(root);
-  const selection = selectForPr(records);
+  const selection = selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
   const issues = [...problems];
   let report = null;
@@ -140,9 +165,15 @@ export function runPrScenarios({ root, config, execute = runVitest }) {
 
 export function main(argv = process.argv.slice(2)) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
-    options: { root: { type: "string" }, config: { type: "string" } } });
+    options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string", default: "origin/main" } } });
   const root = path.resolve(values.root ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."));
-  const summary = runPrScenarios({ root, config: values.config });
+  let changedFiles = null;
+  try {
+    changedFiles = changedFilesSince(root, values.base);
+  } catch {
+    // Left null: the PR diff is unknown, so every active browser record counts as selected and the run fails.
+  }
+  const summary = runPrScenarios({ root, config: values.config, changedFiles });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

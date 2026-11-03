@@ -142,21 +142,57 @@ describe("PR scenario runner", () => {
     expect(summary).toMatchObject({ verdict: "FAIL", passed: 1, issues: ["VITEST_EXIT_1"] });
   });
 
-  it("selection: browser records are counted as not run here, cloud records fail, candidates and retired are not run", () => {
+  it("selection: cloud records fail, candidates and retired are not run, backend records run", () => {
     const selection = selectForPr([
-      { id: "b", status: "active", level: "backend" }, { id: "br", status: "active", level: "browser" },
-      { id: "c", status: "active", level: "cloud" }, { id: "cand", status: "candidate", level: "backend" },
-      { id: "r", status: "retired", level: "backend" },
-    ] as never);
+      { id: "b", status: "active", level: "backend" }, { id: "c", status: "active", level: "cloud" },
+      { id: "cand", status: "candidate", level: "backend" }, { id: "r", status: "retired", level: "backend" },
+    ] as never, []);
     expect(selection.run.map((record: { id: string }) => record.id)).toEqual(["b"]);
-    expect(selection.browserDeferred).toHaveLength(1);
     expect(selection).toMatchObject({ candidate: 1, retired: 1 });
     const summary = summarise(selection, [{ id: "b", code: "PASS" }], []);
     expect(summary.verdict).toBe("FAIL");
     expect(summary.issues).toEqual(["CLOUD_RECORDS_HAVE_NO_RUNNER:1"]);
-    expect(summary.notRunHere).toEqual({ browserDeferred: 1, candidate: 1, retired: 1 });
+    expect(summary.notRunHere).toEqual({ candidate: 1, retired: 1 });
   });
 
+  describe("browser records at PR time", () => {
+    const records = [
+      { id: "mapped-touched", status: "active", level: "browser", sourceGlobs: ["components/cockpit/**"], impl: { file: "playwright/a.spec.ts" } },
+      { id: "mapped-untouched", status: "active", level: "browser", sourceGlobs: ["components/other/**"], impl: { file: "playwright/b.spec.ts" } },
+      { id: "unmapped", status: "active", level: "browser", impl: { file: "playwright/c.spec.ts" } },
+      { id: "spec-edited", status: "active", level: "browser", impl: { file: "playwright/d.spec.ts" } },
+    ] as never;
+    const ids = (list: Array<{ id: string }>) => list.map(record => record.id);
+
+    it("selects by the PR diff: a touched screen or an edited spec; the rest are not required or unmapped", () => {
+      const selection = selectForPr(records, ["components/cockpit/Panel.tsx", "playwright/d.spec.ts"]);
+      expect(ids(selection.browserSelected)).toEqual(["mapped-touched", "spec-edited"]);
+      expect(ids(selection.browserNotRequired)).toEqual(["mapped-untouched"]);
+      expect(ids(selection.browserUnmapped)).toEqual(["unmapped"]);
+    });
+
+    it("a selected browser record that cannot run FAILS the run and says why", () => {
+      const selection = selectForPr(records, ["components/cockpit/Panel.tsx"]);
+      const summary = summarise(selection, [{ id: "b", code: "PASS" }], []);
+      expect(summary.verdict).toBe("FAIL");
+      expect(summary.failureCodes).toEqual({ BROWSER_REPLAY_NOT_EXECUTED: 1 });
+      expect(summary.failedIds).toEqual(["mapped-touched BROWSER_REPLAY_NOT_EXECUTED"]);
+      expect(summary.issues).toEqual(["SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:1"]);
+      expect(summary.browser).toEqual({ selectedForThisPr: 1, notRequiredAtPrTime: 1, unmappedToAScreen: 2 });
+    });
+
+    it("a PR that touches no screen passes, with the browser records counted as not required or unmapped", () => {
+      const summary = summarise(selectForPr(records, ["README.md"]), [{ id: "b", code: "PASS" }], []);
+      expect(summary).toMatchObject({ verdict: "PASS", failed: 0, browser: { selectedForThisPr: 0, notRequiredAtPrTime: 2, unmappedToAScreen: 2 } });
+    });
+
+    it("an unknown PR diff fails: every browser record counts as selected", () => {
+      const summary = summarise(selectForPr(records, null), [{ id: "b", code: "PASS" }], []);
+      expect(summary.verdict).toBe("FAIL");
+      expect(summary.issues).toContain("PR_DIFF_UNAVAILABLE");
+      expect(summary.browser.selectedForThisPr).toBe(4);
+    });
+  });
   it("evaluate matches by the exact file, not by a similarly named one", () => {
     const root = makeProject({ "a.fixture.js": "", "ab.fixture.js": "" }, []);
     const report = { testResults: [{ name: path.join(root, "ab.fixture.js"), status: "passed", assertionResults: [{ title: "t", status: "passed" }] }] };

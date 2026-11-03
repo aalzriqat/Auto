@@ -26,6 +26,8 @@ jobs:
     - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         persist-credentials: false
+        # The runner diffs the PR against its base to choose the browser records this PR touches.
+        fetch-depth: 0
 
     - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
@@ -41,7 +43,8 @@ jobs:
       run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Run the library's bound scenarios
-      run: node scripts/regression/prRunner.mjs
+      run: node scripts/regression/prRunner.mjs --base "$BASE_SHA"
       env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
         NODE_ENV: test
         NODE_OPTIONS: --max-old-space-size=5632
