@@ -113,7 +113,9 @@ describe("SCRUM-757 workflow security and coverage wiring", () => {
 
   it("never checks out candidate source in jobs that hold reusable credentials", () => {
     const workflow = read("browser-attack-swarm");
-    for (const name of ["trusted-e2e", "opening-prepare"]) {
+    // SCRUM-892: opening-prepare no longer exists; every job that owns a local
+    // backend (and so holds its admin key) is held to the same rule.
+    for (const name of ["trusted-e2e", "attack-worker", "opening-proof"]) {
       const job = workflow.jobs[name];
       expect(
         job.steps
