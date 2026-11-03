@@ -409,15 +409,15 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     .filter(w => Object.values(workflowSchema.parse(parse(w.text)).jobs).some(job => job.steps?.some(step => invocation(step, "create"))));
 
   it("finds the known creators", () => {
-    // SCRUM-892: browser-attack-swarm.yml left this census when it moved to a
-    // runner-local Convex backend. It no longer creates, pins or deletes any
-    // cloud Preview, so it owes no cleanup; the next test keeps it out.
-    // trusted-accounting-rehearsal.yml left it too (owner ruling SCRUM-892
-    // c24441): its pull-request and release rehearsals both run locally.
+    // SCRUM-892: browser-attack-swarm.yml, pilot-role-audit.yml and
+    // trusted-accounting-rehearsal.yml left this census when they moved to
+    // runner-local Convex backends (owner ruling SCRUM-892 c24441). None of
+    // them creates, pins or deletes a cloud Preview, so none owes cleanup.
+    // The next test keeps the swarm out; each workflow's own test keeps the
+    // other two out.
     expect(creators.map((w) => w.file).sort()).toEqual([
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
-      "pilot-role-audit.yml",
       "trusted-main-e2e.yml",
     ]);
   });

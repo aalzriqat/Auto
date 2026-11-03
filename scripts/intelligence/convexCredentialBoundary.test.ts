@@ -315,12 +315,17 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // hunt library. Nothing else in the workflow changed: still main-only, same
     // steps, secrets, permissions and checkouts.
     "2f1d2e3816f6927ec6d7cde133d044223a9a13029e6bfa63a845f30ffe7f9db8",
-  // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
-  // pin keeps its triggers, credentials, deploy and cleanup inside the review.
+  // SCRUM-616: main-only; SCRUM-892: each role job runs a local self-hosted
+  // backend, with no cloud preview or credential. This whole-workflow pin keeps
+  // its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
-    // PR #661: preserve screenshots in public-key encrypted evidence; publish
-    // only ciphertext and a fixed-field summary, with private browser logs.
-    "d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d",
+    // SCRUM-892: re-pinned for the local backend: the cloud preview create, pin
+    // and delete steps and the preview deploy key are gone; each role job starts,
+    // marks, verifies and stops its own runner-local backend. Triggers and
+    // permissions are unchanged.
+    // Previous pin d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d.
+    // Previous pin d8fdcec7304c4c8e92da8251f220bd57914b78064148445dcd42dd9c1834cae6 (verify's if was conditional).
+    "c6e255670342aabb42ff1c6d47e195da637ac2fde3e81fcec8e9ee2337de7cf1",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
