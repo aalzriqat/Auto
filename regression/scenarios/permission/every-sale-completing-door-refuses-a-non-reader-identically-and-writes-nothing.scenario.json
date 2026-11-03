@@ -1,0 +1,98 @@
+{
+  "id": "every-sale-completing-door-refuses-a-non-reader-identically-and-writes-nothing",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "entitlement": "E_MINUS_1_FILS_E_PLUS_1_FILS_ABSENT",
+        "price": "E_MINUS_1_FILS_E_PLUS_1_FILS",
+        "status": "AVAILABLE_ARCHIVED"
+      }
+    },
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeDraft",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "entitlement": "E_MINUS_1_FILS_E_PLUS_1_FILS_ABSENT",
+        "price": "E_MINUS_1_FILS_E_PLUS_1_FILS",
+        "status": "AVAILABLE_ARCHIVED"
+      }
+    },
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "vehicle": "SOURCED_CAR_LAST_LINE",
+        "entitlement": "E_MINUS_1_FILS_E_PLUS_1_FILS_ABSENT",
+        "price": "E_MINUS_1_FILS_E_PLUS_1_FILS",
+        "status": "AVAILABLE_ARCHIVED"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant-without-cost",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "entitlement": "E_MINUS_1_FILS_E_PLUS_1_FILS_ABSENT",
+        "status": "AVAILABLE_ARCHIVED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "refusal.payload.distinctValues",
+      "value": "1"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "absent"
+    },
+    {
+      "observable": "tables.changed",
+      "value": "0"
+    }
+  ],
+  "matrixRow": "SCRUM894-sale-door-cost-class",
+  "impl": {
+    "file": "convex/saleDoorCostDisclosureClass.scrum894.test.ts",
+    "testName": "every discovered sale-completing door gives a non-reader one byte-identical coded refusal at every entitlement, price and status, and writes nothing to any table"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum894-retro",
+    "firstSeen": "2026-11-03"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-894",
+    "failingFirst": "4a85b84f58f493c17031d9b6ded22098241434e9"
+  },
+  "fingerprint": "b4772ad58c15aec3565d2dd97a1d1892b444486cd83485e9dea8c3d9d01f2f93"
+}
