@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 
 // A file cheaper than this is left to `defaultFileSeconds`, which keeps the
 // committed model short and diffable.
-export const LISTED_AT_SECONDS = 8;
+const LISTED_AT_SECONDS = 8;
 const ITERATIONS = 400;
 
 export function parseTimingLines(text) {
@@ -74,7 +74,7 @@ export function buildWorkload(previous, cost, fileExists) {
   const median = small.length > 0 ? small[Math.floor(small.length / 2)] : previous.defaultFileSeconds;
   const files = Object.fromEntries(
     known
-      .map(([file, seconds]) => [file, Math.max(1, Math.round(seconds))])
+      .map(([file, seconds]) => [file, Math.round(seconds)])
       .filter(([, seconds]) => seconds >= LISTED_AT_SECONDS)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
   );
@@ -96,7 +96,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (directories.length === 0 || directories.some((d) => !existsSync(d) || !statSync(d).isDirectory())) {
     throw new Error("Usage: node scripts/rebuildCoverageWorkload.mjs <timings-dir> [<timings-dir> ...] [--write]");
   }
-  const workloadPath = path.resolve("scripts", "coverageWorkload.json");
+  const workloadPath = path.resolve(process.env.AUTOFLOW_COVERAGE_WORKLOAD ?? "scripts/coverageWorkload.json");
   const previous = JSON.parse(readFileSync(workloadPath, "utf8"));
   const rows = directories.flatMap(timingFiles).flatMap((file) => parseTimingLines(readFileSync(file, "utf8")));
   if (rows.length === 0) throw new Error("No successful timing lines found.");

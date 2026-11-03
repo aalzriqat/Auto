@@ -166,7 +166,8 @@ const WORKLOAD = JSON.parse(readFileSync(path.join(process.cwd(), "scripts", "co
   processSeconds: { unit: number; sonar: number };
   files: Record<string, number>;
 };
-const isHeavy = (file: string) => (WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds) >= WORKLOAD.isolateAtSeconds;
+const fileSeconds = (file: string) => WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds;
+const isHeavy = (file: string) => fileSeconds(file) >= WORKLOAD.isolateAtSeconds;
 
 const TEST_BLOB_DIR = ".vitest-reports-runner-test";
 const TEST_COVERAGE_DIR = ".coverage-runner-test";
@@ -588,12 +589,11 @@ describe("runVitestCoverageShards", () => {
         jobs: Record<string, { strategy: { matrix: { slice: number[] } } }>;
       };
       const sliceCount = workflow.jobs["unit-and-integration-slice"].strategy.matrix.slice.length;
-      const seconds = (file: string) => WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds;
       // The cost of one Vitest process, from the committed weights alone (not
       // from anything the runner prints), so a change to the planner cannot
       // grade its own balance.
       const processCost = (mode: "unit" | "sonar", files: string[]) =>
-        WORKLOAD.processSeconds[mode] + files.reduce((sum, file) => sum + seconds(file), 0);
+        WORKLOAD.processSeconds[mode] + files.reduce((sum, file) => sum + fileSeconds(file), 0);
 
       const load = Array.from({ length: sliceCount }, () => 0);
       const batches: number[] = [];
@@ -842,7 +842,7 @@ describe("runVitestCoverageShards", () => {
     test("the most expensive batch starts first", async () => {
       await run("unit", { VITEST_COVERAGE_BATCH_SIZE: "16", VITEST_COVERAGE_CONCURRENCY: "2" });
       const cost = (call: (typeof childBoundary.calls)[number]) =>
-        batchTestFiles(call).reduce((sum, file) => sum + (WORKLOAD.files[file] ?? WORKLOAD.defaultFileSeconds), 0);
+        batchTestFiles(call).reduce((sum, file) => sum + fileSeconds(file), 0);
       const started = childBoundary.calls.filter((call) => call.async);
       expect(cost(started[0])).toBe(Math.max(...started.map(cost)));
     });
