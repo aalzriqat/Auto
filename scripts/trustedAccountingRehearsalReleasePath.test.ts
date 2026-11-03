@@ -85,6 +85,27 @@ describe("both events run the same local lifecycle", () => {
     ]);
   });
 
+  // PR #760 Seat 1: the tripwire could be switched off without a red test,
+  // by `continue-on-error` on verify or by a verify `if` that never fires.
+  // `mark` cannot be unconditional here, because a pull request that changes
+  // no backend input starts no backend; it carries the exact run condition.
+  test("mark and verify run under exactly the run condition, found by their commands", () => {
+    const byRun = (command: string) => steps.filter((step) => step.run === command);
+    const mark = byRun("node scripts/localConvexBackend.mjs mark");
+    const verify = byRun("node scripts/localConvexBackend.mjs verify");
+    expect(mark).toHaveLength(1);
+    expect(verify).toHaveLength(1);
+    expect(mark[0]?.if).toBe(RUN_IF);
+    expect(verify[0]?.if).toBe(RUN_IF);
+  });
+
+  test("no local step before the stop, and not the job, may continue on error", () => {
+    expect(rehearsal).not.toHaveProperty("continue-on-error");
+    const guarded = steps.slice(localStart, -1);
+    expect(guarded.map((step) => step.run)).toContain("node scripts/localConvexBackend.mjs verify");
+    for (const step of guarded) expect(step, String(step.name)).not.toHaveProperty("continue-on-error");
+  });
+
   test("the stop step runs whatever happened, and is the job's final step", () => {
     expect(steps.at(-1)?.name).toBe("Stop the local Convex backend");
     expect(steps.at(-1)?.if).toBe("always()");
