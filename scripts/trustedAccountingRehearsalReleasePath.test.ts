@@ -30,7 +30,10 @@ const sha256 = (value: unknown) => createHash("sha256").update(JSON.stringify(va
 const RUN_IF =
   "steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')";
 const localStart = steps.findIndex((step) => step.name === "Start the local Convex backend");
-const localSteps = steps.slice(Math.max(localStart, 0)).filter((step) => step.if === RUN_IF || step.if === "always()");
+const VERIFY_IF = `always() && ${RUN_IF}`;
+const localSteps = steps
+  .slice(Math.max(localStart, 0))
+  .filter((step) => step.if === RUN_IF || step.if === VERIFY_IF || step.if === "always()");
 
 describe("the release refusals are unchanged", () => {
   // Each hash is the same projection of origin/main 0cc1f805's copy of this workflow.
@@ -90,14 +93,81 @@ describe("both events run the same local lifecycle", () => {
   // by `continue-on-error` on verify or by a verify `if` that never fires.
   // `mark` cannot be unconditional here, because a pull request that changes
   // no backend input starts no backend; it carries the exact run condition.
-  test("mark and verify run under exactly the run condition, found by their commands", () => {
+  // `verify` adds always(), so a failed or skipped step before it (a blanked
+  // baseline included) makes verify refuse instead of skipping it.
+  test("mark and verify run under exactly their conditions, found by their commands", () => {
     const byRun = (command: string) => steps.filter((step) => step.run === command);
     const mark = byRun("node scripts/localConvexBackend.mjs mark");
     const verify = byRun("node scripts/localConvexBackend.mjs verify");
     expect(mark).toHaveLength(1);
     expect(verify).toHaveLength(1);
     expect(mark[0]?.if).toBe(RUN_IF);
-    expect(verify[0]?.if).toBe(RUN_IF);
+    expect(verify[0]?.if).toBe(VERIFY_IF);
+  });
+
+  // PR #760 round 3: env injection (NODE_OPTIONS, BASH_ENV), a step that
+  // blanks the baseline through $GITHUB_ENV, and a $GITHUB_PATH write. Closed
+  // by pinning every step from mark through verify as an exact literal (count,
+  // order, name, if, run, directory and env), and the workflow and job env.
+  test("every step from mark through verify equals an exact literal", () => {
+    const first = steps.findIndex((step) => step.run === "node scripts/localConvexBackend.mjs mark");
+    const last = steps.findIndex((step) => step.run === "node scripts/localConvexBackend.mjs verify");
+    const tripwireEnv = {
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+      NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+    };
+    const caseEnv = {
+      CONVEX_SELF_HOSTED_URL: "${{ env.CONVEX_SELF_HOSTED_URL }}",
+      CONVEX_SELF_HOSTED_ADMIN_KEY: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}",
+      NEXT_PUBLIC_CONVEX_URL: "${{ env.NEXT_PUBLIC_CONVEX_URL }}",
+      CLERK_SECRET_KEY: "${{ secrets.CLERK_SECRET_KEY }}",
+      E2E_LOGIN_USER: "${{ secrets.E2E_LOGIN_USER }}",
+      E2E_APPROVER_USER: "${{ secrets.E2E_APPROVER_USER }}",
+    };
+    expect(first).toBeGreaterThan(0);
+    expect(steps.slice(first, last + 1)).toEqual([
+      {
+        name: "Mint the disposable-preview marker with the trusted CLI",
+        if: RUN_IF,
+        "working-directory": "trusted",
+        run: "node scripts/localConvexBackend.mjs mark",
+        env: tripwireEnv,
+      },
+      {
+        name: "Seed synthetic QA dealership on the local backend from trusted main",
+        if: RUN_IF,
+        "working-directory": "trusted",
+        run: "node scripts/e2ePreviewBootstrap.mjs",
+        env: caseEnv,
+      },
+      {
+        name: "Run local accounting rehearsal from trusted main",
+        if: RUN_IF,
+        "working-directory": "trusted",
+        run: 'REHEARSAL_TESTED_SHA="$TESTED_SHA" node scripts/accountingPreviewRehearsal.mjs > rehearsal-evidence.json || status=$?\ncat rehearsal-evidence.json\nexit "${status:-0}"\n',
+        env: caseEnv,
+      },
+      {
+        name: "Verify the local backend was not changed during the run",
+        if: VERIFY_IF,
+        "working-directory": "trusted",
+        run: "node scripts/localConvexBackend.mjs verify",
+        env: tripwireEnv,
+      },
+    ]);
+  });
+
+  test("the workflow has no env and the rehearsal job's env is exact", () => {
+    expect(parse(source)).not.toHaveProperty("env");
+    expect(rehearsal.env).toEqual({
+      PR_NUMBER: "${{ github.event.workflow_run.pull_requests[0].number }}",
+      HEAD_SHA: "${{ github.event.workflow_run.pull_requests[0].head.sha }}",
+      RELEASE_INPUT_SHA: "${{ github.event.client_payload.commit_sha }}",
+      EVENT_NAME: "${{ github.event_name }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+      EVENT_SHA: "${{ github.sha }}",
+      GH_TOKEN: "${{ github.token }}",
+    });
   });
 
   test("no local step before the stop, and not the job, may continue on error", () => {
@@ -112,17 +182,27 @@ describe("both events run the same local lifecycle", () => {
   // allowlist (.strict()), so a new key fails here before anyone reasons about
   // it. The table names each known key and the assertion that covers it.
   //
-  // | key that can turn red into green            | covered by                                   |
-  // |---------------------------------------------|----------------------------------------------|
-  // | step `continue-on-error`                    | strict step schema; mark/verify pinned whole |
-  // | job `continue-on-error`                     | strict job schema                            |
-  // | step `shell` (e.g. `bash ... ; exit 0`)     | strict step schema; mark/verify pinned whole |
-  // | job `defaults.run.shell`                    | strict job schema                            |
-  // | workflow `defaults.run.shell`               | strict workflow schema                       |
-  // | verify `if` that never fires                | mark/verify pinned whole; lifecycle order    |
-  // | verify `run` that swallows the exit code    | mark/verify pinned whole                     |
-  // | verify `working-directory` outside trusted/ | mark/verify pinned whole                     |
-  // | `timeout-minutes` (cancel, not success)     | not red-to-green: a timeout fails the job    |
+  // | key that can turn red into green              | covered by                                    |
+  // |-----------------------------------------------|-----------------------------------------------|
+  // | step `continue-on-error`                      | strict step schema; mark..verify literal      |
+  // | job `continue-on-error`                       | strict job schema                             |
+  // | step `shell` (e.g. `bash ... ; exit 0`)       | strict step schema; mark..verify literal      |
+  // | job `defaults.run.shell`                      | strict job schema                             |
+  // | workflow `defaults.run.shell`                 | strict workflow schema                        |
+  // | verify `if` that never fires                  | mark..verify literal; lifecycle order         |
+  // | verify `run` that swallows the exit code      | mark..verify literal                          |
+  // | verify `working-directory` outside trusted/   | mark..verify literal                          |
+  // | NODE_OPTIONS / BASH_ENV in a step's env       | mark..verify literal (env compared whole)     |
+  // | NODE_OPTIONS / BASH_ENV in job or workflow env| exact job env; workflow has no env            |
+  // | a new step that blanks the baseline in        | mark..verify literal (count and order); and   |
+  // |   $GITHUB_ENV between mark and verify         |   verify runs under always() and refuses a    |
+  // |                                               |   missing baseline                            |
+  // | a new step that writes $GITHUB_PATH           | mark..verify literal (count and order)        |
+  // | `timeout-minutes` (cancel, not success)       | not red-to-green: a timeout fails the job     |
+  //
+  // Not covered here: a $GITHUB_ENV or $GITHUB_PATH write in a step BEFORE
+  // mark. Those steps are earlier trusted setup, pinned by the lifecycle
+  // order and the credential-boundary whole-workflow hash, not by a literal.
   test("the workflow, every job and every step use only allowlisted keys", () => {
     const stepSchema = z
       .object({
@@ -149,27 +229,6 @@ describe("both events run the same local lifecycle", () => {
     expect(result.success ? [] : result.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`)).toEqual([]);
   });
 
-  test("mark and verify are pinned whole: no shell, no continue-on-error, exact if, run and directory", () => {
-    const tripwire = {
-      if: RUN_IF,
-      "working-directory": "trusted",
-      env: {
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
-        NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
-      },
-    };
-    expect(steps.find((step) => step.run === "node scripts/localConvexBackend.mjs mark")).toEqual({
-      name: "Mint the disposable-preview marker with the trusted CLI",
-      run: "node scripts/localConvexBackend.mjs mark",
-      ...tripwire,
-    });
-    expect(steps.find((step) => step.run === "node scripts/localConvexBackend.mjs verify")).toEqual({
-      name: "Verify the local backend was not changed during the run",
-      run: "node scripts/localConvexBackend.mjs verify",
-      ...tripwire,
-    });
-  });
-
   test("the stop step runs whatever happened, and is the job's final step", () => {
     expect(steps.at(-1)?.name).toBe("Stop the local Convex backend");
     expect(steps.at(-1)?.if).toBe("always()");
@@ -178,7 +237,7 @@ describe("both events run the same local lifecycle", () => {
   test("no step after the shared setup is limited to one event", () => {
     const setupEnd = steps.findIndex((step) => step.name === "Install trusted rehearsal dependencies");
     expect(setupEnd).toBeGreaterThan(0);
-    const allowed = new Set([RUN_IF, "always() && steps.provenance.outputs.stale == 'false'", "always()"]);
+    const allowed = new Set([RUN_IF, VERIFY_IF, "always() && steps.provenance.outputs.stale == 'false'", "always()"]);
     for (const step of steps.slice(setupEnd + 1)) expect(allowed, String(step.name)).toContain(step.if);
   });
 

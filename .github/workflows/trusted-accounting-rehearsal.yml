@@ -364,8 +364,11 @@ jobs:
       # PR #757 round 5: re-reads the backend from the runner after the last
       # case and fails the job unless every TRIPWIRE.verified item
       # (scripts/localConvexBackend.mjs) still equals what `mark` recorded.
+      # always(): verify runs even after a failed or skipped earlier step, and a
+      # missing baseline refuses. The run condition stays, because a pull
+      # request that changes no backend input starts no backend at all.
       - name: Verify the local backend was not changed during the run
-        if: steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
+        if: always() && steps.provenance.outputs.stale == 'false' && (github.event_name == 'repository_dispatch' || steps.backend_inputs.outputs.run_rehearsal == 'true')
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs verify
         env:

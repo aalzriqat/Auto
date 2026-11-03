@@ -339,9 +339,10 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-892 c24441: the release runs the same local lifecycle; every cloud
   // step and the preview credential are gone. The release refusals (preflight,
   // provenance, release verdict) stay byte-identical, pinned in
-  // trustedAccountingRehearsalReleasePath.test.ts.
+  // trustedAccountingRehearsalReleasePath.test.ts. PR #760 round 3: verify runs
+  // under always() plus the run condition, so a missing baseline refuses.
   "trusted-accounting-rehearsal.yml":
-    "e3fe315c9c8fb4d4fba7c361457bef01890b6aad141ca4dd564eca9be3a728e9",
+    "3c288c65ca0c64d48a5ac8c8f6fdf650d23533ba4cf4e09b3177c8d3ad114bad",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
