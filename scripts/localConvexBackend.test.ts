@@ -11,6 +11,7 @@ import {
   ADMIN_KEY_PATTERN,
   CONTAINER_ENV_VAR,
   ENV_ALLOWLIST,
+  FINGERPRINT_ENV_VAR,
   LOCAL_CONVEX_IMAGE,
   LOCAL_CONVEX_URL,
   LocalConvexRefusal,
@@ -19,6 +20,8 @@ import {
   assertAdminKey,
   assertContainerName,
   assertEnvMatchesAllowlist,
+  assertEnvMatchesPlan,
+  codeFingerprint,
   compareCodeUnits,
   assertLocalOnly,
   boundedDiagnostic,
@@ -32,8 +35,10 @@ import {
   parseAdminKey,
   parseEnvNames,
   setBackendEnv,
+  stableStringify,
   startBackend,
   stopBackend,
+  verifyBackend,
   waitForBackend,
 } from "./localConvexBackend.mjs";
 
@@ -70,10 +75,15 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
         if (args[0] === "exec") return ok(`${ADMIN_KEY}\n`);
         return ok();
       }
-      if (args.includes("list")) return ok(`${[...ENV_ALLOWLIST].join("\n")}\n`);
+      if (args.includes("list") && args.includes("--names-only")) return ok(`${[...ENV_ALLOWLIST].join("\n")}\n`);
+      if (args.includes("list")) return ok(`${PLAN_LINES.join("\n")}\n`);
       return ok();
     }),
-    fetchImpl: vi.fn(async () => ({ ok: true }) as Response),
+    fetchImpl: vi.fn(async (url: string) =>
+      String(url).endsWith("/api/get_config_hashes")
+        ? ({ ok: true, status: 200, json: async () => configHashes() } as unknown as Response)
+        : ({ ok: true } as Response),
+    ),
     sleep: vi.fn(async (ms: number) => {
       clock += ms;
     }),
@@ -86,8 +96,22 @@ function harness(respond: (call: ExecCall) => ExecResult | undefined = () => und
       appended.push(data);
     }) as never,
     convexCli: "/repo/node_modules/convex/bin/main.js",
+    cliVersion: () => "1.42.1",
   };
   return { deps, calls, logs, appended };
+}
+
+/** What `/api/get_config_hashes` answers for a deployed backend; `hash` varies the code. */
+function configHashes(hash = "h1") {
+  return {
+    config: { functions: "convex/", authInfo: [] },
+    moduleHashes: [
+      { path: "b.js", hash: "hb", environment: "isolate" },
+      { path: "a.js", hash, environment: "node" },
+    ],
+    nodeDependencies: [],
+    udfServerVersion: "1.42.1",
+  };
 }
 
 const CI_ENV = {
@@ -96,6 +120,14 @@ const CI_ENV = {
   GITHUB_RUN_ID: "123",
   GITHUB_RUN_ATTEMPT: "1",
 };
+
+const PLAN_LINES = [
+  "AUTOFLOW_DEPLOYMENT_CLASS=preview",
+  `CLERK_DEV_JWT_ISSUER_DOMAIN=${ISSUER}`,
+  `CLERK_JWT_ISSUER_DOMAIN=${ISSUER}`,
+  "NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000",
+  `TURNSTILE_SECRET_KEY=${TURNSTILE_TEST_SECRET}`,
+];
 
 const READY_ENV = {
   CONVEX_SELF_HOSTED_URL: LOCAL_CONVEX_URL,
@@ -198,6 +230,10 @@ describe("container naming and docker argv", () => {
     expect(args).toContain("127.0.0.1:3211:3211");
     expect(joined).not.toContain("0.0.0.0");
     expect(joined).not.toMatch(/--network|--privileged|--cap-add|--volume|-v /);
+    // Round 5: candidate Node actions run in this container as root.
+    expect(joined).toContain("--cap-drop ALL");
+    expect(joined).toMatch(/--pids-limit \d+/);
+    expect(joined).toContain("--security-opt no-new-privileges");
     expect(args.filter((arg) => arg === "--publish")).toHaveLength(2);
     // Value-less: docker reads it from its own environment.
     expect(args).toContain("INSTANCE_SECRET");
@@ -499,42 +535,161 @@ describe("deployBackend", () => {
   });
 });
 
+describe("assertEnvMatchesPlan (round 5: values, not only names)", () => {
+  const plan = buildEnvPlan({ publishableKey: PUBLISHABLE_KEY, appUrl: "http://127.0.0.1:3000" });
+
+  test("passes on the exact plan in any order", () => {
+    expect(() => assertEnvMatchesPlan([...PLAN_LINES].reverse().join("\n"), plan)).not.toThrow();
+  });
+
+  test.each([
+    ["a rewritten value under an allowed name", PLAN_LINES.map((l) => (l.startsWith("NEXT_PUBLIC_APP_URL=") ? "NEXT_PUBLIC_APP_URL=https://evil.example" : l))],
+    ["an added variable", [...PLAN_LINES, "PROBE_ESCALATED=1"]],
+    ["a removed variable", PLAN_LINES.slice(1)],
+    ["a duplicated line", [...PLAN_LINES, PLAN_LINES[0]!]],
+  ])("refuses %s, naming the variable and never its value", (_label, lines) => {
+    let message = "";
+    try {
+      assertEnvMatchesPlan(lines.join("\n"), plan);
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toMatch(/differs from the trusted plan/);
+    expect(message).not.toContain("evil.example");
+  });
+
+  test("a name-only check would have passed the rewritten value: the allowlist comparison alone is blind to it", () => {
+    expect(() => assertEnvMatchesAllowlist(parseEnvNames(ENV_ALLOWLIST.join("\n")))).not.toThrow();
+  });
+});
+
+describe("codeFingerprint", () => {
+  test("is independent of key order and module order, and changes with any module hash", () => {
+    const base = configHashes();
+    const reordered = { ...base, moduleHashes: [...base.moduleHashes].reverse() };
+    expect(codeFingerprint(reordered)).toBe(codeFingerprint(base));
+    expect(codeFingerprint(configHashes("h2"))).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint(base)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("changes with the config or the node dependencies", () => {
+    const base = configHashes();
+    expect(codeFingerprint({ ...base, config: { functions: "other/" } })).not.toBe(codeFingerprint(base));
+    expect(codeFingerprint({ ...base, nodeDependencies: [{ name: "x", version: "1" }] })).not.toBe(codeFingerprint(base));
+  });
+
+  test("refuses a backend that reports no modules, so an empty backend never matches", () => {
+    expect(() => codeFingerprint({ moduleHashes: [] })).toThrow(/no module hashes/);
+    expect(() => codeFingerprint({})).toThrow(/no module hashes/);
+    expect(() => codeFingerprint({ moduleHashes: [{ path: "a.js" }] })).toThrow(/no module hashes/);
+  });
+
+  test("stableStringify sorts keys at every depth", () => {
+    expect(stableStringify({ b: 1, a: { d: [2, { y: 1, x: 0 }], c: null } })).toBe('{"a":{"c":null,"d":[2,{"x":0,"y":1}]},"b":1}');
+  });
+});
+
 describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed elsewhere)", () => {
-  test("verifies the environment, then mints the marker, and never deploys", () => {
+  test("verifies every value, records the code fingerprint, mints the marker, and never deploys", async () => {
     const h = harness();
-    markBackend(READY_ENV, h.deps);
+    await markBackend({ ...READY_ENV, GITHUB_ENV: "/tmp/github_env" }, h.deps);
     expect(h.calls.map((call) => call.args.slice(1, 4).join(" "))).toEqual([
-      "env list --names-only",
+      "env list",
       "run e2eBootstrap:markPreviewDeployment {}",
     ]);
     expect(h.calls.some((call) => call.args[1] === "deploy")).toBe(false);
     for (const call of h.calls) expect(call.env.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_CONVEX_URL);
+    expect(h.appended).toEqual([`${FINGERPRINT_ENV_VAR}=${codeFingerprint(configHashes())}\n`]);
+    const [url, init] = h.deps.fetchImpl.mock.calls.find(([u]) => String(u).endsWith("/api/get_config_hashes"))! as unknown as [string, RequestInit];
+    expect(url).toBe(`${LOCAL_CONVEX_URL}/api/get_config_hashes`);
+    expect(init.redirect).toBe("error");
   });
 
-  test("does not mint the marker when the environment is not the allowlist", () => {
-    const h = harness((call) => (call.args.includes("list") ? ok("") : undefined));
-    expect(() => markBackend(READY_ENV, h.deps)).toThrow(/Missing/);
+  test("does not mint the marker when a value differs from the trusted plan", async () => {
+    const h = harness((call) =>
+      call.args.includes("list") ? ok(PLAN_LINES.map((l) => l.replace("preview", "production")).join("\n")) : undefined,
+    );
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/AUTOFLOW_DEPLOYMENT_CLASS/);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+    expect(h.appended).toEqual([]);
+  });
+
+  test("does not mint the marker when the fingerprint cannot be read", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(async () => ({ ok: false, status: 401 }) as Response);
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/HTTP 401/);
     expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
   });
 
-  test("surfaces a failed marker run", () => {
+  test("surfaces a failed marker run", async () => {
     const h = harness((call) => (call.args[1] === "run" ? fail("", 3) : undefined));
-    expect(() => markBackend(READY_ENV, h.deps)).toThrow(/exit code 3/);
+    await expect(markBackend(READY_ENV, h.deps)).rejects.toThrow(/exit code 3/);
   });
 
-  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])("refuses beside %s", (name) => {
+  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])("refuses beside %s", async (name) => {
     const h = harness();
-    expect(() => markBackend({ ...READY_ENV, [name]: "x" }, h.deps)).toThrow(LocalConvexRefusal);
+    await expect(markBackend({ ...READY_ENV, [name]: "x" }, h.deps)).rejects.toThrow(LocalConvexRefusal);
     expect(h.deps.exec).not.toHaveBeenCalled();
   });
 
-  test("refuses a self-hosted URL that is not the loopback backend", () => {
+  test("refuses a self-hosted URL that is not the loopback backend", async () => {
     const h = harness();
-    expect(() => markBackend({ ...READY_ENV, CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3211" }, h.deps)).toThrow(/exactly/);
+    await expect(markBackend({ ...READY_ENV, CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3211" }, h.deps)).rejects.toThrow(/exactly/);
     expect(h.deps.exec).not.toHaveBeenCalled();
   });
 });
 
+describe("verifyBackend (round 5 tripwire)", () => {
+  const MARKED_ENV = { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) };
+
+  test("passes when the variables equal the plan and the code fingerprint is unchanged", async () => {
+    const h = harness();
+    await verifyBackend(MARKED_ENV, h.deps);
+    expect(h.calls.map((call) => call.args.slice(1, 3).join(" "))).toEqual(["env list"]);
+    expect(h.logs.at(-1)).toMatch(/unchanged since it was marked/);
+  });
+
+  test("fails when a candidate added a variable with a minted key", async () => {
+    const h = harness((call) => (call.args.includes("list") ? ok([...PLAN_LINES, "PROBE_ESCALATED=1"].join("\n")) : undefined));
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/PROBE_ESCALATED/);
+  });
+
+  test("fails when a candidate rewrote an allowed variable's value", async () => {
+    const h = harness((call) =>
+      call.args.includes("list")
+        ? ok(PLAN_LINES.map((l) => (l.startsWith("CLERK_JWT") ? "CLERK_JWT_ISSUER_DOMAIN=https://evil.example" : l)).join("\n"))
+        : undefined,
+    );
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/CLERK_JWT_ISSUER_DOMAIN/);
+  });
+
+  test("fails when the deployed code changed after mark", async () => {
+    const h = harness();
+    h.deps.fetchImpl.mockImplementation(async (url: string) =>
+      String(url).endsWith("/api/get_config_hashes")
+        ? ({ ok: true, status: 200, json: async () => configHashes("swapped") } as unknown as Response)
+        : ({ ok: true } as Response),
+    );
+    await expect(verifyBackend(MARKED_ENV, h.deps)).rejects.toThrow(/deployed code changed after it was marked/);
+  });
+
+  test("fails closed without a recorded fingerprint, or when the backend no longer answers", async () => {
+    await expect(verifyBackend(READY_ENV, harness().deps)).rejects.toThrow(new RegExp(FINGERPRINT_ENV_VAR));
+    await expect(verifyBackend({ ...READY_ENV, [FINGERPRINT_ENV_VAR]: "abc" }, harness().deps)).rejects.toThrow(/missing/);
+    const gone = harness();
+    gone.deps.fetchImpl.mockImplementation(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await expect(verifyBackend(MARKED_ENV, gone.deps)).rejects.toThrow(/no longer answers/);
+    expect(gone.deps.exec).not.toHaveBeenCalled();
+  });
+
+  test("refuses beside a cloud credential like every other command", async () => {
+    const h = harness();
+    await expect(verifyBackend({ ...MARKED_ENV, CONVEX_DEPLOY_KEY: "x" }, h.deps)).rejects.toThrow(LocalConvexRefusal);
+    expect(h.deps.exec).not.toHaveBeenCalled();
+  });
+});
 describe("stopBackend", () => {
   test("removes the recorded container with --force", () => {
     const h = harness();
@@ -570,10 +725,11 @@ describe("stopBackend", () => {
 });
 
 describe("main", () => {
-  test("dispatches the five subcommands and refuses anything else", async () => {
+  test("dispatches the six subcommands and refuses anything else", async () => {
     const h = harness();
     await main(["stop"], {}, h.deps);
     await main(["mark"], READY_ENV, h.deps);
+    await main(["verify"], { ...READY_ENV, [FINGERPRINT_ENV_VAR]: codeFingerprint(configHashes()) }, h.deps);
     await expect(main(["deploy-prod"], {}, h.deps)).rejects.toThrow(/Usage/);
     await expect(main([], {}, h.deps)).rejects.toThrow(/Usage/);
   });

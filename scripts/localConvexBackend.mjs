@@ -38,10 +38,27 @@
  * (`::add-mask::`) before anything else uses them and are never printed. The
  * admin key is exported to GITHUB_ENV so later steps of the same job can use
  * it: it grants full control of a backend that exists for this job only.
+ *
+ * ## WHAT THE CANDIDATE CAN DO TO THIS BACKEND (PR #757 round 5)
+ *
+ * The backend runs the candidate's "use node" actions as a child `node`
+ * process inside its own container, as the same user (root). That process can
+ * read the instance secret (from /convex/data/credentials and from the
+ * backend's own argv in /proc; the pinned image passes it as
+ * `--instance-secret`, which has no environment form), run /convex/generate_key
+ * and so hold an admin key. Reproduced in CI on this image. So the admin key is
+ * NOT out of the candidate's reach, and nothing here pretends it is.
+ *
+ * What holds instead: `mark` checks every backend variable's value against the
+ * trusted plan and records a fingerprint of the deployed code, and `verify`
+ * re-reads both from the host after the tests and fails the job on any change.
+ * The container keeps no Linux capability. Residuals are recorded on
+ * SCRUM-892: a change undone before `verify` runs, and component code outside
+ * the module hashes.
  */
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { clerkTestFrontendApiOrigin } from "./intelligence/clerkPublicJwtKey.mjs";
@@ -71,6 +88,8 @@ export const INSTANCE_NAME = SWARM_LOCAL_CONVEX_DEPLOYMENT_NAME;
 /** Exported to GITHUB_ENV so an always() step can find and remove the container. */
 export const CONTAINER_ENV_VAR = "AUTOFLOW_LOCAL_CONVEX_CONTAINER";
 const CONTAINER_NAME_PATTERN = /^autoflow-local-convex-[a-z0-9][a-z0-9-]{0,62}$/;
+/** Written by `mark`, read by `verify`: the deployed-code fingerprint at mark time. */
+export const FINGERPRINT_ENV_VAR = "AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT";
 
 /** Cloudflare's published always-pass Turnstile TEST secret; not a real key. */
 export const TURNSTILE_TEST_SECRET = "1x0000000000000000000000000000000AA";
@@ -202,6 +221,12 @@ export function buildDockerRunArgs({ containerName }) {
     "127.0.0.1:3210:3210",
     "--publish",
     "127.0.0.1:3211:3211",
+    // Candidate "use node" actions run in here as root (round 5), so the
+    // container keeps no capability and a bounded process count.
+    "--cap-drop",
+    "ALL",
+    "--pids-limit",
+    "512",
     "--security-opt",
     "no-new-privileges",
     "--env",
@@ -297,6 +322,61 @@ export function assertEnvMatchesAllowlist(actualNames) {
   }
 }
 
+/**
+ * `convex env list` output must be exactly the plan's `NAME=value` lines, in
+ * any order. Values are compared too, not just names: a candidate holding an
+ * admin key can rewrite a value without changing the name set. The refusal
+ * names variables only.
+ */
+export function assertEnvMatchesPlan(stdout, plan) {
+  const actual = String(stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const expected = plan.map(([name, value]) => `${name}=${value}`);
+  const nameOf = (line) => line.slice(0, Math.max(0, line.indexOf("=")));
+  const differing = [
+    ...expected.filter((line) => !actual.includes(line)).map(nameOf),
+    ...actual.filter((line) => !expected.includes(line)).map((line) => nameOf(line) || "<unparseable line>"),
+  ];
+  if (differing.length > 0 || actual.length !== expected.length) {
+    const names = [...new Set(differing)].sort(compareCodeUnits);
+    throw new LocalConvexRefusal(
+      `The local backend environment differs from the trusted plan. Variables that differ: [${names.join(", ")}].`,
+    );
+  }
+}
+
+/** JSON with object keys sorted at every depth, so equal values serialise equally. */
+export function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort(compareCodeUnits);
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * SHA-256 over what `/api/get_config_hashes` reports about the deployed code:
+ * the config, one hash per module, and the Node dependencies. Served by the
+ * backend binary from the pinned image, not by deployed functions, so candidate
+ * code cannot answer it. Refuses a response with no module hashes: an empty
+ * fingerprint would match an empty backend.
+ */
+export function codeFingerprint(body) {
+  const modules = Array.isArray(body?.moduleHashes) ? body.moduleHashes : [];
+  if (modules.length === 0 || modules.some((m) => typeof m?.path !== "string" || typeof m?.hash !== "string")) {
+    throw new LocalConvexRefusal("The backend reported no module hashes; the deployed code cannot be fingerprinted.");
+  }
+  const material = {
+    config: body.config ?? null,
+    moduleHashes: [...modules].sort((a, b) => compareCodeUnits(a.path, b.path)),
+    nodeDependencies: body.nodeDependencies ?? null,
+  };
+  return createHash("sha256").update(stableStringify(material)).digest("hex");
+}
+
 /** Bounded, control-free, secret-free text for a log line. */
 export function boundedDiagnostic(text, secrets = [], maxChars = MAX_DIAGNOSTIC_CHARS) {
   let out = String(text ?? "");
@@ -334,6 +414,7 @@ export function appendGithubEnv(file, entries, append = appendFileSync) {
  *   log: (message: string) => void,
  *   append: typeof appendFileSync,
  *   convexCli: string,
+ *   cliVersion: () => string,
  * }} Deps
  */
 
@@ -367,6 +448,9 @@ function defaultDeps() {
     append: appendFileSync,
     // The repo's own pinned CLI, invoked with node: no pnpm shim, no PATH lookup.
     convexCli: path.join(process.cwd(), "node_modules", "convex", "bin", "main.js"),
+    // The fingerprint request names the CLI version, as the CLI's own call does.
+    cliVersion: () =>
+      JSON.parse(readFileSync(path.join(process.cwd(), "node_modules", "convex", "package.json"), "utf8")).version,
   };
 }
 
@@ -564,20 +648,96 @@ export function deployBackend(env, deps) {
   deps.log("Local backend deployed and marked as a disposable preview deployment.");
 }
 
+function assertEnvMatchesTrustedPlan(deps, env, adminKey) {
+  const plan = buildEnvPlan({
+    publishableKey: env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    appUrl: env.NEXT_PUBLIC_APP_URL,
+  });
+  const listed = runConvexCli(deps, env, adminKey, ["env", "list"], { capture: true });
+  assertEnvMatchesPlan(listed.stdout, plan);
+}
+
+/** The deployed-code fingerprint, read from the backend's admin API on the host. */
+async function fetchCodeFingerprint(deps, adminKey) {
+  const version = deps.cliVersion();
+  let response;
+  try {
+    response = await deps.fetchImpl(`${LOCAL_CONVEX_URL}/api/get_config_hashes`, {
+      method: "POST",
+      headers: {
+        authorization: `Convex ${adminKey}`,
+        "content-type": "application/json",
+        "convex-client": `npm-cli-${version}`,
+      },
+      body: JSON.stringify({ version, adminKey }),
+      redirect: "error",
+      signal: AbortSignal.timeout(HEALTH_REQUEST_TIMEOUT_MS * 6),
+    });
+  } catch {
+    // A fetch error can echo request details, and the request carries the key.
+    throw new LocalConvexRefusal("The local backend did not answer the deployed-code fingerprint request.");
+  }
+  if (!response.ok) {
+    throw new LocalConvexRefusal(`The deployed-code fingerprint request failed with HTTP ${response.status}.`);
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new LocalConvexRefusal("The deployed-code fingerprint response was not JSON.");
+  }
+  return codeFingerprint(body);
+}
+
 /**
  * Mints the preview marker on a backend that already holds deployed functions
  * (SCRUM-892). `deploy` deploys this checkout's convex/ and marks in one go; the
  * browser swarm instead deploys a STAGED candidate backend in a hardened
- * container, so only the marker step runs here, from the trusted checkout. The
- * environment is verified first, exactly as `deploy` does, so the marker is
- * never minted on a backend whose variables are not the allowlist.
+ * container, so only the marker step runs here, from the trusted checkout.
+ *
+ * Round 5: the candidate's "use node" actions run inside the backend container
+ * and can recover the instance secret, so they can mint an admin key. `mark`
+ * therefore checks every variable's VALUE against the trusted plan, not only
+ * the names, and records the deployed-code fingerprint for `verify`.
  */
-export function markBackend(env, deps) {
+export async function markBackend(env, deps) {
   assertLocalOnly(env);
   const adminKey = assertAdminKey(env.CONVEX_SELF_HOSTED_ADMIN_KEY);
-  assertEnvMatchesAllowlist(listEnvNames(deps, env, adminKey));
+  assertEnvMatchesTrustedPlan(deps, env, adminKey);
+  const fingerprint = await fetchCodeFingerprint(deps, adminKey);
   runConvexCli(deps, env, adminKey, ["run", "e2eBootstrap:markPreviewDeployment", "{}"]);
-  deps.log("Local backend marked as a disposable preview deployment.");
+  appendGithubEnv(env.GITHUB_ENV, [[FINGERPRINT_ENV_VAR, fingerprint]], deps.append);
+  deps.log(`Local backend marked as a disposable preview deployment. Deployed-code fingerprint ${fingerprint}.`);
+}
+
+/**
+ * The tripwire, run on the host after the job's last test and before the
+ * verdict is uploaded. Fails closed unless the backend still answers, its
+ * variables still equal the trusted plan exactly, and its deployed code still
+ * has the fingerprint `mark` recorded. A candidate that used a minted admin key
+ * to change either turns the job red. It reads through the backend binary's
+ * admin API from the runner, a path deployed functions cannot serve.
+ *
+ * What it cannot see: a change that is made and undone between two reads.
+ */
+export async function verifyBackend(env, deps) {
+  assertLocalOnly(env);
+  const adminKey = assertAdminKey(env.CONVEX_SELF_HOSTED_ADMIN_KEY);
+  const baseline = env[FINGERPRINT_ENV_VAR];
+  if (typeof baseline !== "string" || !/^[0-9a-f]{64}$/.test(baseline)) {
+    throw new LocalConvexRefusal(`${FINGERPRINT_ENV_VAR} is missing. Run \`mark\` earlier in this job.`);
+  }
+  if (!(await backendAnswers(deps))) {
+    throw new LocalConvexRefusal("The local backend no longer answers; its state cannot be verified.");
+  }
+  assertEnvMatchesTrustedPlan(deps, env, adminKey);
+  const fingerprint = await fetchCodeFingerprint(deps, adminKey);
+  if (fingerprint !== baseline) {
+    throw new LocalConvexRefusal(
+      `The deployed code changed after it was marked (fingerprint ${fingerprint}, recorded ${baseline}).`,
+    );
+  }
+  deps.log("Local backend unchanged since it was marked: environment equals the trusted plan, code fingerprint matches.");
 }
 
 /** Removes the container. Idempotent: a missing container or name is fine. */
@@ -613,10 +773,12 @@ export async function main(argv, env = process.env, overrides = {}) {
       return deployBackend(env, deps);
     case "mark":
       return markBackend(env, deps);
+    case "verify":
+      return verifyBackend(env, deps);
     case "stop":
       return stopBackend(env, deps);
     default:
-      throw new LocalConvexRefusal("Usage: node scripts/localConvexBackend.mjs <start|env|deploy|mark|stop>");
+      throw new LocalConvexRefusal("Usage: node scripts/localConvexBackend.mjs <start|env|deploy|mark|verify|stop>");
   }
 }
 

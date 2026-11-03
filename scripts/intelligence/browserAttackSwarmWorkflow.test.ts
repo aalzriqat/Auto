@@ -754,7 +754,40 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         const mark = step(jobName, "Mint the disposable-preview marker with the trusted CLI");
         expect(mark.run).toBe("node scripts/localConvexBackend.mjs mark");
         expect(mark["working-directory"]).toBe("trusted");
-        expect(mark.env).toBeUndefined();
+        // Round 5: the inputs of the trusted env plan, so `mark` checks VALUES;
+        // public values only, and never the admin key.
+        expect(mark.env).toEqual({
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+        });
+      });
+
+      // PR #757 round 5: candidate "use node" actions can mint an admin key
+      // inside the backend container. The tripwire re-reads the backend from the
+      // runner after the last test step and before the backend is removed, and a
+      // failure there fails this job (no `if:`, no continue-on-error).
+      it("verifies the backend was not changed, after every test step and right before the backend stops", () => {
+        const steps = job(jobName).steps ?? [];
+        const names = steps.map((entry) => String(entry.name));
+        const verifyAt = names.indexOf("Verify the local backend was not changed during the run");
+        const stopAt = names.indexOf("Stop the local Convex backend");
+        expect(verifyAt).toBeGreaterThan(names.indexOf("Mint the disposable-preview marker with the trusted CLI"));
+        expect(verifyAt).toBe(stopAt - 1);
+        const verify = steps[verifyAt];
+        expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
+        expect(verify["working-directory"]).toBe("trusted");
+        expect(verify.if).toBeUndefined();
+        expect(verify["continue-on-error"]).toBeUndefined();
+        expect(verify.env).toEqual({
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: "${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+        });
+        // Every step that drives tests or missions runs before the tripwire.
+        const lastTest = Math.max(
+          ...steps.map((entry, index) => (/playwright test|verifyOpeningBrowserProof/.test(String(entry.run ?? "")) ? index : -1)),
+        );
+        expect(lastTest).toBeGreaterThan(-1);
+        expect(lastTest).toBeLessThan(verifyAt);
       });
 
       it("always stops the backend, and nothing that needs it runs after the stop", () => {
@@ -1402,10 +1435,11 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
         "Start the local Convex backend",
         "Set and verify the local backend environment allowlist before candidate execution",
         "Mint the disposable-preview marker with the trusted CLI",
+        "Verify the local backend was not changed during the run",
         "Stop the local Convex backend",
       ]) {
         const run = String(step(jobName, name).run ?? "").trim();
-        expect(run, `${jobName} :: ${name}`).toMatch(/^node scripts\/localConvexBackend\.mjs (start|env|mark|stop)$/);
+        expect(run, `${jobName} :: ${name}`).toMatch(/^node scripts\/localConvexBackend\.mjs (start|env|mark|verify|stop)$/);
         expect(run).not.toMatch(/\b(for|while|until)\b|sleep|retry/);
       }
       const deploy = String(step(jobName, "Deploy staged candidate backend with trusted Convex CLI").run ?? "");

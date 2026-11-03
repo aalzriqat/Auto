@@ -1,9 +1,14 @@
 name: SPIKE SCRUM-892 r5 candidate Node action escalation (never merged)
 
-# Reproduces the PR #757 round-5 Seat 2 finding on the pinned self-hosted image:
-# a candidate "use node" action recovers the instance secret, mints an admin key
-# and changes the backend's environment. A trusted step outside the container
-# reads the env NAMES before and after. Nothing secret is printed.
+# PR #757 round 5, Seat 2 HIGH finding. On the pinned self-hosted image:
+#   1. Reproduction: a candidate "use node" action recovers the instance secret,
+#      mints an admin key and changes the backend's environment.
+#   2. Remediation controls, using the repo's real localConvexBackend.mjs
+#      (`start` with --cap-drop ALL, `env`, `mark`, `verify`):
+#      positive (no tampering: verify green, twice, so the fingerprint is
+#      stable), negative (escalated add, escalated VALUE rewrite, code swap:
+#      verify red), and cause controls (undo each change: verify green again).
+# Nothing secret is printed: the probe returns booleans and HTTP statuses only.
 on:
   push:
     branches: ["claude/scrum892-r5-escalation-spike"]
@@ -16,11 +21,14 @@ concurrency:
   group: spike-892-r5-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
 jobs:
   escalation:
     if: github.ref == 'refs/heads/claude/scrum892-r5-escalation-spike'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -38,42 +46,113 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Start the local Convex backend
+      - name: Start the local Convex backend (hardened, --cap-drop ALL)
         run: node scripts/localConvexBackend.mjs start
+
+      - name: Show the backend's effective capabilities (control for the hardening)
+        run: docker inspect --format 'CapDrop={{.HostConfig.CapDrop}} PidsLimit={{.HostConfig.PidsLimit}} SecurityOpt={{.HostConfig.SecurityOpt}}' "$AUTOFLOW_LOCAL_CONVEX_CONTAINER"
+
+      - name: Set the trusted environment plan
+        run: node scripts/localConvexBackend.mjs env
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
 
       - name: Deploy the probe (stands in for a candidate backend)
         working-directory: spike892r5/probe-app
         run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" deploy --typecheck disable --yes
 
-      - name: Env names before the probe (trusted, outside the container)
-        working-directory: spike892r5/probe-app
-        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env list --names-only | sort | tee "$RUNNER_TEMP/before.txt"
+      - name: Mark (records the deployed-code fingerprint)
+        run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
 
-      - name: Run the candidate probe action
-        working-directory: spike892r5/probe-app
-        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" run probe:probe '{}' | tee "$RUNNER_TEMP/probe.json"
+      - name: POSITIVE control 1 - verify is green with no tampering
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
 
-      - name: Env names after the probe (trusted, outside the container)
-        working-directory: spike892r5/probe-app
-        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env list --names-only | sort | tee "$RUNNER_TEMP/after.txt"
+      - name: POSITIVE control 2 - verify again (fingerprint is stable across reads)
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
 
-      - name: Verdict
+      - name: ATTACK 1 - candidate Node action mints a key and ADDS a variable
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" run probe:probe '{"mode":"add"}' | tee "$RUNNER_TEMP/probe-add.json"
+
+      - name: NEGATIVE control 1 - verify must fail after the added variable
+        id: neg_add
+        continue-on-error: true
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+
+      - name: CAUSE control 1 - remove only that variable; verify is green again
+        working-directory: spike892r5/probe-app
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
-          echo "--- names added by the probe:"
-          comm -13 "$RUNNER_TEMP/before.txt" "$RUNNER_TEMP/after.txt" | tee "$RUNNER_TEMP/added.txt"
-          if grep -qx PROBE_BOGUS "$RUNNER_TEMP/added.txt"; then
-            echo "CONTROL BROKEN: a key not derived from the secret changed the env"; exit 1
-          fi
-          if grep -qx PROBE_ESCALATED "$RUNNER_TEMP/added.txt"; then
-            echo "ESCALATION REPRODUCED: candidate Node code changed the certifying backend's environment"
-          else
-            echo "ESCALATION NOT REPRODUCED"
-          fi
-          {
-            echo "### Probe result"; echo '```'; cat "$RUNNER_TEMP/probe.json"; echo '```'
-            echo "### Names added"; echo '```'; cat "$RUNNER_TEMP/added.txt"; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env remove PROBE_ESCALATED
+          cd "$GITHUB_WORKSPACE" && node scripts/localConvexBackend.mjs verify
+
+      - name: ATTACK 2 - candidate Node action rewrites an allowlisted VALUE
+        working-directory: spike892r5/probe-app
+        run: node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" run probe:probe '{"mode":"rewrite"}' | tee "$RUNNER_TEMP/probe-rewrite.json"
+
+      - name: NEGATIVE control 2 - verify must fail after the rewritten value
+        id: neg_rewrite
+        continue-on-error: true
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+
+      - name: CAUSE control 2 - names alone still match (the old check would have passed)
+        working-directory: spike892r5/probe-app
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env list --names-only | sort > "$RUNNER_TEMP/names.txt"
+          printf '%s\n' AUTOFLOW_DEPLOYMENT_CLASS CLERK_DEV_JWT_ISSUER_DOMAIN CLERK_JWT_ISSUER_DOMAIN NEXT_PUBLIC_APP_URL TURNSTILE_SECRET_KEY | sort > "$RUNNER_TEMP/allow.txt"
+          diff "$RUNNER_TEMP/allow.txt" "$RUNNER_TEMP/names.txt" && echo "NAMES-ONLY CHECK WOULD PASS"
+
+      - name: CAUSE control 2b - restore the value; verify is green again
+        working-directory: spike892r5/probe-app
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" env set NEXT_PUBLIC_APP_URL "$NEXT_PUBLIC_APP_URL"
+          cd "$GITHUB_WORKSPACE" && node scripts/localConvexBackend.mjs verify
+
+      - name: ATTACK 3 - code swap after mark (a second deploy with one changed module)
+        working-directory: spike892r5/probe-app
+        run: |
+          set -euo pipefail
+          printf '\n// swapped after mark\nexport const swapped = 1;\n' >> convex/e2eBootstrap.ts
+          node "$GITHUB_WORKSPACE/node_modules/convex/bin/main.js" deploy --typecheck disable --yes
+
+      - name: NEGATIVE control 3 - verify must fail after the code swap
+        id: neg_swap
+        continue-on-error: true
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+
+      - name: Verdict
+        env:
+          NEG_ADD: ${{ steps.neg_add.outcome }}
+          NEG_REWRITE: ${{ steps.neg_rewrite.outcome }}
+          NEG_SWAP: ${{ steps.neg_swap.outcome }}
+        run: |
+          set -euo pipefail
+          echo "--- probe (add):";     cat "$RUNNER_TEMP/probe-add.json"
+          echo "--- probe (rewrite):"; cat "$RUNNER_TEMP/probe-rewrite.json"
+          grep -q '"escalatedStatus": 200' "$RUNNER_TEMP/probe-add.json" || { echo "ESCALATION NOT REPRODUCED (add)"; exit 1; }
+          grep -q '"escalatedStatus": 200' "$RUNNER_TEMP/probe-rewrite.json" || { echo "ESCALATION NOT REPRODUCED (rewrite)"; exit 1; }
+          grep -q '"controlStatus": 401' "$RUNNER_TEMP/probe-add.json" || { echo "CONTROL BROKEN: a bogus key was not refused"; exit 1; }
+          echo "negative controls: add=$NEG_ADD rewrite=$NEG_REWRITE swap=$NEG_SWAP"
+          [ "$NEG_ADD" = failure ] && [ "$NEG_REWRITE" = failure ] && [ "$NEG_SWAP" = failure ] || { echo "TRIPWIRE MISSED AN ATTACK"; exit 1; }
+          echo "ESCALATION REPRODUCED AND EVERY ATTACK TURNED VERIFY RED; EVERY UNDO TURNED IT GREEN"
 
       - name: Remove the local Convex backend
         if: always()

