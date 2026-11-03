@@ -542,6 +542,22 @@ describe("local mode targets only this job's loopback backend, and never for the
     expect(childEnv).not.toHaveProperty("CONVEX_PREVIEW_NAME");
   });
 
+  // Found by the first local run: the concurrency worker accepted only cloud
+  // URLs, so C1/C2 were UNPROVEN on the local backend.
+  test.each([
+    [LOCAL_URL, /REHEARSAL_TOKEN is required/],
+    ["https://happy-animal-123.convex.cloud", /REHEARSAL_TOKEN is required/],
+    ["http://127.0.0.1:3211", /Refusing to send/],
+    ["http://localhost:3210", /Refusing to send/],
+    ["https://127.0.0.1:3210", /Refusing to send/],
+  ])("the concurrency worker's target check for %s", (url, outcome) => {
+    const worker = spawnSync(process.execPath, ["scripts/rehearsalReleaseWorker.mjs", "0", "{}"], {
+      env: { PATH: process.env.PATH, REHEARSAL_CONVEX_URL: url }, encoding: "utf8", timeout: 10_000,
+    });
+    expect(worker.status).toBe(1);
+    expect(JSON.parse(worker.stdout).error).toMatch(outcome);
+  });
+
   test("a local cleanup closure refuses any URL but the loopback backend", () => {
     const config = assertRehearsalEnv({ ...LOCAL });
     expect(() => createCleanupPreviewCall({ ...config, convexUrl: "http://127.0.0.1:3211" }, { env: { ...LOCAL }, spawnCli: vi.fn() }))
