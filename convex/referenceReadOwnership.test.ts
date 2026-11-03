@@ -24,6 +24,7 @@ import { expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import { VEHICLE_READ_TIER } from "./utils/vehicleCostVisibility";
 import type { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
@@ -191,7 +192,10 @@ async function attributionFailures(): Promise<string[]> {
 // `vehicles.get` / `vehicles.list` withhold them. Top-level, controls inside (the runner anchors `^title$`).
 test("a customers-only reader never receives vehicle cost or finance fields through a quote relation", async () => {
   const COST = { purchasePrice: 424_242, sourceCost: 313_131, landedCostTotal: 535_353, minimumProfit: 646_464 };
-  const COST_FIELDS = [...Object.keys(COST), "sourcedFromName", "sourcedSupplierId", "addedBy", "updatedBy", "imageIds", "soldBySaleId"];
+  // The COST tier of the one shared classification (SCRUM-886). Supplier identity and audit fields are OPEN there:
+  // the vehicle screens show them to every viewer, so this test checks only what that table withholds.
+  const COST_FIELDS = Object.entries(VEHICLE_READ_TIER).filter(([, tier]) => tier === "COST").map(([field]) => field);
+  for (const field of Object.keys(COST)) if (!COST_FIELDS.includes(field)) throw new Error(`fixture cost field ${field} is not COST in VEHICLE_READ_TIER`);
   const SUPPLIER = "ORGA-SUPPLIER-SECRET";
   const failures: string[] = [];
   const f = await fixture();
@@ -224,7 +228,7 @@ test("a customers-only reader never receives vehicle cost or finance fields thro
   const denied = await vehicleOf(customersOnly);
   if (!denied.vehicle) failures.push("customers-only: the quote's vehicle is missing entirely");
   for (const field of COST_FIELDS) if (denied.vehicle && field in denied.vehicle) failures.push(`customers-only received vehicle.${field}`);
-  for (const marker of [...Object.values(COST).map(String), SUPPLIER]) {
+  for (const marker of Object.values(COST).map(String)) {
     if (JSON.stringify(denied.result).includes(marker)) failures.push(`customers-only: cost marker ${marker} appears in the relations payload`);
   }
   // Control: the display fields the customer screen and the quote print template use are still served.
