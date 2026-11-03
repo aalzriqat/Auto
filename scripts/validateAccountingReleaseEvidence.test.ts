@@ -221,6 +221,12 @@ describe("pull-request evidence from the runner-local backend", () => {
       .toContain("Evidence does not match this job's local backend.");
   });
 
+  test("refuses a cloud URL on the local path, even when evidence and job agree on it", () => {
+    const cloud = "https://x.convex.cloud";
+    expect(validateAccountingReleaseEvidence({ ...localEvidence(), convexUrl: cloud }, { ...localExpected, previewUrl: cloud }))
+      .toContain("Evidence does not match this job's local backend.");
+  });
+
   test("refuses an unknown expected deployment type", () => {
     expect(validateAccountingReleaseEvidence(valid(), { ...expected, deploymentType: "harness" }))
       .toContain("Unknown expected deployment type.");

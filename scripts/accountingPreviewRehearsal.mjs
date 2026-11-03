@@ -547,10 +547,12 @@ function cleanupDiagnostic(result, functionName, phase, reason) {
 /** @param {unknown} value */
 function cleanupOutput(value) {
   if (value === undefined || value === null) return "";
-  if ((!Buffer.isBuffer(value) && typeof value !== "string") || Buffer.byteLength(value) > CLEANUP_OUTPUT_LIMIT) {
-    throw cleanupUnavailable("STREAM_UNAVAILABLE");
-  }
-  return stripVTControlCharacters(value.toString()).trim();
+  let text;
+  if (typeof value === "string") text = value;
+  else if (Buffer.isBuffer(value)) text = value.toString("utf8");
+  else throw cleanupUnavailable("STREAM_UNAVAILABLE");
+  if (Buffer.byteLength(value) > CLEANUP_OUTPUT_LIMIT) throw cleanupUnavailable("STREAM_UNAVAILABLE");
+  return stripVTControlCharacters(text).trim();
 }
 
 /**

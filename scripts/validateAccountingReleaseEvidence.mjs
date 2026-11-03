@@ -12,18 +12,11 @@ const fullSha = /^[0-9a-f]{40}$/;
 // through require(); a test pins it equal to that module's LOCAL_CONVEX_URL.
 export const LOCAL_BACKEND_URL = SWARM_LOCAL_CONVEX_ORIGIN;
 
-export function validateAccountingReleaseEvidence(evidence, expected) {
+// SCRUM-892 (owner ruling c24441): the pull-request and the release rehearsal
+// both certify on the runner-local backend, and no other event may. Anything
+// but an explicit "local" is the cloud check.
+function deploymentIdentityErrors(evidence, expected, local) {
   const errors = [];
-  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
-    return ["Cloud rehearsal evidence is missing or malformed."];
-  }
-  if (!fullSha.test(expected.testedSha ?? "") || evidence.testedSha !== expected.testedSha) {
-    errors.push("Evidence does not name the exact tested SHA.");
-  }
-  // SCRUM-892 (owner ruling c24441): the pull-request and the release rehearsal
-  // both certify on the runner-local backend, and no other event may. Anything
-  // but an explicit "local" is the cloud check.
-  const local = expected.deploymentType === "local";
   if (local && expected.eventName !== "workflow_run" && expected.eventName !== "repository_dispatch") {
     errors.push("Local backend evidence is accepted only from the trusted rehearsal's pull-request or release event.");
   }
@@ -43,6 +36,19 @@ export function validateAccountingReleaseEvidence(evidence, expected) {
       !/^https:\/\/[^/]+\.convex\.cloud$/.test(evidence.convexUrl ?? "")) {
     errors.push("Evidence does not match the created disposable preview.");
   }
+  return errors;
+}
+
+export function validateAccountingReleaseEvidence(evidence, expected) {
+  const errors = [];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return ["Cloud rehearsal evidence is missing or malformed."];
+  }
+  if (!fullSha.test(expected.testedSha ?? "") || evidence.testedSha !== expected.testedSha) {
+    errors.push("Evidence does not name the exact tested SHA.");
+  }
+  const local = expected.deploymentType === "local";
+  errors.push(...deploymentIdentityErrors(evidence, expected, local));
   const attestation = local
     ? "assertE2EBootstrap agreed: preview marker present, local backend URL matches"
     : "assertE2EBootstrap agreed: preview marker present, cloud URL matches";
