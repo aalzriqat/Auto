@@ -58,6 +58,55 @@ describe("buildEgressAllowlist", () => {
     ]);
   });
 
+  // SCRUM-892: the swarm's backend is a self-hosted Convex inside the runner.
+  it("allows exactly 127.0.0.1:3210 for the runner-local Convex backend, besides the candidate and Clerk", () => {
+    expect(
+      buildEgressAllowlist({ convexUrl: "http://127.0.0.1:3210", clerkPublishableKey: PK }),
+    ).toEqual([
+      "127.0.0.1:3000",
+      "127.0.0.1:3210",
+      "example.clerk.accounts.dev:443",
+      "localhost:3000",
+    ]);
+    // A trailing slash is the same origin, still exactly one entry.
+    expect(
+      buildEgressAllowlist({ convexUrl: "http://127.0.0.1:3210/", clerkPublishableKey: PK }),
+    ).toContain("127.0.0.1:3210");
+  });
+
+  it.each([
+    ["another loopback port", "http://127.0.0.1:3211"],
+    ["the localhost name", "http://localhost:3210"],
+    ["https on the local port", "https://127.0.0.1:3210"],
+    ["another loopback address", "http://127.0.0.2:3210"],
+    ["the local origin with a path", "http://127.0.0.1:3210/api"],
+    ["the local origin with credentials", "http://u:p@127.0.0.1:3210"],
+    ["the IPv6 loopback", "http://[::1]:3210"],
+    ["the local origin without a port", "http://127.0.0.1"],
+  ])("refuses %s as the Convex deployment", (_label, convexUrl) => {
+    expect(() =>
+      buildEgressAllowlist({ convexUrl, clerkPublishableKey: PK }),
+    ).toThrow();
+  });
+
+  it("never lets the local Convex origin widen loopback: an extra 127.0.0.1:3210 is still refused", () => {
+    expect(() =>
+      buildEgressAllowlist({ convexUrl: CONVEX, clerkPublishableKey: PK, extra: ["127.0.0.1:3210"] }),
+    ).toThrow();
+  });
+
+  it("pins the swarm local origin constant to the local backend runner's URL", async () => {
+    const { SWARM_LOCAL_CONVEX_ORIGIN, SWARM_LOCAL_CONVEX_AUTHORITY, isSwarmLocalConvexUrl } = await import(
+      "./swarmConvexOrigin.mjs"
+    );
+    const { LOCAL_CONVEX_URL } = await import("../localConvexBackend.mjs");
+    expect(SWARM_LOCAL_CONVEX_ORIGIN).toBe(LOCAL_CONVEX_URL);
+    expect(SWARM_LOCAL_CONVEX_AUTHORITY).toBe(new URL(LOCAL_CONVEX_URL).host);
+    expect(isSwarmLocalConvexUrl(LOCAL_CONVEX_URL)).toBe(true);
+    expect(isSwarmLocalConvexUrl(undefined)).toBe(false);
+    expect(isSwarmLocalConvexUrl("http://127.0.0.1:3210//")).toBe(false);
+  });
+
   it.each([
     ["a non-convex host", "https://evil.example.com"],
     ["a convex suffix trick", "https://x.convex.cloud.evil.example.com"],
