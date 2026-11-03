@@ -28,7 +28,7 @@ export default defineConfig({
   // it, so it never sees it (Playwright merges this over process.env).
   webServer:
     base.webServer && !Array.isArray(base.webServer)
-      ? { ...base.webServer, env: { ...base.webServer.env, CONVEX_DEPLOY_KEY: "" } }
+      ? { ...base.webServer, env: { ...base.webServer.env, CONVEX_DEPLOY_KEY: "", CONVEX_SELF_HOSTED_ADMIN_KEY: "" } }
       : base.webServer,
   projects: [
     { ...base.projects![0], testDir: "./playwright/tests" },

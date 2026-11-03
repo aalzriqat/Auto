@@ -3,6 +3,9 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { parse } from "yaml";
 import { z } from "zod";
+import baseConfig from "../playwright.config";
+import openingProofConfig from "../playwright.opening-proof.config";
+import scenariosConfig from "../playwright.scenarios.config";
 
 /**
  * SCRUM-892, owner ruling c24441: trusted-main-e2e.yml gives its one job a
@@ -180,6 +183,22 @@ describe("SCRUM-892 trusted main E2E: a per-job local backend and no cloud crede
     });
     // Exactly always(), as convexCredentialBoundary.test.ts requires of every backend-owning job.
     expect(steps[indexOfRun(`${LOCAL_BACKEND} stop`)]?.if).toBe("always()");
+  });
+
+  test("mark and every step after it up to the suite are unconditional, so the baseline is always recorded", () => {
+    const mark = indexOfRun(`${LOCAL_BACKEND} mark`);
+    const suite = indexOfRun(SUITE);
+    expect(mark).toBeGreaterThanOrEqual(0);
+    expect(suite).toBeGreaterThan(mark);
+    for (const step of steps.slice(mark, suite + 1)) expect(step.if).toBeUndefined();
+  });
+
+  test("the app server never inherits the self-hosted admin key", () => {
+    // Playwright 1.61 starts the server with { ...process.env, ...webServer.env }.
+    for (const config of [baseConfig, scenariosConfig, openingProofConfig]) {
+      const server = config.webServer;
+      expect(server && !Array.isArray(server) ? server.env?.CONVEX_SELF_HOSTED_ADMIN_KEY : undefined).toBe("");
+    }
   });
 
   test("the seed flag is on BOTH the seed step and the suite step", () => {
