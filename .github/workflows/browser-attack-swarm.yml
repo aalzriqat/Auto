@@ -744,8 +744,12 @@ jobs:
           # names enters the container, and the key controls only a backend that
           # exists for this job.
           # Residual, accepted (SCRUM-350 F1): the backend container has default
-          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
-          # so the zero-execution property above remains what protects the key.
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it.
+          # Zero execution here no longer protects the key on its own: once deployed,
+          # the candidate's "use node" actions run inside the backend container and
+          # can mint an admin key (PR #757 round 5). The key controls only this job's
+          # backend, and the trusted verify step before the backend stops fails the
+          # job if the backend's variables or deployed code changed after `mark`.
           docker run --rm \
             --name autoflow-trusted-staged-backend-deploy \
             --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
@@ -772,6 +776,9 @@ jobs:
       - name: Mint the disposable-preview marker with the trusted CLI
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       - name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
@@ -1080,6 +1087,18 @@ jobs:
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
 
+      # PR #757 round 5: candidate "use node" actions run inside the backend
+      # container and can mint an admin key from its instance secret. This
+      # trusted tripwire re-reads the backend from the runner after the last test
+      # and fails the job if any variable differs from the trusted plan or the
+      # deployed code no longer has the fingerprint `mark` recorded.
+      - name: Verify the local backend was not changed during the run
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
       # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
       # Hosted runners are discarded anyway; this keeps the guarantee true on a
       # reused one.
@@ -1277,8 +1296,12 @@ jobs:
           # names enters the container, and the key controls only a backend that
           # exists for this job.
           # Residual, accepted (SCRUM-350 F1): the backend container has default
-          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
-          # so the zero-execution property above remains what protects the key.
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it.
+          # Zero execution here no longer protects the key on its own: once deployed,
+          # the candidate's "use node" actions run inside the backend container and
+          # can mint an admin key (PR #757 round 5). The key controls only this job's
+          # backend, and the trusted verify step before the backend stops fails the
+          # job if the backend's variables or deployed code changed after `mark`.
           docker run --rm \
             --name autoflow-trusted-staged-backend-deploy \
             --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
@@ -1305,6 +1328,9 @@ jobs:
       - name: Mint the disposable-preview marker with the trusted CLI
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       - name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
@@ -1599,6 +1625,18 @@ jobs:
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
 
+      # PR #757 round 5: candidate "use node" actions run inside the backend
+      # container and can mint an admin key from its instance secret. This
+      # trusted tripwire re-reads the backend from the runner after the last test
+      # and fails the job if any variable differs from the trusted plan or the
+      # deployed code no longer has the fingerprint `mark` recorded.
+      - name: Verify the local backend was not changed during the run
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
       # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
       # Hosted runners are discarded anyway; this keeps the guarantee true on a
       # reused one.
@@ -1789,8 +1827,12 @@ jobs:
           # names enters the container, and the key controls only a backend that
           # exists for this job.
           # Residual, accepted (SCRUM-350 F1): the backend container has default
-          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
-          # so the zero-execution property above remains what protects the key.
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it.
+          # Zero execution here no longer protects the key on its own: once deployed,
+          # the candidate's "use node" actions run inside the backend container and
+          # can mint an admin key (PR #757 round 5). The key controls only this job's
+          # backend, and the trusted verify step before the backend stops fails the
+          # job if the backend's variables or deployed code changed after `mark`.
           docker run --rm \
             --name autoflow-trusted-staged-backend-deploy \
             --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
@@ -1817,6 +1859,9 @@ jobs:
       - name: Mint the disposable-preview marker with the trusted CLI
         working-directory: trusted
         run: node scripts/localConvexBackend.mjs mark
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       - name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
@@ -2098,6 +2143,18 @@ jobs:
           if [ -n "${CANDIDATE_NETWORK:-}" ]; then
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
+
+      # PR #757 round 5: candidate "use node" actions run inside the backend
+      # container and can mint an admin key from its instance secret. This
+      # trusted tripwire re-reads the backend from the runner after the last test
+      # and fails the job if any variable differs from the trusted plan or the
+      # deployed code no longer has the fingerprint `mark` recorded.
+      - name: Verify the local backend was not changed during the run
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs verify
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
       # Hosted runners are discarded anyway; this keeps the guarantee true on a

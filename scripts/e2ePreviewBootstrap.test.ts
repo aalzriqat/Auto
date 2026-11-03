@@ -408,7 +408,9 @@ describe("runConvex — failure reporting", () => {
 
   test("returns quietly on success", () => {
     const spawn = vi.fn(() => ({ status: 0, error: undefined }));
-    expect(() => runConvex(["exec"], "label", spawn)).not.toThrow();
+    // No `--preview-name`, so local mode: the child env must name the loopback backend.
+    const env = { CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3210", CONVEX_SELF_HOSTED_ADMIN_KEY: `autoflow-ci|${"c3".repeat(24)}` };
+    expect(() => runConvex(["exec"], "label", spawn, env)).not.toThrow();
   });
 });
 
@@ -958,19 +960,17 @@ describe("local mode (SCRUM-892)", () => {
   });
 
   describe("buildConvexRunArgs", () => {
-    test("targets --url and --admin-key and never --preview-name", () => {
+    test("puts no target flag in argv: the admin key never reaches a command line", () => {
       const args = buildConvexRunArgs({
         functionName: "e2eBootstrap:assertE2EBootstrap",
         argsJson: "{}",
         local: { url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY },
         env: {},
       });
-      expect(args).toEqual([
-        "exec", "convex", "run", "e2eBootstrap:assertE2EBootstrap", "{}", "--url", LOCAL_URL, "--admin-key", LOCAL_ADMIN_KEY,
-      ]);
+      expect(args).toEqual(["exec", "convex", "run", "e2eBootstrap:assertE2EBootstrap", "{}"]);
+      expect(args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
       expect(args).not.toContain("--preview-name");
     });
-
     test("refuses an unsafe local target before building anything", () => {
       const build = (local: { url?: string; adminKey?: string }, env = {}) =>
         buildConvexRunArgs({ functionName: "m:f", local, env });
@@ -989,42 +989,60 @@ describe("local mode (SCRUM-892)", () => {
     });
   });
 
-  describe("runConvex re-validation of the local flags", () => {
+  describe("runConvex re-validation of the local target", () => {
     const ok = () => ({ status: 0, error: undefined });
-    const goodTail = ["--url", LOCAL_URL, "--admin-key", LOCAL_ADMIN_KEY];
+    const localArgs = ["exec", "convex", "run", "m:f", "{}"];
 
-    test("accepts exactly what buildConvexRunArgs builds", () => {
+    test("accepts exactly what buildConvexRunArgs builds and hands the target over in the child env", () => {
       const spawn = vi.fn(ok);
       const args = buildConvexRunArgs({ functionName: "m:f", local: { url: LOCAL_URL, adminKey: LOCAL_ADMIN_KEY } });
-      expect(() => runConvex(args, "m:f", spawn)).not.toThrow();
+      expect(() => runConvex(args, "m:f", spawn, LOCAL_ENV)).not.toThrow();
       expect(spawn).toHaveBeenCalledTimes(1);
+      const [, spawnedArgs, options] = spawn.mock.calls[0] as unknown as [string, string[], { env?: Record<string, string> }];
+      expect(spawnedArgs).not.toContain(LOCAL_ADMIN_KEY);
+      expect(options.env?.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_URL);
+      expect(options.env?.CONVEX_SELF_HOSTED_ADMIN_KEY).toBe(LOCAL_ADMIN_KEY);
     });
 
     test.each([
-      ["a cloud URL", ["exec", "convex", "run", "m:f", "{}", "--url", "https://x.convex.cloud", "--admin-key", LOCAL_ADMIN_KEY]],
-      ["a URL without the key", ["exec", "convex", "run", "m:f", "{}", "--url", LOCAL_URL]],
-      ["a key without the URL", ["exec", "convex", "run", "m:f", "{}", "--admin-key", LOCAL_ADMIN_KEY]],
-      ["a malformed key", ["exec", "convex", "run", "m:f", "{}", "--url", LOCAL_URL, "--admin-key", "x"]],
-      ["--preview-name beside the local pair", ["exec", "convex", "run", "m:f", "{}", "--preview-name", "e2e-x", ...goodTail]],
-    ])("refuses %s before starting a process", (_label, args) => {
+      ["a cloud URL", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: "https://x.convex.cloud" }],
+      ["no URL", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: undefined }],
+      ["no key", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_ADMIN_KEY: undefined }],
+      ["a malformed key", { ...LOCAL_ENV, CONVEX_SELF_HOSTED_ADMIN_KEY: "x" }],
+      ["a deploy key beside the local pair", { ...LOCAL_ENV, CONVEX_DEPLOY_KEY: PREVIEW_KEY }],
+      ["CONVEX_DEPLOYMENT beside the local pair", { ...LOCAL_ENV, CONVEX_DEPLOYMENT: "prod:clever-mockingbird-719" }],
+    ])("refuses %s in the child env before starting a process", (_label, env) => {
       const spawn = vi.fn(ok);
-      expect(() => runConvex(args, "m:f", spawn)).toThrow(PreviewTargetingError);
+      expect(() => runConvex(localArgs, "m:f", spawn, env)).toThrow(PreviewTargetingError);
       expect(spawn).not.toHaveBeenCalled();
     });
 
-    test("a failure never reproduces the admin key", () => {
-      const spawn = vi.fn(() => ({ status: 1, error: undefined }));
-      let message = "";
-      try {
-        runConvex(["exec", "convex", "run", "m:f", "{}", ...goodTail], "m:f", spawn);
-      } catch (error) {
-        message = String(error);
+    test.each([
+      ["--url", [...localArgs, "--url", LOCAL_URL]],
+      ["--admin-key", [...localArgs, "--admin-key", LOCAL_ADMIN_KEY]],
+    ])("refuses %s in argv: it is no longer a flag this command passes", (_label, args) => {
+      const spawn = vi.fn(ok);
+      expect(() => runConvex(args, "m:f", spawn, LOCAL_ENV)).toThrow(/unexpected option-shaped argument/);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    test("a refusal or a failure never reproduces the admin key", () => {
+      const messages: string[] = [];
+      for (const [spawn, env] of [
+        [vi.fn(() => ({ status: 1, error: undefined })), LOCAL_ENV],
+        [vi.fn(ok), { ...LOCAL_ENV, CONVEX_SELF_HOSTED_URL: "https://x.convex.cloud" }],
+      ] as const) {
+        try {
+          runConvex(localArgs, "m:f", spawn, env);
+        } catch (error) {
+          messages.push(String(error));
+        }
       }
-      expect(message).toMatch(/exit code 1/);
-      expect(message).not.toContain(LOCAL_ADMIN_KEY);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toMatch(/exit code 1/);
+      for (const message of messages) expect(message).not.toContain(LOCAL_ADMIN_KEY);
     });
   });
-
   describe("the flows", () => {
     test("main seeds then verifies, both with the local target and no preview name", async () => {
       const d = deps();
@@ -1034,7 +1052,8 @@ describe("local mode (SCRUM-892)", () => {
         "e2eBootstrap:assertE2EBootstrap",
       ]);
       for (const call of d.calls) {
-        expect(call.args.slice(-4)).toEqual(["--url", LOCAL_URL, "--admin-key", LOCAL_ADMIN_KEY]);
+        expect(call.args).toHaveLength(5);
+        expect(call.args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
         expect(call.args).not.toContain("--preview-name");
         expect(JSON.parse(call.args[4]!).expectedCloudUrl).toBe(LOCAL_URL);
       }
@@ -1071,7 +1090,8 @@ describe("local mode (SCRUM-892)", () => {
         "e2eBootstrap:setHuntSeatRole",
       ]);
       for (const call of d.calls) {
-        expect(call.args.slice(-4)).toEqual(["--url", LOCAL_URL, "--admin-key", LOCAL_ADMIN_KEY]);
+        expect(call.args.slice(0, 3)).toEqual(["exec", "convex", "run"]);
+        expect(call.args.join(" ")).not.toContain(LOCAL_ADMIN_KEY);
         expect(call.args).not.toContain("--preview-name");
       }
     });

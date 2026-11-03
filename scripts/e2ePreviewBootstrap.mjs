@@ -30,7 +30,10 @@
  * When `CONVEX_SELF_HOSTED_URL` and `CONVEX_SELF_HOSTED_ADMIN_KEY` are both
  * set, the target is the throwaway Convex backend that
  * scripts/localConvexBackend.mjs runs in a container on the runner. `convex
- * run` then gets `--url <local> --admin-key <key>` and NEVER `--preview-name`.
+ * run` then gets NEITHER `--preview-name` NOR a target flag: the CLI selects the
+ * self-hosted backend from those two variables in its own environment, so the
+ * admin key is never in argv (where `/proc/<pid>/cmdline` and process listings
+ * show it; PR #757 round 5).
  * The preview-safety argument above does not apply (there is no shared dev
  * deployment to fall through to), so the equivalent refusals are different and
  * just as strict: the URL must be exactly the loopback backend, the key must
@@ -264,7 +267,9 @@ export function buildConvexRunArgs({ functionName, argsJson, previewName, deploy
     );
   }
   if (local) {
-    return ["exec", "convex", "run", functionName, argsJson ?? "{}", "--url", local.url, "--admin-key", local.adminKey];
+    // The target travels in the child environment (CONVEX_SELF_HOSTED_*), which
+    // runConvex re-validates; never in argv.
+    return ["exec", "convex", "run", functionName, argsJson ?? "{}"];
   }
   return [
     "exec",
@@ -454,16 +459,18 @@ export function maskEmail(email) {
  * @param {(command: string, args: string[], options: object) =>
  *          { status: number | null, error?: Error | undefined }} [spawn]
  *        the seam the failure-path tests drive; only `status` and `error` are read
+ * @param {Record<string, string | undefined>} [env] the CLI child's environment; in local
+ *        mode it carries the target and is validated before the spawn
  */
-export function runConvex(args, label, spawn = spawnSync) {
+export function runConvex(args, label, spawn = spawnSync, env = process.env) {
   // ⚠️ RE-VALIDATED AT THE CALL SITE, not merely where the argv was built.
   // `buildConvexRunArgs` is the only intended producer and it validates every
   // element, but this is the line that actually executes a process, and a
   // second producer added later would inherit no guarantee from the first. An
-  // argument that is not a string, or that opens with `-` without being one of
-  // the two flags this command legitimately passes, is refused rather than
-  // handed to the CLI as an option.
-  const ALLOWED_FLAGS = new Set(["--preview-name", "--url", "--admin-key"]);
+  // argument that is not a string, or that opens with `-` without being the one
+  // flag this command legitimately passes, is refused rather than handed to the
+  // CLI as an option.
+  const ALLOWED_FLAGS = new Set(["--preview-name"]);
   for (const arg of args) {
     if (typeof arg !== "string") {
       throw new PreviewTargetingError(`Refusing to run ${label}: a non-string argument was supplied.`);
@@ -474,25 +481,25 @@ export function runConvex(args, label, spawn = spawnSync) {
       );
     }
   }
-  // SCRUM-892: the two local-target flags travel together, point at the
-  // loopback backend only, and never beside `--preview-name`.
-  const urlAt = args.indexOf("--url");
-  const keyAt = args.indexOf("--admin-key");
-  if (urlAt !== -1 || keyAt !== -1) {
-    if (urlAt === -1 || keyAt === -1 || args.includes("--preview-name")) {
+  // SCRUM-892: with no `--preview-name` the CLI targets whatever its
+  // environment selects, so that environment is checked here, at the spawn:
+  // exactly the loopback backend with an admin key, and no cloud credential.
+  const local = !args.includes("--preview-name");
+  if (local) {
+    try {
+      assertLocalTargeting({
+        local: { url: env.CONVEX_SELF_HOSTED_URL, adminKey: env.CONVEX_SELF_HOSTED_ADMIN_KEY },
+        env,
+      });
+    } catch (error) {
       throw new PreviewTargetingError(
-        `Refusing to run ${label}: --url and --admin-key must be passed together and never with --preview-name.`,
-      );
-    }
-    if (args[urlAt + 1] !== LOCAL_CONVEX_URL || !ADMIN_KEY_PATTERN.test(String(args[keyAt + 1]))) {
-      throw new PreviewTargetingError(
-        `Refusing to run ${label}: the local target must be exactly ${LOCAL_CONVEX_URL} with an admin key.`,
+        `Refusing to run ${label}: ${error instanceof Error ? error.message : "the local target is invalid"}`,
       );
     }
   }
 
   const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  const result = spawn(pnpm, args, { stdio: "inherit" });
+  const result = spawn(pnpm, args, local ? { stdio: "inherit", env } : { stdio: "inherit" });
   if (result.error) {
     throw new Error(`Could not start the Convex CLI for ${label}: ${result.error.message}`);
   }
