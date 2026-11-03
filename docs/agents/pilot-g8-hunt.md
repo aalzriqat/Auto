@@ -40,6 +40,8 @@ The later success disproves a persistent failure at that later revision; it does
 not distinguish an earlier product defect from an authentication/harness failure.
 No speculative RECEPTION fix or fabricated failing-first reproduction is included.
 
+Since SCRUM-891 the public `results.json` also carries a closed per-case verdict for each of the seven real-role cases; see `docs/adr/2026-11-03-pilot-role-audit-publishes-per-case-verdicts.md`.
+
 Coordinator diagnosis (private local directory, never upload decrypted files):
 
 ```powershell
