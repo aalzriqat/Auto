@@ -54,11 +54,19 @@
  * re-reads both from the host after the tests and fails the job on any change.
  * The fingerprint covers the root's module content hashes and every mounted
  * component's modules by source package (see `codeFingerprint`). The container
- * keeps no Linux capability. Residuals recorded on SCRUM-892, for the owner:
+ * keeps no Linux capability.
+ *
+ * ACCEPTED RESIDUAL GAP (owner ruling, option A, SCRUM-892): this is a
+ * tripwire. It detects tampering that is still in place when `verify` runs; it
+ * does not prevent tampering. A change that is restored before `verify` goes
+ * unseen. That covers:
  * - a variable changed and changed back before `verify` runs;
  * - code replaced before `mark`, which `mark` then records as the baseline;
  * - direct writes to the backend's own storage from inside the container,
  *   which no admin read observes.
+ * Restoring code by redeploying is expected to leave a new source package id,
+ * which `verify` would see (mod.rs:329-353). That is read from the source and
+ * has not been run.
  */
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -794,7 +802,9 @@ export async function markBackend(env, deps) {
  * to change either turns the job red. It reads through the backend binary's
  * admin API from the runner, a path deployed functions cannot serve.
  *
- * What it cannot see: a change that is made and undone between two reads.
+ * It detects tampering; it does not prevent it. A change that is made and
+ * undone between two reads goes unseen: the owner accepted that residual gap
+ * (SCRUM-892, option A; see the file header).
  */
 export async function verifyBackend(env, deps) {
   assertLocalOnly(env);
