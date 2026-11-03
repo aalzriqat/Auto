@@ -134,15 +134,14 @@ function StatementRegion({
   );
 }
 
-function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
-  const translate = useTranslate();
-  const { hasPermission, isLoading } = usePermissions();
-  const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
-  // Fixed at mount: the server checks it against its own clock and a new day is a new mount.
-  const [nowMs] = useState(() => Date.now());
-  const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
+export interface SupplierStatementData {
+  payable: StatementSectionData;
+  receivable: StatementSectionData;
+}
 
-  if (!allowed) return null;
+/** The statement itself, free of data fetching so every state can be rendered from plain data. */
+export function SupplierStatementView({ statement }: Readonly<{ statement: SupplierStatementData | undefined }>) {
+  const translate = useTranslate();
   if (statement === undefined) {
     return (
       <p role="status" className="py-4 text-center text-sm text-muted-foreground">
@@ -163,29 +162,40 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
           id="supplier-statement-ap"
           title={translate("SuppliersStmtPayableTitle")}
           emptyKey="SuppliersStmtPayableEmpty"
-          data={statement.payable as StatementSectionData}
+          data={statement.payable}
         />
         <StatementRegion
           id="supplier-statement-ar"
           title={translate("SuppliersStmtReceivableTitle")}
           emptyKey="SuppliersStmtReceivableEmpty"
-          data={statement.receivable as StatementSectionData}
+          data={statement.receivable}
         />
       </div>
     </section>
   );
 }
 
-export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
+function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
+  const { hasPermission, isLoading } = usePermissions();
+  const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
+  // Fixed at mount: the server checks it against its own clock and a new day is a new mount.
+  const [nowMs] = useState(() => Date.now());
+  const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
+  if (!allowed) return null;
+  return <SupplierStatementView statement={statement as SupplierStatementData | undefined} />;
+}
+
+export function SupplierStatementError() {
   const translate = useTranslate();
   return (
-    <QueryErrorBoundary
-      render={() => (
-        <p role="alert" className="py-4 text-center text-sm text-destructive">
-          {translate("SuppliersStmtLoadError")}
-        </p>
-      )}
-    >
+    <p role="alert" className="py-4 text-center text-sm text-destructive">
+      {translate("SuppliersStmtLoadError")}
+    </p>
+  );
+}
+export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
+  return (
+    <QueryErrorBoundary render={() => <SupplierStatementError />}>
       <StatementBody {...props} />
     </QueryErrorBoundary>
   );
