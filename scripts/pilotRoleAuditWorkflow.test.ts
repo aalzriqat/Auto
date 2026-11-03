@@ -5,6 +5,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { DEFAULT_ROLE_TEMPLATES } from "../convex/utils/permissions";
 import { auditDestination } from "../playwright/fixtures/screenAuditRoutes";
+import { LOCAL_CONVEX_DEPLOYMENT, convexDeploymentOf, servedDeployments } from "../playwright/scenarios/formExplorer/attestedPreview";
 import roleConfig from "../playwright.role-audit.config";
 import visualConfig from "../playwright.visual.config";
 import { spawnSync } from "node:child_process";
@@ -26,8 +27,9 @@ const stepSchema = z.object({ name: z.string().optional(), run: z.string().optio
 const jobSchema = z.object({ if: z.string(), steps: z.array(stepSchema) });
 const workflow = z.object({
   on: z.record(z.string(), z.unknown()), permissions: z.object({ contents: z.string() }).strict(),
-  jobs: z.object({ roles: jobSchema.extend({ strategy: z.object({
-    matrix: z.object({ role: z.array(z.string()) }), "max-parallel": z.number(), "fail-fast": z.boolean(),
+  concurrency: z.object({ group: z.string() }).passthrough(),
+  jobs: z.object({ roles: jobSchema.extend({ env: z.record(z.string(), z.string()), strategy: z.object({
+    matrix: z.object({ role: z.array(z.string()) }), "max-parallel": z.string(), "fail-fast": z.boolean(),
   }) }) }),
 }).parse(parse(source));
 function stepNamed(steps: z.infer<typeof stepSchema>[], name: string) {
@@ -127,7 +129,8 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     const job = workflow.jobs.roles;
     expect(job.if).toBe("github.ref == 'refs/heads/main'");
     expect(job.strategy.matrix.role.toSorted()).toEqual(DEFAULT_ROLE_TEMPLATES.map((role) => role.name).sort());
-    expect(job.strategy["max-parallel"]).toBe(1);
+    // SCRUM-892: serial in cloud mode (preview quota), all six roles in parallel locally.
+    expect(job.strategy["max-parallel"]).toBe("${{ inputs.backend == 'cloud' && 1 || 6 }}");
     expect(job.strategy["fail-fast"]).toBe(false);
     const browserStep = stepNamed(job.steps, "Run the attested role, locale and viewport matrix");
     expect(browserStep.run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
@@ -142,13 +145,94 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
     expect(deploy.run).toContain("--preview-run e2eBootstrap:markPreviewDeployment");
     for (const step of steps) {
       if (step.env?.CONVEX_DEPLOY_KEY) {
-        expect(step.env.CONVEX_DEPLOY_KEY).toBe("${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}");
+        // Cloud-only steps name the preview key; the matrix step names it behind
+        // the cloud switch so local mode, which refuses a deploy key, gets "".
+        expect(step.env.CONVEX_DEPLOY_KEY).toMatch(
+          /^\$\{\{ (env\.AUDIT_BACKEND == 'cloud' && )?secrets\.CONVEX_PREVIEW_DEPLOY_KEY( \|\| '')? \}\}$/,
+        );
       }
     }
     const cleanup = stepNamed(steps, "Delete the disposable preview");
     expect(cleanup.if).toBe("always() && env.CONVEX_PREVIEW_CREATED_AT != ''");
     expect(cleanup.run).toBe("node scripts/previewDeploymentLifecycle.mjs delete");
     expect(source).not.toContain("pull_request");
+  });
+
+  test("SCRUM-892: the schedule and an ordinary dispatch use the local backend; cloud is an explicit input", () => {
+    const dispatch = z.object({ inputs: z.object({ backend: z.object({
+      type: z.string(), options: z.array(z.string()), default: z.string() }) }) }).parse(workflow.on.workflow_dispatch);
+    expect(dispatch.inputs.backend).toMatchObject({ type: "choice", options: ["local", "cloud"], default: "local" });
+    // A schedule carries no inputs, so the empty value must resolve to local.
+    expect(workflow.jobs.roles.env.AUDIT_BACKEND).toBe("${{ inputs.backend || 'local' }}");
+    expect(workflow.concurrency.group).toContain("inputs.backend || 'local'");
+    expect(workflow.jobs.roles.if).toBe("github.ref == 'refs/heads/main'");
+    expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+  });
+
+  test("SCRUM-892: cloud mode keeps --preview-create and every cloud-credential step is cloud-only", () => {
+    const steps = workflow.jobs.roles.steps;
+    const deploy = stepNamed(steps, "Recreate Convex E2E backend");
+    expect(deploy.if).toBe("env.AUDIT_BACKEND == 'cloud'");
+    expect(deploy.run).toContain('--preview-create "$CONVEX_PREVIEW_NAME"');
+    for (const name of ["Name the disposable scenarios preview", "Refuse an unpinned role audit preview",
+      "Seed the QA dealership", "Set exact product role templates"]) {
+      expect(stepNamed(steps, name).if).toBe("env.AUDIT_BACKEND == 'cloud'");
+    }
+    // The matrix step receives the preview credentials only in cloud mode.
+    const matrix = stepNamed(steps, "Run the attested role, locale and viewport matrix");
+    expect(matrix.env?.CONVEX_DEPLOY_KEY).toBe("${{ env.AUDIT_BACKEND == 'cloud' && secrets.CONVEX_PREVIEW_DEPLOY_KEY || '' }}");
+    expect(matrix.env?.CONVEX_PREVIEW_NAME).toBe("${{ env.AUDIT_BACKEND == 'cloud' && env.CONVEX_PREVIEW_NAME || '' }}");
+    expect(matrix.env?.AUTOFLOW_LOCAL_CONVEX_CI).toBe("${{ env.AUDIT_BACKEND == 'local' && '1' || '' }}");
+  });
+
+  test("SCRUM-892: local mode starts, marks, verifies and stops a per-job backend with no cloud credential", () => {
+    const steps = workflow.jobs.roles.steps;
+    const localSteps = steps.filter((step) => step.if?.includes("env.AUDIT_BACKEND == 'local'"));
+    expect(localSteps.map((step) => step.name)).toEqual([
+      "Start the local Convex backend",
+      "Set and verify the local backend environment allowlist",
+      "Deploy main to the local Convex backend",
+      "Mint the disposable-preview marker and record the tripwire baseline",
+      "Seed the QA dealership on the local backend",
+      "Set exact product role templates on the local backend",
+      "Verify the local backend was not changed during the run",
+    ]);
+    for (const step of localSteps) {
+      expect(JSON.stringify(step.env ?? {})).not.toMatch(/CONVEX_(PREVIEW_)?DEPLOY_KEY|CONVEX_PREVIEW/);
+      expect(step.run ?? "").not.toMatch(/--preview-|previewDeploymentLifecycle/);
+    }
+    expect(stepNamed(steps, "Start the local Convex backend").run).toBe("node scripts/localConvexBackend.mjs start");
+    expect(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline").run)
+      .toBe("node scripts/localConvexBackend.mjs mark");
+    const verify = stepNamed(steps, "Verify the local backend was not changed during the run");
+    expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
+    expect(verify.if).toContain("always()");
+    // Exactly always(), as the shared credential-boundary test requires. In cloud
+    // mode no container is recorded, and stop is then a no-op.
+    expect(stepNamed(steps, "Stop the local Convex backend").if).toBe("always()");
+    expect(stepNamed(steps, "Stop the local Convex backend").run).toBe("node scripts/localConvexBackend.mjs stop");
+    const index = (name: string) => steps.indexOf(stepNamed(steps, name));
+    expect(index("Start the local Convex backend")).toBeLessThan(index("Set and verify the local backend environment allowlist"));
+    expect(index("Set and verify the local backend environment allowlist")).toBeLessThan(index("Deploy main to the local Convex backend"));
+    expect(index("Deploy main to the local Convex backend")).toBeLessThan(index("Mint the disposable-preview marker and record the tripwire baseline"));
+    expect(index("Mint the disposable-preview marker and record the tripwire baseline")).toBeLessThan(index("Seed the QA dealership on the local backend"));
+    expect(index("Set exact product role templates on the local backend")).toBeLessThan(index("Run the attested role, locale and viewport matrix"));
+    expect(index("Run the attested role, locale and viewport matrix")).toBeLessThan(index("Verify the local backend was not changed during the run"));
+    expect(index("Stop the local Convex backend")).toBeLessThan(index("Upload encrypted role audit evidence"));
+    // The attested matrix command is identical in both modes.
+    expect(stepNamed(steps, "Run the attested role, locale and viewport matrix").run).toBe("node scripts/pilotRoleAuditEvidence.mjs");
+  });
+
+  test("SCRUM-892: the browser helpers name only the exact local backend, nothing else on loopback", () => {
+    expect(convexDeploymentOf("http://127.0.0.1:3210")).toBe(LOCAL_CONVEX_DEPLOYMENT);
+    expect(convexDeploymentOf("ws://127.0.0.1:3210/api/1.0/sync")).toBe(LOCAL_CONVEX_DEPLOYMENT);
+    expect(convexDeploymentOf("https://happy-cat-123.convex.cloud")).toBe("happy-cat-123");
+    for (const refused of ["http://127.0.0.1:3000", "http://localhost:3210", "http://127.0.0.2:3210",
+      "https://127.0.0.1:3210", "http://user@127.0.0.1:3210", "http://127.0.0.1:3210.evil.example", undefined]) {
+      expect(convexDeploymentOf(refused)).toBeUndefined();
+    }
+    expect(servedDeployments(["ws://127.0.0.1:3210/api/1.0/sync", "ws://127.0.0.1:3000/_next/webpack-hmr",
+      "wss://x-1.convex.cloud/api/1.0/sync"])).toEqual([LOCAL_CONVEX_DEPLOYMENT, "x-1"]);
   });
 
   test("the real-backend scenario library opts into the existing fail-closed cross-screen oracle", () => {

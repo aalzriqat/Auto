@@ -50,7 +50,13 @@ export async function openHuntPage(page: Page, baseURL: string | undefined, rout
 }
 
 export function readHuntAttestation(): Attestation {
-  expect(process.env.CONVEX_PREVIEW_NAME, "role audit requires an explicitly named disposable preview").toBeTruthy();
+  // SCRUM-892: a disposable backend is either a named cloud preview or the
+  // runner-local self-hosted one (both self-hosted variables, no preview name).
+  const local = Boolean(process.env.CONVEX_SELF_HOSTED_URL && process.env.CONVEX_SELF_HOSTED_ADMIN_KEY);
+  expect(
+    local || process.env.CONVEX_PREVIEW_NAME,
+    "role audit requires an explicitly named disposable preview or the runner-local backend",
+  ).toBeTruthy();
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", READ_HUNT], {
     env: process.env, encoding: "utf8", timeout: 180_000,
   });
