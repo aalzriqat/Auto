@@ -1,5 +1,8 @@
 {
   "name": "spike892r5-probe-app",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "convex": "1.42.1"
+  }
 }
