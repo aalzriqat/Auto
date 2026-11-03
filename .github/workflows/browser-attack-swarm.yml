@@ -13,8 +13,9 @@ concurrency:
   # evaluated before any job `if`, so a swarm run that ends `skipped` (its
   # Playwright run was cancelled or failed) used to cancel the live Playwright
   # run of the newer head. Only a run that can actually provision joins the
-  # per-PR group, where a newer swarm replaces an older one before it recreates
-  # the shared named preview; every other run is alone in a group of its own.
+  # per-PR group, where a newer swarm replaces an older one before it starts a
+  # backend (SCRUM-892: formerly: recreates the shared named cloud preview);
+  # every other run is alone in a group of its own.
   # A swarm for a superseded head is refused by the live-head checks below.
   group: >-
     browser-attack-swarm-${{
@@ -26,6 +27,31 @@ concurrency:
       format('run-{0}', github.run_id)
     }}
   cancel-in-progress: true
+
+# SCRUM-892 — the backend of this swarm is local, not a Convex cloud preview.
+#
+# Every job that needs a backend (trusted-e2e, each attack worker, the terminal
+# opening proof) starts its OWN self-hosted Convex container on its own runner
+# (scripts/localConvexBackend.mjs: image pinned by digest, API published on
+# 127.0.0.1:3210 only, per-run secret, removed by an always() step). A local
+# backend cannot outlive its runner, so nothing is created, pinned, shared or
+# deleted in Convex cloud, and no Convex cloud credential exists in this file.
+#
+# Security delta, stated plainly. Candidate backend code used to run in Convex's
+# cloud, on a deployment holding a project-wide credential's reach. It now runs
+# in a container on the runner. That container receives only its own INSTANCE_*
+# and origin variables, no runner secret and no GitHub token; its ports are bound
+# to loopback; and the CLI that deploys the staged candidate is the trusted one,
+# in the same read-only, no-capability container as before. Candidate code
+# already runs on runners (playwright.yml builds and serves it), so this adds no
+# new class of exposure; it removes the cloud project credential from the swarm.
+# Accepted residuals: the per-run admin key reaches later steps of the SAME job
+# through GITHUB_ENV (it controls only that job's throwaway backend), and the
+# backend container has default bridge egress because it fetches Clerk's JWKS.
+#
+# Semantic change: each attack worker attacks a freshly seeded backend of its own
+# (its accounting period opened by its own setup step before the missions), not
+# the state the full E2E suite left behind in one shared preview.
 
 jobs:
   e2e-gate-begin:
@@ -86,9 +112,6 @@ jobs:
       tested_sha: ${{ steps.provenance.outputs.tested_sha }}
       base_sha: ${{ steps.provenance.outputs.base_sha }}
       pr_number: ${{ steps.plan.outputs.pr_number }}
-      cleanup_preview_name: ${{ steps.pin.outputs.preview_name }}
-      cleanup_convex_url: ${{ steps.pin.outputs.convex_cloud_url }}
-      cleanup_preview_created_at: ${{ steps.pin.outputs.preview_created_at }}
 
     steps:
       - name: Checkout trusted control plane from immutable workflow revision
@@ -290,9 +313,11 @@ jobs:
 
       # SCRUM-777: `provenance` read the PR refs once, at the start of this job.
       # Install, impact and the descriptor download take minutes, so re-read them
-      # immediately before the first preview write (`convex deploy
-      # --preview-create` below); a superseded head must not recreate the preview.
-      - name: Refuse a superseded PR head before creating the disposable preview
+      # immediately before the paid Jev request below, the first action of this
+      # job that cannot be taken back. A superseded head must not spend it.
+      # (SCRUM-892: this check used to guard the creation of the shared cloud
+      # preview; no cloud preview exists any more.)
+      - name: Refuse a superseded PR head before the paid Jev call
         working-directory: trusted
         run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
         env:
@@ -301,79 +326,23 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
           EXPECTED_TESTED_SHA: ${{ steps.provenance.outputs.tested_sha }}
 
-      - name: Recreate disposable Convex preview from trusted main
+      # SCRUM-892: the backend of every job below is a self-hosted Convex that the
+      # job starts inside its own runner, at one fixed loopback address. There is
+      # nothing to create, pin, resolve or delete, so this step only records that
+      # fact as a trusted constant; prepareTrustedBrowserSwarmRun validates it
+      # field by field and refuses anything but the exact local origin.
+      - name: Record the runner-local Convex authority
         working-directory: trusted
+        run: node scripts/intelligence/localConvexAuthority.mjs
         env:
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "refs/pull/${PR_NUMBER}/merge" "$PR_NUMBER")"
 
-          retry_convex() {
-            local attempt delay
-            delay=2
-            for attempt in 1 2 3 4 5; do
-              if "$@"; then return 0; fi
-              if [ "$attempt" = "5" ]; then return 1; fi
-              echo "Trusted preview recreation failed on attempt $attempt/5; retrying in ${delay}s..." >&2
-              sleep "$delay"
-              delay=$((delay * 2))
-            done
-          }
-
-          echo "CLEANUP_PREVIEW_NAME=$PREVIEW_NAME" >> "$GITHUB_ENV"
-          # --cmd records the URL of the deployment THIS command created (SCRUM-377);
-          # it is the only identity the cleanup will ever act on.
-          retry_convex pnpm exec convex deploy \
-            --typecheck enable \
-            --preview-create "$PREVIEW_NAME" \
-            --preview-run e2eBootstrap:markPreviewDeployment \
-            --cmd 'echo "CONVEX_PREVIEW_URL=$CREATED_CONVEX_URL" >> "$GITHUB_ENV"' \
-            --cmd-url-env-var-name CREATED_CONVEX_URL
-
-      # SCRUM-377: record which deployment this run owns and shorten its expiry,
-      # so the deployment quota is freed even if the run dies before cleanup.
-      # Its own outputs feed preview-cleanup, which must work even when a later
-      # prepare step fails and the plan outputs stay empty.
-      - name: Pin the disposable preview for cleanup
-        id: pin
-        if: always() && env.CONVEX_PREVIEW_URL != ''
-        working-directory: trusted
-        env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.CLEANUP_PREVIEW_NAME }}
-        run: |
-          set -euo pipefail
-          echo "preview_name=$CONVEX_PREVIEW_NAME" >> "$GITHUB_OUTPUT"
-          echo "convex_cloud_url=$CONVEX_PREVIEW_URL" >> "$GITHUB_OUTPUT"
-          node scripts/previewDeploymentLifecycle.mjs pin
-
-      # The pin step only warns on failure, and preview-cleanup acts only on a
-      # recorded pin. Stop before anything claims the preview (#650).
-      - name: Refuse to continue without a recorded cleanup pin
-        env:
-          CONVEX_PREVIEW_CREATED_AT: ${{ steps.pin.outputs.preview_created_at }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
-            echo "Disposable preview has no pinned cleanup identity." >&2
-            exit 1
-          fi
-
-      # The lookup is by preview name, so it can return a newer run's
-      # replacement; it refuses anything but CONVEX_PREVIEW_URL, the deployment
-      # this run created (SCRUM-377).
-      - name: Resolve named Convex preview from trusted control plane
-        working-directory: trusted
-        run: node scripts/intelligence/convexPreviewAuthority.mjs
-        env:
-          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_URL: ${{ env.CONVEX_PREVIEW_URL }}
-
-      # The one paid TypeSafe request, spent only once the disposable preview
-      # exists (SCRUM-376): a quota or preview failure must not pay for it first.
+      # The one paid TypeSafe request, made exactly once, here. It used to wait
+      # until the disposable cloud preview existed (SCRUM-376), so that a quota or
+      # preview failure could not make this job pay first. No paid preview exists
+      # any more, so there is nothing left to gate it on: it stays directly before
+      # its only consumer (the plan step below) and after every cheaper refusal in
+      # this job (coverage gate, descriptor, head freshness, local authority).
       - name: Generate bounded Jev browser exploration once
         working-directory: trusted
         run: pnpm browser-swarm:jev-exploration
@@ -666,11 +635,11 @@ jobs:
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
 
-      # SCRUM-777: the first step of this job that writes to the disposable
-      # preview (`prepare` created it, behind its own check). A run planned
+      # SCRUM-777: the first step of this job that starts a backend. A run planned
       # against a head the PR has since left must stop here; the verdict job
-      # would fail it later, but only after it had deployed over the preview.
-      - name: Refuse a superseded PR head before touching the disposable preview
+      # would fail it later, but only after it had deployed a backend and run
+      # the whole suite.
+      - name: Refuse a superseded PR head before starting the local Convex backend
         working-directory: trusted
         run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
         env:
@@ -679,94 +648,25 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
           EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
-      - name: Scrub disposable preview environment before candidate execution
+      # SCRUM-892: the backend is a disposable self-hosted Convex container on this
+      # runner, not a cloud preview. Pinned by digest in
+      # scripts/localConvexBackend.mjs, published on 127.0.0.1 only, given no
+      # runner secret, and removed by the always() step at the end of this job.
+      - name: Start the local Convex backend
         working-directory: trusted
+        run: node scripts/localConvexBackend.mjs start
+
+      # Set BEFORE the candidate deploy: convex/auth.config.ts is evaluated at
+      # deploy time. The command sets exactly the allowlisted names (all public
+      # origins or Cloudflare's published test secret) and then fails unless
+      # `convex env list` reports exactly those names, so a candidate never sees
+      # any other backend variable. Replaces the cloud "scrub" step.
+      - name: Set and verify the local backend environment allowlist before candidate execution
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs env
         env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
-          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}
-        run: |
-          set -euo pipefail
-
-          # The pin step only warns when it fails, and preview-cleanup runs only for a
-          # recorded cleanup identity. Do not change a preview nothing will retire.
-          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
-            echo "Disposable preview has no pinned cleanup identity." >&2
-            exit 1
-          fi
-
-          ADMIN_KEY="$(
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const resolved = await resolveConvexPreviewCredentials({
-            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          process.stdout.write(resolved.adminKey);
-          NODE
-          )"
-          if [ -z "$ADMIN_KEY" ]; then
-            echo "Trusted control plane returned an empty preview deployment credential." >&2
-            exit 1
-          fi
-          echo "::add-mask::$ADMIN_KEY"
-
-          mapfile -t CURRENT_ENV_NAMES < <(
-            pnpm exec convex env list --names-only \
-              --url "$NEXT_PUBLIC_CONVEX_URL" \
-              --admin-key "$ADMIN_KEY"
-          )
-
-          for name in "${CURRENT_ENV_NAMES[@]}"; do
-            if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
-              echo "Preview env listing contained an unexpected value; refusing candidate execution." >&2
-              exit 1
-            fi
-            case "$name" in
-              AUTOFLOW_DEPLOYMENT_CLASS|CLERK_DEV_JWT_ISSUER_DOMAIN|CLERK_JWT_ISSUER_DOMAIN|NEXT_PUBLIC_APP_URL|TURNSTILE_SECRET_KEY)
-                ;;
-              *)
-                pnpm exec convex env remove "$name" \
-                  --url "$NEXT_PUBLIC_CONVEX_URL" \
-                  --admin-key "$ADMIN_KEY"
-                ;;
-            esac
-          done
-
-          # The only secret-shaped value candidate code may observe is
-          # Cloudflare's documented public E2E secret, never a real widget key.
-          pnpm exec convex env set TURNSTILE_SECRET_KEY \
-            '1x0000000000000000000000000000000AA' --force \
-            --url "$NEXT_PUBLIC_CONVEX_URL" \
-            --admin-key "$ADMIN_KEY"
-          pnpm exec convex env set NEXT_PUBLIC_APP_URL \
-            'http://127.0.0.1:3000' --force \
-            --url "$NEXT_PUBLIC_CONVEX_URL" \
-            --admin-key "$ADMIN_KEY"
-
-          mapfile -t SCRUBBED_ENV_NAMES < <(
-            pnpm exec convex env list --names-only \
-              --url "$NEXT_PUBLIC_CONVEX_URL" \
-              --admin-key "$ADMIN_KEY"
-          )
-          ACTUAL="$(
-            printf '%s\n' "${SCRUBBED_ENV_NAMES[@]}" | LC_ALL=C sort
-          )"
-          EXPECTED="$(
-            printf '%s\n' \
-              AUTOFLOW_DEPLOYMENT_CLASS \
-              CLERK_DEV_JWT_ISSUER_DOMAIN \
-              CLERK_JWT_ISSUER_DOMAIN \
-              NEXT_PUBLIC_APP_URL \
-              TURNSTILE_SECRET_KEY | LC_ALL=C sort
-          )"
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "Disposable preview environment does not match the trusted allowlist." >&2
-            printf 'Expected:\n%s\nActual:\n%s\n' "$EXPECTED" "$ACTUAL" >&2
-            exit 1
-          fi
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       # SCRUM-350: the preview credential is project-wide, so the candidate
       # backend is never deployed by candidate code. This step holds no secret:
@@ -808,43 +708,43 @@ jobs:
 
       - name: Deploy staged candidate backend with trusted Convex CLI
         env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
         run: |
           set -euo pipefail
 
-          ADMIN_KEY="$(
-            cd trusted
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const resolved = await resolveConvexPreviewCredentials({
-            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          if (resolved.authority.convexCloudUrl !== process.env.NEXT_PUBLIC_CONVEX_URL) {
-            throw new Error("Swarm preview was recreated after planning; refusing to deploy.");
-          }
-          process.stdout.write(resolved.adminKey);
-          NODE
-          )"
-          if [ -z "$ADMIN_KEY" ]; then
-            echo "Trusted control plane returned an empty preview credential." >&2
-            exit 1
-          fi
-          echo "::add-mask::$ADMIN_KEY"
+          case "${AUTOFLOW_LOCAL_CONVEX_CONTAINER:-}" in
+            autoflow-local-convex-*) ;;
+            *)
+              echo "No local Convex container was recorded by the start step." >&2
+              exit 1
+              ;;
+          esac
 
           # The TRUSTED Convex CLI from the trusted lockfile, in a container that
           # sees exactly the staged backend and trusted node_modules, read-only.
           # No package manager (it would read candidate-adjacent config), no
           # typecheck (it would run the project's typescript), no codegen (it
           # would write). Bundling parses candidate code; nothing of it executes.
-          # Residual, accepted (SCRUM-350 F1): the container needs egress to the
-          # Convex API, so this relies on that zero-execution property.
+          #
+          # SCRUM-892 network choice. The backend publishes its API on the runner's
+          # 127.0.0.1 only, which a container on the default bridge cannot reach,
+          # and `--network host` would also expose the runner's loopback (the
+          # egress proxy, the candidate relay) to the CLI container. Joining the
+          # BACKEND container's own network namespace (`--network container:`, the
+          # documented container network mode) gives the CLI exactly one thing it
+          # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
+          # literal everywhere. Nothing else on the runner is reachable from it.
+          # The URL and admin key are inherited by NAME (`--env NAME`), so neither
+          # is in argv. Nothing from the runner environment besides these two
+          # names enters the container, and the key controls only a backend that
+          # exists for this job.
+          # Residual, accepted (SCRUM-350 F1): the backend container has default
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
+          # so the zero-execution property above remains what protects the key.
           docker run --rm \
             --name autoflow-trusted-staged-backend-deploy \
-            --network bridge \
+            --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
             --read-only \
             --tmpfs /tmp:rw,size=512m \
             --cap-drop ALL \
@@ -853,21 +753,33 @@ jobs:
             --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
             --workdir /app \
             --env HOME=/tmp/home \
-            --env NEXT_PUBLIC_CONVEX_URL \
-            --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
+            --env CONVEX_SELF_HOSTED_URL \
+            --env CONVEX_SELF_HOSTED_ADMIN_KEY \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
-            sh -c 'exec node /app/node_modules/convex/bin/main.js deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck disable --codegen disable'
+            node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes
+
+      # The disposable-preview marker (e2eBootstrap:markPreviewDeployment) is
+      # minted by the TRUSTED CLI from the trusted checkout after the candidate
+      # deploy, because the function it calls is part of the deployed code.
+      # Delta from the cloud flow, where trusted main minted it before the
+      # candidate overlay: the function body now comes from the candidate. It
+      # guards only seeding and test-only entry points, on a backend that holds
+      # nothing but this job's seed.
+      - name: Mint the disposable-preview marker with the trusted CLI
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs mark
 
       - name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
+
 
       - name: Resolve public Clerk JWT verification material
         working-directory: trusted
@@ -1161,6 +1073,14 @@ jobs:
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
 
+      # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
+      # Hosted runners are discarded anyway; this keeps the guarantee true on a
+      # reused one.
+      - name: Stop the local Convex backend
+        if: always()
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs stop
+
       - name: Upload trusted E2E report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -1189,14 +1109,18 @@ jobs:
 
   attack-worker:
     name: attack-worker-${{ matrix.worker_index }}
-    needs: [prepare, candidate-build, trusted-e2e]
+    # SCRUM-892: candidate-source is needed because each worker deploys the staged
+    # candidate backend to a local backend of its own.
+    needs: [prepare, candidate-build, candidate-source, trusted-e2e]
     if: >-
       needs.prepare.outputs.should_run == 'true' &&
       needs.trusted-e2e.result == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # 35 before SCRUM-892; +10 for this worker's own backend start, deploy, seed
+    # and accounting-period setup.
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
@@ -1228,6 +1152,163 @@ jobs:
       - name: Install trusted Chromium
         working-directory: trusted
         run: pnpm exec playwright install --with-deps chromium
+
+      - name: Download exact candidate source data
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.candidate-source.outputs.artifact_id }}
+          path: ${{ runner.temp }}/candidate-source-archive
+          merge-multiple: true
+      - name: Extract candidate data outside trusted code
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/candidate-source-data"
+          tar --extract --file "$RUNNER_TEMP/candidate-source-archive/candidate-source.tar" --directory "$RUNNER_TEMP/candidate-source-data" --no-same-owner
+
+      # SCRUM-777: the first step of this job that starts a backend. A run planned
+      # against a head the PR has since left must stop here; the verdict job
+      # would fail it later, but only after it had deployed a backend and run
+      # the whole suite.
+      - name: Refuse a superseded PR head before starting the local Convex backend
+        working-directory: trusted
+        run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+
+      # SCRUM-892: the backend is a disposable self-hosted Convex container on this
+      # runner, not a cloud preview. Pinned by digest in
+      # scripts/localConvexBackend.mjs, published on 127.0.0.1 only, given no
+      # runner secret, and removed by the always() step at the end of this job.
+      - name: Start the local Convex backend
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs start
+
+      # Set BEFORE the candidate deploy: convex/auth.config.ts is evaluated at
+      # deploy time. The command sets exactly the allowlisted names (all public
+      # origins or Cloudflare's published test secret) and then fails unless
+      # `convex env list` reports exactly those names, so a candidate never sees
+      # any other backend variable. Replaces the cloud "scrub" step.
+      - name: Set and verify the local backend environment allowlist before candidate execution
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs env
+        env:
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
+
+      # SCRUM-350: the preview credential is project-wide, so the candidate
+      # backend is never deployed by candidate code. This step holds no secret:
+      # it copies convex/ and lib/ as data, refuses links, .wasm and nested
+      # package.json, and requires the candidate's dependency files to be
+      # byte-identical to trusted's.
+      - name: Stage exact candidate backend as data
+        run: node trusted/scripts/intelligence/stageCandidateBackend.mjs
+        env:
+          CANDIDATE_ROOT: ${{ runner.temp }}/candidate-source-data
+          TRUSTED_ROOT: ${{ github.workspace }}/trusted
+          STAGE_ROOT: ${{ runner.temp }}/candidate-backend
+          STAGE_MANIFEST_PATH: ${{ runner.temp }}/candidate-backend-manifest.json
+          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
+
+      # SCRUM-350 F1: a candidate import is an instruction to the bundler to
+      # read a file, and in the deploy container /proc/self/environ holds the
+      # key. So the trusted CLI's own bundle calls run here first, with no
+      # credential and no network over the same read-only mounts, and every
+      # file the audit models them reading must lie inside the stage or trusted
+      # node_modules. A model, not a proof: unknown read channels are SCRUM-745.
+      - name: Audit staged backend inputs without credentials
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --name autoflow-staged-backend-input-audit \
+            --network none \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/scripts/intelligence/auditStagedBackendInputs.mjs:/audit/auditStagedBackendInputs.mjs:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /audit/auditStagedBackendInputs.mjs
+
+      - name: Deploy staged candidate backend with trusted Convex CLI
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+        run: |
+          set -euo pipefail
+
+          case "${AUTOFLOW_LOCAL_CONVEX_CONTAINER:-}" in
+            autoflow-local-convex-*) ;;
+            *)
+              echo "No local Convex container was recorded by the start step." >&2
+              exit 1
+              ;;
+          esac
+
+          # The TRUSTED Convex CLI from the trusted lockfile, in a container that
+          # sees exactly the staged backend and trusted node_modules, read-only.
+          # No package manager (it would read candidate-adjacent config), no
+          # typecheck (it would run the project's typescript), no codegen (it
+          # would write). Bundling parses candidate code; nothing of it executes.
+          #
+          # SCRUM-892 network choice. The backend publishes its API on the runner's
+          # 127.0.0.1 only, which a container on the default bridge cannot reach,
+          # and `--network host` would also expose the runner's loopback (the
+          # egress proxy, the candidate relay) to the CLI container. Joining the
+          # BACKEND container's own network namespace (`--network container:`, the
+          # documented container network mode) gives the CLI exactly one thing it
+          # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
+          # literal everywhere. Nothing else on the runner is reachable from it.
+          # The URL and admin key are inherited by NAME (`--env NAME`), so neither
+          # is in argv. Nothing from the runner environment besides these two
+          # names enters the container, and the key controls only a backend that
+          # exists for this job.
+          # Residual, accepted (SCRUM-350 F1): the backend container has default
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
+          # so the zero-execution property above remains what protects the key.
+          docker run --rm \
+            --name autoflow-trusted-staged-backend-deploy \
+            --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
+            --read-only \
+            --tmpfs /tmp:rw,size=512m \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$RUNNER_TEMP/candidate-backend:/app:ro" \
+            --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
+            --workdir /app \
+            --env HOME=/tmp/home \
+            --env CONVEX_SELF_HOSTED_URL \
+            --env CONVEX_SELF_HOSTED_ADMIN_KEY \
+            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
+            node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes
+
+      # The disposable-preview marker (e2eBootstrap:markPreviewDeployment) is
+      # minted by the TRUSTED CLI from the trusted checkout after the candidate
+      # deploy, because the function it calls is part of the deployed code.
+      # Delta from the cloud flow, where trusted main minted it before the
+      # candidate overlay: the function body now comes from the candidate. It
+      # guards only seeding and test-only entry points, on a backend that holds
+      # nothing but this job's seed.
+      - name: Mint the disposable-preview marker with the trusted CLI
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs mark
+
+      - name: Seed and assert the QA dealership from trusted main
+        working-directory: trusted
+        run: node scripts/e2ePreviewBootstrap.mjs
+        env:
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
 
       - name: Resolve test-only Clerk public JWT verification key
         working-directory: trusted
@@ -1273,30 +1354,19 @@ jobs:
           CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
-      - name: Assert seeded preview from trusted control plane
+      # The backend above was deployed, marked and seeded by this very job from
+      # trusted code, so there is no control plane to ask whether a newer run
+      # replaced it (SCRUM-892). What remains is the bootstrap's own read-only
+      # assertion that the seeded dealership is present and well formed.
+      - name: Assert the seeded local backend
         working-directory: trusted
         run: |
           set -euo pipefail
-          CURRENT_URL="$(
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewAuthority } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const authority = await resolveConvexPreviewAuthority({
-            deployKey: process.env.CONVEX_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          process.stdout.write(authority.convexCloudUrl);
-          NODE
-          )"
-          if [ "$CURRENT_URL" != "$NEXT_PUBLIC_CONVEX_URL" ]; then
-            echo "Named preview was recreated underneath this swarm; refusing stale execution." >&2
-            exit 1
-          fi
           node scripts/e2ePreviewBootstrap.mjs --assert-only
           echo "BROWSER_SWARM_PREVIEW_ATTESTED=1" >> "$GITHUB_ENV"
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
           NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
@@ -1454,6 +1524,26 @@ jobs:
           node scripts/intelligence/browserEgressProof.mjs | tee egress-evidence/browser-egress-proof.json
           node scripts/intelligence/browserEgressProofVerify.mjs egress-evidence/browser-egress-proof.json
 
+      # SCRUM-892: this worker attacks its own freshly seeded backend, not the
+      # state the full E2E suite left behind, so it opens the accounting period
+      # itself, here, before any mission. Without an open period every posting
+      # stays QUEUED and ACC-2 cannot judge reversal (SCRUM-350 G4). This runs
+      # unconditionally and before the missions: a worker cannot reach them with
+      # the period unset, and a failure here fails the worker.
+      - name: Open the swarm accounting period and drain its pending outbox
+        working-directory: trusted
+        run: >-
+          pnpm exec playwright test playwright/tests/browser-swarm-accounting-period.spec.ts
+          --project=chromium --no-deps --output=test-results-swarm-period
+        env:
+          BROWSER_EGRESS_REQUIRED: "1"
+          BROWSER_SWARM_PERIOD_SETUP: "1"
+          CI: true
+          PLAYWRIGHT_HTML_REPORT: playwright-report-swarm-period
+          PLAYWRIGHT_SKIP_WEBSERVER: "1"
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
+
       # SCRUM-777: the last trusted boundary before candidate code is attacked.
       - name: Refuse a superseded PR head before attacking
         working-directory: trusted
@@ -1499,6 +1589,14 @@ jobs:
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
 
+      # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
+      # Hosted runners are discarded anyway; this keeps the guarantee true on a
+      # reused one.
+      - name: Stop the local Convex backend
+        if: always()
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs stop
+
       - name: Upload trusted swarm evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -1508,38 +1606,61 @@ jobs:
             trusted/swarm/
             trusted/playwright-report/
             trusted/test-results/
+            trusted/playwright-report-swarm-period/
+            trusted/test-results-swarm-period/
             trusted/egress-evidence/
           if-no-files-found: warn
           retention-days: 14
 
-  opening-prepare:
-    name: fresh-opening-preview
+  opening-proof:
+    name: terminal-opening-proof
+    # SCRUM-892: no opening-prepare / opening-build any more. The fresh state this
+    # proof owns is its own freshly started and seeded local backend (below), and
+    # the one exact-SHA candidate build is reusable because every job's backend is
+    # at the same fixed local origin.
     needs: [prepare, candidate-build, candidate-source, trusted-e2e, attack-worker]
     if: >-
       !cancelled() &&
       needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
+      needs.candidate-source.result == 'success' &&
       needs.trusted-e2e.result == 'success' &&
       ((needs.prepare.outputs.should_run == 'true' && needs.attack-worker.result == 'success') ||
        (needs.prepare.outputs.should_run == 'false' && needs.attack-worker.result == 'skipped')) &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    # 35 before SCRUM-892; +10 for this job's own backend start, deploy and seed.
     timeout-minutes: 45
     permissions:
       contents: read
     outputs:
-      creation_attempted: ${{ steps.create.outputs.attempted }}
-      preview_name: ${{ steps.pin.outputs.preview_name }}
-      convex_cloud_url: ${{ steps.pin.outputs.convex_cloud_url }}
-      cleanup_preview_created_at: ${{ steps.pin.outputs.preview_created_at }}
+      checked: ${{ steps.proof.outputs.checked }}
 
     steps:
-      - name: Checkout trusted E2E controller from immutable workflow revision
+      - name: Checkout trusted browser controller from immutable workflow revision
+        if: ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.workflow_sha }}
           path: trusted
           persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+
+      - name: Install trusted controller dependencies
+        working-directory: trusted
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install trusted Chromium
+        working-directory: trusted
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Download exact candidate source data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -1553,20 +1674,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/candidate-source-data"
           tar --extract --file "$RUNNER_TEMP/candidate-source-archive/candidate-source.tar" --directory "$RUNNER_TEMP/candidate-source-data" --no-same-owner
 
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 11.13.0
-
-      - name: Use Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-
-      - name: Install trusted E2E dependencies
-        working-directory: trusted
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Refuse a superseded PR head before touching the disposable preview
+      # SCRUM-777: the first step of this job that starts a backend. A run planned
+      # against a head the PR has since left must stop here; the verdict job
+      # would fail it later, but only after it had deployed a backend and run
+      # the whole suite.
+      - name: Refuse a superseded PR head before starting the local Convex backend
         working-directory: trusted
         run: node scripts/intelligence/browserSwarmHeadFreshness.mjs
         env:
@@ -1575,143 +1687,25 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
           EXPECTED_TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
 
-      - name: Recreate disposable opening Preview from trusted main
-        id: create
+      # SCRUM-892: the backend is a disposable self-hosted Convex container on this
+      # runner, not a cloud preview. Pinned by digest in
+      # scripts/localConvexBackend.mjs, published on 127.0.0.1 only, given no
+      # runner secret, and removed by the always() step at the end of this job.
+      - name: Start the local Convex backend
         working-directory: trusted
-        env:
-          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-        run: |
-          set -euo pipefail
-          PREVIEW_NAME="$(node scripts/e2ePreviewBootstrap.mjs --print-name "refs/pull/${PR_NUMBER}/merge/opening-proof/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}" "$PR_NUMBER")"
-          echo "OPENING_PREVIEW_NAME=$PREVIEW_NAME" >> "$GITHUB_ENV"
-          echo "attempted=true" >> "$GITHUB_OUTPUT"
-          retry_convex() {
-            local attempt delay
-            delay=2
-            for attempt in 1 2 3 4 5; do
-              if "$@"; then return 0; fi
-              if [ "$attempt" = "5" ]; then return 1; fi
-              echo "Trusted preview recreation failed on attempt $attempt/5; retrying in ${delay}s..." >&2
-              sleep "$delay"
-              delay=$((delay * 2))
-            done
-          }
-          retry_convex pnpm exec convex deploy \
-            --typecheck enable \
-            --preview-create "$PREVIEW_NAME" \
-            --preview-run e2eBootstrap:markPreviewDeployment \
-            --cmd 'echo "CONVEX_PREVIEW_URL=$CREATED_CONVEX_URL" >> "$GITHUB_ENV"' \
-            --cmd-url-env-var-name CREATED_CONVEX_URL
+        run: node scripts/localConvexBackend.mjs start
 
-      - name: Pin the opening Preview for cleanup
-        id: pin
-        if: always() && env.CONVEX_PREVIEW_URL != ''
+      # Set BEFORE the candidate deploy: convex/auth.config.ts is evaluated at
+      # deploy time. The command sets exactly the allowlisted names (all public
+      # origins or Cloudflare's published test secret) and then fails unless
+      # `convex env list` reports exactly those names, so a candidate never sees
+      # any other backend variable. Replaces the cloud "scrub" step.
+      - name: Set and verify the local backend environment allowlist before candidate execution
         working-directory: trusted
+        run: node scripts/localConvexBackend.mjs env
         env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.OPENING_PREVIEW_NAME }}
-        run: |
-          set -euo pipefail
-          echo "preview_name=$CONVEX_PREVIEW_NAME" >> "$GITHUB_OUTPUT"
-          echo "convex_cloud_url=$CONVEX_PREVIEW_URL" >> "$GITHUB_OUTPUT"
-          node scripts/previewDeploymentLifecycle.mjs pin --strict
-
-      - name: Refuse an unpinned opening Preview
-        run: |
-          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
-            echo "Opening Preview has no creation-bound cleanup identity." >&2
-            exit 1
-          fi
-
-      - name: Scrub disposable preview environment before candidate execution
-        working-directory: trusted
-        env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.OPENING_PREVIEW_NAME }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ env.CONVEX_PREVIEW_URL }}
-          CONVEX_PREVIEW_CREATED_AT: ${{ env.CONVEX_PREVIEW_CREATED_AT }}
-        run: |
-          set -euo pipefail
-
-          # Strict pin admission has already succeeded; retain the creation-bound
-          # identity check before any candidate backend can touch this Preview.
-          if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]; then
-            echo "Disposable preview has no pinned cleanup identity." >&2
-            exit 1
-          fi
-
-          ADMIN_KEY="$(
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const resolved = await resolveConvexPreviewCredentials({
-            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          process.stdout.write(resolved.adminKey);
-          NODE
-          )"
-          if [ -z "$ADMIN_KEY" ]; then
-            echo "Trusted control plane returned an empty preview deployment credential." >&2
-            exit 1
-          fi
-          echo "::add-mask::$ADMIN_KEY"
-
-          mapfile -t CURRENT_ENV_NAMES < <(
-            pnpm exec convex env list --names-only \
-              --url "$NEXT_PUBLIC_CONVEX_URL" \
-              --admin-key "$ADMIN_KEY"
-          )
-
-          for name in "${CURRENT_ENV_NAMES[@]}"; do
-            if ! [[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
-              echo "Preview env listing contained an unexpected value; refusing candidate execution." >&2
-              exit 1
-            fi
-            case "$name" in
-              AUTOFLOW_DEPLOYMENT_CLASS|CLERK_DEV_JWT_ISSUER_DOMAIN|CLERK_JWT_ISSUER_DOMAIN|NEXT_PUBLIC_APP_URL|TURNSTILE_SECRET_KEY)
-                ;;
-              *)
-                pnpm exec convex env remove "$name" \
-                  --url "$NEXT_PUBLIC_CONVEX_URL" \
-                  --admin-key "$ADMIN_KEY"
-                ;;
-            esac
-          done
-
-          # The only secret-shaped value candidate code may observe is
-          # Cloudflare's documented public E2E secret, never a real widget key.
-          pnpm exec convex env set TURNSTILE_SECRET_KEY \
-            '1x0000000000000000000000000000000AA' --force \
-            --url "$NEXT_PUBLIC_CONVEX_URL" \
-            --admin-key "$ADMIN_KEY"
-          pnpm exec convex env set NEXT_PUBLIC_APP_URL \
-            'http://127.0.0.1:3000' --force \
-            --url "$NEXT_PUBLIC_CONVEX_URL" \
-            --admin-key "$ADMIN_KEY"
-
-          mapfile -t SCRUBBED_ENV_NAMES < <(
-            pnpm exec convex env list --names-only \
-              --url "$NEXT_PUBLIC_CONVEX_URL" \
-              --admin-key "$ADMIN_KEY"
-          )
-          ACTUAL="$(
-            printf '%s\n' "${SCRUBBED_ENV_NAMES[@]}" | LC_ALL=C sort
-          )"
-          EXPECTED="$(
-            printf '%s\n' \
-              AUTOFLOW_DEPLOYMENT_CLASS \
-              CLERK_DEV_JWT_ISSUER_DOMAIN \
-              CLERK_JWT_ISSUER_DOMAIN \
-              NEXT_PUBLIC_APP_URL \
-              TURNSTILE_SECRET_KEY | LC_ALL=C sort
-          )"
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "Disposable preview environment does not match the trusted allowlist." >&2
-            printf 'Expected:\n%s\nActual:\n%s\n' "$EXPECTED" "$ACTUAL" >&2
-            exit 1
-          fi
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000"
 
       # SCRUM-350: the preview credential is project-wide, so the candidate
       # backend is never deployed by candidate code. This step holds no secret:
@@ -1753,43 +1747,43 @@ jobs:
 
       - name: Deploy staged candidate backend with trusted Convex CLI
         env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.OPENING_PREVIEW_NAME }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ env.CONVEX_PREVIEW_URL }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
         run: |
           set -euo pipefail
 
-          ADMIN_KEY="$(
-            cd trusted
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewCredentials } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const resolved = await resolveConvexPreviewCredentials({
-            deployKey: process.env.CONVEX_PREVIEW_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          if (resolved.authority.convexCloudUrl !== process.env.NEXT_PUBLIC_CONVEX_URL) {
-            throw new Error("Swarm preview was recreated after planning; refusing to deploy.");
-          }
-          process.stdout.write(resolved.adminKey);
-          NODE
-          )"
-          if [ -z "$ADMIN_KEY" ]; then
-            echo "Trusted control plane returned an empty preview credential." >&2
-            exit 1
-          fi
-          echo "::add-mask::$ADMIN_KEY"
+          case "${AUTOFLOW_LOCAL_CONVEX_CONTAINER:-}" in
+            autoflow-local-convex-*) ;;
+            *)
+              echo "No local Convex container was recorded by the start step." >&2
+              exit 1
+              ;;
+          esac
 
           # The TRUSTED Convex CLI from the trusted lockfile, in a container that
           # sees exactly the staged backend and trusted node_modules, read-only.
           # No package manager (it would read candidate-adjacent config), no
           # typecheck (it would run the project's typescript), no codegen (it
           # would write). Bundling parses candidate code; nothing of it executes.
-          # Residual, accepted (SCRUM-350 F1): the container needs egress to the
-          # Convex API, so this relies on that zero-execution property.
+          #
+          # SCRUM-892 network choice. The backend publishes its API on the runner's
+          # 127.0.0.1 only, which a container on the default bridge cannot reach,
+          # and `--network host` would also expose the runner's loopback (the
+          # egress proxy, the candidate relay) to the CLI container. Joining the
+          # BACKEND container's own network namespace (`--network container:`, the
+          # documented container network mode) gives the CLI exactly one thing it
+          # needs: the backend at 127.0.0.1:3210, so the deploy URL is the same
+          # literal everywhere. Nothing else on the runner is reachable from it.
+          # The URL and admin key are inherited by NAME (`--env NAME`), so neither
+          # is in argv. Nothing from the runner environment besides these two
+          # names enters the container, and the key controls only a backend that
+          # exists for this job.
+          # Residual, accepted (SCRUM-350 F1): the backend container has default
+          # bridge egress (it fetches Clerk's JWKS), and this container shares it,
+          # so the zero-execution property above remains what protects the key.
           docker run --rm \
             --name autoflow-trusted-staged-backend-deploy \
-            --network bridge \
+            --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" \
             --read-only \
             --tmpfs /tmp:rw,size=512m \
             --cap-drop ALL \
@@ -1798,192 +1792,32 @@ jobs:
             --volume "$GITHUB_WORKSPACE/trusted/node_modules:/app/node_modules:ro" \
             --workdir /app \
             --env HOME=/tmp/home \
-            --env NEXT_PUBLIC_CONVEX_URL \
-            --env CONVEX_PREVIEW_ADMIN_KEY="$ADMIN_KEY" \
+            --env CONVEX_SELF_HOSTED_URL \
+            --env CONVEX_SELF_HOSTED_ADMIN_KEY \
             node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
-            sh -c 'exec node /app/node_modules/convex/bin/main.js deploy --url "$NEXT_PUBLIC_CONVEX_URL" --admin-key "$CONVEX_PREVIEW_ADMIN_KEY" --typecheck disable --codegen disable'
+            node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes
+
+      # The disposable-preview marker (e2eBootstrap:markPreviewDeployment) is
+      # minted by the TRUSTED CLI from the trusted checkout after the candidate
+      # deploy, because the function it calls is part of the deployed code.
+      # Delta from the cloud flow, where trusted main minted it before the
+      # candidate overlay: the function body now comes from the candidate. It
+      # guards only seeding and test-only entry points, on a backend that holds
+      # nothing but this job's seed.
+      - name: Mint the disposable-preview marker with the trusted CLI
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs mark
 
       - name: Seed and assert the QA dealership from trusted main
         working-directory: trusted
         run: node scripts/e2ePreviewBootstrap.mjs
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ env.OPENING_PREVIEW_NAME }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ env.CONVEX_PREVIEW_URL }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
-
-  opening-build:
-    name: exact-opening-candidate-build
-    needs: [prepare, opening-prepare]
-    if: >-
-      !cancelled() &&
-      needs.prepare.result == 'success' &&
-      needs.opening-prepare.result == 'success' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.pull_requests[0].number != null
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    outputs:
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
-      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
-
-    steps:
-      - name: Checkout trusted artifact controller from immutable workflow revision
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted
-          persist-credentials: false
-
-      - name: Checkout exact tested PR merge for the one candidate build
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ needs.prepare.outputs.tested_sha }}
-          path: candidate
-          persist-credentials: false
-
-      - name: Use Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-
-      - name: Resolve public Clerk JWT verification material for build
-        working-directory: trusted
-        env:
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-        run: |
-          set -euo pipefail
-          case "$NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" in
-            pk_test_*) ;;
-            *)
-              echo "Shared candidate build refuses a non-test Clerk publishable key." >&2
-              exit 1
-              ;;
-          esac
-          JWT_KEY_PATH="$RUNNER_TEMP/clerk-jwt-key.pem"
-          node scripts/intelligence/clerkPublicJwtKey.mjs > "$JWT_KEY_PATH"
-          chmod 600 "$JWT_KEY_PATH"
-          {
-            echo 'CLERK_JWT_KEY<<__AUTOFLOW_CLERK_JWT_KEY__'
-            cat "$JWT_KEY_PATH"
-            echo '__AUTOFLOW_CLERK_JWT_KEY__'
-          } >> "$GITHUB_ENV"
-          rm -f "$JWT_KEY_PATH"
-
-      # SCRUM-376 F1: the build container must be able to write its mount, and
-      # actions/checkout runs git on the checkout when the job cleans up. A
-      # candidate that could write .git (config or an index fsmonitor entry) would
-      # get a command run on the runner host. So the writable mount is a copy
-      # that never contains .git, and the checkout itself stays untouched.
-      - name: Copy candidate source without git metadata for the writable build
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/candidate-build-src"
-          rsync -a --exclude=/.git "$GITHUB_WORKSPACE/candidate/" "$RUNNER_TEMP/candidate-build-src/"
-
-      - name: Build exact tested candidate once in isolated container
-        env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
-          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
-          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
-          VERCEL_GIT_COMMIT_SHA: ${{ needs.prepare.outputs.tested_sha }}
-          AUTOFLOW_SWARM_STANDALONE: "1"
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            --name "autoflow-swarm-shared-build-${GITHUB_RUN_ID}" \
-            --network bridge \
-            --cap-drop ALL \
-            --security-opt no-new-privileges \
-            --user "$(id -u):$(id -g)" \
-            --volume "$RUNNER_TEMP/candidate-build-src:/app" \
-            --workdir /app \
-            --env HOME=/tmp/home \
-            --env NEXT_PUBLIC_CONVEX_URL \
-            --env NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY \
-            --env CLERK_JWT_KEY \
-            --env NEXT_PUBLIC_TURNSTILE_SITE_KEY \
-            --env NEXT_PUBLIC_APP_URL \
-            --env VERCEL_GIT_COMMIT_SHA \
-            --env AUTOFLOW_SWARM_STANDALONE \
-            node:22.21.1-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 \
-            sh -lc 'mkdir -p "$HOME/bin" && corepack enable --install-directory "$HOME/bin" && export PATH="$HOME/bin:$PATH" && corepack prepare pnpm@11.13.0 --activate && pnpm install --frozen-lockfile --ignore-scripts && pnpm build'
-
-      - name: Stage and hash exact-SHA candidate runtime artifact
-        run: node trusted/scripts/intelligence/browserSwarmBuildArtifact.mjs create
-        env:
-          CANDIDATE_ROOT: ${{ runner.temp }}/candidate-build-src
-          BROWSER_SWARM_BUILD_ARTIFACT_ROOT: ${{ runner.temp }}/browser-swarm-candidate-build
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
-          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
-          TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
-          CONTROLLER_SHA: ${{ github.workflow_sha }}
-          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
-          BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
-
-      - name: Upload immutable exact-SHA candidate build
-        id: upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: trusted-opening-candidate-build-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/browser-swarm-candidate-build/
-          if-no-files-found: error
-          include-hidden-files: true
-          compression-level: 1
-          retention-days: 1
-
-  opening-proof:
-    name: terminal-opening-proof
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-prepare, opening-build]
-    if: >-
-      !cancelled() &&
-      needs.prepare.result == 'success' && needs.candidate-build.result == 'success' &&
-      needs.trusted-e2e.result == 'success' &&
-      needs.opening-prepare.result == 'success' && needs.opening-build.result == 'success' &&
-      ((needs.prepare.outputs.should_run == 'true' && needs.attack-worker.result == 'success') ||
-       (needs.prepare.outputs.should_run == 'false' && needs.attack-worker.result == 'skipped')) &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    permissions:
-      contents: read
-    outputs:
-      checked: ${{ steps.proof.outputs.checked }}
-
-    steps:
-      - name: Checkout trusted browser controller from immutable workflow revision
-        if: ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted
-          persist-credentials: false
-
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 11.13.0
-
-      - name: Use Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-
-      - name: Install trusted controller dependencies
-        working-directory: trusted
-        run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Install trusted Chromium
-        working-directory: trusted
-        run: pnpm exec playwright install --with-deps chromium
 
       - name: Resolve test-only Clerk public JWT verification key
         working-directory: trusted
@@ -2012,7 +1846,7 @@ jobs:
       - name: Download immutable exact-SHA candidate build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          artifact-ids: ${{ needs.opening-build.outputs.artifact_id }}
+          artifact-ids: ${{ needs.candidate-build.outputs.artifact_id }}
           path: ${{ runner.temp }}/browser-swarm-candidate-build
           merge-multiple: true
 
@@ -2026,34 +1860,23 @@ jobs:
           CONTROLLER_SHA: ${{ github.workflow_sha }}
           PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
           BROWSER_SWARM_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
 
-      - name: Assert seeded preview from trusted control plane
+      # The backend above was deployed, marked and seeded by this very job from
+      # trusted code, so there is no control plane to ask whether a newer run
+      # replaced it (SCRUM-892). What remains is the bootstrap's own read-only
+      # assertion that the seeded dealership is present and well formed.
+      - name: Assert the seeded local backend
         working-directory: trusted
         run: |
           set -euo pipefail
-          CURRENT_URL="$(
-            node --input-type=module <<'NODE'
-          import { resolveConvexPreviewAuthority } from "./scripts/intelligence/convexPreviewAuthority.mjs";
-          const authority = await resolveConvexPreviewAuthority({
-            deployKey: process.env.CONVEX_DEPLOY_KEY,
-            previewName: process.env.CONVEX_PREVIEW_NAME,
-            expectedConvexCloudUrl: process.env.NEXT_PUBLIC_CONVEX_URL,
-          });
-          process.stdout.write(authority.convexCloudUrl);
-          NODE
-          )"
-          if [ "$CURRENT_URL" != "$NEXT_PUBLIC_CONVEX_URL" ]; then
-            echo "Named preview was recreated underneath this swarm; refusing stale execution." >&2
-            exit 1
-          fi
           node scripts/e2ePreviewBootstrap.mjs --assert-only
           echo "BROWSER_SWARM_PREVIEW_ATTESTED=1" >> "$GITHUB_ENV"
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          CONVEX_SELF_HOSTED_URL: ${{ env.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
@@ -2064,7 +1887,7 @@ jobs:
         env:
           CI: true
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
@@ -2163,7 +1986,7 @@ jobs:
           echo "Exact candidate frontend did not become healthy on isolated loopback." >&2
           exit 1
         env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
@@ -2172,7 +1995,7 @@ jobs:
       - name: Start trusted browser egress proxy
         working-directory: trusted
         env:
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
@@ -2228,8 +2051,8 @@ jobs:
           PLAYWRIGHT_SKIP_WEBSERVER: "1"
           BROWSER_EGRESS_REQUIRED: "1"
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          NEXT_PUBLIC_CONVEX_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
+          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.preview_name }}
+          NEXT_PUBLIC_CONVEX_URL: ${{ needs.prepare.outputs.convex_cloud_url }}
           BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
@@ -2263,6 +2086,14 @@ jobs:
             docker network rm "$CANDIDATE_NETWORK" >/dev/null 2>&1 || true
           fi
 
+      # SCRUM-892: always, so a failed or cancelled job leaves no container behind.
+      # Hosted runners are discarded anyway; this keeps the guarantee true on a
+      # reused one.
+      - name: Stop the local Convex backend
+        if: always()
+        working-directory: trusted
+        run: node scripts/localConvexBackend.mjs stop
+
       - name: Upload checked terminal opening evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -2274,51 +2105,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  opening-cleanup:
-    name: disposable-opening-preview-cleanup
-    needs: [prepare, opening-prepare, opening-build, opening-proof]
-    if: >-
-      always() &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      needs.opening-prepare.outputs.creation_attempted == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout trusted opening cleanup controller
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted-cleanup
-          persist-credentials: false
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-      - name: Refuse missing opening cleanup identity
-        env:
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          CONVEX_PREVIEW_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
-          CONVEX_PREVIEW_CREATED_AT: ${{ needs.opening-prepare.outputs.cleanup_preview_created_at }}
-        run: |
-          if [ -z "$CONVEX_PREVIEW_NAME" ] || [ -z "$CONVEX_PREVIEW_URL" ] || [ -z "$CONVEX_PREVIEW_CREATED_AT" ]; then
-            echo "Opening cleanup ownership is unavailable after creation was attempted." >&2
-            exit 1
-          fi
-      - name: Delete the disposable opening Preview
-        working-directory: trusted-cleanup
-        run: node scripts/previewDeploymentLifecycle.mjs delete --strict
-        env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.opening-prepare.outputs.preview_name }}
-          CONVEX_PREVIEW_URL: ${{ needs.opening-prepare.outputs.convex_cloud_url }}
-          CONVEX_PREVIEW_CREATED_AT: ${{ needs.opening-prepare.outputs.cleanup_preview_created_at }}
-
   verdict:
     name: trusted-browser-swarm-verdict
-    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup]
+    needs: [prepare, candidate-build, trusted-e2e, attack-worker, opening-proof]
     if: >-
       always() &&
       needs.prepare.outputs.tested_sha != '' &&
@@ -2369,7 +2158,6 @@ jobs:
           TRUSTED_E2E_RESULT: ${{ needs.trusted-e2e.result }}
           ATTACK_RESULT: ${{ needs.attack-worker.result }}
           OPENING_RESULT: ${{ needs.opening-proof.result }}
-          OPENING_CLEANUP_RESULT: ${{ needs.opening-cleanup.result }}
           OPENING_CHECKED: ${{ needs.opening-proof.outputs.checked }}
           SHOULD_RUN: ${{ needs.prepare.outputs.should_run }}
           FRESH_CURRENT: ${{ steps.freshness.outputs.fresh }}
@@ -2379,7 +2167,7 @@ jobs:
           STATE=failure
           DESCRIPTION="Trusted browser swarm did not complete successfully."
 
-          if [ "$FRESH_CURRENT" = "true" ] && [ "$PREPARE_RESULT" = "success" ] && [ "$TRUSTED_E2E_RESULT" = "success" ] && [ "$OPENING_RESULT" = "success" ] && [ "$OPENING_CLEANUP_RESULT" = "success" ] && [ "$OPENING_CHECKED" = "true" ]; then
+          if [ "$FRESH_CURRENT" = "true" ] && [ "$PREPARE_RESULT" = "success" ] && [ "$TRUSTED_E2E_RESULT" = "success" ] && [ "$OPENING_RESULT" = "success" ] && [ "$OPENING_CHECKED" = "true" ]; then
             if [ "$SHOULD_RUN" = "false" ]; then
               STATE=success
               DESCRIPTION="Trusted E2E and terminal opening proof passed; no mandatory swarm missions."
@@ -2444,43 +2232,3 @@ jobs:
           E2E_RESULT: ${{ needs.trusted-e2e.result }}
           TESTED_SHA: ${{ needs.prepare.outputs.tested_sha }}
           EVIDENCE_PATH: ${{ runner.temp }}/g5-evidence/evidence.json
-
-  # SCRUM-377: every job above shares the disposable preview, so it is deleted
-  # only after all of them — whatever their outcome — have finished with it.
-  preview-cleanup:
-    name: disposable-preview-cleanup
-    needs: [e2e-gate-begin, prepare, candidate-source, candidate-build, trusted-e2e, e2e-gate-finish, attack-worker, opening-prepare, opening-build, opening-proof, opening-cleanup, verdict]
-    # The same-repository conditions repeat `prepare`'s own: only such a run can
-    # have created a preview, and they keep fork-triggered runs out of a job
-    # that holds the preview deploy key.
-    if: >-
-      always() &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      needs.prepare.outputs.cleanup_preview_created_at != ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout trusted cleanup controller from immutable workflow revision
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted-cleanup
-          persist-credentials: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22.21.1"
-
-      - name: Delete the disposable preview
-        working-directory: trusted-cleanup
-        run: node scripts/previewDeploymentLifecycle.mjs delete
-        env:
-          CONVEX_PREVIEW_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
-          CONVEX_PREVIEW_NAME: ${{ needs.prepare.outputs.cleanup_preview_name }}
-          CONVEX_PREVIEW_URL: ${{ needs.prepare.outputs.cleanup_convex_url }}
-          CONVEX_PREVIEW_CREATED_AT: ${{ needs.prepare.outputs.cleanup_preview_created_at }}

@@ -94,6 +94,29 @@ const CANONICAL_STAGED_COMMAND: Record<string, string> = {
     " node /audit/auditStagedBackendInputs.mjs",
 };
 
+// SCRUM-892: the local-backend form of the same step. The CLI runs in the
+// BACKEND container's own network namespace (`--network container:<name>`),
+// so it reaches the backend at 127.0.0.1:3210 and nothing else on the runner.
+// The URL and the admin key are inherited by NAME, never written into argv.
+// Same image, same hardening, same two read-only mounts, same flags: the only
+// differences from the cloud form are how the target is reached and named.
+const LOCAL_STAGED_DEPLOY_COMMAND =
+  "docker run --rm --name autoflow-trusted-staged-backend-deploy" +
+  ' --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" ' +
+  CONTAINER_HARDENING +
+  " --volume " + STAGED_DEPLOY_VOLUMES.join(" --volume ") +
+  " --workdir /app --env HOME=/tmp/home --env CONVEX_SELF_HOSTED_URL --env CONVEX_SELF_HOSTED_ADMIN_KEY " +
+  NODE_IMAGE +
+  " node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes";
+
+/** Every exact command a named staged step may consist of. */
+function canonicalForms(name: string | undefined): string[] {
+  if (!name) return [];
+  if (name === STAGED_DEPLOY_STEP) return [CANONICAL_STAGED_COMMAND[name] as string, LOCAL_STAGED_DEPLOY_COMMAND];
+  const only = CANONICAL_STAGED_COMMAND[name];
+  return only ? [only] : [];
+}
+
 function normalizeRun(run: string): string {
   return run.replace(/\\\r?\n\s*/g, " ").replace(/[ \t]+/g, " ");
 }
@@ -104,10 +127,17 @@ function normalizeRun(run: string): string {
  */
 function residualRun(step: Step): string {
   const run = normalizeRun(String(step.run ?? ""));
-  const canonical = step.name ? CANONICAL_STAGED_COMMAND[step.name] : undefined;
-  if (!canonical || run.split(canonical).length !== 2) return run;
-  return run.replace(canonical, " ");
+  for (const canonical of canonicalForms(step.name)) {
+    if (run.split(canonical).length === 2) return run.replace(canonical, " ");
+  }
+  return run;
 }
+
+// SCRUM-892: the runner-local backend's admin key is not a `secrets.` access
+// (it is minted at run time and arrives through the job environment), so the
+// secrets scan alone cannot see it. Any step or workflow that names it is
+// treated exactly like one that names a Convex secret.
+const LOCAL_BACKEND_KEY = /CONVEX_SELF_HOSTED_ADMIN_KEY/;
 
 function holdsConvexCredential(step: Step): boolean {
   // Any evaluated field can carry a secret: env and action inputs (Sol R3 on
@@ -115,7 +145,7 @@ function holdsConvexCredential(step: Step): boolean {
   // The whole step is scanned, so an expression in a field that cannot carry
   // one (`if`, `name`) over-refuses rather than under-refuses (Sol R8). Every
   // spelling of the access counts (Sol R4).
-  return referencesConvexSecret(step);
+  return referencesConvexSecret(step) || LOCAL_BACKEND_KEY.test(JSON.stringify(step));
 }
 
 function dockerVolumes(run: string): string[] {
@@ -160,7 +190,7 @@ function executesCandidate(step: Step): boolean {
  * forwards every secret to a reusable workflow.
  */
 function reachesConvexCredential(workflow: unknown): boolean {
-  return referencesConvexSecret(workflow);
+  return referencesConvexSecret(workflow) || LOCAL_BACKEND_KEY.test(JSON.stringify(workflow));
 }
 
 /**
@@ -235,7 +265,22 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // `reset` step before its evidence download. No secret, credential command or
     // candidate checkout ref changed. Previous: 118099 bytes (LF), pin aa713e3d;
     // new: 121298 bytes (LF), pin below.
-    "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
+    // SCRUM-892: the swarm leaves cloud Convex previews for a runner-local
+    // self-hosted backend in each backend-owning job (trusted-e2e,
+    // attack-worker, opening-proof). Hunks: (1) every CONVEX_PREVIEW_DEPLOY_KEY
+    // reference, the preview create/pin/resolve/scrub steps and the
+    // opening-prepare/opening-build/opening-cleanup/preview-cleanup jobs are
+    // removed, so the workflow holds no `secrets.CONVEX_*` at all; (2) the
+    // backend is started, configured and marked by the trusted
+    // `scripts/localConvexBackend.mjs` (admin key minted at run time, masked
+    // before it is written to GITHUB_ENV, backend stopped by an always() step);
+    // (3) the staged deploy keeps its exact container hardening and mounts and
+    // joins ONLY the backend container's network namespace
+    // (LOCAL_STAGED_DEPLOY_COMMAND above); (4) workers and the opening proof
+    // consume candidate-source and the one candidate-build. The workflow is
+    // still pinned because the local admin key is classified as a credential
+    // (LOCAL_BACKEND_KEY). NOT yet reviewed by an independent seat.
+    "05d0fa2db011991e64101fb4baf4b524c94ac6586f8045221731790065b3bffa",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -352,10 +397,72 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       for (const step of job.steps ?? []) {
         if (!step.name || !(step.name in CANONICAL_STAGED_COMMAND)) continue;
         const run = normalizeRun(String(step.run ?? ""));
-        expect(run.split(CANONICAL_STAGED_COMMAND[step.name] as string).length, label + " :: " + step.name).toBe(2);
+        const matching = canonicalForms(step.name).filter((form) => run.split(form).length === 2);
+        expect(matching, label + " :: " + step.name).toHaveLength(1);
         expect(residualRun(step), label + " :: " + step.name).not.toMatch(/\bdocker\b/);
       }
     }
+  });
+
+  it("SCRUM-892: sets aside only the local deploy form's exact command, and every alteration of it is judged as candidate execution", () => {
+    const name = STAGED_DEPLOY_STEP;
+    const canonical = LOCAL_STAGED_DEPLOY_COMMAND;
+    expect(executesCandidate({ name, run: canonical }), "exact").toBe(false);
+    expect(residualRun({ name, run: canonical }).trim(), "exact").toBe("");
+    expect(executesCandidate({ name, run: canonical + "\nnode candidate/scripts/exfil.mjs" }), "appended").toBe(true);
+    expect(executesCandidate({ name, run: canonical + "\n" + canonical }), "twice").toBe(true);
+    // The host network would expose the runner's loopback (egress proxy, relay).
+    expect(
+      executesCandidate({ name, run: canonical.replace('--network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}"', "--network host") }),
+      "host network",
+    ).toBe(true);
+    // An extra mount is not the staged-only container any more.
+    expect(
+      executesCandidate({ name, run: canonical.replace("--workdir /app", '--volume "$GITHUB_WORKSPACE/candidate:/x" --workdir /app') }),
+      "extra mount",
+    ).toBe(true);
+    // A package-manager or typecheck-enabled variant is not the canonical command either.
+    expect(executesCandidate({ name, run: canonical.replace("--typecheck disable", "--typecheck enable") }), "typecheck").toBe(true);
+    // The command is recognised under the staged step's name only.
+    expect(executesCandidate({ name: "Some other step", run: canonical }), "other name").toBe(true);
+
+    // The key is classified as a credential even though it is not a `secrets.` access.
+    expect(holdsConvexCredential({ run: "node x.mjs", env: { K: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}" } })).toBe(true);
+    expect(reachesConvexCredential({ jobs: { j: { steps: [{ env: { K: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}" } }] } } })).toBe(true);
+    expect(holdsConvexCredential({ run: "node x.mjs", env: { U: "${{ env.CONVEX_SELF_HOSTED_URL }}" } })).toBe(false);
+  });
+
+  it("SCRUM-892: the local admin key reaches the job environment only from the trusted start subcommand, masked first, and only after that job started its backend", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "scripts/localConvexBackend.mjs"), "utf8");
+    const maskAt = source.indexOf("mask(env, deps.log, adminKey);");
+    const writeAt = source.indexOf('["CONVEX_SELF_HOSTED_ADMIN_KEY", adminKey]');
+    expect(maskAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(maskAt);
+    expect(source.match(/"CONVEX_SELF_HOSTED_ADMIN_KEY", adminKey/g) ?? []).toHaveLength(1);
+
+    // In every workflow: a job that names the key starts its own backend first,
+    // always stops it, and never writes the key into the environment itself.
+    let jobsNamingTheKey = 0;
+    for (const { label, job } of everyJob()) {
+      const steps = job.steps ?? [];
+      const first = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+      if (first < 0) continue;
+      jobsNamingTheKey += 1;
+      const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");
+      expect(start, label).toBeGreaterThan(-1);
+      expect(start, label).toBeLessThan(first);
+      const stop = steps.find((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs stop");
+      expect(stop?.if, label).toBe("always()");
+      for (const step of steps) {
+        for (const line of String(step.run ?? "").split("\n")) {
+          if (/GITHUB_(ENV|OUTPUT)/.test(line)) expect(line, label).not.toMatch(LOCAL_BACKEND_KEY);
+        }
+      }
+      // Referenced as an env value from the job environment, never as a secret or a job output.
+      expect(JSON.stringify(job.outputs ?? {}), label).not.toMatch(LOCAL_BACKEND_KEY);
+    }
+    // Not vacuous: the swarm's three backend-owning jobs.
+    expect(jobsNamingTheKey).toBeGreaterThanOrEqual(3);
   });
 
   it("is run by the trusted controller, not only by candidate-controlled PR CI (Sol F3 on PR #341)", () => {
@@ -570,7 +677,11 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("deploys the candidate backend in both PR lanes only through the staged, trusted-CLI step", () => {
     const labels = stagedDeploySteps().map(({ label }) => label).sort();
     expect(labels).toEqual([
-      "browser-attack-swarm.yml :: opening-prepare",
+      // SCRUM-892: every swarm job that owns a local backend deploys through
+      // the same staged, trusted-CLI step; the cloud-preview opening-prepare
+      // job that used to be listed here no longer exists.
+      "browser-attack-swarm.yml :: attack-worker",
+      "browser-attack-swarm.yml :: opening-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);
