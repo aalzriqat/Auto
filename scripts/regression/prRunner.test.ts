@@ -1,7 +1,9 @@
 // @vitest-environment node
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { evaluate, runPrScenarios, selectForPr, summarise } from "./prRunner.mjs";
 
@@ -91,6 +93,29 @@ describe("PR scenario runner", () => {
     expect(summary.failureCodes).toEqual({ FILE_FAILED_TO_RUN: 1 });
   });
 
+  it("the CLI exits non-zero and names the file-failed-to-run code when a bound file cannot load", () => {
+    const root = makeProject(
+      { "broken.fixture.js": 'throw new Error("boom-7342");\n', "ok.fixture.js": 'test("fine", () => {});\n' },
+      [
+        { id: "unloadable", file: "broken.fixture.js", testName: "anything" },
+        { id: "healthy", file: "ok.fixture.js", testName: "fine" },
+      ],
+    );
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
+    const child = spawnSync(process.execPath, [cli, "--root", root, "--config", config(root)], { encoding: "utf8" });
+    expect(child.status).toBe(1);
+    const summary = JSON.parse(child.stdout.slice(child.stdout.indexOf("{")));
+    expect(summary).toMatchObject({ verdict: "FAIL", selected: 2, passed: 1, failed: 1 });
+    expect(summary.failedIds).toEqual(["unloadable FILE_FAILED_TO_RUN"]);
+    expect(summary.issues).toEqual(["VITEST_EXIT_1"]);
+    expect(child.stdout).not.toContain("7342");
+  });
+
+  it("a green project exits zero from the CLI", () => {
+    const root = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "healthy", file: "ok.fixture.js", testName: "fine" }]);
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
+    expect(spawnSync(process.execPath, [cli, "--root", root, "--config", config(root)], { encoding: "utf8" }).status).toBe(0);
+  });
   it("emits counts and ids only: no test name, file path or error text", () => {
     const root = makeProject(
       { "leak.fixture.js": 'test("secret-title-4711", () => { throw new Error("secret-message-4711"); });\n' },
