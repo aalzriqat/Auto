@@ -4,8 +4,8 @@ name: Trusted Main E2E (Playwright)
 # Pull requests are exercised by the immutable workflow_run controller instead.
 #
 # SCRUM-892 (owner ruling c24441): the one job gives itself a per-job LOCAL
-# self-hosted Convex backend (scripts/localConvexBackend.mjs, the mechanism of
-# browser-attack-swarm.yml and pilot-role-audit.yml) instead of a Convex cloud
+# self-hosted Convex backend (scripts/localConvexBackend.mjs, the mechanism
+# browser-attack-swarm.yml already uses) instead of a Convex cloud
 # preview. No Convex cloud credential, deployment quota or cleanup identity
 # exists in this file. The job id `playwright` and its `if` are unchanged: on
 # main this job still produces the required `github-actions/playwright` check,

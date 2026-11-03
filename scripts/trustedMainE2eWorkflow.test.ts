@@ -78,6 +78,17 @@ describe("SCRUM-892 trusted main E2E: required-check identity is unchanged", () 
     expect(workflow.jobs.playwright?.["runs-on"]).toBe("ubuntu-latest");
     expect(workflow.jobs.playwright?.["timeout-minutes"]).toBe(35);
   });
+
+  test("no job or step sets continue-on-error, so a red verify fails the required check", () => {
+    // Read the raw YAML: the zod step schema strips keys it does not declare.
+    const raw = z
+      .object({ jobs: z.record(z.string(), z.object({ steps: z.array(z.record(z.string(), z.unknown())) }).passthrough()) })
+      .parse(parse(source));
+    for (const job of Object.values(raw.jobs)) {
+      expect(job).not.toHaveProperty("continue-on-error");
+      for (const step of job.steps) expect(step).not.toHaveProperty("continue-on-error");
+    }
+  });
 });
 
 describe("SCRUM-892 trusted main E2E: a per-job local backend and no cloud credential", () => {
