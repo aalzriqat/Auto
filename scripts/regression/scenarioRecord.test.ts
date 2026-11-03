@@ -152,8 +152,10 @@ describe("ruling snapshot (public repo: ids, digests, dates only)", () => {
   });
 });
 
+const LIBRARY_LOAD_TIMEOUT_MS = 30_000;
+
 describe("the committed library", () => {
-  test("terminal opening browser records retain real file and exact test-name enforcement", () => {
+  test("terminal opening browser records retain real file and exact test-name enforcement", { timeout: LIBRARY_LOAD_TIMEOUT_MS }, () => {
     const { records, rulings } = loadLibrary(REPO_ROOT);
     const opening = records.filter(record => record.impl?.file === "playwright/opening-proof/opening-onboarding.spec.ts");
     expect(opening).toHaveLength(2);
@@ -164,7 +166,9 @@ describe("the committed library", () => {
     expect(validateLibrary([missingName], { rulings, repoRoot: REPO_ROOT }).map(problem => problem.rule)).toContain("skip");
   });
 
-  test("loads the committed library and it has no problems", () => {
+  // Loading reads every committed scenario and its implementation source, so the cost grows with the library.
+  // Under a loaded CI slice it exceeded vitest's 5 s default with no failing assertion (SCRUM-140).
+  test("loads the committed library and it has no problems", { timeout: LIBRARY_LOAD_TIMEOUT_MS }, () => {
     const { records, rulings, problems } = loadLibrary(REPO_ROOT);
     expect([...problems, ...validateLibrary(records, { rulings, repoRoot: REPO_ROOT })]).toEqual([]);
   });
