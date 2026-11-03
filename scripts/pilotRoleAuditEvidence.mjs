@@ -42,9 +42,14 @@ const PROBE_OPERATIONS = new Set(["foreign organization read", "foreign customer
   "foreign organization update", "foreign customer delete", "foreign row delete under own org"]);
 const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/),
   workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict();
+// Playwright's JSON reporter writes `errorLocation` and `errors[].location` as { file, line, column } with an
+// absolute runner path. A malformed one is dropped (undefined), never an error that makes the report absent.
+const reportLocationSchema = z.object({ file: z.string(), line: z.number() }).passthrough().optional().catch(undefined);
+const roleAttemptSchema = z.object({ status: z.string(), errorLocation: reportLocationSchema,
+  errors: z.array(z.object({ location: reportLocationSchema }).passthrough()).optional().catch(undefined) }).passthrough();
 const roleSuiteSchema = z.object({
   specs: z.array(z.object({ file: z.string(), title: z.string(), ok: z.boolean(), tests: z.array(z.object({
-    projectName: z.string(), expectedStatus: z.string(), status: z.string(), results: z.array(z.object({ status: z.string() }).passthrough()),
+    projectName: z.string(), expectedStatus: z.string(), status: z.string(), results: z.array(roleAttemptSchema),
   }).passthrough()) }).passthrough()),
   suites: z.array(z.unknown()).optional(),
 }).passthrough();
@@ -93,24 +98,61 @@ function isPassedRoleCase({ ok, row }) {
     Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed";
 }
 
-/** Closed verdict for one observed attempt. Anything that is not the exact pass
- * shape, including a status this version does not know, is "failed" or "skipped".
+/** Closed verdict for one observed attempt. A case is "skipped" only when Playwright
+ * expected it to skip (test.skip, test.fixme, a runtime skip). Playwright 1.61 also
+ * reports status "skipped" for an interrupted-only test, a test with no attempt and
+ * a skipped attempt of a test expected to pass; those could not run, so they are
+ * "failed", as is anything else that is not the exact pass shape, including a status
+ * this version does not know.
  * @param {RoleCase} item */
 function roleCaseStatus(item) {
   if (isPassedRoleCase(item)) return "passed";
-  const results = Array.isArray(item.row.results) ? item.row.results : [];
-  if (item.row.status === "skipped" || (results.length > 0 && results.every((result) => result?.status === "skipped"))) return "skipped";
-  return "failed";
+  return item.row.expectedStatus === "skipped" && item.row.status === "skipped" ? "skipped" : "failed";
 }
 
-/** Closed verdict for one allowlisted case, from what the report showed for its title.
- * Title and project come from the constant; the report supplies only the status.
- * @param {string} title @param {string} project @param {RoleCase[] | undefined} seenForTitle */
-function classifyRoleCase(title, project, seenForTitle) {
+const REPO_PATH = /^playwright\/[A-Za-z0-9_\-./]+\.(?:ts|tsx|js|mjs)$/;
+
+/** The only report-derived text that may be published: `<repo path under playwright/>:<line>`.
+ * The runner's absolute path, the column and every other report field are dropped.
+ * @param {{ file: string, line: number } | undefined} location
+ * @returns {string | null} */
+function publishableLocation(location) {
+  if (!location || !Number.isSafeInteger(location.line) || location.line < 1) return null;
+  const segments = location.file.replaceAll("\\", "/").split("/");
+  if (segments.includes("..") || segments.includes("node_modules")) return null;
+  const start = segments.lastIndexOf("playwright");
+  if (start < 0) return null;
+  const tail = segments.slice(start);
+  if (tail.some((segment) => segment === "" || segment === ".")) return null;
+  const repoPath = tail.join("/");
+  return REPO_PATH.test(repoPath) ? `${repoPath}:${location.line}` : null;
+}
+
+/** Location of the last attempt that failed (not passed, not skipped), or null.
+ * @param {RoleCase} item
+ * @returns {string | null} */
+function failingLocation({ row }) {
+  const failing = row.results.findLast((attempt) => attempt.status !== "passed" && attempt.status !== "skipped");
+  if (!failing) return null;
+  for (const candidate of [failing.errorLocation, ...(failing.errors ?? []).map((error) => error.location)]) {
+    const published = publishableLocation(candidate);
+    if (published) return published;
+  }
+  return null;
+}
+
+/** Closed verdict and optional location for one allowlisted case, from what the report
+ * showed for its title. Title and project come from the constant; the report supplies
+ * only the status and a sanitised location of a failure.
+ * @param {string} project @param {RoleCase[] | undefined} seenForTitle
+ * @returns {{ status: string, location: string | null }} */
+function classifyRoleCase(project, seenForTitle) {
   const seen = seenForTitle ?? [];
-  if (seen.length === 0) return "missing";
-  if (seen.length > 1) return "duplicate";
-  return seen[0].row.projectName === project ? roleCaseStatus(seen[0]) : "wrong-project";
+  if (seen.length === 0) return { status: "missing", location: null };
+  if (seen.length > 1) return { status: "duplicate", location: null };
+  if (seen[0].row.projectName !== project) return { status: "wrong-project", location: null };
+  const status = roleCaseStatus(seen[0]);
+  return { status, location: status === "failed" ? failingLocation(seen[0]) : null };
 }
 
 /** @param {RoleCase[]} observed
@@ -130,30 +172,31 @@ function groupByTitle(observed) {
  * @param {Map<string, RoleCase[]>} byTitle */
 function roleCaseVerdicts(byTitle) {
   return Array.from(ROLE_CASE_PROJECTS, ([title, project]) => ({
-    title, project, status: classifyRoleCase(title, project, byTitle.get(title)),
+    title, project, ...classifyRoleCase(project, byTitle.get(title)),
   }));
 }
 
 const ABSENT_ROLE_CASES = Object.freeze(roleCaseVerdicts(new Map()).map((entry) => Object.freeze(entry)));
 
 /** Measure exact real-role cases from the JSON reporter of this invocation.
- * `cases` and `unexpected` are the only report-derived values that may be
- * published: constant titles with a closed status, and a count of foreign cases.
+ * `cases` and `unlisted` are the only report-derived values that may be published:
+ * constant titles with a closed status and a sanitised `playwright/...:line` of a
+ * failure, and a count of cases whose title is not on the allowlist.
  * @param {unknown} report */
 export function roleRegressionOutcome(report) {
   const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE",
-    cases: ABSENT_ROLE_CASES, unexpected: 0 };
+    cases: ABSENT_ROLE_CASES, unlisted: 0 };
   const parsed = roleReportSchema.safeParse(report);
   if (!parsed.success || parsed.data.errors.length !== 0) return absent;
   const observed = collectRoleCases(parsed.data.suites);
   if (observed === null) return absent;
   const cases = roleCaseVerdicts(groupByTitle(observed));
-  const unexpected = observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length;
-  const verified = cases.every((entry) => entry.status === "passed") && unexpected === 0;
+  const unlisted = observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length;
+  const verified = cases.every((entry) => entry.status === "passed") && unlisted === 0;
   let measurement = "FAIL";
   if (verified) measurement = "PASS";
   else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
-  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified, measurement, cases, unexpected };
+  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified, measurement, cases, unlisted };
 }
 
 /** @template T @param {() => Promise<T>} operation
@@ -446,7 +489,7 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
       complete: execution === "SUCCEEDED" && summary.cellsComplete && roleCases.verified, execution,
       roleRegressionsExpected: roleCases.expected, roleRegressionsObserved: roleCases.observed,
       roleRegressionsVerified: roleCases.verified, roleRegressionsMeasurement: roleCases.measurement,
-      roleRegressionCases: roleCases.cases, roleRegressionsUnexpectedCount: roleCases.unexpected,
+      roleRegressionCases: roleCases.cases, roleRegressionsUnlistedCount: roleCases.unlisted,
       runContext: runContext ?? "UNAVAILABLE" };
     await fs.mkdir(path.join(archiveRoot, "captures"), { recursive: true, mode: 0o700 });
     /** @type {{path: string, bytes: number, sha256: string}[]} */
