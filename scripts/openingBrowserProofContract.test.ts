@@ -67,23 +67,30 @@ describe("terminal opening evidence admission", () => {
     expect(/testDir:\s*["']([^"']+)["']/.exec(config)?.[1]).toBe("./playwright/opening-proof");
     expect(/testMatch:\s*["']([^"']+)["']/.exec(config)?.[1]).toBe(path.basename(file));
   });
-  it("waits for the whole worker matrix and gates both verdict branches plus cleanup", () => {
+  it("waits for the whole worker matrix and gates both verdict branches (SCRUM-892: no cleanup job remains)", () => {
     const jobs = load("browser-attack-swarm.yml").jobs;
-    expect(jobs["opening-proof"].needs).toEqual(["prepare", "candidate-build", "trusted-e2e", "attack-worker", "opening-prepare", "opening-build"]);
+    // opening-prepare / opening-build / opening-cleanup / preview-cleanup were
+    // the cloud-preview lifecycle. The opening job now owns a local backend.
+    expect(jobs["opening-proof"].needs).toEqual(["prepare", "candidate-build", "candidate-source", "trusted-e2e", "attack-worker"]);
     expect(jobs["opening-proof"].if).toContain("needs.attack-worker.result == 'skipped'");
     expect(jobs.verdict.needs).toContain("opening-proof");
-    expect(jobs.verdict.needs).toContain("opening-cleanup");
-    expect(jobs["preview-cleanup"].needs).toContain("opening-proof");
-    expect(jobs["preview-cleanup"].if).toContain("always()");
+    for (const gone of ["opening-prepare", "opening-build", "opening-cleanup", "preview-cleanup"]) {
+      expect(jobs, gone).not.toHaveProperty(gone);
+      expect([jobs.verdict.needs].flat(), gone).not.toContain(gone);
+    }
     const publish = jobs.verdict.steps.find(item => item.name === "Publish authoritative trusted swarm verdict");
     expect(publish?.run).toContain('[ "$OPENING_RESULT" = "success" ]');
     expect(publish?.run).toContain('[ "$OPENING_CHECKED" = "true" ]');
-    expect(publish?.run).toContain('[ "$OPENING_CLEANUP_RESULT" = "success" ]');
+    expect(publish?.run).not.toContain("OPENING_CLEANUP_RESULT");
     const steps = jobs["opening-proof"].steps;
     const strict = steps.findIndex(item => item.run?.includes("--assert-only"));
     const execute = steps.findIndex(item => item.run?.includes("-c playwright.opening-proof.config.ts"));
     expect(strict).toBeGreaterThanOrEqual(0); expect(strict).toBeLessThan(execute);
     expect(steps.slice(execute + 1).some(item => item.run?.includes("--assert-only"))).toBe(false);
+    // The backend it attacks is its own and is stopped whatever happened.
+    const stop = steps.find(item => item.name === "Stop the local Convex backend");
+    expect(stop?.if).toBe("always()");
+    expect(steps.findIndex(item => item.name === "Start the local Convex backend")).toBeLessThan(strict);
   });
   it.each([
     { impact: "true", attack: "success", runs: true },
@@ -97,8 +104,8 @@ describe("terminal opening evidence admission", () => {
       always: () => true,
       cancelled: () => false,
       needs: { prepare: { result: "success", outputs: { should_run: impact } },
-        "candidate-build": { result: "success" }, "trusted-e2e": { result: "success" }, "attack-worker": { result: attack },
-        "opening-prepare": { result: "success", outputs: { creation_attempted: "true" } }, "opening-build": { result: "success" } },
+        "candidate-build": { result: "success" }, "candidate-source": { result: "success" },
+        "trusted-e2e": { result: "success" }, "attack-worker": { result: attack } },
       github: { repository: "synthetic/repository", event: { workflow_run: { event: "pull_request",
         head_repository: { full_name: "synthetic/repository" }, pull_requests: [{ number: 1 }] } } },
     };
@@ -107,29 +114,20 @@ describe("terminal opening evidence admission", () => {
       (jobs[name].if ?? "false").replace(/needs\.([\w-]+)/g, 'needs["$1"]'), context, { timeout: 100 });
     expect(admitted("candidate-build")).toBe(true);
     expect(admitted("trusted-e2e")).toBe(true);
-    expect(admitted("opening-prepare")).toBe(runs);
-    context.needs["opening-prepare"].result = runs ? "success" : "skipped";
-    expect(jobs["opening-build"].if).toContain("!cancelled()");
-    expect(admitted("opening-build")).toBe(runs);
-    context.needs["opening-build"].result = runs ? "success" : "skipped";
     expect(admitted("opening-proof")).toBe(runs);
-    // Cleanup must still attempt retirement after provisioning/build failure, never skip it as success.
-    context.needs["opening-prepare"].result = "failure";
-    context.needs["opening-build"].result = "failure";
-    expect(admitted("opening-build")).toBe(false);
-    expect(admitted("opening-proof")).toBe(false);
-    expect(admitted("opening-cleanup")).toBe(true);
-    context.cancelled = () => true;
-    expect(admitted("opening-build")).toBe(false);
+    // Any upstream failure, or a cancelled run, must never admit the opening proof.
     if (runs) {
-      context.needs["opening-prepare"].result = "success";
-      context.needs["opening-build"].result = "success";
-      expect(admitted("opening-prepare")).toBe(false);
-      expect(admitted("opening-proof")).toBe(false);
-      expect(admitted("opening-cleanup")).toBe(true);
+      for (const upstream of ["candidate-build", "candidate-source", "trusted-e2e"] as const) {
+        context.needs[upstream].result = "failure";
+        expect(admitted("opening-proof"), upstream).toBe(false);
+        context.needs[upstream].result = "success";
+      }
+      context.needs.prepare.result = "failure";
+      expect(admitted("opening-proof"), "prepare").toBe(false);
+      context.needs.prepare.result = "success";
+      context.cancelled = () => true;
+      expect(admitted("opening-proof"), "cancelled").toBe(false);
     }
-    context.needs["opening-prepare"].outputs.creation_attempted = "false";
-    expect(admitted("opening-cleanup")).toBe(false);
   });
   it("places the main opening phase after all original hunters and before cleanup", () => {
     const steps = load("deal-scenarios-e2e.yml").jobs.scenarios.steps;
