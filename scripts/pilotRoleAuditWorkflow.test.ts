@@ -22,7 +22,8 @@ test.each([
 const source = readFileSync(path.resolve(".github/workflows/pilot-role-audit.yml"), "utf8");
 const stepSchema = z.object({ name: z.string().optional(), run: z.string().optional(),
   with: z.object({ path: z.string().optional() }).passthrough().optional(),
-  if: z.string().optional(), env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional() });
+  if: z.string().optional(), "continue-on-error": z.unknown().optional(),
+  env: z.record(z.string(), z.union([z.string(), z.boolean(), z.number()])).optional() });
 const jobSchema = z.object({ if: z.string(), steps: z.array(stepSchema) });
 const workflow = z.object({
   on: z.record(z.string(), z.unknown()), permissions: z.object({ contents: z.string() }).strict(),
@@ -157,7 +158,15 @@ describe("SCRUM-616 role audit trust and coverage contract", () => {
       .toBe("node scripts/localConvexBackend.mjs mark");
     const verify = stepNamed(steps, "Verify the local backend was not changed during the run");
     expect(verify.run).toBe("node scripts/localConvexBackend.mjs verify");
-    expect(verify.if).toContain("always()");
+    // The tripwire must be able to fail the job and must run whenever `mark` ran.
+    // Exact text: a weakened condition (e.g. `== 'never'`) would silently skip it.
+    expect(verify.if).toBe("always() && env.AUTOFLOW_LOCAL_CONVEX_CODE_FINGERPRINT != ''");
+    expect(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline").if).toBeUndefined();
+    const tripwireSpan = steps.slice(
+      steps.indexOf(stepNamed(steps, "Mint the disposable-preview marker and record the tripwire baseline")),
+      steps.indexOf(verify) + 1,
+    );
+    for (const step of tripwireSpan) expect(step["continue-on-error"], step.name).toBeUndefined();
     // Exactly always(), as the shared credential-boundary test requires.
     const stop = stepNamed(steps, "Stop the local Convex backend");
     expect(stop.if).toBe("always()");

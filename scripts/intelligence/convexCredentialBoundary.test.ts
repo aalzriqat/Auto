@@ -319,8 +319,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // backend, with no cloud preview or credential. This whole-workflow pin keeps
   // its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
-    // PR #661: preserve screenshots in public-key encrypted evidence; publish
-    // only ciphertext and a fixed-field summary, with private browser logs.
+    // SCRUM-892: re-pinned for the local backend: the cloud preview create, pin
+    // and delete steps and the preview deploy key are gone; each role job starts,
+    // marks, verifies and stops its own runner-local backend. Triggers and
+    // permissions are unchanged.
+    // Previous pin d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d.
     "d8fdcec7304c4c8e92da8251f220bd57914b78064148445dcd42dd9c1834cae6",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
