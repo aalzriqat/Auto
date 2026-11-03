@@ -280,7 +280,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // consume candidate-source and the one candidate-build. The workflow is
     // still pinned because the local admin key is classified as a credential
     // (LOCAL_BACKEND_KEY). NOT yet reviewed by an independent seat.
-    "05d0fa2db011991e64101fb4baf4b524c94ac6586f8045221731790065b3bffa",
+    "de764762f0617c53c6920e0ce4d842225b38a7d4826b06563b6e73d74f55d056",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
