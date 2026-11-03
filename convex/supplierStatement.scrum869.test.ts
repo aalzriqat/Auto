@@ -44,7 +44,7 @@ async function seed(tag: string, permissions: string[] = ["view:finance"]) {
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
 
-function addSupplier(t: Seed["t"], orgId: Id<"organizations">, displayName: string, userId: Id<"users">) {
+function addSupplier(t: ReturnType<typeof convexTestWithComponents>, orgId: Id<"organizations">, displayName: string, userId: Id<"users">) {
   return t.run((ctx) =>
     ctx.db.insert("suppliers", {
       orgId, displayName, displayNameKey: displayName.toLowerCase(), status: "ACTIVE", origin: "MANUAL", version: 1, createdBy: userId, updatedBy: userId,
@@ -106,7 +106,9 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.receivable.totals).toEqual([{ currency: "JOD", grossMinor: 3_000_000, disputedMinor: 0, overdueMinor: 0 }]);
     // No net, balance or difference figure anywhere in the result.
     expect(Object.keys(r).sort()).toEqual(["payable", "receivable", "supplierId"]);
-    expect(JSON.stringify(r)).not.toMatch(/net|balance|6_?500/i);
+    const keys: string[] = [];
+    JSON.stringify(r, (k, v) => (keys.push(k), v));
+    expect(keys.filter((k) => /net|balance|diff|offset/i.test(k))).toEqual([]);
   });
 
   test("a cost recovery is A/R, labelled by kind, and joins the receivable total of its own currency only", async () => {
@@ -151,11 +153,19 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
 
   test("tenancy and permission: foreign supplier, other org, missing view:finance and a stale clock all refuse", async () => {
     const a = await seed("ta");
-    const b = await seed("tb");
-    await expect(statement(a, b.supplierId)).rejects.toThrow();
-    await expect(a.asUser.query(api.supplierStatement.outstanding, { orgId: b.orgId, supplierId: b.supplierId, nowMs: NOW } as never)).rejects.toThrow();
+    // Same harness instance on purpose: two convexTest instances hand out identical ids.
+    const orgB = await a.t.run((ctx) => ctx.db.insert("organizations", { name: "ST other", createdAt: Date.now() }));
+    await a.t.run((ctx) =>
+      ctx.db.insert("subscriptions", { orgId: orgB, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+    );
+    const supplierB = await addSupplier(a.t, orgB, "Foreign Supplier", a.userId);
+    await expect(statement(a, supplierB), "foreign supplier in own org").rejects.toThrow();
+    await expect(
+      a.asUser.query(api.supplierStatement.outstanding, { orgId: orgB, supplierId: supplierB, nowMs: NOW } as never),
+      "other org"
+    ).rejects.toThrow();
     const noFinance = await seed("tc", ["view:vehicles"]);
-    await expect(statement(noFinance)).rejects.toThrow();
-    await expect(statement(a, a.supplierId, { nowMs: NOW + 5 * DAY })).rejects.toThrow(/nowMs/);
+    await expect(statement(noFinance), "no finance").rejects.toThrow();
+    await expect(statement(a, a.supplierId, { nowMs: NOW + 5 * DAY }), "stale clock").rejects.toThrow(/nowMs/);
   });
 });

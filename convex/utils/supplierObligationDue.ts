@@ -306,3 +306,85 @@ export async function readObligationPage(
 
   return { rows, totals: totalsOf(rows), complete: isDone, continueCursor };
 }
+
+/** Rows read per family for one supplier's statement; one more is fetched to prove the family is not complete. */
+export const STATEMENT_FAMILY_LIMIT = 100;
+
+export interface StatementTotal {
+  currency: string;
+  grossMinor: number;
+  disputedMinor: number;
+  /** The part of the gross whose due date has passed. Never subtracted from the gross. */
+  overdueMinor: number;
+}
+
+export interface StatementSection {
+  rows: ObligationRow[];
+  /** One total per currency; currencies are never added together. */
+  totals: StatementTotal[];
+  /** False when the family held more rows than the read bound: the rows and totals are then partial. */
+  complete: boolean;
+}
+
+function statementSection(rows: ObligationRow[], complete: boolean): StatementSection {
+  const byCurrency = new Map<string, StatementTotal>();
+  for (const row of rows) {
+    const total = byCurrency.get(row.currency) ?? { currency: row.currency, grossMinor: 0, disputedMinor: 0, overdueMinor: 0 };
+    total.grossMinor += row.outstandingMinor;
+    total.disputedMinor += row.disputedMinor;
+    if (row.daysOverdue !== null && row.daysOverdue > 0) total.overdueMinor += row.outstandingMinor;
+    byCurrency.set(row.currency, total);
+  }
+  return { rows, totals: [...byCurrency.values()], complete };
+}
+
+/**
+ * SCRUM-869 slice 1 - one supplier's outstanding obligations as two sections that are never
+ * combined: `payable` (A/P, what the dealership owes) and `receivable` (A/R, what the supplier
+ * owes: margin receivables and cost recoveries). Rows come from the supplier-keyed index and use
+ * the same row reader as the aging screen, so a line shows the same figure on both. The caller
+ * must already have proved the supplier belongs to `orgId`.
+ */
+export async function readSupplierOutstanding(
+  ctx: Reader,
+  args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; nowMs: number }
+): Promise<{ payable: StatementSection; receivable: StatementSection }> {
+  const { orgId, supplierId, nowMs } = args;
+  const take = STATEMENT_FAMILY_LIMIT + 1;
+
+  const payableDocs = await ctx.db
+    .query("vehicleSupplierPayables")
+    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
+    .take(take);
+  const receivableDocs = await ctx.db
+    .query("vehicleSupplierReceivables")
+    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
+    .take(take);
+  const recoveryDocs = await ctx.db
+    .query("supplierCostRecoveries")
+    .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId))
+    .take(take);
+
+  const payableRows: ObligationRow[] = [];
+  for (const row of payableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
+    const read = await readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), undefined);
+    if (read) payableRows.push(read);
+  }
+  const receivableRows: ObligationRow[] = [];
+  for (const row of receivableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
+    const read = await readRow("RECEIVABLE", row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row), undefined);
+    if (read) receivableRows.push(read);
+  }
+  for (const row of recoveryDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
+    const read = await readRow("RECOVERY", row._id, row.currency, nowMs, () => recoveryFacts(row), undefined);
+    if (read) receivableRows.push(read);
+  }
+
+  return {
+    payable: statementSection(payableRows, payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    receivable: statementSection(
+      receivableRows,
+      receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT
+    ),
+  };
+}
