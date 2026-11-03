@@ -27,6 +27,7 @@ import {
   deployBackend,
   generateInstanceSecret,
   main,
+  markBackend,
   parseAdminKey,
   parseEnvNames,
   setBackendEnv,
@@ -489,6 +490,42 @@ describe("deployBackend", () => {
   });
 });
 
+describe("markBackend (SCRUM-892: marker only, for a staged candidate deployed elsewhere)", () => {
+  test("verifies the environment, then mints the marker, and never deploys", () => {
+    const h = harness();
+    markBackend(READY_ENV, h.deps);
+    expect(h.calls.map((call) => call.args.slice(1, 4).join(" "))).toEqual([
+      "env list --names-only",
+      "run e2eBootstrap:markPreviewDeployment {}",
+    ]);
+    expect(h.calls.some((call) => call.args[1] === "deploy")).toBe(false);
+    for (const call of h.calls) expect(call.env.CONVEX_SELF_HOSTED_URL).toBe(LOCAL_CONVEX_URL);
+  });
+
+  test("does not mint the marker when the environment is not the allowlist", () => {
+    const h = harness((call) => (call.args.includes("list") ? ok("") : undefined));
+    expect(() => markBackend(READY_ENV, h.deps)).toThrow(/Missing/);
+    expect(h.calls.some((call) => call.args[1] === "run")).toBe(false);
+  });
+
+  test("surfaces a failed marker run", () => {
+    const h = harness((call) => (call.args[1] === "run" ? fail("", 3) : undefined));
+    expect(() => markBackend(READY_ENV, h.deps)).toThrow(/exit code 3/);
+  });
+
+  test.each(["CONVEX_DEPLOY_KEY", "CONVEX_DEPLOYMENT", "CONVEX_PREVIEW_DEPLOY_KEY"])("refuses beside %s", (name) => {
+    const h = harness();
+    expect(() => markBackend({ ...READY_ENV, [name]: "x" }, h.deps)).toThrow(LocalConvexRefusal);
+    expect(h.deps.exec).not.toHaveBeenCalled();
+  });
+
+  test("refuses a self-hosted URL that is not the loopback backend", () => {
+    const h = harness();
+    expect(() => markBackend({ ...READY_ENV, CONVEX_SELF_HOSTED_URL: "http://127.0.0.1:3211" }, h.deps)).toThrow(/exactly/);
+    expect(h.deps.exec).not.toHaveBeenCalled();
+  });
+});
+
 describe("stopBackend", () => {
   test("removes the recorded container with --force", () => {
     const h = harness();
@@ -524,9 +561,10 @@ describe("stopBackend", () => {
 });
 
 describe("main", () => {
-  test("dispatches the four subcommands and refuses anything else", async () => {
+  test("dispatches the five subcommands and refuses anything else", async () => {
     const h = harness();
     await main(["stop"], {}, h.deps);
+    await main(["mark"], READY_ENV, h.deps);
     await expect(main(["deploy-prod"], {}, h.deps)).rejects.toThrow(/Usage/);
     await expect(main([], {}, h.deps)).rejects.toThrow(/Usage/);
   });

@@ -539,6 +539,22 @@ export function deployBackend(env, deps) {
   deps.log("Local backend deployed and marked as a disposable preview deployment.");
 }
 
+/**
+ * Mints the preview marker on a backend that already holds deployed functions
+ * (SCRUM-892). `deploy` deploys this checkout's convex/ and marks in one go; the
+ * browser swarm instead deploys a STAGED candidate backend in a hardened
+ * container, so only the marker step runs here, from the trusted checkout. The
+ * environment is verified first, exactly as `deploy` does, so the marker is
+ * never minted on a backend whose variables are not the allowlist.
+ */
+export function markBackend(env, deps) {
+  assertLocalOnly(env);
+  const adminKey = assertAdminKey(env.CONVEX_SELF_HOSTED_ADMIN_KEY);
+  assertEnvMatchesAllowlist(listEnvNames(deps, env, adminKey));
+  runConvexCli(deps, env, adminKey, ["run", "e2eBootstrap:markPreviewDeployment", "{}"]);
+  deps.log("Local backend marked as a disposable preview deployment.");
+}
+
 /** Removes the container. Idempotent: a missing container or name is fine. */
 export function stopBackend(env, deps) {
   assertLocalOnly(env);
@@ -570,10 +586,12 @@ export async function main(argv, env = process.env, overrides = {}) {
       return setBackendEnv(env, deps);
     case "deploy":
       return deployBackend(env, deps);
+    case "mark":
+      return markBackend(env, deps);
     case "stop":
       return stopBackend(env, deps);
     default:
-      throw new LocalConvexRefusal("Usage: node scripts/localConvexBackend.mjs <start|env|deploy|stop>");
+      throw new LocalConvexRefusal("Usage: node scripts/localConvexBackend.mjs <start|env|deploy|mark|stop>");
   }
 }
 
