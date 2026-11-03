@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
@@ -245,6 +246,8 @@ describe("egress proxy semantics", () => {
     const wsProxy = await startEgressProxy({ allow: [`127.0.0.1:${wsPort}`], port: 0 });
     try {
       const authority = `127.0.0.1:${wsPort}`;
+      // RFC 6455 §4.1: a fresh base64-encoded 16-byte nonce per handshake.
+      const wsKey = randomBytes(16).toString("base64");
       const transcript = await new Promise<string>((resolve, reject) => {
         let seen = "";
         const socket = net.connect(wsProxy.port, "127.0.0.1", () => {
@@ -255,7 +258,7 @@ describe("egress proxy semantics", () => {
           if (seen.includes("200 Connection Established") && !seen.includes("Upgrade: websocket")) {
             socket.write(
               `GET /api/1.31.0/sync HTTP/1.1\r\nHost: ${authority}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
-                "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+                `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${wsKey}\r\n\r\n`,
             );
           } else if (seen.includes("101 Switching Protocols") && !seen.includes("echo:")) {
             socket.write("frame-1");
