@@ -268,3 +268,104 @@ Imported dependencies can still enter either graph. These are compiler results, 
 The protected customer-credit containment blob is unchanged at `af09f908267944be4189ec7720301c775b50c848`.
 Only 14 named files were staged. Existing `.gitignore` and `.ignore` edits remain unstaged. No push, merge, deployment,
 production read/write, CI run, remote Sonar analysis or independent-seat certification was performed by this lane.
+
+## CI timeout remediation at 8d0fd5a4, 2026-11-04
+
+Run 41865994194 timed out in the Fixed Assets parity hook. Local V8 coverage reproduced the same
+`Hook timed out in 10000ms` failure. A diagnostic run measured 9.53 s parsing 1,175 production
+sources and 3.08 s binding them. These are local compiler costs, not Convex platform measurements.
+
+The compiler now retains at most two programs per Vitest worker context, keyed by root-file lists and
+validated against every source string. Unchanged inputs reuse the program and checker. Changed
+inputs pass `oldProgram` and reuse only ASTs whose text is unchanged. The cache survives
+`vi.resetModules()`, while changed, added and removed sources invalidate it. The source snapshot
+still reads the complete production tree; fixture reloads deliberately reread it to observe edits.
+The mock census reads its complete test-file set once and binds one program. An empty export
+keeps script-shaped test files in separate module scopes, as Vitest executes them, so a binding
+in another file cannot hide a mock invocation. No discovery directory or negative control was removed.
+
+The complete first scan still exceeds 5 s with coverage. UI suites use `beforePilotCertifyingConfig`
+for the same assertion with a shared 30 s hook timeout and a measured-cost comment. The new helper
+is itself in the protected mock-module list, and certification/mock coexistence checks recognize it.
+At the pinned head, the UI caller enumeration is one file, `FixedAssetsTab.pilotOff.test.tsx`.
+The other pilot-off suite, `ManualJournalTab.pilotOff.test.tsx`, directly checks its constant.
+The two additional measured callers are the parity suite's existing R3-F2 hooks-barrel and F4
+manual-journal-guard negative controls; no additional UI callers were invented.
+
+### Design sources
+
+The [TypeScript compiler API guide](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API#writing-an-incremental-program-watcher)
+describes program reuse, the `oldProgram` parameter and incremental builders. This analyzer needs
+symbols rather than diagnostic/emit caches, so it reuses native `Program` and `SourceFile` objects
+without a watcher, incremental output files or a second compiler service.
+[Vitest hook timeouts](https://vitest.dev/config/hooktimeout) documents the 10 s Node default and
+[Vitest coverage profiling](https://vitest.dev/guide/profiling-test-performance.html#code-coverage)
+separates test/import time from coverage work. The compiler work was optimized before adding the
+scoped hook timeout; repository-wide timeouts and coverage thresholds are unchanged.
+
+A discarded dependency-prefilter experiment failed the namespace-export controls because
+TypeScript 6.0.3 `preProcessFile('export * as ns from "./local";', true, true).importedFiles`
+is empty. The committed design preserves the complete file census and compiler-symbol discovery.
+
+### Local timings
+
+The following are individual `performance.now()` samples around the assertion, excluding import,
+environment startup and the temporary timing write. The timing probes were removed before final
+validation. They are not statistical medians; the shared Windows machine had concurrent activity.
+The after samples measure native cache reuse, including source-changing controls, and the cold
+Fixed Assets call. A cold-scan speedup is not established.
+
+| Caller | Before plain | After plain | Before V8 coverage | After V8 coverage |
+| --- | ---: | ---: | ---: | ---: |
+| Fixed Assets, cold worker | 4,722 ms | 7,929 ms | 13,873 ms, hook failed | 12,811 ms, hook passed |
+| R3-F2 hooks-barrel control, source changed | 4,576 ms | 3,045 ms | 14,731 ms | 2,778 ms |
+| F4 manual-journal guard control, module reset | 5,281 ms | 2,477 ms | 13,886 ms | 2,688 ms |
+
+Unchanged assertions in the instrumented covered parity suite measured 0.06–0.78 ms. The original
+failure and the new unchanged-program reuse assertion both ran red before the fix. New controls
+also check unchanged AST reuse, module-reset reuse, source/root invalidation, namespace cycles,
+escaped exports, unreadable mock targets and isolation of bindings between test files.
+
+### Validation commands and evidence boundary
+
+The complete representative covered run, with timing probes removed, was:
+
+```powershell
+pnpm exec vitest run components/accounting/FixedAssetsTab.pilotOff.test.tsx components/accounting/ManualJournalTab.pilotOff.test.tsx test-utils lib/pilotCapabilityManifest.test.ts scripts/supplierSettlementCensus.test.ts --maxWorkers=1 --coverage --coverage.include=test-utils/pilotSourceDiscovery.ts --coverage.include=test-utils/pilotConfigParity.ts --coverage.include=test-utils/pilotConfigHook.ts --coverage.reporter=json-summary --coverage.reporter=json --coverage.reporter=text --coverage.reportsDirectory=coverage/scrum810-final
+```
+
+Result: **101/101 passed**, seven files, 142.83 s. Line coverage was 99.18%, statements 95.62%,
+functions 95.83% and branches 90.53%. The scoped include list measures the changed helpers rather
+than unrelated application modules. The configured 90/90/85/75 statement/line/function/branch
+thresholds were unchanged and passed. A diff-to-V8 statement-start comparison measured **30/30
+added executable lines covered**. This is local coverage, not a remote SonarCloud new-code verdict.
+
+The preceding broader plain run passed 92/92 tests across both pilot-off files, all three test-utils
+suites and the manifest in 128.91 s. The final plain run of the requested five-file set passed
+**79/79 tests**, five files, 119.78 s:
+
+```powershell
+pnpm exec vitest run components/accounting/FixedAssetsTab.pilotOff.test.tsx components/accounting/ManualJournalTab.pilotOff.test.tsx test-utils --maxWorkers=1
+```
+
+Both `pnpm typecheck` and `pnpm typecheck:convex` returned exit 0. Root typecheck excludes
+`convex`, `test-utils`, `apps`, `packages`, `dealer-worker` and `node_modules` as input roots.
+Convex typecheck includes backend and test-utils roots, excludes `_generated` as input roots,
+and does not separately check frontend, mobile, shared-package or worker projects. Imported
+dependencies can enter either graph. Neither result proves Convex runtime or concurrency behavior.
+
+Changed-file lint:
+
+```powershell
+pnpm exec eslint components/accounting/FixedAssetsTab.pilotOff.test.tsx test-utils/pilotConfigParity.ts test-utils/pilotConfigParity.test.ts test-utils/pilotSourceDiscovery.ts test-utils/pilotSourceDiscovery.test.ts test-utils/pilotConfigHook.ts --max-warnings=0
+```
+
+Local SonarJS 4.2.2 recommended rules, with cognitive complexity limited to 14, reported zero new
+diagnostics and zero inherited diagnostics in these six files. No suppression or NOSONAR was added.
+The independent seats and remote CI/Sonar analysis remain unverified at the remediation commit.
+All three PR comment APIs were read. CodeRabbit's conversation says automatic review was skipped;
+the review-summary and inline APIs returned empty arrays. No CodeRabbit certification is claimed.
+
+The customer-credit containment blob remains `af09f908267944be4189ec7720301c775b50c848`.
+Production sources, thresholds, release waivers, review evidence, `.gitignore` and `.ignore` are
+outside this remediation commit. No push, merge, deployment or live financial operation was performed.

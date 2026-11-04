@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   assertPilotCertifyingConfig,
   opensAPilotDoor,
+  pilotDoorOpeners,
   pilotConfigMismatches,
   pilotModuleBasenames,
   pilotSwitchNames,
@@ -201,6 +202,17 @@ describe("the door-opening detector", () => {
   const names = ["EXAMPLE_PILOT_DISABLED"];
   const opens = (src: string) => opensAPilotDoor(src, basenames, names);
 
+  test("the shared census keeps file scopes separate and refuses unreadable mock targets", () => {
+    const sources = new Map([
+      ["globals.ts", "const vi = unrelated;"],
+      ["unbound.ts", `${DO_MOCK}(target, () => ({}));`],
+      ["aliased.ts", 'import { vi as tools } from "vitest"; const { doMock: replace } = tools; replace(target, () => ({}));'],
+      ["shadowed.ts", 'export function f(vi) { vi.doMock(target, () => ({})); }'],
+      ["literal.ts", 'export {}; replaceSomething("./gateModule", () => ({}));'],
+    ]);
+    expect(pilotDoorOpeners(sources, basenames, names)).toEqual(["unbound.ts", "aliased.ts", "literal.ts"]);
+  });
+
   test.each([
     'const tools = vi; tools.doMock("./gateModule", () => ({}));',
     'const m = vi.doMock; m("./gateModule", () => ({}));',
@@ -317,22 +329,21 @@ describe("legacy door-opening suites are labelled", () => {
   const self = "test-utils/pilotConfigParity.test.ts";
   const basenames = pilotModuleBasenames();
   const names = pilotSwitchNames();
-  const opening = testFiles("")
-    .filter((rel) => rel !== self && opensAPilotDoor(read(rel), basenames, names))
-    .sort();
+  const sources = new Map(testFiles("").filter((rel) => rel !== self).map((rel) => [rel, read(rel)]));
+  const opening = pilotDoorOpeners(sources, basenames, names).sort();
 
   test("a suite that opens a door says NON-PILOT-CERTIFYING or is in the shrink-only baseline", () => {
-    const unlabelled = opening.filter((rel) => !read(rel).includes("NON-PILOT-CERTIFYING") && !baseline.has(rel));
+    const unlabelled = opening.filter((rel) => !sources.get(rel)!.includes("NON-PILOT-CERTIFYING") && !baseline.has(rel));
     expect(unlabelled, "add `NON-PILOT-CERTIFYING` to the header of each, or stop opening the door").toEqual([]);
   });
 
   test("the baseline lists only suites that still open a door and are still unlabelled", () => {
-    const stale = [...baseline].filter((rel) => !opening.includes(rel) || read(rel).includes("NON-PILOT-CERTIFYING"));
+    const stale = [...baseline].filter((rel) => !opening.includes(rel) || sources.get(rel)!.includes("NON-PILOT-CERTIFYING"));
     expect(stale, "remove these from test-utils/nonPilotCertifyingBaseline.json").toEqual([]);
   });
 
   test("a suite that asserts pilot certification does not also open a door", () => {
-    const both = opening.filter((rel) => read(rel).includes("assertPilotCertifyingConfig("));
+    const both = opening.filter((rel) => /\b(?:assertPilotCertifyingConfig|beforePilotCertifyingConfig)\s*\(/.test(sources.get(rel)!));
     expect(both).toEqual([]);
   });
 });

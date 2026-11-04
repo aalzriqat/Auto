@@ -1,5 +1,45 @@
-import { describe, expect, test } from "vitest";
-import { discoverGuardedPilotMutations, discoverPilotSources } from "./pilotSourceDiscovery";
+import { describe, expect, test, vi } from "vitest";
+import { discoverGuardedPilotMutations, discoverPilotSources, sourceProgram } from "./pilotSourceDiscovery";
+
+describe("SCRUM-810 bounded compiler work", () => {
+  test("reuses an unchanged snapshot across module resets but invalidates changed text and root files", async () => {
+    const sources = new Map([
+      ["flags.ts", "export const REVIEW_PILOT_DISABLED = true;"],
+      ["stable.ts", "export const stable = 1;"],
+    ]);
+    const first = sourceProgram(sources);
+    expect(sourceProgram(new Map(sources))).toBe(first);
+    vi.resetModules();
+    const reloaded = await import("./pilotSourceDiscovery");
+    expect(reloaded.sourceProgram(new Map(sources))).toBe(first);
+    sources.set("flags.ts", "export const REVIEW_PILOT_DISABLED = false;");
+    const changed = sourceProgram(sources);
+    expect(changed).not.toBe(first);
+    expect(changed.getSourceFile("stable.ts")).toBe(first.getSourceFile("stable.ts"));
+    expect(discoverPilotSources(sources, new Set()).declarations[0]?.value).toBe(false);
+    sources.delete("flags.ts");
+    sources.set("other.ts", "export const OTHER_PILOT_DISABLED = true;");
+    expect(sourceProgram(sources).getSourceFile("flags.ts")).toBeUndefined();
+    expect(discoverPilotSources(sources, new Set()).declarations.map((entry) => entry.name)).toEqual(["OTHER_PILOT_DISABLED"]);
+  });
+
+  test("finds aliases through cycles and escaped exports outside the usual directories", () => {
+    const sources = new Map([
+      ["elsewhere/flags.ts", 'export const REVIEW_\\u0050ILOT_DISABLED = true;'],
+      ["elsewhere/barrel.ts", 'export * from "./flags"; export * from "./cycle";'],
+      ["elsewhere/cycle.ts", 'export * as nested from "./barrel";'],
+      ["hooks/exporter.ts", 'import { REVIEW_PILOT_DISABLED as flag } from "../elsewhere/barrel"; export const alias = flag;'],
+      ["unrelated.ts", 'export const text = "unrelated";'],
+    ]);
+    const discovery = discoverPilotSources(sources, new Set());
+    expect(discovery.declarations.map(({ name, value }) => ({ name, value }))).toEqual([
+      { name: "REVIEW_PILOT_DISABLED", value: true },
+    ]);
+    expect([...discovery.exportedBy.get("REVIEW_PILOT_DISABLED") ?? []].sort()).toEqual([
+      "elsewhere/barrel", "elsewhere/cycle", "elsewhere/flags", "hooks/exporter",
+    ]);
+  });
+});
 
 describe("pilot source discovery controls", () => {
   test.each([

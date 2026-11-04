@@ -56,27 +56,56 @@ function variableSwitches(decl: ts.VariableDeclaration): SwitchDeclaration[] {
   return doorMap.length > 0 ? doorMap : constant;
 }
 
-/** Resolve only within the supplied source snapshot. No node_modules or compiler library reads. */
+function resolveSource(specifier: string, from: string, sources: ReadonlyMap<string, string>): string | undefined {
+  let target: string;
+  if (specifier.startsWith("@/")) target = specifier.slice(2);
+  else if (specifier.startsWith(".")) target = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier)).replace(/^\//, "");
+  else return undefined;
+  const base = target.replace(/\.[cm]?[jt]sx?$/, "");
+  return [target, `${base}.ts`, `${base}.tsx`, `${base}.d.ts`, `${base}/index.ts`].find((file) => sources.has(file));
+}
+
+interface CachedProgram {
+  readonly sources: ReadonlyMap<string, string>;
+  readonly program: ts.Program;
+}
+
+// Vitest resets modules while installing negative-control mocks. Keep compiler data across
+// those resets, but compare source contents on every call. Retain at most two root sets.
+const worker = globalThis as typeof globalThis & { autoflowPilotPrograms?: Map<string, CachedProgram> };
+const programs = worker.autoflowPilotPrograms ??= new Map<string, CachedProgram>();
+
+function previousProgram(key: string, size: number): CachedProgram | undefined {
+  return programs.get(key) ?? [...programs.values()].sort((a, b) =>
+    Math.abs(a.sources.size - size) - Math.abs(b.sources.size - size))[0];
+}
+
+/** Resolve only within the supplied source snapshot. Reuse unchanged text, never stale file lists. */
 export function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program {
+  const key = JSON.stringify([...sources.keys()]);
+  const previous = previousProgram(key, sources.size);
+  if (previous && sources.size === previous.sources.size &&
+    [...sources].every(([file, text]) => previous.sources.get(file) === text)) return previous.program;
   const options: ts.CompilerOptions = { noLib: true, types: [], target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext };
   const host = ts.createCompilerHost(options);
   host.getCurrentDirectory = () => "/";
   host.getSourceFile = (file) => {
     const text = sources.get(file);
-    return text === undefined ? undefined : ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    if (text === undefined) return undefined;
+    const oldSource = previous?.program.getSourceFile(file);
+    return oldSource?.text === text ? oldSource : ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
   };
   host.fileExists = (file) => sources.has(file);
   host.readFile = (file) => sources.get(file);
   host.resolveModuleNames = (specifiers, from) => specifiers.map((specifier) => {
-    let target: string;
-    if (specifier.startsWith("@/")) target = specifier.slice(2);
-    else if (specifier.startsWith(".")) target = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier)).replace(/^\//, "");
-    else return undefined;
-    const base = target.replace(/\.[cm]?[jt]sx?$/, "");
-    const resolvedFileName = [target, `${base}.ts`, `${base}.tsx`, `${base}.d.ts`, `${base}/index.ts`].find((file) => sources.has(file));
+    const resolvedFileName = resolveSource(specifier, from, sources);
     return resolvedFileName ? { resolvedFileName } : undefined;
   });
-  return ts.createProgram([...sources.keys()], options, host);
+  const program = ts.createProgram([...sources.keys()], options, host, previous?.program);
+  programs.delete(key);
+  programs.set(key, { sources: new Map(sources), program });
+  if (programs.size > 2) programs.delete(programs.keys().next().value!);
+  return program;
 }
 
 function originalSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
@@ -112,7 +141,7 @@ function switchesBehind(symbol: ts.Symbol, checker: ts.TypeChecker, visited = ne
   return variableExports(symbol, original, checker, visited);
 }
 
-/** Every source is parsed. Export structure and compiler symbols, never text, decide inclusion. */
+/** Every source is inspected. Export structure and compiler symbols decide inclusion. */
 export function discoverPilotSources(sources: ReadonlyMap<string, string>, guardNames: ReadonlySet<string>): PilotSourceDiscovery {
   const program = sourceProgram(sources);
   const checker = program.getTypeChecker();

@@ -4,10 +4,10 @@
  * therefore not offer them. The register and each asset's event history are reads
  * and stay available.
  */
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
-import { assertPilotCertifyingConfig } from "@/test-utils/pilotConfigParity";
+import { beforePilotCertifyingConfig } from "@/test-utils/pilotConfigHook";
 
 const stubs = vi.hoisted(() => ({
   t: (key: string): string => key,
@@ -44,7 +44,7 @@ const asset = {
   status: "ACTIVE",
 };
 
-beforeAll(() => assertPilotCertifyingConfig(["FIXED_ASSET_LIFECYCLE_PILOT_DISABLED"]));
+beforePilotCertifyingConfig(["FIXED_ASSET_LIFECYCLE_PILOT_DISABLED"]);
 afterEach(() => {
   cleanup();
   stubs.assets = [];

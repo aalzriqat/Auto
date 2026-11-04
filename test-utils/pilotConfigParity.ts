@@ -70,7 +70,7 @@ export function switchModules(): SwitchModules {
 /** Include every switch exporter and every module exporting one of the declared door guards. */
 export function pilotModuleBasenames(): string[] {
   const { exportedBy, guardModules } = discoveredSources();
-  const names = new Set<string>(["pilotCapabilityManifest", "cashSalePilotGate"]);
+  const names = new Set<string>(["pilotCapabilityManifest", "pilotConfigHook", "cashSalePilotGate"]);
   for (const mod of [...guardModules, ...[...exportedBy.values()].flatMap((set) => [...set])]) {
     names.add(path.posix.basename(mod));
   }
@@ -234,11 +234,7 @@ function changesPilotCall(call: ts.CallExpression, basenames: readonly string[],
   return names.has(spied) || /^(?:assert\w*(?:Allowed|Enabled)|is\w*Disabled)$/.test(spied);
 }
 
-/** Inspect invocations, not comments, strings or formatting. Unreadable mock targets refuse certification. */
-export function opensAPilotDoor(src: string, basenames: readonly string[], names: readonly string[]): boolean {
-  const program = sourceProgram(new Map([["test.tsx", src]]));
-  const source = program.getSourceFile("test.tsx")!;
-  const checker = program.getTypeChecker();
+function opensSourceDoor(source: ts.SourceFile, checker: ts.TypeChecker, basenames: readonly string[], names: readonly string[]): boolean {
   const spiedNames = new Set([...names, ...pilotGuardNames()]);
   function visit(node: ts.Node): boolean {
     if (ts.isCallExpression(node) && changesPilotCall(node, basenames, spiedNames, checker)) return true;
@@ -251,4 +247,20 @@ export function opensAPilotDoor(src: string, basenames: readonly string[], names
     return ts.forEachChild(node, visit) ?? false;
   }
   return visit(source);
+}
+
+/** Inspect invocations, not comments, strings or formatting. Unreadable mock targets refuse certification. */
+export function opensAPilotDoor(src: string, basenames: readonly string[], names: readonly string[]): boolean {
+  const program = sourceProgram(new Map([["test.tsx", src]]));
+  return opensSourceDoor(program.getSourceFile("test.tsx")!, program.getTypeChecker(), basenames, names);
+}
+
+/** Parse and bind the complete mock census once, preserving each file's lexical scope. */
+export function pilotDoorOpeners(sources: ReadonlyMap<string, string>, basenames: readonly string[], names: readonly string[]): string[] {
+  // Vitest executes each file as a module. Make script-shaped fixtures modules too so a
+  // top-level binding in one file cannot hide an unbound Vitest invocation in another.
+  const isolated = new Map([...sources].map(([file, text]) => [file, `${text}\nexport {};\n`]));
+  const program = sourceProgram(isolated);
+  const checker = program.getTypeChecker();
+  return [...sources.keys()].filter((file) => opensSourceDoor(program.getSourceFile(file)!, checker, basenames, names));
 }
