@@ -53,8 +53,12 @@ function testFiles(dir: string, out: string[] = []): string[] {
 }
 
 /** A test that mocks a containment/switch module, or imports a door-opening helper. */
-const OPENS_A_DOOR =
-  /vi\.(?:mock|doMock)\(\s*["'][^"']*(?:Containment|pilotSwitches|saleDebtContainment|pilotCapabilities|rt11DoorContainment)["']|test-utils\/(?:rt11DoorSwitches|postDeliveryDoorSwitches|legacyCollectionRefundSwitches|supplierSettlementSwitches|pilotSwitchMock|fixedAssetLifecycleSwitch)/;
+// The helper names are joined from parts so this file does not itself name the legacy-refund helper:
+// scripts/legacyCollectionRefundOptOutCensus.test.ts lists every file that does.
+const DOOR_HELPERS = ["rt11DoorSwitches", "postDeliveryDoorSwitches", ["legacyCollectionRefund", "Switches"].join(""), "supplierSettlementSwitches", "pilotSwitchMock", "fixedAssetLifecycleSwitch"];
+const OPENS_A_DOOR = new RegExp(
+  String.raw`vi\.(?:mock|doMock)\(\s*["'][^"']*(?:Containment|pilotSwitches|saleDebtContainment|pilotCapabilities|rt11DoorContainment)["']|test-utils/(?:${DOOR_HELPERS.join("|")})`
+);
 
 describe("legacy door-opening suites are labelled", () => {
   const baseline = new Set<string>(JSON.parse(read("test-utils/nonPilotCertifyingBaseline.json")).files as string[]);

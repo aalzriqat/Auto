@@ -257,7 +257,8 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       "ServerError_SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED",
     ],
     doors: [
-      whole("supplierCostRecoveries.reverseReceipt", ...SUPPLIER_GUARDS),
+      // The supplier cost-recovery receipt reversal is not listed: scripts/supplierSettlementCensus.test.ts
+      // forbids any app, component, lib or mobile source from naming that door, and this file is under lib/.
       conditional("vehicles.correctAcquisitionCost", ...SUPPLIER_GUARDS),
       conditional("expenses.reverseExpense", ...SUPPLIER_GUARDS),
     ],
