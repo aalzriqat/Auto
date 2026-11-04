@@ -298,7 +298,7 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
     doors: [
       conditional("collections.requestApproval", "assertLegacyCollectionRefund"),
       conditional("collections.respondToApproval", "assertLegacyCollectionRefund"),
-      conditional("subledger.recordPayment", "assertLegacyCollectionRefund"),
+      // subledger recordPayment is internalMutation, outside this public-door list.
     ],
   },
   {
@@ -320,8 +320,8 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       "ServerError_SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED",
     ],
     doors: [
-      // The supplier cost-recovery receipt reversal is not listed: scripts/supplierSettlementCensus.test.ts
-      // forbids any app, component, lib or mobile source from naming that door, and this file is under lib/.
+      // The supplier cost-recovery receipt reversal always refuses and has a test-only whole-door scan.
+      // The supplier census forbids its name in shipped app, component, hook, lib or mobile source.
       conditional("vehicles.correctAcquisitionCost", ...SUPPLIER_GUARDS),
       conditional("expenses.reverseExpense", ...SUPPLIER_GUARDS),
     ],
@@ -394,6 +394,14 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
     id: "DEAL_COMMISSION_LINES",
     switches: ["DEAL_COMMISSION_LINES_PILOT_DISABLED"],
     refusalKeys: ["ServerError_DEAL_COMMISSION_LINES_DISABLED"],
-    doors: [],
+    doors: [
+      whole("dealCommissions.addLine", "DEAL_COMMISSION_LINES_PILOT_DISABLED"),
+      whole("dealCommissions.removeLine", "DEAL_COMMISSION_LINES_PILOT_DISABLED"),
+    ],
+    uiCallers: [{
+      file: "components/commissions/DealCommissionLinesDialog.tsx",
+      doors: ["dealCommissions.addLine", "dealCommissions.removeLine"],
+      gate: "writesEnabled",
+    }],
   },
 ];

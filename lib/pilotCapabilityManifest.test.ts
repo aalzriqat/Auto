@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
+import { pilotSourceSnapshot } from "../test-utils/pilotSourceSnapshot";
 import { discoverGuardedPilotMutations, discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
@@ -32,31 +33,19 @@ function walk(dir: string, accept: (rel: string) => boolean, out: string[] = [])
 const isSource = (rel: string) => /\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel) && !rel.endsWith(".d.ts");
 
 // Test-only exception: scripts/supplierSettlementCensus.test.ts forbids naming this
-// door in shipped lib/ code. The receipt reversal remains a conditional refusal.
+// door in shipped lib/ code. It always refuses and has an expected empty screen caller list.
 const GUARDED_DOOR_EXCLUSIONS: Readonly<Record<string, string>> = {
-  "supplierCostRecoveries.reverseReceipt": "Conditional supplier receipt reversal; the supplier census forbids this name in shipped lib/ source.",
+  "supplierCostRecoveries.reverseReceipt": "Always refuses every receipt reversal; scanned as a whole door here because shipped lib/ cannot name it.",
   "sourcingPayables.markPaid": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
   "sourcingPayables.recordPartialPayment": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
   "supplierReceivables.recordReceipt": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
 };
 
 function guardedPublicMutations(): ReadonlyMap<string, readonly string[]> {
-  const topLevel = readdirSync(path.join(ROOT, "convex"))
-    .filter((name) => /\.ts$/.test(name) && !/\.(?:test|spec)\.ts$/.test(name))
-    .map((name) => `convex/${name}`);
-  const containment = readdirSync(path.join(ROOT, "convex/utils"))
-    .filter((name) => name.endsWith("Containment.ts"))
-    .map((name) => `convex/utils/${name}`);
-  const files = [...topLevel, ...containment, "convex/_generated/server.d.ts"];
-  return discoverGuardedPilotMutations(new Map(files.map((file) => [file, read(file)])));
+  const sources = new Map(pilotSourceSnapshot());
+  sources.set("convex/_generated/server.d.ts", read("convex/_generated/server.d.ts"));
+  return discoverGuardedPilotMutations(sources);
 }
-
-const SOURCE_ROOTS = readdirSync(ROOT).filter(
-  (name) =>
-    !name.startsWith(".") &&
-    !["node_modules", "_generated", "coverage", "playwright-report", "test-results"].includes(name) &&
-    statSync(path.join(ROOT, name)).isDirectory()
-);
 
 /**
  * Every switch the repository declares anywhere outside tests, found by parsing the source:
@@ -66,7 +55,7 @@ const SOURCE_ROOTS = readdirSync(ROOT).filter(
 let declaredCache: string[] | null = null;
 function declaredSwitches(): string[] {
   if (declaredCache) return declaredCache;
-  const sources = new Map(SOURCE_ROOTS.flatMap((root) => walk(root, isSource)).map((rel) => [rel, read(rel)]));
+  const sources = pilotSourceSnapshot();
   const names = new Set(discoverPilotSources(sources, new Set()).declarations.map((declaration) => declaration.name));
   declaredCache = [...names].sort();
   return declaredCache;
@@ -112,10 +101,50 @@ function doorSource(moduleName: string, fn: string): string {
   return next < 0 ? rest : rest.slice(0, next);
 }
 
+function wholeDoorCallers(sources: ReadonlyMap<string, string>): Map<string, Set<string>> {
+  const wholeDoors = [
+    ...PILOT_CAPABILITIES.flatMap((cap) => cap.doors.filter((door) => door.scope === "whole")),
+    { name: "supplierCostRecoveries.reverseReceipt" },
+  ];
+  const found = new Map<string, Set<string>>();
+  for (const [rel, text] of sources) {
+    for (const door of wholeDoors) {
+      if (new RegExp(`\\bapi\\.${door.name.replace(".", "\\.")}\\b`).test(text)) {
+        found.set(door.name, (found.get(door.name) ?? new Set()).add(rel));
+      }
+    }
+  }
+  return found;
+}
+
 // The discovery and shipped-value checks read and parse every source module through the compiler
 // symbols. Under coverage instrumentation in a contended CI slice that walk passed the 5 s default
 // (PR #769, run 41832856111, slice 8/8), so this suite carries its own limit; the global timeout is unchanged.
 describe("pilot capability manifest", { timeout: 60_000 }, () => {
+  test("R3-F4: the always-refusing receipt reversal participates in the whole-door screen scan", () => {
+    const callers = wholeDoorCallers(new Map([
+      ["hooks/useSupplierReversal.ts", "const reverse = useMutation(api.supplierCostRecoveries.reverseReceipt);"],
+    ]));
+    expect([...callers.get("supplierCostRecoveries.reverseReceipt") ?? []]).toEqual(["hooks/useSupplierReversal.ts"]);
+  });
+
+  test("R3-F5: commission line writes are whole doors gated by server writesEnabled", () => {
+    const capability = PILOT_CAPABILITIES.find((cap) => cap.id === "DEAL_COMMISSION_LINES");
+    expect(capability?.doors).toEqual([
+      { name: "dealCommissions.addLine", scope: "whole", guards: ["DEAL_COMMISSION_LINES_PILOT_DISABLED"] },
+      { name: "dealCommissions.removeLine", scope: "whole", guards: ["DEAL_COMMISSION_LINES_PILOT_DISABLED"] },
+    ]);
+    expect(capability?.uiCallers).toEqual([{
+      file: "components/commissions/DealCommissionLinesDialog.tsx",
+      doors: ["dealCommissions.addLine", "dealCommissions.removeLine"],
+      gate: "writesEnabled",
+    }]);
+  });
+
+  test("R3-F5: internal subledger payment is absent from public doors", () => {
+    expect(PILOT_CAPABILITIES.flatMap((cap) => cap.doors.map((door) => door.name))).not.toContain("subledger.recordPayment");
+  });
+
   test("discovery: every declared pilot switch is registered", () => {
     const registered = new Set(Object.keys(PILOT_SWITCHES));
     const missing = declaredSwitches().filter((name) => !registered.has(name));
@@ -169,7 +198,7 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
       for (const key of cap.switches) owners.set(key, [...(owners.get(key) ?? []), cap.id]);
     }
     for (const key of Object.keys(PILOT_SWITCHES)) {
-      expect(declared.has(key), `${key} is registered but not declared in convex/ or lib/`).toBe(true);
+      expect(declared.has(key), `${key} is registered but not declared in the source snapshot`).toBe(true);
       expect(owners.get(key), `${key} must belong to exactly one capability`).toHaveLength(1);
     }
     expect(PILOT_CAPABILITIES.map((c) => c.id)).toEqual([...new Set(PILOT_CAPABILITIES.map((c) => c.id))]);
@@ -207,7 +236,7 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
     }
   });
 
-  test("R2-F3: every public mutation calling a pilot guard is registered or has a reasoned exclusion", () => {
+  test("R2-F3: every public mutation calling a pilot guard or reading a switch is registered or has a reasoned exclusion", () => {
     const guarded = guardedPublicMutations();
     expect(guarded.size, "containment guard discovery must not be empty").toBeGreaterThan(0);
     const registered = new Set(PILOT_CAPABILITIES.flatMap((cap) => cap.doors.map((door) => door.name)));
@@ -224,16 +253,10 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
   });
 
   test("ui: every caller of a whole-refusing door is declared, and still holds its gate", () => {
-    const wholeDoors = PILOT_CAPABILITIES.flatMap((c) => c.doors.filter((d) => d.scope === "whole"));
-    const found = new Map<string, Set<string>>();
-    for (const rel of [...walk("components", isSource), ...walk("app", isSource), ...walk("hooks", isSource)]) {
-      const text = read(rel);
-      for (const door of wholeDoors) {
-        if (new RegExp(`\\bapi\\.${door.name.replace(".", "\\.")}\\b`).test(text)) {
-          found.set(door.name, (found.get(door.name) ?? new Set()).add(rel));
-        }
-      }
-    }
+    const found = wholeDoorCallers(new Map(
+      [...walk("components", isSource), ...walk("app", isSource), ...walk("hooks", isSource)].map((rel) => [rel, read(rel)])
+    ));
+    expect([...(found.get("supplierCostRecoveries.reverseReceipt") ?? [])], "receipt reversal always refuses; no screen caller is permitted").toEqual([]);
     for (const cap of PILOT_CAPABILITIES) {
       for (const door of cap.doors.filter((d) => d.scope === "whole")) {
         const declared = new Set((cap.uiCallers ?? []).filter((u) => u.doors.includes(door.name)).map((u) => u.file));

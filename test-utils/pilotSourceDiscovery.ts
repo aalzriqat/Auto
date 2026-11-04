@@ -42,18 +42,18 @@ function variableSwitches(decl: ts.VariableDeclaration): SwitchDeclaration[] {
   if (!ts.isIdentifier(decl.name)) return [];
   const moduleId = moduleName(decl.getSourceFile().fileName);
   const initializer = unwrap(decl.initializer);
-  if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
-    return SWITCH_NAME.test(decl.name.text)
-      ? [{ name: decl.name.text, kind: "constant", module: moduleId, value: literalBoolean(initializer), sourceId: `${moduleId}:${decl.pos}` }]
-      : [];
-  }
-  return initializer.properties.flatMap((prop) => {
+  const constant: SwitchDeclaration[] = SWITCH_NAME.test(decl.name.text)
+    ? [{ name: decl.name.text, kind: "constant", module: moduleId, value: literalBoolean(initializer), sourceId: `${moduleId}:${decl.pos}` }]
+    : [];
+  if (!initializer || !ts.isObjectLiteralExpression(initializer)) return constant;
+  const doorMap = initializer.properties.flatMap((prop) => {
     if (!ts.isPropertyAssignment(prop)) return [];
     if (!(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) || !SWITCH_NAME.test(prop.name.text)) return [];
     const value = unwrap(prop.initializer);
     if (value && NON_BOOLEAN_INITIALIZERS.has(value.kind)) return [];
     return [{ name: prop.name.text, kind: "doorMap" as const, module: moduleId, value: literalBoolean(prop.initializer), sourceId: `${moduleId}:${prop.pos}` }];
   });
+  return doorMap.length > 0 ? doorMap : constant;
 }
 
 /** Resolve only within the supplied source snapshot. No node_modules or compiler library reads. */
@@ -83,7 +83,25 @@ function originalSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
   return symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
-/** Follow compiler-resolved import/export aliases, namespaces, and exported const aliases. */
+function exportedBinding(symbol: ts.Symbol, declaration: ts.Declaration, value: boolean | null): SwitchDeclaration[] {
+  if (!SWITCH_NAME.test(symbol.name)) return [];
+  const moduleId = moduleName(declaration.getSourceFile().fileName);
+  return [{ name: symbol.name, kind: "constant", module: moduleId, value, sourceId: `${moduleId}:${declaration.pos}:${symbol.name}` }];
+}
+
+function variableExports(symbol: ts.Symbol, original: ts.Symbol, checker: ts.TypeChecker, visited: Set<ts.Symbol>): SwitchDeclaration[] {
+  const declaration = original.valueDeclaration ?? symbol.declarations?.[0];
+  if (!declaration) return [];
+  // Binding elements include nested array/object patterns. Defaults are not evidence of the actual value.
+  if (!ts.isVariableDeclaration(declaration)) return exportedBinding(symbol, declaration, null);
+  const initializer = unwrap(declaration.initializer);
+  const target = initializer && checker.getSymbolAtLocation(initializer);
+  const referenced = target ? switchesBehind(target, checker, visited) : [];
+  const aliases = symbol.name !== original.name ? exportedBinding(symbol, declaration, literalBoolean(initializer)) : [];
+  return [...aliases, ...referenced, ...variableSwitches(declaration)];
+}
+
+/** Follow compiler-resolved aliases and enumerate exported binding elements without evaluating code. */
 function switchesBehind(symbol: ts.Symbol, checker: ts.TypeChecker, visited = new Set<ts.Symbol>()): SwitchDeclaration[] {
   const original = originalSymbol(symbol, checker);
   if (visited.has(symbol)) return [];
@@ -91,16 +109,7 @@ function switchesBehind(symbol: ts.Symbol, checker: ts.TypeChecker, visited = ne
   if (original.flags & ts.SymbolFlags.Module) {
     return checker.getExportsOfModule(original).flatMap((entry) => switchesBehind(entry, checker, visited));
   }
-  const declaration = original.valueDeclaration;
-  if (!declaration || !ts.isVariableDeclaration(declaration)) return [];
-  const exportedAlias = SWITCH_NAME.test(symbol.name) && symbol.name !== original.name
-    ? [{ name: symbol.name, kind: "constant" as const, module: moduleName(declaration.getSourceFile().fileName),
-      value: literalBoolean(declaration.initializer), sourceId: `${declaration.getSourceFile().fileName}:${declaration.pos}:${symbol.name}` }]
-    : [];
-  const initializer = unwrap(declaration.initializer);
-  const target = initializer && checker.getSymbolAtLocation(initializer);
-  const referenced = target ? switchesBehind(target, checker, visited) : [];
-  return [...exportedAlias, ...referenced, ...variableSwitches(declaration)];
+  return variableExports(symbol, original, checker, visited);
 }
 
 /** Every source is parsed. Export structure and compiler symbols, never text, decide inclusion. */
@@ -152,35 +161,42 @@ function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.N
   return config.properties.find((prop) => prop.name && prop.name.getText() === "handler");
 }
 
-function calledGuards(handler: ts.Node, checker: ts.TypeChecker, guards: ReadonlySet<ts.Symbol>): string[] {
+function pilotDependencies(handler: ts.Node, checker: ts.TypeChecker, dependencies: ReadonlyMap<ts.Symbol, string>): string[] {
   const found = new Set<string>();
   function visit(node: ts.Node): void {
-    if (ts.isCallExpression(node)) {
-      const symbol = resolvedSymbol(node.expression, checker);
-      if (symbol && guards.has(symbol)) found.add(symbol.name);
-    }
+    const reference = ts.isCallExpression(node) ? node.expression : node;
+    const symbol = resolvedSymbol(reference, checker);
+    const name = symbol && dependencies.get(symbol);
+    if (name && (ts.isCallExpression(node) || SWITCH_NAME.test(name))) found.add(name);
     ts.forEachChild(node, visit);
   }
   visit(handler);
   return [...found].sort();
 }
 
-/** Direct guard invocations inside exported public mutation handlers, including nested branches.
- * Guard exports come from containment modules, independently of the capability manifest.
- */
+function pilotSymbols(files: readonly ts.SourceFile[], checker: ts.TypeChecker): ReadonlyMap<ts.Symbol, string> {
+  const dependencies = new Map<ts.Symbol, string>();
+  for (const file of files) {
+    for (const entry of moduleExports(file, checker)) {
+      const symbol = originalSymbol(entry, checker);
+      const guard = /^convex\/utils\/[^/]*Containment\.ts$/.test(file.fileName) && /^assert\w*(?:Allowed|Enabled)$/.test(symbol.name);
+      if (guard || SWITCH_NAME.test(entry.name)) dependencies.set(symbol, entry.name);
+    }
+  }
+  return dependencies;
+}
+
+/** Public mutation handlers calling containment guards or directly reading exported pilot switches. */
 export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, string>): ReadonlyMap<string, readonly string[]> {
   const program = sourceProgram(sources);
   const checker = program.getTypeChecker();
   const files = program.getSourceFiles();
-  const guards = new Set(files.filter((file) => /^convex\/utils\/[^/]*Containment\.ts$/.test(file.fileName))
-    .flatMap((file) => moduleExports(file, checker))
-    .filter((symbol) => /^assert\w*(?:Allowed|Enabled)$/.test(symbol.name))
-    .map((symbol) => originalSymbol(symbol, checker)));
+  const dependencies = pilotSymbols(files, checker);
   const doors = new Map<string, readonly string[]>();
   for (const file of files.filter((source) => /^convex\/[^/]+\.ts$/.test(source.fileName) && !/\.(?:test|spec)\.ts$/.test(source.fileName))) {
     for (const symbol of moduleExports(file, checker)) {
       const handler = publicMutationHandler(symbol, checker);
-      const calls = handler ? calledGuards(handler, checker, guards) : [];
+      const calls = handler ? pilotDependencies(handler, checker, dependencies) : [];
       if (calls.length > 0) doors.set(`${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`, calls);
     }
   }

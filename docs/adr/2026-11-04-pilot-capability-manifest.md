@@ -27,15 +27,15 @@ server reads; it does not replace them and changes no switch value.
 - `PILOT_SWITCHES`: every switch, keyed by its constant name, with a reader function that goes through the same export the server uses
   (the constant, or the module's own `is...Disabled` function, so a test that mocks either shows up).
 - `PILOT_CAPABILITIES`: one entry per capability. It names its switches, the EN/AR refusal keys, and the public Convex doors it
-  guards, each with the identifier that must appear in the door's source. A door that always refuses is `whole`; a door that is
-  shared with enabled behaviour is `conditional`.
+  guards, each with the identifier that must appear in the door's source. When its switch is on, a door that refuses every invocation is `whole`;
+  a door shared with enabled behaviour is `conditional`.
 - `isPilotSwitchOn(key)`: the one call a screen makes to decide whether to offer an action. The two screens with a verified
   divergence use it. Screens that already gate themselves keep their gate; the test pins that the gate is still present.
 
 Four tests fail when the layers diverge:
 
-1. **Discovery.** Every exported `*_PILOT_DISABLED|REQUIRED|REFUSED` constant (and every key of the two door maps) in `convex/`
-   and `lib/` must be a key in `PILOT_SWITCHES`. A new switch cannot ship unregistered.
+1. **Discovery.** Exported `*_PILOT_DISABLED|REQUIRED|REFUSED` bindings and exported boolean door-map keys in the shared
+   whole-root source snapshot must be keys in `PILOT_SWITCHES`. A new switch cannot ship unregistered.
 2. **Copy.** Every capability's refusal keys exist in the EN and AR dictionaries, and the AR text differs from the EN text.
 3. **Server.** Every registered door's source contains its guard identifier.
 4. **UI.** Every `api.<module>.<fn>` reference in `components/`, `app/` or `hooks/` to a `whole` door must be in the
@@ -54,7 +54,7 @@ must carry the header `NON-PILOT-CERTIFYING` or be in the baseline file
 - The `conditional` doors are checked for their guard in the server, but the UI test cannot prove a conditional branch is hidden;
   those need a rendered test per screen (SCRUM-761 replay).
 - Only references written as `api.<module>.<fn>` are found. A call through a string-built function name or a re-exported
-  reference would escape the UI test. The repository has no such call to a registered door today.
+  reference would escape the UI test. Absence of those forms is not established by this census.
 - The test does not prove the gate is applied to the right button, only that the file still holds it. The two fixed screens have
   their own rendered EN/AR tests. The remaining screens keep the render tests they already have.
 - The ~100 existing suites that open a door stay as they are, listed in the baseline. Converting them to pilot-certifying tests
@@ -82,7 +82,8 @@ The snapshot compiler host reads only the supplied sources, including the genera
 
 The mock census resolves local import bindings from `vitest`, including renamed `vi` and `vitest` imports and namespace
 imports. It recognizes property access, literal element access, and destructured methods, including renamed destructuring.
-Shadowed parameters and imports from other packages do not count as Vitest bindings. This follows the
+Shadowed parameters and imports from other packages do not count as Vitest bindings for precise detection. The round-3
+argument rule still includes these calls when a pilot module argument is present. The precise binding distinction follows the
 [Vitest API](https://vitest.dev/api/vi.html#vi-domock): `doMock` executes without hoisting and affects subsequent imports.
 The census conservatively detects these access forms for both `mock` and `doMock`; it does not infer that hoisting succeeds.
 
@@ -142,3 +143,128 @@ Coverage validation passed all 54 tests and the unchanged configured thresholds.
 line coverage was 99.63% and branch coverage was 93.11%. Comparing added lines from `git diff --unified=0 HEAD` with the V8
 statement start-line counts measured 74 added executable lines, all covered. The protected customer-credit containment file's
 Git blob remained `af09f908267944be4189ec7720301c775b50c848`, matching the starting HEAD. `git diff HEAD -- convex` was empty.
+
+
+## Round 3 remediation at 721482d3
+
+The round-2 binding-specific repair still missed local aliases, extracted methods, `bind`, `call` and dynamically imported
+Vitest bindings. `/correct` applies to these two distinct review rounds. Prevention is enforced by call structure and the
+shared source snapshot, rather than another finite list of callee forms.
+
+| Finding | Failing-first control | Enforced behavior |
+| --- | --- | --- |
+| R3-F1 mock census | 13 failures across local/extracted/bound/call/dynamic-import aliases, arbitrary callees and unrelated or shadowed bindings | Any non-import call with a readable pilot module argument counts. Static and dynamic imports alone remain negative controls. |
+| R3-F2 roots | A mocked `hooks/reviewBarrel.ts` re-export still certified | Binding discovery and the switch census read `pilotSourceSnapshot()`, one cached whole-root map per module load. Unmeasured re-exports refuse certification. |
+| R3-F3 destructuring | Six object/array/nested/renamed/default binding controls returned no declaration | Compiler-exported bindings are enumerated even when their value declaration is a `BindingElement`. Their values are unavailable, not guessed from defaults or RHS objects. |
+| R3-F4 reversal | Both whole-door scan and actual hooks fixture controls missed `hooks/useSupplierReversal.ts` | Receipt reversal always refuses. Its test-only whole-door scan expects no screen caller. Supplier census includes `hooks`. |
+| R3-F5 LOW items | Commission door registration, internal-door exclusion and direct-switch reverse census controls all failed | Both commission mutations are whole doors gated by server `writesEnabled`; internal subledger payment is excluded with a reason; public handlers reading exported pilot switch symbols join the reverse census. |
+
+The failing-first command was:
+
+```powershell
+pnpm exec vitest run test-utils/pilotConfigParity.test.ts test-utils/pilotSourceDiscovery.test.ts lib/pilotCapabilityManifest.test.ts scripts/supplierSettlementCensus.test.ts --maxWorkers=1 -t R3 --reporter=verbose
+```
+
+Result before the fix: **25 failed, 1 passed**, with unrelated tests filtered out. The passing control imports the module without
+replacing it. After implementation, the four-file run passed all 26 round-3 controls but exposed six newly included suites.
+Those suites now carry explicit non-certifying labels with the reason. Three match commission table names, two call
+`importActual`, and the supplier census reads a containment source file. No baseline entry, assertion or threshold was loosened.
+
+The argument rule deliberately over-approximates: matching uses the discovered module basename, and any argument position
+counts, including the module promise form. Bare strings sharing that basename, source reads and `importActual` can also trigger
+it. This false-positive policy avoids relying on recognition of an alias's implementation. Precise Vitest detection remains
+because it also refuses unreadable mock targets and spies on known switch/guard names without a module literal.
+
+The snapshot traverses root files and non-hidden directories, excluding `node_modules`, `_generated`, `coverage`,
+`playwright-report` and `test-results`. It includes `.ts`/`.tsx` production sources and excludes declaration files and
+`.test`/`.spec` files. The public mutation census adds the generated server declaration solely for builder identity.
+The snapshot is immutable by convention and refreshed when test modules reset; it does not observe edits after creation.
+
+Remaining limits:
+
+- Arbitrary callees with computed paths, a path stored in another variable, or a path nested in an array/object argument are
+  not resolved. Recognized Vitest mock methods still fail closed on unreadable first arguments. Dynamic imports alone do not
+  count, except imports of the explicitly listed test door-opening helpers.
+- The compiler host resolves relative and `@/` imports within the snapshot, not arbitrary external packages or custom runtime
+  resolution. Destructuring is discovered conservatively with unavailable values, including literal RHS patterns. A switch
+  moved to such a pattern cannot obtain a shipped-value certification.
+- The reverse census scans exported public mutations in top-level `convex/*.ts`, with recognized mutation builders and inline
+  handler configurations. It finds direct containment-guard calls and direct references to exported switch symbols; it does
+  not trace arbitrary helper bodies or custom registration factories. An unregistered helper-mediated switch is not proven absent.
+- Screen scans retain literal `api.module.function` reference matching. They do not resolve aliased references, computed access
+  or string-built names, nor prove that a gate controls the right rendered action. Supplier scanning also accepts its existing
+  colon form and includes mobile source; that is source evidence, not mobile pilot certification.
+- These checks measure local source and harness behavior. Independent seats, CI, remote Sonar, authenticated hunters and a
+  real-backend certification remain separate evidence. No production source, server guard or switch value changed.
+
+Material design references: the official [TypeScript compiler API guide](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
+describes Program, SourceFile traversal and compiler symbols. The official [Vitest vi API](https://vitest.dev/api/vi.html)
+documents `mock`/`doMock`, dynamic-import arguments and static-analysis limits. The installed versions are TypeScript 6.0.3 and
+Vitest 4.1.9. The argument over-approximation and unavailable-value policy are project safeguards, not guarantees made by Vitest.
+
+
+Final self-review extended F3 to arbitrary unavailable exported bindings, not only binding elements. Before the extension,
+`pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts --maxWorkers=1 -t 'other unreadable'` produced **2 failed, 1 passed**:
+an unresolved exported pilot name and a pilot-named object without door-map keys were omitted, while the function export was
+already unavailable. Discovery now uses the exported declaration when the resolved value declaration is unavailable, and
+non-map object values fall back to an unavailable constant. Recognized door-map containers still contribute their switch keys.
+The discovery-only green run passed 12 tests but failed the unchanged 90% statement-coverage threshold at 87.67%; the complete
+core coverage command below then passed with no threshold change. That isolated command added `--coverage` and
+`--coverage.include=test-utils/pilotSourceDiscovery.ts` to the discovery test, with output under `coverage/r3-discovery`.
+
+Final round-3 core validation:
+
+```powershell
+pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts test-utils/pilotConfigParity.test.ts lib/pilotCapabilityManifest.test.ts scripts/supplierSettlementCensus.test.ts --maxWorkers=1 --coverage --coverage.include=test-utils/pilotSourceDiscovery.ts --coverage.include=test-utils/pilotConfigParity.ts --coverage.include=test-utils/pilotSourceSnapshot.ts --coverage.include=lib/pilotCapabilityManifest.ts --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
+```
+
+**86/86 passed**. All 29 R3 controls passed: F1 14, F2 1, F3 9, F4 2, F5 3. Unchanged coverage thresholds passed:
+98.65% lines, 95.68% statements, 96.42% functions and 89.17% branches. Across the four measured implementation modules,
+49/49 added executable statement-start lines were covered, including the entire new snapshot file. This is local V8 coverage,
+not a remote SonarCloud new-code verdict.
+
+The complete changed-file ESLint command was:
+
+```powershell
+pnpm exec eslint lib/pilotCapabilityManifest.ts lib/pilotCapabilityManifest.test.ts test-utils/pilotConfigParity.ts test-utils/pilotConfigParity.test.ts test-utils/pilotSourceDiscovery.ts test-utils/pilotSourceDiscovery.test.ts test-utils/pilotSourceSnapshot.ts scripts/supplierSettlementCensus.test.ts convex/dealCommissionLinesLedger.test.ts convex/dealCommissions.test.ts convex/orgFinancialReset.test.ts convex/scrum802CashSaleContainment.test.ts convex/scrum802CashSaleExtras.test.ts --max-warnings=0
+```
+
+It reported zero errors and four existing `no-explicit-any` warnings in `orgFinancialReset.test.ts`, so strict warning mode
+returned exit 1. That file's sole change is its explanatory header. SonarJS 4.2.2 recommended rules with cognitive complexity
+limited to 14 reported two existing smells: a nested ternary in that same test and the supplier census's pre-existing map-key
+regex. A multiset comparison against linting each file's exact HEAD text found all six diagnostics inherited and **zero new
+warnings or smells**. The fingerprint includes file, rule, message and source line; adding a duplicate diagnostic consumes a
+separate count. No suppression, NOSONAR or threshold change was used. No cognitive-complexity violation was reported.
+
+Self-review checked reuse, simplification, scope and efficiency: parity and census share the source snapshot; mock detection
+keeps precise checks where they add coverage; controls test the actual detector and source I/O, with fixture restoration.
+This is an implementer self-review, not `/simplify` from an independent seat or a certification.
+
+
+Adjacent suite validation:
+
+```powershell
+pnpm exec vitest run components/accounting/FixedAssetsTab.pilotOff.test.tsx components/accounting/ManualJournalTab.pilotOff.test.tsx scripts/legacyCollectionRefundOptOutCensus.test.ts convex/scrum802OptOutCensus.test.ts convex/dealCommissionLinesLedger.test.ts convex/dealCommissions.test.ts convex/orgFinancialReset.test.ts convex/scrum802CashSaleContainment.test.ts convex/scrum802CashSaleExtras.test.ts --maxWorkers=1
+```
+
+Result: **133 passed, 6 failed** across nine files. The failures are the six known Windows separator failures in the unchanged
+`convex/scrum802OptOutCensus.test.ts`. Combined with the four-file core run: **219 passed, 6 known failures**, 13 named files.
+The five backend test changes are explanatory header lines only. All thresholds, the shrink-only baseline, production
+containment sources, release waivers and review-evidence files remain unchanged.
+
+
+Local analysis helpers were run with `node $env:TEMP\scrum810-sonar\check-r3-delta.cjs` and
+`node $env:TEMP\scrum810-sonar\changed-coverage-r3.cjs`. They are temporary local measurement scripts, not repository gates.
+The first applies the installed SonarJS recommended rules and compares diagnostics with exact HEAD text; the second measures
+added executable lines from the V8 report against the diff, including the full newly added snapshot module. Their final results
+were zero new diagnostics and 49/49 added executable lines covered.
+
+
+Final frozen-source `pnpm typecheck` and `pnpm typecheck:convex` both returned exit 0. Root input exclusions are
+`node_modules`, `apps`, `packages`, `convex`, `dealer-worker` and `test-utils`. Convex includes backend and test-utils inputs,
+excludes `convex/_generated` as input roots, and does not separately check frontend, mobile, shared or worker projects.
+Imported dependencies can still enter either graph. These are compiler results, not Convex platform or concurrency evidence.
+
+The protected customer-credit containment blob is unchanged at `af09f908267944be4189ec7720301c775b50c848`.
+Only 14 named files were staged. Existing `.gitignore` and `.ignore` edits remain unstaged. No push, merge, deployment,
+production read/write, CI run, remote Sonar analysis or independent-seat certification was performed by this lane.

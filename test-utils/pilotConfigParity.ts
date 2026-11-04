@@ -18,14 +18,12 @@
  * A suite that replaces pilot configuration (a historical lifecycle suite) cannot satisfy SCRUM-760 G2/G3/G7.
  * It carries the header `NON-PILOT-CERTIFYING` (see `pilotConfigParity.test.ts`).
  */
-import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { discoverPilotSources, sourceProgram, unwrap, type PilotSourceDiscovery } from "./pilotSourceDiscovery";
+import { pilotSourceSnapshot } from "./pilotSourceSnapshot";
 import { PILOT_CAPABILITIES, PILOT_SERVER_BINDINGS, PILOT_SERVER_GUARDS, PILOT_SWITCHES, type PilotSwitchKey } from "../lib/pilotCapabilityManifest";
 
-const ROOT = path.resolve(__dirname, "..");
-const SOURCE_DIRS = ["convex", "lib"];
 export interface PilotConfigMismatch {
   readonly switch: PilotSwitchKey;
   readonly shipped: boolean | null;
@@ -45,21 +43,9 @@ export function pilotSwitchDeclarations(text: string, fileName = "source.ts") {
   return discoverPilotSources(new Map([[fileName, text]]), new Set()).declarations;
 }
 
-function walkSources(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(path.join(ROOT, dir))) {
-    if (name === "node_modules" || name === "_generated" || name.startsWith(".")) continue;
-    const rel = `${dir}/${name}`;
-    if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith(".d.ts")) out.push(rel);
-    else if (!/\.[a-z]+$/.test(name)) walkSources(rel, out);
-  }
-  return out;
-}
-
 let discovered: PilotSourceDiscovery | null = null;
 function discoveredSources(): PilotSourceDiscovery {
-  discovered ??= discoverPilotSources(new Map(
-    SOURCE_DIRS.flatMap((dir) => walkSources(dir)).map((rel) => [rel, readFileSync(path.join(ROOT, rel), "utf8")])
-  ), new Set(pilotGuardNames()));
+  discovered ??= discoverPilotSources(pilotSourceSnapshot(), new Set(pilotGuardNames()));
   return discovered;
 }
 
@@ -229,6 +215,12 @@ function vitestMethod(call: ts.CallExpression, checker: ts.TypeChecker): string 
 }
 
 function changesPilotCall(call: ts.CallExpression, basenames: readonly string[], names: ReadonlySet<string>, checker: ts.TypeChecker): boolean {
+  if (call.expression.kind === ts.SyntaxKind.ImportKeyword) return false;
+  // Callee identity is not authority: aliases, wrappers, bind and call can all replace a module.
+  if (call.arguments.some((argument) => {
+    const specifier = moduleArgument(argument);
+    return specifier !== undefined && basenames.includes(basename(specifier));
+  })) return true;
   const method = vitestMethod(call, checker);
   if (method === "mock" || method === "doMock") {
     const specifier = moduleArgument(call.arguments[0]);

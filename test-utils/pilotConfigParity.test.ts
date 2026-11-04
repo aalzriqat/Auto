@@ -31,6 +31,7 @@ afterEach(() => {
   }
   sourceFixtures.clear();
   vi.doUnmock("@/lib/pilotCapabilities");
+  vi.doUnmock("@/hooks/reviewBarrel");
   vi.doUnmock("@/convex/utils/fixedAssetLifecycleContainment");
   vi.doUnmock("@/convex/utils/manualJournalContainment");
   vi.restoreAllMocks();
@@ -49,6 +50,19 @@ async function parityWithSources(sources: Readonly<Record<string, string>>) {
 }
 
 describe("SCRUM-810 review negative controls", () => {
+  test("R3-F2: a mocked hooks barrel cannot certify an unmeasured binding", async () => {
+    vi.doMock("@/hooks/reviewBarrel", () => ({ PAYMENT_LINKS_PILOT_DISABLED: false }));
+    const parity = await parityWithSources({
+      "hooks/reviewBarrel.ts": 'export { PAYMENT_LINKS_PILOT_DISABLED } from "../lib/pilotCapabilities";',
+    });
+    const moduleId = "../hooks/reviewBarrel";
+    const barrel = await import(moduleId);
+    expect(barrel.PAYMENT_LINKS_PILOT_DISABLED).toBe(false);
+    expect(() => parity.assertPilotCertifyingConfig(["PAYMENT_LINKS_PILOT_DISABLED"])).toThrow(/NOT PILOT CERTIFIED.*hooks\/reviewBarrel/);
+    expect(parity.switchModules().reexporting.get("PAYMENT_LINKS_PILOT_DISABLED")).toContain("hooks/reviewBarrel");
+    expect(parity.pilotModuleBasenames()).toContain("reviewBarrel");
+  }, RELOAD_TIMEOUT_MS);
+
   test.each([
     ["const off: boolean = true; export { off as REVIEW_PILOT_DISABLED };", true],
     ["const off: boolean = Boolean(true); export { off as REVIEW_PILOT_DISABLED };", null],
@@ -188,6 +202,24 @@ describe("the door-opening detector", () => {
   const opens = (src: string) => opensAPilotDoor(src, basenames, names);
 
   test.each([
+    'const tools = vi; tools.doMock("./gateModule", () => ({}));',
+    'const m = vi.doMock; m("./gateModule", () => ({}));',
+    'vi.doMock.bind(vi)("./gateModule", () => ({}));',
+    'const m = vi.doMock.bind(vi); m("./gateModule", () => ({}));',
+    'vi.doMock.call(vi, "./gateModule", () => ({}));',
+    'const { vi: v } = await import("vitest"); v.doMock("./gateModule", () => ({}));',
+    'replaceSomething(0, "./gateModule", () => ({}));',
+    'replaceSomething(import("./gateModule"), () => ({}));',
+  ])("R3-F1: any callee receiving a pilot module refuses certification: %s", (source) => {
+    expect(opens(source)).toBe(true);
+  });
+
+  test("R3-F1: static and dynamic module imports alone do not open a door", () => {
+    expect(opens('import { flag } from "./gateModule";')).toBe(false);
+    expect(opens('const flags = await import("./gateModule");')).toBe(false);
+  });
+
+  test.each([
     ['import { vi as toolsVi } from "vitest";', "toolsVi.doMock"],
     ['import { vitest as toolsVi } from "vitest";', "toolsVi.doMock"],
     ['import * as V from "vitest";', "V.vi.mock"],
@@ -206,8 +238,8 @@ describe("the door-opening detector", () => {
     'import { vi as toolsVi } from "vitest"; function f(toolsVi) { toolsVi.doMock("./gateModule", () => ({})); }',
     'function f(vi) { vi["mock"]("./gateModule", () => ({})); }',
     'const { doMock } = unrelated; doMock("./gateModule", () => ({}));',
-  ])("R2-F2: leaves unrelated or shadowed bindings alone: %s", (source) => {
-    expect(opens(source)).toBe(false);
+  ])("R3-F1: a pilot module argument refuses even with unrelated or shadowed bindings: %s", (source) => {
+    expect(opens(source)).toBe(true);
   });
 
   test.each([
