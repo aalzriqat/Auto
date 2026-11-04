@@ -19,7 +19,7 @@ jobs:
   scan:
     name: scan
     # SCRUM-764: Runs on main when Tests workflow completes, or on manual workflow_dispatch.
-    # Reuses the exact same-commit coverage report produced by Tests across 4 slices + mobile + shared.
+    # Reuses the exact same-commit coverage report produced by Tests across 8 slices + mobile + shared.
     # Native trusted-controller pattern: admission runs from trusted code before candidate checkout.
     # Fails closed on missing, failed, cancelled, stale, truncated, fork, or unverified producer coverage.
     if: |

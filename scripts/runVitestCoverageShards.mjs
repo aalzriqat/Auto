@@ -331,7 +331,11 @@ function workUnits(forMode, testFiles) {
       units.push({ mode: forMode, blob: `unit-batch-${index + 1}.json`, files, cost: cost(files) });
     });
   } else {
-    const batchSize = boundedInteger("VITEST_SONAR_BATCH_SIZE", "32", 1, 64);
+    // 16, not 32: a 32-file batch of cheap-looking suites ran 638 s alone in one
+    // lane (run 41584728669), longer than every other batch in its slice.
+    // Smaller batches keep any one process short enough to balance; the cost is
+    // one more process start (`processSeconds.sonar`) per extra batch.
+    const batchSize = boundedInteger("VITEST_SONAR_BATCH_SIZE", "16", 1, 64);
     batchesOf(sonarCensus(testFiles), batchSize).forEach((files, index) => {
       units.push({ mode: forMode, blob: `sonar-${index + 1}.json`, files, cost: cost(files) });
     });

@@ -283,7 +283,7 @@ const WORKFLOW_EVIDENCE_CONTRACTS: Readonly<
     trigger: "workflow_run",
     jobId: "rehearsal",
     runsOn: "ubuntu-latest",
-    stepName: "Run cloud accounting rehearsal from trusted main",
+    stepName: "Run local accounting rehearsal from trusted main",
   },
 };
 

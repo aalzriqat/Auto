@@ -87,5 +87,9 @@ export default defineConfig({
         timeout: 180_000,
         stdout: "pipe",
         stderr: "pipe",
+        // SCRUM-892: a local-backend job writes the self-hosted admin key to
+        // GITHUB_ENV for its trusted steps. The app server never needs it, and
+        // Playwright merges this over process.env, so the server never sees it.
+        env: { CONVEX_SELF_HOSTED_ADMIN_KEY: "" },
       },
 });

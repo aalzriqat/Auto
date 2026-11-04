@@ -67,10 +67,11 @@ function descriptor(overrides: Record<string, unknown> = {}) {
 function authority(overrides: Record<string, unknown> = {}) {
   return {
     version: 1,
-    authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
+    authority: "LOCAL_SELF_HOSTED_CONVEX",
+    mode: "LOCAL_SELF_HOSTED",
     previewName: PREVIEW_NAME,
-    convexCloudUrl: "https://trusted-preview.convex.cloud",
-    deploymentName: "trusted-preview",
+    convexCloudUrl: "http://127.0.0.1:3210",
+    deploymentName: "autoflow-ci",
     ...overrides,
   };
 }
@@ -258,10 +259,8 @@ describe("trusted browser swarm run assembly", () => {
     });
     expect(payload.testedSha).toBe(TESTED_SHA);
     expect(payload.previewName).toBe(PREVIEW_NAME);
-    expect(payload.convexCloudUrl).toBe(
-      "https://trusted-preview.convex.cloud",
-    );
-    expect(payload.convexDeploymentName).toBe("trusted-preview");
+    expect(payload.convexCloudUrl).toBe("http://127.0.0.1:3210");
+    expect(payload.convexDeploymentName).toBe("autoflow-ci");
   });
 
   it("produces an explicit trusted no-op and does not admit Jev work when canonical impact is empty", () => {
@@ -409,6 +408,37 @@ describe("trusted browser swarm run assembly", () => {
         }),
       }),
     ).toThrow(/metadata/);
+    expect(() =>
+      assemble({ authorityArtifact: authority({ mode: "CLOUD_PREVIEW" }) }),
+    ).toThrow(/metadata/);
+  });
+
+  // SCRUM-892: the cloud authority shape (control-plane answer, convex.cloud
+  // URL) is no longer an accepted authority; only the exact local one is.
+  it.each([
+    ["the old cloud authority shape", {
+      authority: "CONVEX_CONTROL_PLANE_AUTHORIZE_PREVIEW",
+      mode: undefined,
+      convexCloudUrl: "https://trusted-preview.convex.cloud",
+      deploymentName: "trusted-preview",
+    }],
+    ["another loopback port", { convexCloudUrl: "http://127.0.0.1:3211" }],
+    ["the localhost name", { convexCloudUrl: "http://localhost:3210" }],
+    ["https on the local port", { convexCloudUrl: "https://127.0.0.1:3210" }],
+    ["a trailing slash", { convexCloudUrl: "http://127.0.0.1:3210/" }],
+    ["a different instance name", { deploymentName: "someone-else" }],
+  ])("refuses Convex authority that is %s", (_label, overrides) => {
+    expect(() => assemble({ authorityArtifact: authority(overrides) })).toThrow(/Convex authority/);
+  });
+
+  it("refuses Convex authority with an extra or a missing field", () => {
+    expect(() =>
+      assemble({ authorityArtifact: authority({ adminKey: "x" }) }),
+    ).toThrow(/unexpected or missing fields/);
+    const { mode: _mode, ...withoutMode } = authority();
+    expect(() => assemble({ authorityArtifact: withoutMode })).toThrow(
+      /unexpected or missing fields/,
+    );
   });
 
   it("refuses an impact artifact whose authority metadata is candidate-controlled", () => {

@@ -94,6 +94,31 @@ const CANONICAL_STAGED_COMMAND: Record<string, string> = {
     " node /audit/auditStagedBackendInputs.mjs",
 };
 
+// SCRUM-892: the local-backend form of the same step. The CLI runs in the
+// BACKEND container's own network namespace (`--network container:<name>`),
+// so it reaches the backend at 127.0.0.1:3210. That namespace is on Docker's
+// default bridge: runner services bound to 127.0.0.1 are out of reach, but
+// services listening on all interfaces and outbound networking are reachable.
+// The URL and the admin key are inherited by NAME, never written into argv.
+// Same image, same hardening, same two read-only mounts, same flags: the only
+// differences from the cloud form are how the target is reached and named.
+const LOCAL_STAGED_DEPLOY_COMMAND =
+  "docker run --rm --name autoflow-trusted-staged-backend-deploy" +
+  ' --network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}" ' +
+  CONTAINER_HARDENING +
+  " --volume " + STAGED_DEPLOY_VOLUMES.join(" --volume ") +
+  " --workdir /app --env HOME=/tmp/home --env CONVEX_SELF_HOSTED_URL --env CONVEX_SELF_HOSTED_ADMIN_KEY " +
+  NODE_IMAGE +
+  " node /app/node_modules/convex/bin/main.js deploy --typecheck disable --codegen disable --yes";
+
+/** Every exact command a named staged step may consist of. */
+function canonicalForms(name: string | undefined): string[] {
+  if (!name) return [];
+  if (name === STAGED_DEPLOY_STEP) return [CANONICAL_STAGED_COMMAND[name] as string, LOCAL_STAGED_DEPLOY_COMMAND];
+  const only = CANONICAL_STAGED_COMMAND[name];
+  return only ? [only] : [];
+}
+
 function normalizeRun(run: string): string {
   return run.replace(/\\\r?\n\s*/g, " ").replace(/[ \t]+/g, " ");
 }
@@ -104,10 +129,17 @@ function normalizeRun(run: string): string {
  */
 function residualRun(step: Step): string {
   const run = normalizeRun(String(step.run ?? ""));
-  const canonical = step.name ? CANONICAL_STAGED_COMMAND[step.name] : undefined;
-  if (!canonical || run.split(canonical).length !== 2) return run;
-  return run.replace(canonical, " ");
+  for (const canonical of canonicalForms(step.name)) {
+    if (run.split(canonical).length === 2) return run.replace(canonical, " ");
+  }
+  return run;
 }
+
+// SCRUM-892: the runner-local backend's admin key is not a `secrets.` access
+// (it is minted at run time and arrives through the job environment), so the
+// secrets scan alone cannot see it. Any step or workflow that names it is
+// treated exactly like one that names a Convex secret.
+const LOCAL_BACKEND_KEY = /CONVEX_SELF_HOSTED_ADMIN_KEY/;
 
 function holdsConvexCredential(step: Step): boolean {
   // Any evaluated field can carry a secret: env and action inputs (Sol R3 on
@@ -115,7 +147,7 @@ function holdsConvexCredential(step: Step): boolean {
   // The whole step is scanned, so an expression in a field that cannot carry
   // one (`if`, `name`) over-refuses rather than under-refuses (Sol R8). Every
   // spelling of the access counts (Sol R4).
-  return referencesConvexSecret(step);
+  return referencesConvexSecret(step) || LOCAL_BACKEND_KEY.test(JSON.stringify(step));
 }
 
 function dockerVolumes(run: string): string[] {
@@ -160,7 +192,7 @@ function executesCandidate(step: Step): boolean {
  * forwards every secret to a reusable workflow.
  */
 function reachesConvexCredential(workflow: unknown): boolean {
-  return referencesConvexSecret(workflow);
+  return referencesConvexSecret(workflow) || LOCAL_BACKEND_KEY.test(JSON.stringify(workflow));
 }
 
 /**
@@ -235,7 +267,32 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // `reset` step before its evidence download. No secret, credential command or
     // candidate checkout ref changed. Previous: 118099 bytes (LF), pin aa713e3d;
     // new: 121298 bytes (LF), pin below.
-    "4532ddcf64ae4f37e24dd73dca6efe6e3190bbb843b85ba96acba1a35f108181",
+    // SCRUM-892: the swarm leaves cloud Convex previews for a runner-local
+    // self-hosted backend in each backend-owning job (trusted-e2e,
+    // attack-worker, opening-proof). Hunks: (1) every CONVEX_PREVIEW_DEPLOY_KEY
+    // reference, the preview create/pin/resolve/scrub steps and the
+    // opening-prepare/opening-build/opening-cleanup/preview-cleanup jobs are
+    // removed, so the workflow holds no `secrets.CONVEX_*` at all; (2) the
+    // backend is started, configured and marked by the trusted
+    // `scripts/localConvexBackend.mjs` (admin key minted at run time, masked
+    // before it is written to GITHUB_ENV, backend stopped by an always() step);
+    // (3) the staged deploy keeps its exact container hardening and mounts and
+    // joins ONLY the backend container's network namespace
+    // (LOCAL_STAGED_DEPLOY_COMMAND above); (4) workers and the opening proof
+    // consume candidate-source and the one candidate-build. The workflow is
+    // still pinned because the local admin key is classified as a credential
+    // (LOCAL_BACKEND_KEY). NOT yet reviewed by an independent seat.
+    // PR #757 round 5: re-pinned for the tripwire only. `mark` and the new
+    // `verify` step get the two public env-plan inputs (the pk_test key and the
+    // loopback app URL; no admin key, no other secret), `verify` runs right
+    // before the backend stops, and the deploy comment no longer claims the key
+    // is out of candidate reach. No trigger, checkout or candidate path changed.
+    // PR #757 round 8: re-pinned for shell comments only. The three deploy
+    // steps' network comment no longer claims nothing else on the runner is
+    // reachable: it discloses bridge reachability. Every changed line is a `#`
+    // comment inside `run:`; no command, env, trigger or checkout changed.
+    // Previous pin ee2175676d6803207fda18b82d1cb44c1cedbf97e4d05cb4ee3e5dc013f85f10.
+    "515e2cd2124f4107e504465d2694601c8802ef931e0a77090868e06471089714",
   "contract-skew.yml":
     // SCRUM-866: reviewed native-render step executes checked-out main before
     // the secret-bearing comparison, without a credential env. Triggers,
@@ -258,12 +315,17 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     // hunt library. Nothing else in the workflow changed: still main-only, same
     // steps, secrets, permissions and checkouts.
     "2f1d2e3816f6927ec6d7cde133d044223a9a13029e6bfa63a845f30ffe7f9db8",
-  // SCRUM-616: main-only, serialized disposable previews; this whole-workflow
-  // pin keeps its triggers, credentials, deploy and cleanup inside the review.
+  // SCRUM-616: main-only; SCRUM-892: each role job runs a local self-hosted
+  // backend, with no cloud preview or credential. This whole-workflow pin keeps
+  // its triggers, credentials, deploy and cleanup inside the review.
   "pilot-role-audit.yml":
-    // PR #661: preserve screenshots in public-key encrypted evidence; publish
-    // only ciphertext and a fixed-field summary, with private browser logs.
-    "d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d",
+    // SCRUM-892: re-pinned for the local backend: the cloud preview create, pin
+    // and delete steps and the preview deploy key are gone; each role job starts,
+    // marks, verifies and stops its own runner-local backend. Triggers and
+    // permissions are unchanged.
+    // Previous pin d3fdaa32ecd1da4412a636bf8d0a2b36636fafb13ff96ed0aaa41a947e4bad8d.
+    // Previous pin d8fdcec7304c4c8e92da8251f220bd57914b78064148445dcd42dd9c1834cae6 (verify's if was conditional).
+    "c6e255670342aabb42ff1c6d47e195da637ac2fde3e81fcec8e9ee2337de7cf1",
   "hunt-preview.yml":
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
@@ -276,13 +338,30 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // NOT_APPLICABLE check and gate evidence. Credential commands, provenance,
   // staged deployment and exact-SHA release verdict remain unchanged.
   // Round 3 adds only TESTED_SHA (the provenance merge) to the path-gate step env, with no secret.
+  // SCRUM-892 option A: the pull-request path runs on the runner-local backend
+  // (start, staged deploy, mark, cases, verify, stop) and creates no preview;
+  // the cloud steps run only for repository_dispatch, their bodies unchanged.
+  // SCRUM-892 c24441: the release runs the same local lifecycle; every cloud
+  // step and the preview credential are gone. The release refusals (preflight,
+  // provenance, release verdict) stay byte-identical, pinned in
+  // trustedAccountingRehearsalReleasePath.test.ts. PR #760 round 3: verify runs
+  // under always() plus the run condition, so a missing baseline refuses.
   "trusted-accounting-rehearsal.yml":
-    "5fa1ebee0748d69075852feb2c10b15490eef5bed1e9d7925d07d86412b7ce84",
+    "3c288c65ca0c64d48a5ac8c8f6fdf650d23533ba4cf4e09b3177c8d3ad114bad",
   // SCRUM-860: reviewed addition of the role frame census before preview
   // provisioning, with no step secrets. All credential steps, preview targeting,
   // cleanup and canonical-command/tamper controls remain pinned unchanged.
   "trusted-main-e2e.yml":
-    "3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437",
+    // SCRUM-892 (owner ruling c24441): the Convex cloud preview, its preview deploy
+    // key and its create/pin/delete steps are removed; the one `playwright` job
+    // starts, deploys to, marks, verifies and stops a per-job local backend through
+    // scripts/localConvexBackend.mjs. The job id, name, triggers, main-only `if`,
+    // concurrency and permissions are unchanged (trustedMainE2eWorkflow.test.ts).
+    // The suite step gains the AUTOFLOW_LOCAL_CONVEX_CI switch. No trigger, grant,
+    // checkout or secret other than the Clerk keys the suite already read.
+    // Verify now runs exactly always(), so a missing baseline refuses (#760 round 3).
+    // Previous pin 3ff3286a70bdbaffe6a228184f7c1933c4c9c111b08925c9bee2b3412709c437.
+    "4022cb739d446ac59dc204737ebbc5eb1bf08dda9c586b9a079ed754a016baa1",
 };
 
 function everyJob(): Array<{ label: string; workflow: Workflow; job: Job }> {
@@ -352,10 +431,103 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
       for (const step of job.steps ?? []) {
         if (!step.name || !(step.name in CANONICAL_STAGED_COMMAND)) continue;
         const run = normalizeRun(String(step.run ?? ""));
-        expect(run.split(CANONICAL_STAGED_COMMAND[step.name] as string).length, label + " :: " + step.name).toBe(2);
+        const matching = canonicalForms(step.name).filter((form) => run.split(form).length === 2);
+        expect(matching, label + " :: " + step.name).toHaveLength(1);
         expect(residualRun(step), label + " :: " + step.name).not.toMatch(/\bdocker\b/);
       }
     }
+  });
+
+  it("SCRUM-892: sets aside only the local deploy form's exact command, and every alteration of it is judged as candidate execution", () => {
+    const name = STAGED_DEPLOY_STEP;
+    const canonical = LOCAL_STAGED_DEPLOY_COMMAND;
+    expect(executesCandidate({ name, run: canonical }), "exact").toBe(false);
+    expect(residualRun({ name, run: canonical }).trim(), "exact").toBe("");
+    expect(executesCandidate({ name, run: canonical + "\nnode candidate/scripts/exfil.mjs" }), "appended").toBe(true);
+    expect(executesCandidate({ name, run: canonical + "\n" + canonical }), "twice").toBe(true);
+    // The host network would expose the runner's loopback (egress proxy, relay).
+    expect(
+      executesCandidate({ name, run: canonical.replace('--network "container:${AUTOFLOW_LOCAL_CONVEX_CONTAINER}"', "--network host") }),
+      "host network",
+    ).toBe(true);
+    // An extra mount is not the staged-only container any more.
+    expect(
+      executesCandidate({ name, run: canonical.replace("--workdir /app", '--volume "$GITHUB_WORKSPACE/candidate:/x" --workdir /app') }),
+      "extra mount",
+    ).toBe(true);
+    // A package-manager or typecheck-enabled variant is not the canonical command either.
+    expect(executesCandidate({ name, run: canonical.replace("--typecheck disable", "--typecheck enable") }), "typecheck").toBe(true);
+    // The command is recognised under the staged step's name only.
+    expect(executesCandidate({ name: "Some other step", run: canonical }), "other name").toBe(true);
+
+    // The key is classified as a credential even though it is not a `secrets.` access.
+    expect(holdsConvexCredential({ run: "node x.mjs", env: { K: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}" } })).toBe(true);
+    expect(reachesConvexCredential({ jobs: { j: { steps: [{ env: { K: "${{ env.CONVEX_SELF_HOSTED_ADMIN_KEY }}" } }] } } })).toBe(true);
+    expect(holdsConvexCredential({ run: "node x.mjs", env: { U: "${{ env.CONVEX_SELF_HOSTED_URL }}" } })).toBe(false);
+  });
+
+  it("SCRUM-892: the local admin key reaches the job environment only from the trusted start subcommand, masked first, and only after that job started its backend", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "scripts/localConvexBackend.mjs"), "utf8");
+    const maskAt = source.indexOf("mask(env, deps.log, adminKey);");
+    const writeAt = source.indexOf('["CONVEX_SELF_HOSTED_ADMIN_KEY", adminKey]');
+    expect(maskAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(maskAt);
+    expect(source.match(/"CONVEX_SELF_HOSTED_ADMIN_KEY", adminKey/g) ?? []).toHaveLength(1);
+
+    // In every workflow: a job that names the key starts its own backend first,
+    // always stops it, and never writes the key into the environment itself.
+    let jobsNamingTheKey = 0;
+    for (const { label, job } of everyJob()) {
+      const steps = job.steps ?? [];
+      const first = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+      if (first < 0) continue;
+      jobsNamingTheKey += 1;
+      const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");
+      expect(start, label).toBeGreaterThan(-1);
+      expect(start, label).toBeLessThan(first);
+      const stop = steps.find((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs stop");
+      // SCRUM-892: the rehearsal job also serves the cloud release, so its stop
+      // is always() on every PR run; the release path never starts a backend.
+      expect(["always()", "always() && github.event_name == 'workflow_run'"], label).toContain(stop?.if);
+      if (stop?.if !== "always()") {
+        expect(String(steps[start]?.if ?? ""), label).toMatch(/^github\.event_name == 'workflow_run' && /);
+      }
+      for (const step of steps) {
+        for (const line of String(step.run ?? "").split("\n")) {
+          if (/GITHUB_(ENV|OUTPUT)/.test(line)) expect(line, label).not.toMatch(LOCAL_BACKEND_KEY);
+        }
+      }
+      // Referenced as an env value from the job environment, never as a secret or a job output.
+      expect(JSON.stringify(job.outputs ?? {}), label).not.toMatch(LOCAL_BACKEND_KEY);
+    }
+    // Not vacuous: the swarm's three backend-owning jobs.
+    expect(jobsNamingTheKey).toBeGreaterThanOrEqual(3);
+  });
+
+  it("SCRUM-892: trusted main E2E reads no Convex cloud key, names the local admin key only after its own start, and always() stops the backend", () => {
+    const entry = workflows.find(({ name }) => name === "trusted-main-e2e.yml");
+    const job = entry?.workflow.jobs?.playwright;
+    expect(job, "the playwright job").toBeDefined();
+    const source = readFileSync(path.join(workflowsDir, "trusted-main-e2e.yml"), "utf8");
+    // The preview deploy key and the repository deploy key are not read, by any spelling.
+    expect(source).not.toMatch(/CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY/);
+    expect(JSON.stringify(entry?.workflow)).not.toMatch(/CONVEX_PREVIEW_DEPLOY_KEY|CONVEX_DEPLOY_KEY|--preview-create/);
+    expect(referencesConvexSecret(entry?.workflow)).toBe(false);
+    for (const step of job?.steps ?? []) {
+      expect(referencesConvexSecret(step), String(step.name)).toBe(false);
+    }
+    // It does hold the local admin key (so the whole-workflow pin and the generic
+    // start/stop ordering test above apply to it), and it is not a vacuous pass.
+    expect(reachesConvexCredential(entry?.workflow)).toBe(true);
+    const steps = job?.steps ?? [];
+    const start = steps.findIndex((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs start");
+    const firstKey = steps.findIndex((step) => LOCAL_BACKEND_KEY.test(JSON.stringify(step)));
+    expect(start).toBeGreaterThan(-1);
+    expect(firstKey).toBeGreaterThan(start);
+    const stop = steps.find((step) => String(step.run ?? "").trim() === "node scripts/localConvexBackend.mjs stop");
+    expect(stop?.if).toBe("always()");
+    // A regained preview key is detected: the control the assertions above rely on.
+    expect(referencesConvexSecret({ env: { K: "${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}" } })).toBe(true);
   });
 
   it("is run by the trusted controller, not only by candidate-controlled PR CI (Sol F3 on PR #341)", () => {
@@ -563,8 +735,13 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("deploys the candidate backend in both PR lanes only through the staged, trusted-CLI step", () => {
     const labels = stagedDeploySteps().map(({ label }) => label).sort();
     expect(labels).toEqual([
-      "browser-attack-swarm.yml :: opening-prepare",
+      // SCRUM-892: every swarm job that owns a local backend deploys through
+      // the same staged, trusted-CLI step; the cloud-preview opening-prepare
+      // job that used to be listed here no longer exists.
+      "browser-attack-swarm.yml :: attack-worker",
+      "browser-attack-swarm.yml :: opening-proof",
       "browser-attack-swarm.yml :: trusted-e2e",
+      // SCRUM-892 c24441: one local form for the pull request and the release.
       "trusted-accounting-rehearsal.yml :: rehearsal",
     ]);
   });
@@ -596,22 +773,26 @@ describe("Convex credential boundary across every workflow (SCRUM-350)", () => {
   it("stages and audits the candidate backend with no credential, immediately before the deploy that consumes it", () => {
     for (const { label, job } of everyJob()) {
       const steps = job.steps ?? [];
-      const deployIndex = steps.findIndex((step) => step.name === STAGED_DEPLOY_STEP);
-      if (deployIndex < 0) continue;
-      const stageIndex = steps.findIndex((step) => step.name === STAGE_STEP);
-      const auditIndex = steps.findIndex((step) => step.name === AUDIT_STEP);
-      expect(stageIndex, label).toBeGreaterThanOrEqual(0);
-      // Nothing runs between the audit and the deploy it licenses.
-      expect([stageIndex, auditIndex, deployIndex], label).toEqual([deployIndex - 2, deployIndex - 1, deployIndex]);
-      const audit = steps[auditIndex] as Step;
-      expect(JSON.stringify(audit.env ?? {}), label).not.toMatch(/secrets\./);
-      expect(String(audit.run ?? ""), label).not.toMatch(CREDENTIAL_NAME);
-      expect(String(audit.if ?? ""), label).toBe(String((steps[deployIndex] as Step).if ?? ""));
-      const stage = steps[stageIndex] as Step;
-      expect(JSON.stringify(stage.env ?? {}), label).not.toMatch(/secrets\./);
-      expect(String(stage.run ?? ""), label).toContain(
-        "trusted/scripts/intelligence/stageCandidateBackend.mjs",
-      );
+      // SCRUM-892: a job may hold more than one deploy form (the rehearsal's
+      // release and PR paths); every one is checked, not only the first.
+      const deployIndexes = steps.flatMap((step, index) => (step.name === STAGED_DEPLOY_STEP ? [index] : []));
+      for (const deployIndex of deployIndexes) {
+        const stageIndex = deployIndex - 2;
+        const auditIndex = deployIndex - 1;
+        // Nothing runs between the audit and the deploy it licenses.
+        expect([steps[stageIndex]?.name, steps[auditIndex]?.name], label).toEqual([STAGE_STEP, AUDIT_STEP]);
+        const deployIf = String((steps[deployIndex] as Step).if ?? "");
+        const audit = steps[auditIndex] as Step;
+        expect(JSON.stringify(audit.env ?? {}), label).not.toMatch(/secrets\./);
+        expect(String(audit.run ?? ""), label).not.toMatch(CREDENTIAL_NAME);
+        expect(String(audit.if ?? ""), label).toBe(deployIf);
+        const stage = steps[stageIndex] as Step;
+        expect(String(stage.if ?? ""), label).toBe(deployIf);
+        expect(JSON.stringify(stage.env ?? {}), label).not.toMatch(/secrets\./);
+        expect(String(stage.run ?? ""), label).toContain(
+          "trusted/scripts/intelligence/stageCandidateBackend.mjs",
+        );
+      }
     }
   });
 });

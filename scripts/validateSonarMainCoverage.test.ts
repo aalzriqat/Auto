@@ -1137,7 +1137,7 @@ describe("verifyProducerRun producer job and attempt binding (SCRUM-764 M1)", ()
   it("ignores the per-slice jobs and other jobs whose name only starts with the coverage job name", async () => {
     const res = await verify({
       jobs: [
-        producerJob(1, { id: 1, name: "unit-and-integration slice 1/4", conclusion: "failure" }),
+        producerJob(1, { id: 1, name: "unit-and-integration slice 1/8", conclusion: "failure" }),
         producerJob(1, { id: 2, name: "unit-and-integration-extra", conclusion: "failure" }),
         producerJob(1),
       ],
@@ -1181,7 +1181,7 @@ describe("verifyProducerRun producer job and attempt binding (SCRUM-764 M1)", ()
 
   it("refuses when the run has no coverage job at all", async () => {
     await expect(
-      verify({ jobs: [producerJob(1, { name: "unit-and-integration slice 1/4" })] }),
+      verify({ jobs: [producerJob(1, { name: "unit-and-integration slice 1/8" })] }),
     ).rejects.toThrow("no 'unit-and-integration' job found for producer run 12345");
   });
 
