@@ -34,8 +34,8 @@ Add one read-only query, `api.supplierStatement.outstanding`, in a new `convex/s
 ## Not in this slice (remaining gaps, in order)
 
 1. Settled history and receipts per supplier (PAID/CANCELLED lines, cash movements, payer/payee).
-2. The statement tab on `SupplierDetailScreen` (EN/AR, RTL) consuming this query.
-3. Settlement allocation proof for partial and full installments across several lines (feature 3), and the audit entry gap on
+2. (Done in slice 2.) The statement tab on `SupplierDetailScreen` (EN/AR, RTL) consuming this query.
+3. (Proof done in slice 3; audit entry gap remains.) Settlement allocation proof for partial and full installments across several lines (feature 3), and the audit entry gap on
    `sourcingPayables.markPaid`/`recordPartialPayment`/`setDisputed`.
 4. Per-supplier reconciliation to GL 2400/1240 (org-wide exists, #744).
 5. Informational net position: needs an owner ruling (design packet OQ-4). Not built.
@@ -43,9 +43,15 @@ Add one read-only query, `api.supplierStatement.outstanding`, in a new `convex/s
 ## Consequences
 
 - Cost: one tenant-scoped read per family, bounded; no new index.
-- Permission: VIEW_FINANCE already shows these amounts on the aging screen, so no new disclosure class.
-- Risk: legacy rows without `supplierId` do not appear under any supplier. They are reported by the registry coverage query
-  (SCRUM-888) and are out of this slice; the result states that it covers identity-stamped rows only.
+- Permission: the query requires `view:finance` and `view:cost_price` (`STATEMENT_PERMISSIONS`). A SOURCED car's supplier
+  entitlement equals its acquisition cost, so the amounts are cost-derived and finance access alone must not reveal them
+  (SCRUM-886 / ACC-10; seat finding on #763).
+- Plan gate: the query requires the accounting feature. The screen reads the plan first and shows a gated note instead of an
+  error when accounting is not included.
+- Risk: opening-balance rows (`origin: "OPENING"`) and legacy rows carry no `supplierId`, so they do not appear under any
+  supplier. They are reported by the registry coverage query (SCRUM-888). The result does not carry this limit, so the screen
+  does: an always-visible scope note says opening and unlinked lines are not included, and the empty states say "no
+  outstanding lines are linked to this supplier" rather than "nothing is owed".
 
 ## Sources
 

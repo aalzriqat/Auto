@@ -39,7 +39,6 @@ const SALE_PRICE = 12_500;
 const ENTITLEMENT = 9_500;
 const MARGIN = SALE_PRICE - ENTITLEMENT;
 void MARGIN;
-const SCALE = 1000;
 
 async function seed(tag: string) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
