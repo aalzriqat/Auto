@@ -87,6 +87,20 @@ test.each([commonEn, commonAr])("pilot disables new links and explains the refus
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+// SCRUM-810 c22842: the server refuses markSettled with PAYMENT_LINKS_DISABLED, so the row must not offer it.
+// Expiring an existing pending link and the held-funds review are legitimate legacy exits and stay available.
+test.each([commonEn, commonAr])("pilot offers no Mark settled on a pending link, but keeps Expire", (locale) => {
+  stubs.t = (key) => (locale as Record<string, string>)[key] ?? key;
+  stubs.rows = [intent({})];
+  render(<PaymentLinksPanel />);
+  const settle = screen.getByRole("button", { name: locale.MarkSettled }) as HTMLButtonElement;
+  expect(settle.disabled).toBe(true);
+  expect(settle.title).toBe(locale.ServerError_PAYMENT_LINKS_DISABLED);
+  fireEvent.click(settle);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect((screen.getByRole("button", { name: locale.ExpirePaymentLink }) as HTMLButtonElement).disabled).toBe(false);
+});
+
 describe("PaymentLinksPanel: Expire link", () => {
   test.each(["SETTLED", "EXPIRED", "FAILED"])("is disabled for a %s link", (status) => {
     stubs.rows = [intent({ status })];
