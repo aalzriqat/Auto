@@ -8,18 +8,21 @@
  * figure, that the legacy figure never paints while the overview loads, and
  * that a cash deal (no overview) keeps its accounting result.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
-import { salesEn } from "@/lib/i18n/domains/sales";
+import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import type { DealCockpitData } from "./DealStagePresentation";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
+import { getFunctionName } from "convex/server";
 
+const language = vi.hoisted(() => ({ locale: "en" }));
+const commissionRead = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
-    t: (key: string) => (salesEn as Record<string, string>)[key] ?? key,
-    isRtl: false,
-    locale: "en",
+    t: (key: string) => ((language.locale === "ar" ? salesAr : salesEn) as Record<string, string>)[key] ?? key,
+    isRtl: language.locale === "ar",
+    locale: language.locale,
   }),
 }));
 vi.mock("@/hooks/useCurrency", () => ({
@@ -28,10 +31,18 @@ vi.mock("@/hooks/useCurrency", () => ({
 vi.mock("@/components/accounting/AccountingTabShared", () => ({ scaleForCurrency: () => 3 }));
 vi.mock("convex/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("convex/react")>(),
-  useQuery: () => undefined,
+  useQuery: (ref: Parameters<typeof import("convex/react").useQuery>[0]) =>
+    commissionRead.enabled && getFunctionName(ref) === "dealCommissions:forSale" ? {
+      currency: "JOD", saleStatus: "COMPLETED", salePending: false, totalMinor: 125_000,
+      salesperson: { employeeName: "Synthetic salesperson", amountMinor: 125_000 }, lines: [],
+    } : undefined,
+}));
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ isLoading: false, hasPermission: () => true }),
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+import { DealCommissionsRow } from "@/components/commissions/DealCommissionsRow";
 
 const SCALE = 1_000;
 type Financed = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
@@ -161,6 +172,19 @@ function cashDeal(): DealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: false,
       routeKnown: true,
+      managementNetProfit: {
+        available: true,
+        basis: "MANAGEMENT_NET",
+        amountMinor: 2_800 * SCALE,
+        currency: "JOD",
+        postable: false,
+        lines: [
+          { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: 17_000 * SCALE },
+          { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 100 * SCALE },
+          { key: "COMMISSIONS", sign: -1, amountMinor: 100 * SCALE },
+        ],
+      },
       profit: {
         available: true,
         basis: "ACCOUNTING_RESULT",
@@ -183,8 +207,134 @@ function cashDeal(): DealCockpitData {
 const money = (minor: number, currency: string) => `${(minor / SCALE).toLocaleString("en-US")} ${currency}`;
 
 afterEach(cleanup);
+beforeEach(() => { language.locale = "en"; commissionRead.enabled = false; });
 
 describe("one canonical profit on the financed cockpit", () => {
+  test.each([false, true])("SCRUM-908 commissions line present=%s controls the financed net supplied to the row", (hasCommissions) => {
+    commissionRead.enabled = true;
+    const data = overview();
+    if (!data.financialSummary?.profit.available || data.financialSummary.profit.basis !== "MANAGEMENT_ESTIMATE") {
+      throw new Error("Expected readable overview");
+    }
+    if (hasCommissions) data.financialSummary.profit.lines.push({ key: "COMMISSIONS", sign: -1, amountMinor: 0 });
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money}
+      renderCommissions={({ profitMinor, money: format, t }) => <DealCommissionsRow
+        orgId={"org_1" as Id<"organizations">} saleId={"sale_1" as Id<"sales">}
+        profitMinor={profitMinor} money={format} t={t} />} />);
+    const row = within(screen.getByTestId("deal-commissions-row"));
+    expect(row.getByText("125 JOD")).toBeTruthy();
+    if (hasCommissions) expect(row.getByText("2,110 JOD")).toBeTruthy();
+    else {
+      expect(row.queryByText("2,110 JOD")).toBeNull();
+      expect(row.getByText(salesEn.DealCommissionsNetUnavailable)).toBeTruthy();
+    }
+  });
+
+  test.each([
+    ["CostAccessRequired", "Viewing net profit requires permission to view vehicle cost.", "عرض صافي الربح يتطلب صلاحية عرض تكلفة السيارة."],
+    ["CommissionsPending", "The commission has not been decided yet, so net profit is unavailable.", "لم تُحدّد العمولة بعد، لذلك لا يتوفر صافي الربح."],
+    ["CommissionsUnreadable", "A commission amount cannot be read, so the total is not shown.", "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي."],
+    ["CommissionsReadBoundExceeded", "The commission lines exceed the readable bound, so net profit is unavailable.", "تتجاوز بنود العمولات حد القراءة، لذلك لا يتوفر صافي الربح."],
+    ["VehicleCostBasisUnreadable", "The vehicle's cost basis cannot be read completely in the deal currency, so net profit is unavailable.", "تعذّرت قراءة أساس تكلفة السيارة بالكامل بعملة الصفقة، لذلك لا يتوفر صافي الربح."],
+  ] as const)("SCRUM-908 %s has truthful EN/AR refusal text", (reason, en, ar) => {
+    for (const locale of ["en", "ar"] as const) {
+      language.locale = locale;
+      const original = overview();
+      if (!original.financialSummary) throw new Error("Expected overview");
+      const data: FinancedDealOverviewData = { ...original, financialSummary: {
+        ...original.financialSummary, profit: { available: false, reason },
+      } };
+      render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data, loading: false }} custodyMoney={money} />);
+      expect(screen.getAllByText(locale === "en" ? en : ar).length).toBeGreaterThan(0);
+      expect(screen.queryByText("2,110 JOD")).toBeNull();
+      cleanup();
+      const cash = cashDeal();
+      if (cash.dealKind !== "CASH" || !cash.money) throw new Error("Expected cash money");
+      render(<DealCockpitView deal={{ ...cash, money: {
+        ...cash.money, managementNetProfit: { available: false, reason },
+      } }} onRecordSupplierReceipt={async () => {}} />);
+      expect(screen.getAllByText(locale === "en" ? en : ar).length).toBeGreaterThan(0);
+      expect(screen.queryByText("2,800 JOD")).toBeNull();
+      expect(screen.queryByText("3,000 JOD")).toBeNull();
+      cleanup();
+    }
+  });
+
+  test.each(["en", "ar"] as const)("SCRUM-908 %s cost-withheld cockpit aliases and supplier balance never render as zero", (locale) => {
+    language.locale = locale;
+    const dictionary = locale === "ar" ? salesAr : salesEn;
+    const withheld = { available: false, reason: "CostAccessRequired" } as const;
+    for (const original of [stockDeal(), cashDeal()]) {
+      if (!original.money) throw new Error("Expected money");
+      const deal = { ...original, money: {
+        ...original.money, profit: withheld,
+        ...(original.dealKind === "FINANCED" ? { managementProfit: withheld } : { managementNetProfit: withheld }),
+        parties: [{ party: "SUPPLIER", name: "Restricted supplier", position: "DEALERSHIP_OWES", amountMinor: null, currency: "JOD" }],
+      } } as DealCockpitData;
+      const originalOverview = overview();
+      if (!originalOverview.financialSummary) throw new Error("Expected summary");
+      const data: FinancedDealOverviewData = { ...originalOverview, financialSummary: {
+        ...originalOverview.financialSummary, profit: withheld,
+        supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: null, route: "THROUGH_DEALERSHIP" },
+      } };
+      render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}}
+        financialOverview={deal.dealKind === "FINANCED" ? { data, loading: false } : undefined} custodyMoney={money} />);
+      expect(screen.getAllByText(dictionary.ProfitCostAccessRequired).length).toBeGreaterThan(0);
+      const supplierFact = screen.getByText("Restricted supplier").closest("p")?.parentElement;
+      if (!supplierFact) throw new Error("Expected supplier fact");
+      expect(within(supplierFact).queryByText("0 JOD")).toBeNull();
+      expect(within(supplierFact).getByText(locale === "en"
+        ? "This amount requires permission to view vehicle cost."
+        : "عرض هذا المبلغ يتطلب صلاحية عرض تكلفة السيارة.")).toBeTruthy();
+      expect(screen.queryByText("9,900 JOD")).toBeNull();
+      cleanup();
+    }
+  });
+
+  test.each(["en", "ar"] as const)("SCRUM-908 %s pre-sale estimate labels commissions registered to date in its working", (locale) => {
+    language.locale = locale;
+    const data = overview();
+    if (!data.financialSummary?.profit.available || data.financialSummary.profit.basis !== "MANAGEMENT_ESTIMATE") {
+      throw new Error("Expected estimate");
+    }
+    data.financialSummary.profit.lines.push({ key: "COMMISSIONS", sign: -1, amountMinor: 0 });
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money} />);
+    const label = locale === "en" ? "Commissions registered to date" : "العمولات المسجلة حتى الآن";
+    expect(screen.getAllByText(label)).toHaveLength(1); // Financed overview uses rows, not duplicate fact tiles.
+    expect(screen.queryByText(locale === "en" ? "Total commissions" : "إجمالي العمولات")).toBeNull();
+  });
+
+  test.each(["en", "ar"])("SCRUM-908 %s headline renders both deductions and isolates the amount", (locale) => {
+    language.locale = locale;
+    const original = overview();
+    if (!original.financialSummary) throw new Error("Expected overview fixture");
+    const data: FinancedDealOverviewData = { ...original, financialSummary: {
+      ...original.financialSummary, profit: {
+      available: true, basis: "MANAGEMENT_ESTIMATE", amountMinor: 1_009_200,
+      currency: "JOD", postable: false, classification: "ESTIMATED_AWAITING_SETTLEMENT",
+      lines: [
+        { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_100_000 },
+        { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_900_000 },
+        { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 315_000 },
+        { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 451_300 },
+        { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 314_500 },
+        { key: "COMMISSIONS", sign: -1, amountMinor: 110_000 },
+      ],
+      },
+    } };
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money} />);
+    const dictionary = locale === "ar" ? salesAr : salesEn;
+    expect(screen.getAllByText(dictionary.LinePreparationExpenses).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(dictionary.DealCommissionsRegisteredToDate).length).toBeGreaterThan(0);
+    for (const amount of screen.getAllByText(/1,009\.200 (JOD|JD)/)) {
+      expect(amount.closest("bdi")).not.toBeNull();
+    }
+  });
+
   test("the overview's route-aware profit drives the headline, the fact tiles and the breakdown — the legacy figure paints nowhere", () => {
     render(
       <DealCockpitView
@@ -287,9 +437,10 @@ describe("one canonical profit on the financed cockpit", () => {
     expect(plannedTile.getByText(salesEn.OverviewGapCashPlannedNote)).toBeTruthy();
   });
 
-  test("a genuine CASH deal has no overview and keeps the accounting result the sale cockpit serves", () => {
+  test("a CASH deal renders server management net rather than its unchanged accounting margin", () => {
     render(<DealCockpitView deal={cashDeal()} onRecordSupplierReceipt={async () => {}} />);
-    expect(screen.getAllByText("3,000 JOD").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("2,800 JOD").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("3,000 JOD")).toBeNull();
     expect(screen.getAllByText(salesEn.LineSalePrice).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByTestId("deal-financial-overview")).toBeNull();
     expect(screen.queryByTestId("deal-financial-overview-withheld")).toBeNull();
