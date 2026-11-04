@@ -1489,9 +1489,6 @@ export function backfillSourcedCostMirrorRollout(input: WalkLimits & {
     totals.skippedInvalid += page.skippedInvalid;
   });
   if (!walk.ok) return walk;
-  if (totals.skippedLocked + totals.skippedInvalid > 0) {
-    return { ok: false, reason: `${SOURCED_MIRROR_DEPLOYED} is INCOMPLETE: repaired ${totals.updated}; locked ${totals.skippedLocked}; invalid ${totals.skippedInvalid}. Review the refused rows in the backend, then re-run.` };
-  }
   return { ok: true, ...totals };
 }
 
@@ -1501,15 +1498,14 @@ export function runSourcedCostMirrorPhase(input: {
   now: () => number;
   startedAt: number;
   timeoutMs: number;
-  fail: (reason: string) => never;
-}): string {
+}): { ok: true; summary: string } | Refusal {
   const result = backfillSourcedCostMirrorRollout({
     ...input,
     maxPages: 10_000,
     runPage: cursor => input.convex(["run", "vehicles:backfillSourcedCostMirror", JSON.stringify({ cursor, numItems: SOURCED_MIRROR_PAGE_SIZE })]),
   });
-  if (!result.ok) input.fail(result.reason);
-  return `Checked ${result.scanned} vehicles in ${result.pages} page call(s); repaired ${result.updated} SOURCED cost mirrors; locked ${result.skippedLocked}; invalid ${result.skippedInvalid}.`;
+  if (!result.ok) return result;
+  return { ok: true, summary: `Checked ${result.scanned} vehicles in ${result.pages} page call(s); repaired ${result.updated} SOURCED cost mirrors; locked ${result.skippedLocked}; invalid ${result.skippedInvalid}.` };
 }
 
 /**

@@ -409,7 +409,8 @@ console.log(`  ${accountantCostPriceSummary}`);
 
 // ─── 2f. Repair unposted SOURCED purchase-price mirrors (SCRUM-907) ───────────
 console.log(`Repairing SOURCED cost mirrors…`);
-sourcedCostMirrorSummary = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
+const sourcedCostMirror = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS });
+sourcedCostMirrorSummary = sourcedCostMirror.ok ? sourcedCostMirror.summary : sourcedCostMirror.reason;
 console.log(`  ${sourcedCostMirrorSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
@@ -451,6 +452,12 @@ const supplierIdentityRefusal = lastOutcome === "verified" ? supplierIdentityRef
 if (supplierIdentityRefusal) {
   lastOutcome = "failed";
   fail(supplierIdentityRefusal);
+}
+
+// A failed repair remains a deploy failure, but cannot prevent Social Inbox verification.
+if (!sourcedCostMirror.ok) {
+  lastOutcome = "failed";
+  fail(sourcedCostMirror.reason);
 }
 
 if (lastOutcome === "verified") {

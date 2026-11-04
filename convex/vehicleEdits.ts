@@ -41,7 +41,7 @@ import {
   parseVehicleSourceType,
   requestedVehicleSourceTypeChange,
   throwVehicleSourceShape,
-  sourcedCostMirrorPatch,
+  normalizeSourcedCostUpdate,
 } from "./utils/vehicleSourceShape";
 import type { SupplierSnapshot } from "./utils/supplierRegistry";
 import {
@@ -292,9 +292,9 @@ export const requestUpdate = mutation({
     if (!canReadVehicleCost(role) && editPayloadCarriesCost(args.payload)) {
       throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
     }
-    const payload = normalizeVehicleEditPayload(args.payload);
+    const submittedPayload = normalizeVehicleEditPayload(args.payload);
+    const payload = normalizeSourcedCostUpdate(vehicle, submittedPayload);
     assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
-    const costMirror = sourcedCostMirrorPatch(vehicle, payload);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,
@@ -404,7 +404,6 @@ export const requestUpdate = mutation({
     if (Object.keys(filteredPayload).length === 0) {
       throw new ConvexError("No changes detected.");
     }
-    Object.assign(filteredPayload, costMirror);
 
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
@@ -584,10 +583,9 @@ export const resolve = mutation({
         // can have appeared since the request was written (N11). A name with no id cannot be approved.
         const resolvedSourced = await resolveUpdateSourcedSupplier(ctx, args.orgId, previousVehicle, requestedPayload);
         await assertSupplierLinkChangeAllowed(ctx, args.orgId, previousVehicle, resolvedSourced);
-        const payload: NormalizedVehicleEditPayload = resolvedSourced
+        const payload: NormalizedVehicleEditPayload = normalizeSourcedCostUpdate(previousVehicle, resolvedSourced
           ? { ...requestedPayload, sourcedFromName: resolvedSourced.name, sourcedSupplierId: resolvedSourced.supplierId }
-          : requestedPayload;
-        Object.assign(payload, sourcedCostMirrorPatch(previousVehicle, payload));
+          : requestedPayload);
         assertDirectVehicleStatusTransition(previousVehicle.status, payload.status);
         await assertNoPendingBeforeAvailable(ctx, {
           orgId: args.orgId,
@@ -702,11 +700,13 @@ export const resolve = mutation({
           (vehiclePatchFields as Record<string, unknown>).sourcedSupplierId = resolvedSourced.supplierId;
         }
 
-        await ctx.db.patch(request.vehicleId, {
-          ...(vehiclePatchFields as any),
-          updatedBy: user._id, // Manager who approved it
-          updatedAt: Date.now(),
-        });
+        if (Object.keys(vehiclePatchFields).length > 0) {
+          await ctx.db.patch(request.vehicleId, {
+            ...(vehiclePatchFields as any),
+            updatedBy: user._id, // Manager who approved it
+            updatedAt: Date.now(),
+          });
+        }
         // An older pending request may not yet carry the mirror that was applied.
         await ctx.db.patch(request._id, { payload });
 

@@ -44,7 +44,7 @@
   "matrixRow": "SCRUM907-approval",
   "bugRef": {
     "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
+    "failingFirst": "e827df86f6d06bda613c1b2fd1956a45c7d2d187"
   },
   "fingerprint": "df2b2c3b6d93018c3f49adb411baefb1a9a357661f92ee83f3a014432207b90c"
 }

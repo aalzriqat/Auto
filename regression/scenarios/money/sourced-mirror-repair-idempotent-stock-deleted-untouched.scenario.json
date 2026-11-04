@@ -50,9 +50,5 @@
     "testName": "repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched"
   },
   "matrixRow": "SCRUM907-repair",
-  "bugRef": {
-    "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
-  },
   "fingerprint": "4967ddc599d3936e433f088855dd0e757206c2d169646827333fcc254d8b1976"
 }

@@ -45,9 +45,5 @@
     "testName": "repair reports sold, opening-locked and unreadable supplier costs without changing them"
   },
   "matrixRow": "SCRUM907-repair-history",
-  "bugRef": {
-    "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
-  },
   "fingerprint": "63152ae83522a13c35091f7ca941b07ddf26e1986a9911721992ba6c0478c2b4"
 }

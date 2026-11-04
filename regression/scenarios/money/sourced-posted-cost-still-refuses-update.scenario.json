@@ -42,9 +42,5 @@
     "testName": "posted acquisition still locks supplier cost and the mirror"
   },
   "matrixRow": "SCRUM907-posted",
-  "bugRef": {
-    "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
-  },
   "fingerprint": "f6ee4a035794b3902a00f56df0e55573fff712e553797d092dbd59522718f2ee"
 }

@@ -42,9 +42,5 @@
     "testName": "conflicting submitted costs are refused without changing the vehicle or its audit"
   },
   "matrixRow": "SCRUM907-conflict",
-  "bugRef": {
-    "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
-  },
   "fingerprint": "c00945f5ddd1cd4888fc0c7cba3ac8d81af31853518120c62d093eaf9545369c"
 }

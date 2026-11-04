@@ -72,15 +72,30 @@ export function sourcedCostMirrorPatch(
 ): { purchasePrice?: number } {
   if ((input.sourceType ?? existing.sourceType) !== "SOURCED") return {};
   const sourceCost = input.sourceCost ?? existing.sourceCost;
-  if (input.purchasePrice !== undefined && input.purchasePrice !== sourceCost) {
+  const costChanges = input.sourceCost !== undefined && input.sourceCost !== existing.sourceCost;
+  const ownershipChanges = input.sourceType === "SOURCED" && existing.sourceType !== "SOURCED";
+  const expectedPrice = costChanges || ownershipChanges ? sourceCost : existing.purchasePrice;
+  if (input.purchasePrice !== undefined && input.purchasePrice !== expectedPrice) {
     throwVehicleSourceShape("VEHICLE_SOURCED_COST_CONFLICT");
   }
-  if (typeof sourceCost === "number" &&
-      (input.sourceCost !== undefined || (input.sourceType === "SOURCED" && existing.sourceType !== "SOURCED")) &&
-      existing.purchasePrice !== sourceCost) {
+  if (typeof sourceCost === "number" && (costChanges || ownershipChanges) && existing.purchasePrice !== sourceCost) {
     return { purchasePrice: sourceCost };
   }
   return {};
+}
+
+/** Approval payloads may predate the mirror rule. Drop cost echoes before testing locks or writing. */
+export function normalizeSourcedCostUpdate<T extends VehicleSourceFields & { purchasePrice?: number }>(
+  existing: VehicleSourceFields & { purchasePrice?: number },
+  input: T,
+): T {
+  const patch = { ...input, ...sourcedCostMirrorPatch(existing, input) };
+  if ((input.sourceType ?? existing.sourceType) === "SOURCED") {
+    for (const field of ["sourceCost", "purchasePrice", "sourceType"] as const) {
+      if (patch[field] === existing[field]) delete patch[field];
+    }
+  }
+  return patch;
 }
 
 /**

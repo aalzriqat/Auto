@@ -41,9 +41,5 @@
     "testName": "repair reports posted-cost locks and does not change them"
   },
   "matrixRow": "SCRUM907-repair-lock",
-  "bugRef": {
-    "key": "SCRUM-907",
-    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
-  },
   "fingerprint": "7ba631794742ef5df0e6704babc5b5e5feabba4a8cfd224fc7606beaaedb60c6"
 }
