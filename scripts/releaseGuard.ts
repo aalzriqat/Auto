@@ -1509,10 +1509,10 @@ export function runAccountantCommissionsPhase(input: Parameters<typeof runAccoun
   let pages = 0;
   let updated = 0;
   const walk = walkCursorPages(
-    { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: 10_000 },
+    { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES },
     "Production is DEPLOYED, but the ACCOUNTANT commissions backfill",
-    (cursor) => input.convex(["run", "migrateRoles:backfillAccountantCommissionsAccess", JSON.stringify({ cursor, numItems: 100 })]),
-    (value) => parseRolePermissionBackfillPage(value, 100),
+    (cursor) => input.convex(["run", "migrateRoles:backfillAccountantCommissionsAccess", JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE })]),
+    (value) => parseRolePermissionBackfillPage(value, ACCOUNTANT_COST_PRICE_PAGE_SIZE),
     (page) => {
       pages += 1;
       updated += page.updatedCount;

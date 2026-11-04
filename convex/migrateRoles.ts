@@ -262,6 +262,30 @@ export const backfillAccountantExpensePermissions = internalMutation({
   },
 });
 
+const accountantBackfillArgs = {
+  numItems: v.optional(v.number()),
+  cursor: v.optional(v.union(v.string(), v.null())),
+};
+
+const accountantBackfillResult = v.object({
+  updatedCount: v.number(),
+  updates: v.array(v.string()),
+  isDone: v.boolean(),
+  continueCursor: v.string(),
+});
+
+async function readAccountantRolePage(
+  ctx: MutationCtx,
+  args: { numItems?: number; cursor?: string | null },
+) {
+  const page = await ctx.db
+    .query("roles")
+    .paginate({ numItems: Math.min(Math.max(Math.floor(args.numItems ?? 100), 1), 500), cursor: args.cursor ?? null });
+  const accountant = normalizeRoleName("ACCOUNTANT");
+  const accountants = page.page.filter((role) => !role.isDeleted && normalizeRoleName(role.name) === accountant);
+  return { page, accountants };
+}
+
 /**
  * SCRUM-886 round 13 (owner ruling comment 24358): the default ACCOUNTANT template gained `view:cost_price` because finalizing a
  * SOURCED car's deal now needs it. A template change does not reach orgs that were seeded before it (`organizations.ts` seeds the
@@ -285,27 +309,14 @@ export const backfillAccountantExpensePermissions = internalMutation({
  * deploy. A role of another name in that state is not changed here: the completion door refuses it.
  */
 export const backfillAccountantCostPriceAccess = internalMutation({
-  args: {
-    numItems: v.optional(v.number()),
-    cursor: v.optional(v.union(v.string(), v.null())),
-  },
-  returns: v.object({
-    updatedCount: v.number(),
-    updates: v.array(v.string()),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
+  args: { ...accountantBackfillArgs },
+  returns: accountantBackfillResult,
   handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("roles")
-      .paginate({ numItems: Math.min(Math.max(Math.floor(args.numItems ?? 100), 1), 500), cursor: args.cursor ?? null });
+    const { page, accountants } = await readAccountantRolePage(ctx, args);
     let updatedCount = 0;
     const updates: string[] = [];
-    const accountant = normalizeRoleName("ACCOUNTANT");
 
-    for (const role of page.page) {
-      if (role.isDeleted) continue;
-      if (normalizeRoleName(role.name) !== accountant) continue;
+    for (const role of accountants) {
       // SCRUM-896 R1-F1: only the combination the role-save rule calls invalid (`completesSalesWithoutCostAccess`) is repaired.
       if (!completesSalesWithoutCostAccess(role.permissions)) continue;
       if (await patchRoleIfNeeded(ctx, role, new Set([PERMISSIONS.VIEW_COST_PRICE]), updates)) updatedCount++;
@@ -321,41 +332,25 @@ export const backfillAccountantCostPriceAccess = internalMutation({
  * Same bounded cursor contract as the cost-price repair. `updates` contains tenant identifiers and must not reach public logs.
  */
 export const backfillAccountantCommissionsAccess = internalMutation({
-  args: {
-    numItems: v.optional(v.number()),
-    cursor: v.optional(v.union(v.string(), v.null())),
-  },
-  returns: v.object({
-    updatedCount: v.number(),
-    updates: v.array(v.string()),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
+  args: { ...accountantBackfillArgs },
+  returns: accountantBackfillResult,
   handler: async (ctx, args) => {
-    const page = await ctx.db
-      .query("roles")
-      .paginate({ numItems: Math.min(Math.max(Math.floor(args.numItems ?? 100), 1), 500), cursor: args.cursor ?? null });
-    let updatedCount = 0;
-    const updates: string[] = [];
-    const accountant = normalizeRoleName("ACCOUNTANT");
-
-    for (const role of page.page) {
-      if (role.isDeleted) continue;
-      if (normalizeRoleName(role.name) !== accountant) continue;
-      if (isSystemOwnerRole(role) || role.appliedRoleMigrations?.includes(ACCOUNTANT_COMMISSIONS_MIGRATION)) continue;
+    const { page, accountants } = await readAccountantRolePage(ctx, args);
+    const targets = accountants.filter((role) => {
+      if (isSystemOwnerRole(role) || role.appliedRoleMigrations?.includes(ACCOUNTANT_COMMISSIONS_MIGRATION)) return false;
       const held = new Set(role.permissions);
-      if (role.permissions.length !== ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.length || held.size !== role.permissions.length) continue;
-      if (!ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.every((permission) => held.has(permission))) continue;
-
+      if (role.permissions.length !== ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.length || held.size !== role.permissions.length) return false;
+      return ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.every((permission) => held.has(permission));
+    });
+    const updates = await Promise.all(targets.map(async (role) => {
       await ctx.db.patch(role._id, {
         permissions: [...role.permissions, PERMISSIONS.VIEW_COMMISSIONS],
         appliedRoleMigrations: [...(role.appliedRoleMigrations ?? []), ACCOUNTANT_COMMISSIONS_MIGRATION],
       });
-      updates.push(`${role.name} (${role.orgId}): +${PERMISSIONS.VIEW_COMMISSIONS}`);
-      updatedCount++;
-    }
+      return `${role.name} (${role.orgId}): +${PERMISSIONS.VIEW_COMMISSIONS}`;
+    }));
 
-    return { updatedCount, updates, isDone: page.isDone, continueCursor: page.continueCursor };
+    return { updatedCount: updates.length, updates, isDone: page.isDone, continueCursor: page.continueCursor };
   },
 });
 
