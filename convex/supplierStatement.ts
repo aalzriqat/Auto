@@ -139,20 +139,23 @@ export const outstanding = query({
   },
 });
 
-const attentionRow = v.object({
-  kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
-  id: v.string(),
-  currency: v.string(),
-  outstandingMinor: v.number(),
-  disputedMinor: v.number(),
-  dueDate: v.union(v.string(), v.null()),
-  daysOverdue: v.union(v.number(), v.null()),
-  status: v.union(v.literal("ALERTING"), v.literal("HELD")),
-  step: v.optional(
-    v.union(v.literal("T_MINUS_3"), v.literal("DUE_DAY"), v.literal("OVERDUE_7"), v.literal("OVERDUE_WEEKLY"))
-  ),
-  heldReason: v.optional(v.union(v.literal("NO_DUE_DATE"), v.literal("DISPUTED"))),
-});
+const attentionCommon = {
+  kind: row.fields.kind, id: row.fields.id, currency: row.fields.currency, outstandingMinor: row.fields.outstandingMinor,
+  disputedMinor: row.fields.disputedMinor, dueDate: row.fields.dueDate, daysOverdue: row.fields.daysOverdue,
+};
+// One variant per AlertStatus (convex/utils/supplierDueAlertPlan.ts): an ALERTING row always has a step, a HELD row always a reason.
+const attentionRow = v.union(
+  v.object({
+    ...attentionCommon,
+    status: v.literal("ALERTING"),
+    step: v.union(v.literal("T_MINUS_3"), v.literal("DUE_DAY"), v.literal("OVERDUE_7"), v.literal("OVERDUE_WEEKLY")),
+  }),
+  v.object({
+    ...attentionCommon,
+    status: v.literal("HELD"),
+    heldReason: v.union(v.literal("NO_DUE_DATE"), v.literal("DISPUTED")),
+  })
+);
 const attentionSection = v.object({ rows: v.array(attentionRow), complete: v.boolean() });
 
 function attentionOf(section: StatementSection) {
@@ -160,8 +163,10 @@ function attentionOf(section: StatementSection) {
   for (const r of section.rows) {
     const s = alertStatusFor(r);
     if (s.status === "NOT_YET") continue;
-    const { kind, id, currency, outstandingMinor, disputedMinor, dueDate, daysOverdue } = r;
-    const common = { kind, id, currency, outstandingMinor, disputedMinor, dueDate, daysOverdue };
+    const common = {
+      kind: r.kind, id: r.id, currency: r.currency, outstandingMinor: r.outstandingMinor,
+      disputedMinor: r.disputedMinor, dueDate: r.dueDate, daysOverdue: r.daysOverdue,
+    };
     rows.push(s.status === "ALERTING" ? { ...common, status: s.status, step: s.step } : { ...common, status: s.status, heldReason: s.reason });
   }
   return { rows, complete: section.complete };

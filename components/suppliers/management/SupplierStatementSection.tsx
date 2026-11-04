@@ -343,9 +343,7 @@ const ATTN_STEP_KEY = {
 const ATTN_HELD_KEY = { DISPUTED: "SuppliersStmtAttnHeldDisputed", NO_DUE_DATE: "SuppliersStmtAttnHeldNoDue" } as const;
 
 function attentionLabel(row: AttentionRow, translate: Translate): string {
-  if (row.status === "ALERTING" && row.step) return translate(ATTN_STEP_KEY[row.step]);
-  if (row.heldReason) return translate(ATTN_HELD_KEY[row.heldReason]);
-  return translate("SuppliersStmtAttnAlerting");
+  return translate(row.status === "ALERTING" ? ATTN_STEP_KEY[row.step] : ATTN_HELD_KEY[row.heldReason]);
 }
 
 /** Which obligations are alerting now or held back and why (SCRUM-869 feature 5); A/P and A/R stay apart. */
@@ -378,7 +376,11 @@ export function SupplierAttentionView({ attention }: Readonly<{ attention: Suppl
               ))}
             </ul>
           )}
-          {!section.complete && <p className="text-xs text-muted-foreground">{translate("SuppliersStmtAttnIncomplete")}</p>}
+          {!section.complete && (
+            <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+              {translate("SuppliersStmtIncomplete")}
+            </p>
+          )}
         </div>
       ))}
     </section>

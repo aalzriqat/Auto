@@ -17,6 +17,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+type SupplierDb = { db: { insert: (table: "suppliers", doc: never) => Promise<Id<"suppliers">> } };
+const insertSupplier = (ctx: SupplierDb, orgId: Id<"organizations">, userId: Id<"users">, displayName: string) =>
+  ctx.db.insert("suppliers", {
+    orgId, displayName, displayNameKey: displayName.toLowerCase(), status: "ACTIVE", origin: "MANUAL", version: 1,
+    createdBy: userId, updatedBy: userId, createdAt: NOW, updatedAt: NOW,
+  } as never);
+
 async function seed(tag: string, permissions: string[] = ["view:finance"]) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
@@ -37,12 +44,7 @@ async function seed(tag: string, permissions: string[] = ["view:finance"]) {
       sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
     })
   );
-  const supplierId = await t.run((ctx) =>
-    ctx.db.insert("suppliers", {
-      orgId, displayName: "Amman Importer Co", displayNameKey: "amman importer co", status: "ACTIVE", origin: "MANUAL", version: 1,
-      createdBy: userId, updatedBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
-    } as never)
-  );
+  const supplierId = await t.run((ctx) => insertSupplier(ctx, orgId, userId, "Amman Importer Co"));
   return { t, orgId, userId, asUser, customerId, vehicleId, supplierId };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
@@ -85,7 +87,7 @@ describe("SCRUM-869 supplier attention view", () => {
     expect(r.payable.rows[0]).toMatchObject({
       kind: "PAYABLE", currency: "JOD", outstandingMinor: 9_500_000, status: "ALERTING", step: "OVERDUE_7", daysOverdue: 10,
     });
-    expect(r.payable.rows[0].heldReason).toBeUndefined();
+    expect(r.payable.rows[0]).not.toHaveProperty("heldReason");
     expect(r.receivable.rows).toEqual([]);
     expect(Object.keys(r).sort()).toEqual(["payable", "receivable", "supplierId"]);
   });
@@ -96,7 +98,7 @@ describe("SCRUM-869 supplier attention view", () => {
     const r = await attention(s);
     expect(r.payable.rows).toHaveLength(1);
     expect(r.payable.rows[0]).toMatchObject({ status: "HELD", heldReason: "DISPUTED", disputedMinor: 9_500_000 });
-    expect(r.payable.rows[0].step).toBeUndefined();
+    expect(r.payable.rows[0]).not.toHaveProperty("step");
   });
 
   test("an obligation with no due date is HELD for that reason", async () => {
@@ -117,12 +119,7 @@ describe("SCRUM-869 supplier attention view", () => {
 
   test("another supplier's rows are excluded", async () => {
     const s = await seed("other");
-    const otherId = await s.t.run((ctx) =>
-      ctx.db.insert("suppliers", {
-        orgId: s.orgId, displayName: "Other Co", displayNameKey: "other co", status: "ACTIVE", origin: "MANUAL", version: 1,
-        createdBy: s.userId, updatedBy: s.userId, createdAt: NOW, updatedAt: NOW,
-      } as never)
-    );
+    const otherId = await s.t.run((ctx) => insertSupplier(ctx, s.orgId, s.userId, "Other Co"));
     await addPayable(s, { supplierId: otherId });
     const r = await attention(s);
     expect(r.payable.rows).toEqual([]);
@@ -139,10 +136,7 @@ describe("SCRUM-869 supplier attention view", () => {
     const s = await seed("tenancy");
     const other = await s.t.run(async (ctx) => {
       const orgId = await ctx.db.insert("organizations", { name: "Other org", createdAt: NOW });
-      return await ctx.db.insert("suppliers", {
-        orgId, displayName: "Foreign", displayNameKey: "foreign", status: "ACTIVE", origin: "MANUAL", version: 1,
-        createdBy: s.userId, updatedBy: s.userId, createdAt: NOW, updatedAt: NOW,
-      } as never);
+      return await insertSupplier(ctx, orgId, s.userId, "Foreign");
     });
     await expect(attention(s, other)).rejects.toThrow();
     await expect(attention(s, s.supplierId, NOW + 3 * DAY)).rejects.toThrow(/nowMs/);

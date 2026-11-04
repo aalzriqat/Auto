@@ -399,7 +399,7 @@ describe("supplier statement section", () => {
         "SuppliersStmtAttnStepOverdue7",
         "SuppliersStmtAttnHeldDisputed",
         "SuppliersStmtAttnHeldNoDue",
-        "SuppliersStmtAttnIncomplete",
+        "SuppliersStmtIncomplete",
       ] as const) {
         expect(screen.getByText(dict[key])).toBeTruthy();
       }

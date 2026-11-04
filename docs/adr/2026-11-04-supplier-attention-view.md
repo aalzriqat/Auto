@@ -44,4 +44,7 @@ No scheduler, cron, notification write or schema change is added. The organizati
 
 - Whether a notification was delivered or read.
 - Receivables of kind RECOVERY use the same state function; no separate rule.
+- Clock input: the sweep reads the server's `Date.now()`; the screen reads a client `nowMs` that the query accepts within 24 hours of the server clock. A client clock off by up to a day can show a step the sweep would not send that day. Closing this means dropping `nowMs` from the query, which `outstanding` also takes; left for a separate change.
+- Unreadable rows: the sweep logs and skips a row it cannot read. The screen shows whatever `readSupplierOutstanding` returns and has no equivalent signal.
+- HELD lists every disputed or undated open row, including ones not yet near their due date, because the owner ruling wants a dispute never to look healthy. The list can be long for a supplier with many undated rows.
 - Not proven on a live Convex backend or in a browser until rendered.
