@@ -4,6 +4,7 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
+import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
 /**
@@ -64,6 +65,52 @@ export const settled = query({
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
     const { payable, receivable } = await readSupplierSettled(ctx, args);
     return { supplierId: args.supplierId, payable, receivable };
+  },
+});
+
+/**
+ * SCRUM-869 - what was paid to one supplier according to the subledger, against the net debit to GL 2400 posted
+ * against that supplier's payables (ADR docs/adr/2026-11-04-supplier-payments-gl-reconciliation.md). The obligation
+ * side has no supplier dimension on the ledger and is reported as NOT_ATTRIBUTABLE, never as a number. Read-only.
+ */
+export const paymentsReconciliation = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
+  returns: v.object({
+    supplierId: v.id("suppliers"),
+    status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+    unavailableReason: v.optional(
+      v.union(
+        v.literal("OVER_LIMIT"),
+        v.literal("PENDING_POSTINGS"),
+        v.literal("NO_CONTROL_ACCOUNT"),
+        v.literal("INCONSISTENT_REFERENCE"),
+      ),
+    ),
+    currencies: v.array(
+      v.object({
+        currency: v.string(),
+        subledgerPaidMinor: v.number(),
+        glPaidMinor: v.number(),
+        differenceMinor: v.number(),
+      }),
+    ),
+    isReconciled: v.boolean(),
+    differences: v.array(
+      v.object({
+        payableId: v.id("vehicleSupplierPayables"),
+        currency: v.string(),
+        subledgerPaidMinor: v.number(),
+        glPaidMinor: v.number(),
+      }),
+    ),
+    excludedOpeningRows: v.number(),
+    creditSide: v.literal("NOT_ATTRIBUTABLE"),
+  }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    return { supplierId: args.supplierId, ...(await readSupplierPaymentsReconciliation(ctx, args)) };
   },
 });
 

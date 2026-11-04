@@ -283,6 +283,30 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtHistorySettled: ["Settled in full", "مُسوّى بالكامل"],
   SuppliersStmtHistoryPartly: ["Partly settled", "مُسوّى جزئياً"],
   SuppliersStmtHistoryLastChange: ["Last change", "آخر تحديث"],
+  SuppliersStmtReconTitle: ["Payments check against the ledger", "مطابقة الدفعات مع دفتر الأستاذ"],
+  SuppliersStmtReconOk: [
+    "Payments recorded for this supplier match the ledger (account 2400).",
+    "الدفعات المسجلة لهذا المورد تطابق دفتر الأستاذ (حساب 2400).",
+  ],
+  SuppliersStmtReconDiffers: [
+    "Payments recorded for this supplier differ from the ledger (account 2400). Ask an accountant to review.",
+    "الدفعات المسجلة لهذا المورد تختلف عن دفتر الأستاذ (حساب 2400). اطلب مراجعة المحاسب.",
+  ],
+  SuppliersStmtReconUnavailable: ["Check unavailable", "المطابقة غير متاحة"],
+  SuppliersStmtReconReasonOverLimit: ["too many records to check at once", "عدد السجلات أكبر من أن يُفحص دفعة واحدة"],
+  SuppliersStmtReconReasonPending: ["postings are still being processed", "ما زالت القيود قيد المعالجة"],
+  SuppliersStmtReconReasonNoAccount: ["the ledger account is missing", "حساب دفتر الأستاذ غير موجود"],
+  SuppliersStmtReconReasonInconsistent: ["a ledger record is inconsistent", "سجل في دفتر الأستاذ غير متسق"],
+  SuppliersStmtReconSubledger: ["Paid (supplier record)", "المدفوع (سجل المورد)"],
+  SuppliersStmtReconLedger: ["Ledger", "دفتر الأستاذ"],
+  SuppliersStmtReconCreditNote: [
+    "Amounts owed to a supplier cannot be traced to one supplier in the ledger, so only payments are checked.",
+    "لا يمكن ربط المبالغ المستحقة للمورد بمورد محدد في دفتر الأستاذ، لذلك تُفحص الدفعات فقط.",
+  ],
+  SuppliersStmtReconOpeningNote: [
+    "{count} opening-balance record(s) are not part of this check.",
+    "{count} سجل(ات) رصيد افتتاحي ليست ضمن هذه المطابقة.",
+  ],
   SuppliersStmtTotalUnavailable: [
     "Total unavailable: this list is incomplete",
     "الإجمالي غير متاح: القائمة غير مكتملة",

@@ -1038,13 +1038,13 @@ const SUPPLIER_PAYABLE_RECON_READ_STATUSES: ReadonlyArray<Doc<"vehicleSupplierPa
 ];
 
 /** Posting event types whose rule touches ACCOUNTS_PAYABLE_SUPPLIERS (classified in postingRules.ts). */
-const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
+export const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
   Object.entries(AP_AFFECTING_BY_EVENT_TYPE)
     .filter(([, affectsAp]) => affectsAp)
     .map(([eventType]) => eventType)
 );
 
-async function hasPendingAffectingPosting(
+export async function hasPendingAffectingPosting(
   ctx: QueryCtx,
   events: Array<Doc<"pendingAccountingEvents">>,
   affectingEventTypes: ReadonlySet<string>

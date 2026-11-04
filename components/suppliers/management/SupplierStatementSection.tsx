@@ -278,6 +278,59 @@ export function SupplierSettledView({ settled }: Readonly<{ settled: SupplierSet
   );
 }
 
+export type SupplierReconData = FunctionReturnType<typeof api.supplierStatement.paymentsReconciliation>;
+
+const RECON_REASON_KEY: Record<NonNullable<SupplierReconData["unavailableReason"]>, string> = {
+  OVER_LIMIT: "SuppliersStmtReconReasonOverLimit",
+  PENDING_POSTINGS: "SuppliersStmtReconReasonPending",
+  NO_CONTROL_ACCOUNT: "SuppliersStmtReconReasonNoAccount",
+  INCONSISTENT_REFERENCE: "SuppliersStmtReconReasonInconsistent",
+};
+
+/** Payments check (SCRUM-869): subledger paid against GL 2400 for this supplier. Never claims the obligation side. */
+export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData | undefined }>) {
+  const translate = useTranslate();
+  if (recon === undefined) return null;
+  let verdict: string;
+  if (recon.status === "UNAVAILABLE") {
+    verdict = `${translate("SuppliersStmtReconUnavailable")}: ${translate(
+      RECON_REASON_KEY[recon.unavailableReason ?? "OVER_LIMIT"],
+    )}`;
+  } else {
+    verdict = translate(recon.isReconciled ? "SuppliersStmtReconOk" : "SuppliersStmtReconDiffers");
+  }
+  return (
+    <section aria-labelledby="supplier-recon-title" className="space-y-2">
+      <h3 id="supplier-recon-title" className="text-lg font-semibold">
+        {translate("SuppliersStmtReconTitle")}
+      </h3>
+      <p role="status" className="text-sm">
+        {verdict}
+      </p>
+      {recon.status === "AVAILABLE" && (
+        <dl className="space-y-1 text-sm">
+          {recon.currencies.map((c) => (
+            <div key={c.currency} className="flex flex-wrap justify-between gap-x-4">
+              <dt className="font-medium">{translate("SuppliersStmtReconSubledger")}</dt>
+              <dd>
+                <Money minor={c.subledgerPaidMinor} currency={c.currency} />
+                {" · "}
+                {translate("SuppliersStmtReconLedger")}: <Money minor={c.glPaidMinor} currency={c.currency} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <p className="text-xs text-muted-foreground">{translate("SuppliersStmtReconCreditNote")}</p>
+      {recon.excludedOpeningRows > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {interpolate(translate("SuppliersStmtReconOpeningNote"), { count: String(recon.excludedOpeningRows) })}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const { hasPermission, isLoading } = usePermissions();
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
@@ -290,11 +343,13 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   }, []);
   const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
   const settled = useQuery(api.supplierStatement.settled, allowed ? { orgId, supplierId } : "skip");
+  const recon = useQuery(api.supplierStatement.paymentsReconciliation, allowed ? { orgId, supplierId } : "skip");
   if (!allowed) return null;
   return (
     <div className="space-y-6">
       <SupplierStatementView statement={statement} />
       {statement !== undefined && <SupplierSettledView settled={settled} />}
+      {statement !== undefined && <SupplierReconView recon={recon} />}
     </div>
   );
 }

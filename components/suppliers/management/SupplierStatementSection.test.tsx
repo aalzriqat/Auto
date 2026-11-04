@@ -23,6 +23,7 @@ const world = vi.hoisted(() => ({
   permissionsLoading: false,
   statement: undefined as unknown,
   settled: undefined as unknown,
+  recon: undefined as unknown,
   queryThrows: null as null | Error,
   queryCalls: [] as Array<{ name: string; args: unknown }>,
 }));
@@ -51,7 +52,9 @@ vi.mock("convex/react", async () => {
       world.queryCalls.push({ name: getFunctionName(reference), args });
       if (world.queryThrows) throw world.queryThrows;
       if (args === "skip") return undefined;
-      return getFunctionName(reference) === "supplierStatement:settled" ? world.settled : world.statement;
+      const name = getFunctionName(reference);
+      if (name === "supplierStatement:paymentsReconciliation") return world.recon;
+      return name === "supplierStatement:settled" ? world.settled : world.statement;
     },
   };
 });
@@ -92,6 +95,7 @@ beforeEach(() => {
   world.permissionsLoading = false;
   world.queryThrows = null;
   world.settled = undefined;
+  world.recon = undefined;
   world.queryCalls.length = 0;
   world.statement = {
     supplierId: "sup_1",
@@ -331,6 +335,39 @@ describe("supplier statement section", () => {
     world.settled = undefined;
     renderIt();
     expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
+  });
+
+  test("payments check: reconciled, differing and unavailable are told apart, in EN and AR, and the credit side is never given a number", () => {
+    const base = {
+      supplierId: "sup_1",
+      currencies: [{ currency: "JOD", subledgerPaidMinor: 4_000_000, glPaidMinor: 3_000_000, differenceMinor: 1_000_000 }],
+      differences: [],
+      excludedOpeningRows: 2,
+      creditSide: "NOT_ATTRIBUTABLE",
+    };
+    const cases = [
+      { recon: { ...base, status: "AVAILABLE", isReconciled: true }, key: "SuppliersStmtReconOk" },
+      { recon: { ...base, status: "AVAILABLE", isReconciled: false }, key: "SuppliersStmtReconDiffers" },
+      {
+        recon: { ...base, status: "UNAVAILABLE", unavailableReason: "PENDING_POSTINGS", currencies: [], isReconciled: false },
+        key: "SuppliersStmtReconUnavailable",
+      },
+    ] as const;
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      for (const c of cases) {
+        world.recon = c.recon;
+        const { unmount } = renderIt();
+        expect(screen.getByRole("heading", { name: dict.SuppliersStmtReconTitle })).toBeTruthy();
+        expect(screen.getByText(new RegExp(dict[c.key].replace(/[()]/g, "\\$&")))).toBeTruthy();
+        expect(screen.getByText(dict.SuppliersStmtReconCreditNote)).toBeTruthy();
+        unmount();
+      }
+    }
+    world.recon = undefined;
+    renderIt();
+    expect(screen.queryByRole("heading", { name: en.SuppliersStmtReconTitle })).toBeNull();
   });
 
   test("the time window is refreshed while the page stays open, so a long-lived tab never trips the server clock check", () => {
