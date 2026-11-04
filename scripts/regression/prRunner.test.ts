@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { evaluate, runPrScenarios, selectForPr, summarise } from "./prRunner.mjs";
+import { evaluate, evaluatePlaywright, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 
 // The runner is exercised against a throwaway project and the real Vitest: the verdicts below come from
 // executed tests, not from a stubbed report. Fixture tests use Vitest globals so the project needs no node_modules.
@@ -178,19 +178,19 @@ describe("PR scenario runner", () => {
       expect(summary.failureCodes).toEqual({ BROWSER_REPLAY_NOT_EXECUTED: 1 });
       expect(summary.failedIds).toEqual(["mapped-touched BROWSER_REPLAY_NOT_EXECUTED"]);
       expect(summary.issues).toEqual(["SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:1"]);
-      expect(summary.browser).toEqual({ selectedForThisPr: 1, notRequiredAtPrTime: 1, unmappedToAScreen: 2 });
+      expect(summary.browser).toEqual({ selected: 1, notRequiredAtPrTime: 1, unmappedToAScreen: 2 });
     });
 
     it("a PR that touches no screen passes, with the browser records counted as not required or unmapped", () => {
       const summary = summarise(selectForPr(records, ["README.md"]), [{ id: "b", code: "PASS" }], []);
-      expect(summary).toMatchObject({ verdict: "PASS", failed: 0, browser: { selectedForThisPr: 0, notRequiredAtPrTime: 2, unmappedToAScreen: 2 } });
+      expect(summary).toMatchObject({ verdict: "PASS", failed: 0, browser: { selected: 0, notRequiredAtPrTime: 2, unmappedToAScreen: 2 } });
     });
 
     it("an unknown PR diff fails: every browser record counts as selected", () => {
       const summary = summarise(selectForPr(records, null), [{ id: "b", code: "PASS" }], []);
       expect(summary.verdict).toBe("FAIL");
       expect(summary.issues).toContain("PR_DIFF_UNAVAILABLE");
-      expect(summary.browser.selectedForThisPr).toBe(4);
+      expect(summary.browser.selected).toBe(4);
     });
   });
   it("evaluate matches by the exact file, not by a similarly named one", () => {
@@ -198,5 +198,112 @@ describe("PR scenario runner", () => {
     const report = { testResults: [{ name: path.join(root, "ab.fixture.js"), status: "passed", assertionResults: [{ title: "t", status: "passed" }] }] };
     const verdicts = evaluate([{ id: "x", impl: { file: "a.fixture.js", testName: "t" } }], report, root);
     expect(verdicts).toEqual([{ id: "x", code: "FILE_NOT_EXECUTED" }]);
+  });
+});
+
+// SCRUM-761 R3: the full tier (nightly, release). Every active record is required; browser records are judged from
+// Playwright JSON reports shaped as documented at https://playwright.dev/docs/test-reporters#json-reporter.
+describe("full tier", () => {
+  const root = path.resolve("/repo");
+  const browserRecord = (id: string, file = "playwright/tests/a.spec.ts", testName = "the replay") =>
+    ({ id, status: "active", level: "browser", impl: { file, testName } });
+  const report = (specs: Array<{ title: string; file?: string; status: string; project?: string }>) => ({
+    config: { rootDir: path.join(root, "playwright", "tests"), projects: [{ id: "chromium", name: "chromium", testDir: path.join(root, "playwright", "tests") }] },
+    suites: [{ title: "a.spec.ts", file: "a.spec.ts", specs: [], suites: [{ title: "group", file: "a.spec.ts", specs: specs.map(spec => ({
+      title: spec.title, file: spec.file ?? "a.spec.ts", tests: [{ projectName: spec.project ?? "chromium", projectId: spec.project ?? "chromium", status: spec.status }],
+    })) }] }],
+  });
+  // evaluatePlaywright checks the bound file exists on disk, so these tests point it at a real temp project.
+  function withFiles(...names: string[]): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "pr-runner-browser-"));
+    roots.push(dir);
+    for (const name of names) {
+      mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+      writeFileSync(path.join(dir, name), "");
+    }
+    return dir;
+  }
+  const reportFor = (dir: string, specs: Parameters<typeof report>[0]) => {
+    const base = report(specs);
+    base.config.rootDir = path.join(dir, "playwright", "tests");
+    base.config.projects[0].testDir = path.join(dir, "playwright", "tests");
+    return base;
+  };
+
+  it("selects every active browser record, mapped or not, and every active backend record", () => {
+    const selection = selectFull([
+      browserRecord("mapped"), { ...browserRecord("unmapped"), sourceGlobs: [] },
+      { id: "b", status: "active", level: "backend" }, { id: "r", status: "retired", level: "browser" },
+    ] as never);
+    expect(selection.browserSelected.map((record: { id: string }) => record.id)).toEqual(["mapped", "unmapped"]);
+    expect(selection.run.map((record: { id: string }) => record.id)).toEqual(["b"]);
+    expect(selection).toMatchObject({ browserNotRequired: [], browserUnmapped: [], retired: 1 });
+  });
+
+  it("green control: a browser record whose bound title ran as expected passes", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    expect(evaluatePlaywright([browserRecord("ok")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir)).toEqual([{ id: "ok", code: "PASS" }]);
+  });
+
+  it("fails every way a browser replay can fail to run, never skipping it", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const verdict = (status: string | null) => evaluatePlaywright([browserRecord("r")] as never,
+      status === null ? [] : [reportFor(dir, [{ title: "the replay", status }])], dir)[0].code;
+    expect(verdict(null)).toBe("BROWSER_REPLAY_NOT_EXECUTED");
+    expect(verdict("skipped")).toBe("TEST_SKIPPED");
+    expect(verdict("unexpected")).toBe("TEST_FAILED");
+    expect(verdict("flaky")).toBe("TEST_FLAKY");
+    // renamed title, another spec file, missing file, no binding
+    expect(evaluatePlaywright([browserRecord("r", "playwright/tests/a.spec.ts", "was renamed")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir)[0].code).toBe("BROWSER_REPLAY_NOT_EXECUTED");
+    expect(evaluatePlaywright([browserRecord("r", "playwright/tests/b.spec.ts")] as never, [reportFor(dir, [{ title: "the replay", status: "expected" }])], dir)[0].code).toBe("BINDING_FILE_MISSING");
+    expect(evaluatePlaywright([{ id: "r", status: "active", level: "browser" }] as never, [], dir)[0].code).toBe("BINDING_MISSING");
+  });
+
+  it("one failing execution among several projects fails the record", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts");
+    const both = reportFor(dir, [{ title: "the replay", status: "expected" }, { title: "the replay", status: "unexpected", project: "chromium" }]);
+    expect(evaluatePlaywright([browserRecord("r")] as never, [both], dir)[0].code).toBe("TEST_FAILED");
+  });
+
+  it("a spec with the same name in another directory does not satisfy the record", () => {
+    const dir = withFiles("playwright/tests/a.spec.ts", "playwright/scenarios/a.spec.ts");
+    const other = reportFor(dir, [{ title: "the replay", status: "expected" }]);
+    other.config.rootDir = path.join(dir, "playwright", "scenarios");
+    other.config.projects[0].testDir = path.join(dir, "playwright", "scenarios");
+    expect(evaluatePlaywright([browserRecord("r")] as never, [other], dir)[0].code).toBe("BROWSER_REPLAY_NOT_EXECUTED");
+  });
+
+  it("the full tier fails on an unexecuted browser record, a parked candidate and an unreadable report", () => {
+    const records = [browserRecord("replay"), { id: "cand", status: "candidate", level: "backend" }];
+    const selection = selectFull(records as never);
+    const summary = summarise(selection, [{ id: "b", code: "PASS" }], ["PLAYWRIGHT_REPORT_UNREADABLE"], [{ id: "replay", code: "BROWSER_REPLAY_NOT_EXECUTED" }], "full");
+    expect(summary).toMatchObject({ tier: "full", verdict: "FAIL", failureCodes: { BROWSER_REPLAY_NOT_EXECUTED: 1 } });
+    expect(summary.issues).toEqual(["PLAYWRIGHT_REPORT_UNREADABLE", "CANDIDATE_RECORDS_ARE_NOT_EXECUTED:1"]);
+    expect(summary.browser.selected).toBe(1);
+  });
+
+  it("an all-green full tier passes and does not report the PR-tier browser issue", () => {
+    const selection = selectFull([browserRecord("replay")] as never);
+    expect(summarise(selection, [], [], [{ id: "replay", code: "PASS" }], "full")).toMatchObject({ tier: "full", verdict: "PASS", issues: [] });
+  });
+
+  it("readPlaywrightReports flags a missing file and a file that is not a report", () => {
+    const dir = withFiles();
+    writeFileSync(path.join(dir, "not-a-report.json"), "{}");
+    writeFileSync(path.join(dir, "ok.json"), JSON.stringify({ suites: [] }));
+    const result = readPlaywrightReports([path.join(dir, "missing.json"), path.join(dir, "not-a-report.json"), path.join(dir, "ok.json")]);
+    expect(result.problems).toEqual(["PLAYWRIGHT_REPORT_UNREADABLE", "PLAYWRIGHT_REPORT_INVALID"]);
+    expect(result.reports).toHaveLength(1);
+  });
+
+  it("the CLI full tier exits non-zero without reports and rejects an unknown tier", () => {
+    const dir = withFiles();
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
+    mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
+    writeFileSync(path.join(dir, "regression", "scenarios", "x.scenario.json"), JSON.stringify(browserRecord("replay")));
+    const full = spawnSync(process.execPath, [cli, "--root", dir, "--tier", "full"], { encoding: "utf8" });
+    expect(full.status).toBe(1);
+    expect(JSON.parse(full.stdout.slice(full.stdout.indexOf("{")))).toMatchObject({ tier: "full", verdict: "FAIL", failedIds: ["replay BINDING_FILE_MISSING"] });
+    expect(spawnSync(process.execPath, [cli, "--root", dir, "--tier", "nightly"], { encoding: "utf8" }).status).toBe(2);
   });
 });

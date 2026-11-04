@@ -1,4 +1,5 @@
-// SCRUM-761 R3: the PR-time regression-library runner. See docs/adr/2026-11-03-pr-time-scenario-runner.md.
+// SCRUM-761 R3: the regression-library runner for the PR tier (default) and the full tier (nightly, release).
+// See docs/adr/2026-11-03-pr-time-scenario-runner.md and docs/adr/2026-11-04-library-execution-cadence.md.
 //
 // Selects every ACTIVE backend-level scenario record, runs the test each one is bound to (one Vitest invocation over
 // the bound files, one worker, no retry), and gives each record a verdict. A scenario that cannot run is a FAIL, never
@@ -81,6 +82,61 @@ export function changedFilesSince(root, base) {
 
 
 /**
+ * The full tier (nightly, release): every active record is required. Backend records run under Vitest, browser records
+ * must appear in the Playwright JSON reports of the same run. An active cloud record has no runner, so it fails; a
+ * candidate record is a scenario nobody executes, so it fails too (it is parked, not retired).
+ */
+export function selectFull(records) {
+  const selection = selectForPr(records, []);
+  // selectForPr sorts browser records into "not required" or "unmapped"; in this tier all of them are required.
+  selection.browserSelected = records.filter(record => record.status === "active" && record.level === "browser");
+  selection.browserNotRequired = [];
+  selection.browserUnmapped = [];
+  return selection;
+}
+
+/**
+ * One verdict per active browser record from Playwright JSON reports (https://playwright.dev/docs/test-reporters#json-reporter).
+ * Every execution of the bound title (one per project that collects the file) must have run as expected; a skipped,
+ * unexpected or flaky (passed only on retry) execution fails, and zero executions fail. Spec paths are resolved against
+ * the report's rootDir and each project's testDir.
+ * @param {object[]} records active browser-level records
+ * @param {object[]} reports parsed Playwright JSON reports
+ * @param {string} root repository root
+ * @returns {{ id: string, code: string }[]}
+ */
+export function evaluatePlaywright(records, reports, root) {
+  const executions = new Map();
+  const add = (file, title, status) => {
+    const key = `${normalise(path.relative(root, file))}\0${title}`;
+    executions.set(key, [...(executions.get(key) ?? []), status]);
+  };
+  const walk = (suite, report) => {
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        const project = (report.config?.projects ?? []).find(candidate => candidate.name === test.projectName || candidate.id === test.projectId);
+        const bases = new Set([report.config?.rootDir, project?.testDir].filter(base => typeof base === "string" && base));
+        for (const base of bases) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, test.status);
+      }
+    }
+    for (const child of suite.suites ?? []) walk(child, report);
+  };
+  for (const report of reports) for (const suite of report?.suites ?? []) walk(suite, report);
+  return records.map(record => {
+    const file = record.impl?.file;
+    const name = record.impl?.testName;
+    if (typeof file !== "string" || typeof name !== "string" || !file || !name) return { id: record.id, code: "BINDING_MISSING" };
+    if (!existsSync(path.join(root, file))) return { id: record.id, code: "BINDING_FILE_MISSING" };
+    const found = executions.get(`${normalise(file)}\0${name}`) ?? [];
+    if (found.length === 0) return { id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" };
+    if (found.includes("skipped")) return { id: record.id, code: "TEST_SKIPPED" };
+    if (found.includes("flaky")) return { id: record.id, code: "TEST_FLAKY" };
+    if (found.some(status => status !== "expected")) return { id: record.id, code: "TEST_FAILED" };
+    return { id: record.id, code: "PASS" };
+  });
+}
+
+/**
  * One verdict per selected record from Vitest's JSON report (assertionResults are the executed tests).
  * @returns {{ id: string, code: string }[]} code "PASS" or the failure code
  */
@@ -108,25 +164,28 @@ export function evaluate(selected, report, root) {
 }
 
 /** Counts only. Failing ids are listed because the records are already public in the repository. */
-export function summarise(selection, verdicts, extraIssues) {
+export function summarise(selection, verdicts, extraIssues, browserVerdicts = null, tier = "pr") {
   const counts = {};
   // A browser record this PR requires cannot be executed here, so it is a failed verdict, not a skip.
-  const all = [...verdicts, ...selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" }))];
+  // In the full tier the browser records carry verdicts read from the Playwright reports.
+  const all = [...verdicts, ...(browserVerdicts ?? selection.browserSelected.map(record => ({ id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" })))];
   for (const verdict of all) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
   const failures = all.filter(verdict => verdict.code !== "PASS");
   const issues = [...extraIssues];
   if (all.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
   if (selection.cloud.length) issues.push(`CLOUD_RECORDS_HAVE_NO_RUNNER:${selection.cloud.length}`);
-  if (selection.browserSelected.length) issues.push(`SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:${selection.browserSelected.length}`);
+  if (tier === "full" && selection.candidate) issues.push(`CANDIDATE_RECORDS_ARE_NOT_EXECUTED:${selection.candidate}`);
+  if (browserVerdicts === null && selection.browserSelected.length) issues.push(`SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:${selection.browserSelected.length}`);
   if (selection.changedFilesUnavailable) issues.push("PR_DIFF_UNAVAILABLE");
   return {
+    tier,
     verdict: failures.length === 0 && issues.length === 0 ? "PASS" : "FAIL",
     selected: all.length,
     passed: counts.PASS ?? 0,
     failed: failures.length,
     failureCodes: Object.fromEntries(Object.entries(counts).filter(([code]) => code !== "PASS")),
     failedIds: failures.map(verdict => `${verdict.id} ${verdict.code}`),
-    browser: { selectedForThisPr: selection.browserSelected.length, notRequiredAtPrTime: selection.browserNotRequired.length, unmappedToAScreen: selection.browserUnmapped.length },
+    browser: { selected: selection.browserSelected.length, notRequiredAtPrTime: selection.browserNotRequired.length, unmappedToAScreen: selection.browserUnmapped.length },
     notRunHere: { candidate: selection.candidate, retired: selection.retired },
     issues,
   };
@@ -149,12 +208,15 @@ export function runVitest(root, files, config) {
   }
 }
 
-/** @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null }} options */
-export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null }) {
+/**
+ * @param {{ root: string, config?: string, execute?: typeof runVitest, changedFiles?: string[] | null,
+ *   tier?: "pr" | "full", playwrightReports?: object[], reportProblems?: string[] }} options
+ */
+export function runPrScenarios({ root, config, execute = runVitest, changedFiles = null, tier = "pr", playwrightReports = [], reportProblems = [] }) {
   const { records, problems } = loadRecords(root);
-  const selection = selectForPr(records, changedFiles);
+  const selection = tier === "full" ? selectFull(records) : selectForPr(records, changedFiles);
   const files = [...new Set(selection.run.map(record => record.impl?.file).filter(file => typeof file === "string" && file && existsSync(path.join(root, file))))].sort(codeUnitCompare);
-  const issues = [...problems];
+  const issues = [...problems, ...reportProblems];
   let report = null;
   if (files.length) {
     const result = execute(root, files, config);
@@ -162,24 +224,49 @@ export function runPrScenarios({ root, config, execute = runVitest, changedFiles
     if (!report) issues.push("VITEST_REPORT_MISSING");
     else if (result.exitCode !== 0) issues.push(`VITEST_EXIT_${result.exitCode}`);
   }
-  return summarise(selection, evaluate(selection.run, report, root), issues);
+  const browserVerdicts = tier === "full" ? evaluatePlaywright(selection.browserSelected, playwrightReports, root) : null;
+  return summarise(selection, evaluate(selection.run, report, root), issues, browserVerdicts, tier);
+}
+
+/** Reads Playwright JSON reports. An unreadable or non-report file is a problem (FAIL), never dropped. */
+export function readPlaywrightReports(paths) {
+  const reports = [];
+  const problems = [];
+  for (const file of paths) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      if (Array.isArray(parsed?.suites)) reports.push(parsed);
+      else problems.push("PLAYWRIGHT_REPORT_INVALID");
+    } catch {
+      problems.push("PLAYWRIGHT_REPORT_UNREADABLE");
+    }
+  }
+  return { reports, problems };
 }
 
 export function main(argv = process.argv.slice(2)) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
-    options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string", default: "origin/main" } } });
+    options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string", default: "origin/main" },
+      tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true } } });
+  if (values.tier !== "pr" && values.tier !== "full") {
+    process.stderr.write("--tier must be pr or full\n");
+    return 2;
+  }
   const root = path.resolve(values.root ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."));
   let changedFiles = null;
-  try {
-    changedFiles = changedFilesSince(root, values.base);
-  } catch {
-    // Left null: the PR diff is unknown, so every active browser record counts as selected and the run fails.
+  if (values.tier === "pr") {
+    try {
+      changedFiles = changedFilesSince(root, values.base);
+    } catch {
+      // Left null: the PR diff is unknown, so every active browser record counts as selected and the run fails.
+    }
   }
-  const summary = runPrScenarios({ root, config: values.config, changedFiles });
+  const { reports, problems } = readPlaywrightReports(values["playwright-report"] ?? []);
+  const summary = runPrScenarios({ root, config: values.config, changedFiles, tier: values.tier, playwrightReports: reports, reportProblems: problems });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## PR scenario runner: ${summary.verdict}\n\n\`\`\`json\n${text}\n\`\`\`\n`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Regression library runner (${summary.tier} tier): ${summary.verdict}\n\n\`\`\`json\n${text}\n\`\`\`\n`);
   }
   return summary.verdict === "PASS" ? 0 : 1;
 }
