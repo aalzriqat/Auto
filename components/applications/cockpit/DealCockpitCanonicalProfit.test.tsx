@@ -273,27 +273,37 @@ describe("one canonical profit on the financed cockpit", () => {
         ...(original.dealKind === "FINANCED" ? { managementProfit: withheld } : { managementNetProfit: withheld }),
         parties: [{ party: "SUPPLIER", name: "Restricted supplier", position: "DEALERSHIP_OWES", amountMinor: null, currency: "JOD" }],
       } } as DealCockpitData;
-      const data = overview();
-      if (!data.financialSummary) throw new Error("Expected summary");
-      data.financialSummary.profit = withheld;
+      const originalOverview = overview();
+      if (!originalOverview.financialSummary) throw new Error("Expected summary");
+      const data: FinancedDealOverviewData = { ...originalOverview, financialSummary: {
+        ...originalOverview.financialSummary, profit: withheld,
+        supplier: { consigned: true, direction: "DEALERSHIP_OWES", amountMinor: null, route: "THROUGH_DEALERSHIP" },
+      } };
       render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}}
         financialOverview={deal.dealKind === "FINANCED" ? { data, loading: false } : undefined} custodyMoney={money} />);
       expect(screen.getAllByText(dictionary.ProfitCostAccessRequired).length).toBeGreaterThan(0);
-      expect(screen.queryByText("0 JOD")).toBeNull();
+      const supplierFact = screen.getByText("Restricted supplier").closest("p")?.parentElement;
+      if (!supplierFact) throw new Error("Expected supplier fact");
+      expect(within(supplierFact).queryByText("0 JOD")).toBeNull();
+      expect(within(supplierFact).getByText(locale === "en"
+        ? "This amount requires permission to view vehicle cost."
+        : "عرض هذا المبلغ يتطلب صلاحية عرض تكلفة السيارة.")).toBeTruthy();
       expect(screen.queryByText("9,900 JOD")).toBeNull();
       cleanup();
     }
   });
 
-  test.each(["en", "ar"] as const)("SCRUM-908 %s pre-sale estimate labels commissions registered to date in tiles and working", (locale) => {
+  test.each(["en", "ar"] as const)("SCRUM-908 %s pre-sale estimate labels commissions registered to date in its working", (locale) => {
     language.locale = locale;
     const data = overview();
-    if (!data.financialSummary?.profit.available) throw new Error("Expected estimate");
+    if (!data.financialSummary?.profit.available || data.financialSummary.profit.basis !== "MANAGEMENT_ESTIMATE") {
+      throw new Error("Expected estimate");
+    }
     data.financialSummary.profit.lines.push({ key: "COMMISSIONS", sign: -1, amountMinor: 0 });
     render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
       financialOverview={{ data, loading: false }} custodyMoney={money} />);
     const label = locale === "en" ? "Commissions registered to date" : "العمولات المسجلة حتى الآن";
-    expect(screen.getAllByText(label)).toHaveLength(2);
+    expect(screen.getAllByText(label)).toHaveLength(1); // Financed overview uses rows, not duplicate fact tiles.
     expect(screen.queryByText(locale === "en" ? "Total commissions" : "إجمالي العمولات")).toBeNull();
   });
 

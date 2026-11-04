@@ -155,9 +155,10 @@ test.each([
   expect(await s.read()).toMatchObject({ available: true, amountMinor: financed ? 1_009_200 : 1_775_500 });
 });
 
-test.each([
-  [false, "SOURCED"], [true, "SOURCED"], [false, "STOCK"], [true, "STOCK"],
-] as const)("SCRUM-908 complete cockpit responses financed=%s %s withhold every cost projection", async (financed, sourceType) => {
+test("SCRUM-908 complete cockpit responses withhold every cost projection", async () => {
+  const variants = [[false, "SOURCED"], [true, "SOURCED"], [false, "STOCK"], [true, "STOCK"]] as const;
+  for (let index = 0; index < variants.length; index += 1) {
+  const [financed, sourceType] = variants[index];
   const s = await seedDealNetProfit(modules, sourceType, financed);
   const permissions = ["view:sales", "view:finance", "view:commissions"];
   await s.t.run((ctx) => ctx.db.patch(s.roleId, {
@@ -215,6 +216,7 @@ test.each([
   if (!financed) expect((await readSale())?.money).toMatchObject({
     profit: allowedSale?.money?.profit, managementNetProfit: allowedSale?.money?.managementNetProfit,
   });
+  }
 });
 
 test.each(["deleted", "foreign"] as const)("SCRUM-908 %s finalized sale cannot supply commission evidence", async (state) => {
