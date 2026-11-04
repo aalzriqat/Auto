@@ -2,6 +2,7 @@ import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { hasReadHeadroom, type HeadroomCtx } from "./utils/transactionReadHeadroom";
 import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
@@ -1043,6 +1044,35 @@ export const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
     .filter(([, affectsAp]) => affectsAp)
     .map(([eventType]) => eventType)
 );
+
+/**
+ * Whether a queued posting could move the GL, with the original-event lookups held to the transaction's read budget
+ * (transactionReadHeadroom.ts): each queued reversal's original is an `accountingEvents` document with an unbounded `payload`, so
+ * the lookups are read one at a time, each after a headroom check. `OVER_LIMIT` means the budget ran out before the answer was
+ * known; the caller must not read that as "nothing pending" (#764 round 5).
+ */
+export async function pendingAffectingPostingState(
+  ctx: Pick<QueryCtx, "db"> & HeadroomCtx,
+  events: Array<Doc<"pendingAccountingEvents">>,
+  affectingEventTypes: ReadonlySet<string>
+): Promise<"NONE" | "AFFECTING" | "OVER_LIMIT"> {
+  const reversals: Array<Doc<"pendingAccountingEvents">> = [];
+  for (const event of events) {
+    if (event.kind === "REVERSE") reversals.push(event);
+    else if (!event.eventType || affectingEventTypes.has(event.eventType)) return "AFFECTING";
+  }
+  const originalOrgs = new Map<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>, Id<"organizations">>();
+  for (const event of reversals) {
+    if (!event.originalEventId) return "AFFECTING";
+    originalOrgs.set(event.originalEventId, event.orgId);
+  }
+  for (const [id, orgId] of originalOrgs) {
+    if (!(await hasReadHeadroom(ctx))) return "OVER_LIMIT";
+    const original = await ctx.db.get(id);
+    if (!original || original.orgId !== orgId || affectingEventTypes.has(original.eventType)) return "AFFECTING";
+  }
+  return "NONE";
+}
 
 export async function hasPendingAffectingPosting(
   ctx: Pick<QueryCtx, "db">,

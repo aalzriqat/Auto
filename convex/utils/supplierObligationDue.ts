@@ -5,7 +5,7 @@ import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import { OPEN_RECOVERY_STATUSES } from "./costBearer";
 import { SYSTEM_KEYS } from "./defaultChart";
-import { readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
+import { hasReadHeadroom, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
 import {
   agingFor,
   ammanDateString,
@@ -325,11 +325,16 @@ export interface StatementSection {
   rows: ObligationRow[];
   /** One total per currency; currencies are never added together. */
   totals: StatementTotal[];
-  /** False when the family held more rows than the read bound: the rows and totals are then partial. */
+  /** False when the family held more rows than the read bound or the transaction ran out of read budget: rows and totals are then partial. */
   complete: boolean;
+  /** Why the section is incomplete; absent when it is complete. A screen must not call an unread section empty. */
+  incompleteReason?: IncompleteReason;
 }
 
-function statementSection(rows: ObligationRow[], complete: boolean): StatementSection {
+/** ROW_LIMIT: more rows than the per-family cap. READ_BUDGET: the transaction had no room left to read them (bytes, not rows). */
+export type IncompleteReason = "ROW_LIMIT" | "READ_BUDGET";
+
+function statementSection(rows: ObligationRow[], complete: boolean, reason: IncompleteReason = "ROW_LIMIT"): StatementSection {
   const byCurrency = new Map<string, StatementTotal>();
   for (const row of rows) {
     const total = byCurrency.get(row.currency) ?? { currency: row.currency, grossMinor: 0, disputedMinor: 0, overdueMinor: 0 };
@@ -339,7 +344,40 @@ function statementSection(rows: ObligationRow[], complete: boolean): StatementSe
     byCurrency.set(row.currency, total);
   }
   // W14: a partial list never presents a partial sum as a total (the settled section does the same).
-  return { rows, totals: complete ? [...byCurrency.values()] : [], complete };
+  return complete ? { rows, totals: [...byCurrency.values()], complete } : { rows, totals: [], complete, incompleteReason: reason };
+}
+
+/** Thrown by the budgeted reader when the transaction has no room for another document; caught where the section is assembled. */
+class ReadBudgetExhausted extends Error {}
+
+/**
+ * A reader whose `get` asks the transaction for headroom first (transactionReadHeadroom.ts), so the per-row enrichment reads
+ * (the sale and the finance application behind a row) spend the same budget as the streamed lists instead of bypassing it.
+ */
+function budgetedReader(ctx: Reader & HeadroomCtx): Reader {
+  const get = async (id: never) => {
+    if (!(await hasReadHeadroom(ctx))) throw new ReadBudgetExhausted();
+    return await ctx.db.get(id);
+  };
+  return { db: { get } } as unknown as Reader;
+}
+
+/** Rows read one at a time; stops at the first row the budget cannot cover and reports the cut. */
+async function readRowsWithinBudget(
+  docs: readonly unknown[],
+  read: (index: number) => Promise<ObligationRow | null>,
+): Promise<{ rows: ObligationRow[]; cut: boolean }> {
+  const rows: ObligationRow[] = [];
+  for (let i = 0; i < docs.length; i += 1) {
+    try {
+      const row = await read(i);
+      if (row) rows.push(row);
+    } catch (error) {
+      if (error instanceof ReadBudgetExhausted) return { rows, cut: true };
+      throw error;
+    }
+  }
+  return { rows, cut: false };
 }
 
 // Exhaustive on purpose: a status added to the schema fails typecheck until it is classified here,
@@ -390,26 +428,35 @@ export async function readSupplierOutstanding(
   const payableDocs = payables.docs;
   const receivableDocs = claims.docs;
   const recoveryDocs = recoveries.docs;
-  const payableRows: ObligationRow[] = [];
-  for (const row of payableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
-    const read = await readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), undefined);
-    if (read) payableRows.push(read);
-  }
-  const receivableRows: ObligationRow[] = [];
-  for (const row of receivableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
-    const read = await readRow("RECEIVABLE", row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row), undefined);
-    if (read) receivableRows.push(read);
-  }
+  const budgeted = budgetedReader(ctx);
+  const payableDocsShown = payableDocs.slice(0, STATEMENT_FAMILY_LIMIT);
+  const payableRead = await readRowsWithinBudget(payableDocsShown, (i) => {
+    const row = payableDocsShown[i]!;
+    return readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(budgeted, orgId, row), undefined);
+  });
+  const receivableDocsShown = receivableDocs.slice(0, STATEMENT_FAMILY_LIMIT);
+  const receivableRead = await readRowsWithinBudget(receivableDocsShown, (i) => {
+    const row = receivableDocsShown[i]!;
+    return readRow("RECEIVABLE", row._id, row.currency, nowMs, () => receivableFacts(budgeted, orgId, row), undefined);
+  });
+  const receivableRows: ObligationRow[] = [...receivableRead.rows];
   for (const row of recoveryDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
     const read = await readRow("RECOVERY", row._id, row.currency, nowMs, () => recoveryFacts(row), undefined);
     if (read) receivableRows.push(read);
   }
 
+  const payableBudgetCut = payables.cut || payableRead.cut;
+  const receivableBudgetCut = claims.cut || recoveries.cut || receivableRead.cut;
   return {
-    payable: statementSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    payable: statementSection(
+      payableRead.rows,
+      !payableBudgetCut && payableDocs.length <= STATEMENT_FAMILY_LIMIT,
+      payableBudgetCut ? "READ_BUDGET" : "ROW_LIMIT",
+    ),
     receivable: statementSection(
       receivableRows,
-      !claims.cut && !recoveries.cut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT
+      !receivableBudgetCut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
+      receivableBudgetCut ? "READ_BUDGET" : "ROW_LIMIT",
     ),
   };
 }
@@ -455,6 +502,8 @@ export interface SettledTotal {
 
 export interface SettledSection {
   rows: SettledRow[];
+  /** Why the section is incomplete, when a row or read limit is the reason; absent when complete or when only unverified receipts are. */
+  incompleteReason?: IncompleteReason;
   /** One total per currency; currencies are never added together. */
   totals: SettledTotal[];
   /** False when a family held more rows than the read bound, or a row's cash could not be established: rows and totals are then partial. */
@@ -503,7 +552,7 @@ function newest<D extends { _creationTime: number }>(docs: D[]): D[] {
   return [...docs].sort((a, b) => b._creationTime - a._creationTime).slice(0, STATEMENT_FAMILY_LIMIT);
 }
 
-function settledSection(rows: SettledRow[], withinBound: boolean, unverifiedCount = 0): SettledSection {
+function settledSection(rows: SettledRow[], withinBound: boolean, unverifiedCount = 0, budgetCut = false): SettledSection {
   // W14: a partial list never presents a partial sum as a total.
   const complete = withinBound && unverifiedCount === 0;
   const byCurrency = new Map<string, SettledTotal>();
@@ -512,7 +561,9 @@ function settledSection(rows: SettledRow[], withinBound: boolean, unverifiedCoun
     total.settledMinor += row.settledMinor;
     byCurrency.set(row.currency, total);
   }
-  return { rows, totals: [...byCurrency.values()], complete, unverifiedCount };
+  // Budget first: it is the one reason a screen must not read as "nothing here". Unverified receipts alone carry no reason.
+  const incompleteReason: IncompleteReason | undefined = complete ? undefined : budgetCut ? "READ_BUDGET" : withinBound ? undefined : "ROW_LIMIT";
+  return { rows, totals: [...byCurrency.values()], complete, unverifiedCount, ...(incompleteReason ? { incompleteReason } : {}) };
 }
 
 /** Ledger reads per supplier for receipt provenance: entries, and lines per entry (a receipt posts two lines). */
@@ -750,11 +801,12 @@ export async function readSupplierSettled(
   }
   receivableRows.sort((a, b) => b.createdAt - a.createdAt);
   return {
-    payable: settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    payable: settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT, 0, payables.cut),
     receivable: settledSection(
       receivableRows.map((entry) => entry.row),
       !claimsRead.cut && !recoveries.cut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
       unverifiedCount,
+      claimsRead.cut || recoveries.cut || (budgetSpent && unverifiedCount > 0),
     ),
   };
 }

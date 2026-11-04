@@ -274,6 +274,10 @@ const suppliersMessages = defineBilingualMessages({
     "More lines exist than can be shown here. The lines above are partial, so no total is shown.",
     "توجد بنود أكثر من المعروض هنا. البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
   ],
+  SuppliersStmtIncompleteBudget: [
+    "Not every line could be read in one request, so the lines above are partial and no total is shown. Narrow the supplier or try again.",
+    "تعذّرت قراءة كل البنود في طلب واحد، لذلك البنود أعلاه جزئية ولا يُعرض إجمالي. ضيّق نطاق المورّد أو حاول مرة أخرى.",
+  ],
   SuppliersStmtKindPayable: ["Supplier payable", "مستحق للمورّد"],
   SuppliersStmtKindReceivable: ["Margin receivable", "هامش مستحق على المورّد"],
   SuppliersStmtKindRecovery: ["Cost recovery", "استرداد تكلفة"],

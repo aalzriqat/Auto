@@ -95,6 +95,10 @@ function Totals({ totals, translate }: Readonly<{ totals: StatementTotal[]; tran
   );
 }
 
+function incompleteKey(reason: "ROW_LIMIT" | "READ_BUDGET" | undefined): string {
+  return reason === "READ_BUDGET" ? "SuppliersStmtIncompleteBudget" : "SuppliersStmtIncomplete";
+}
+
 function StatementRegion({
   id,
   title,
@@ -113,7 +117,8 @@ function StatementRegion({
         {title}
       </h3>
       {data.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
+        // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
+        data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
         <ul className="divide-y">
           {data.rows.map((row) => (
@@ -123,7 +128,7 @@ function StatementRegion({
       )}
       {!data.complete && (
         <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
-          {translate("SuppliersStmtIncomplete")}
+          {translate(incompleteKey(data.incompleteReason))}
         </p>
       )}
       {!data.complete ? (
@@ -223,7 +228,8 @@ function SettledRegion({
         {title}
       </h4>
       {data.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
+        // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
+        data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
         <ul className="divide-y">
           {data.rows.map((row) => (
@@ -237,9 +243,9 @@ function SettledRegion({
           {interpolate(translate("SuppliersStmtHistoryUnverified"), { count: String(data.unverifiedCount) })}
         </p>
       )}
-      {!data.complete && data.unverifiedCount === 0 && (
+      {!data.complete && (data.unverifiedCount === 0 || data.incompleteReason === "READ_BUDGET") && (
         <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
-          {translate("SuppliersStmtIncomplete")}
+          {translate(incompleteKey(data.incompleteReason))}
         </p>
       )}
       {!data.complete ? (

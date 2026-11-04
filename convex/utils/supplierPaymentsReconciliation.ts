@@ -1,6 +1,6 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { AP_AFFECTING_EVENT_TYPES, hasPendingAffectingPosting } from "../accountingReports";
+import { AP_AFFECTING_EVENT_TYPES, pendingAffectingPostingState } from "../accountingReports";
 import { SYSTEM_KEYS } from "./defaultChart";
 import { toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
@@ -98,12 +98,11 @@ export async function readSupplierPaymentsReconciliation(
   }
   // A queued reversal of a supplier payment is typed JOURNAL_REVERSAL, which the AP classification marks false:
   // unknown must not read as safe, so any queued reversal makes this unavailable.
-  if (
-    inFlight.some((event) => event.eventType === "JOURNAL_REVERSAL") ||
-    (await hasPendingAffectingPosting(ctx, inFlight, AP_AFFECTING_EVENT_TYPES))
-  ) {
-    return unavailable("PENDING_POSTINGS");
-  }
+  if (inFlight.some((event) => event.eventType === "JOURNAL_REVERSAL")) return unavailable("PENDING_POSTINGS");
+  // The original-event lookups spend the same read budget; running out of it is OVER_LIMIT, not "nothing pending".
+  const pending = await pendingAffectingPostingState(ctx, inFlight, AP_AFFECTING_EVENT_TYPES);
+  if (pending === "OVER_LIMIT") return unavailable("OVER_LIMIT");
+  if (pending === "AFFECTING") return unavailable("PENDING_POSTINGS");
 
   // 2. Every payable of the supplier under one bound; past it nothing is summed (W14).
   const payables: Doc<"vehicleSupplierPayables">[] = [];

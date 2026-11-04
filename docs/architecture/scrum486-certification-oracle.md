@@ -993,11 +993,36 @@ Evidence boundary: convex-test only, with the real `openSupplierReceivable` and 
 
 ### SCRUM-869 supplier statement queries: no read limit is ever thrown (PR #764 round 4)
 
-Matrix row `SCRUM869-supplier-read-limits` binds five literal tests (one scenario record each, `regression/scenarios/money/supplier-recon-*`, `supplier-outstanding-*` and `supplier-history-spent-budget-*`; failing-first commit `8c98ed31f2633a817689fe615c8eba408082cc0b`, where they were red). Owner ruling SCRUM-869#c23881 (2026-10-29). Invariant: no supplier statement query (`outstanding`, `settled`, `paymentsReconciliation`) throws on a Convex read limit (16 MiB, 32,000 documents, 4,096 index ranges per function, https://docs.convex.dev/production/state/limits). Each answers UNAVAILABLE / OVER_LIMIT or `complete: false` with its totals withheld.
+Matrix row `SCRUM869-supplier-read-limits` binds seven literal tests (one scenario record each, `regression/scenarios/money/supplier-recon-*`, `supplier-outstanding-*` and `supplier-history-spent-budget-*`; failing-first commits `8c98ed31f2633a817689fe615c8eba408082cc0b` for round 4 and `c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6` for round 5, where they were red). Owner ruling SCRUM-869#c23881 (2026-10-29). Invariant: no supplier statement query (`outstanding`, `settled`, `paymentsReconciliation`) throws on a Convex read limit (16 MiB, 32,000 documents, 4,096 index ranges per function, https://docs.convex.dev/production/state/limits). Each answers UNAVAILABLE / OVER_LIMIT or `complete: false` with its totals withheld.
 
 - Mechanism: every list read goes through `readBoundedStream` (`convex/utils/transactionReadHeadroom.ts`), which asks `ctx.meta.getTransactionMetrics()` for room before each document (https://docs.convex.dev/database/writing-data, "Checking transaction headroom"). One shared budget, no second one. A row cap alone bounds documents, not bytes: `paymentNotes` can be ~1 MiB.
 - `paymentsReconciliation`: the outbox in-flight read, the payables of all seven statuses, each payable's journal entries (shared 1,000-entry budget) and each entry's lines. Any cut is UNAVAILABLE / OVER_LIMIT with no currencies and no differences.
 - `outstanding`: payables, margin receivables and cost recoveries are streamed in turn. A cut family is `complete: false`. A section that is not complete now withholds its totals (W14), as the settled section already did, so a partial sum never sits next to the flag; the row cap path changed with it.
 - `settled` unverified count (LOW-2): a claim with no recorded receipt (`receiptSeq` 0) holds only the customer deposit seed. It is read while budget remains, but when the budget is gone it is skipped and never counted unverified.
 
-Evidence boundary: convex-test with `transactionLimits: true`, which emulates the 16 MiB ceiling; not proven against the Convex backend (SCRUM-762): that its metering matches the headroom figures and the cost of one `getTransactionMetrics` call per document. The shared budget means a heavy payables family can also withhold the receivable side of `outstanding`; that is a truthful incomplete section, not a total. Not covered: the per-row fact reads inside `readRow` (one small document each) and `hasPendingAffectingPosting`'s own lookups.
+Evidence boundary: convex-test with `transactionLimits: true`, which emulates the 16 MiB ceiling; not proven against the Convex backend (SCRUM-762): that its metering matches the headroom figures and the cost of one `getTransactionMetrics` call per document. The shared budget means a heavy payables family can also withhold the receivable side of `outstanding`; that is a truthful incomplete section, not a total. Round 5 closed the two reads this paragraph used to list as not covered (next section).
+
+### SCRUM-869 supplier statement queries: every read spends the shared budget, a cut is never an absence (PR #764 round 5)
+
+Same matrix row, `SCRUM869-supplier-read-limits`; failing-first commit `c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6`. Invariant: a read that happens inside a supplier statement query is either charged to the one shared transaction budget or is a single schema-bounded document; and a section the budget cut is reported as incomplete with a reason, never rendered as "none".
+
+- Row enrichment (M1): `payableFacts` and `receivableFacts` read the linked sale and finance application with `db.get`. Those reads now go through `budgetedReader`, which checks `hasReadHeadroom` before each get and throws a private `ReadBudgetExhausted`; `readRowsWithinBudget` catches it per family. The family is then incomplete with `incompleteReason: "READ_BUDGET"` and its totals withheld.
+- Queued postings (M2): `paymentsReconciliation` calls the new `pendingAffectingPostingState`, which reads each queued reversal's original event one at a time after a headroom check and answers NONE, AFFECTING or OVER_LIMIT. OVER_LIMIT is `UNAVAILABLE / OVER_LIMIT`, never "nothing pending". `hasPendingAffectingPosting` is unchanged: its two other callers are report queries outside this change (follow-up, not widened here).
+- Reason (M3): `section` and `settledSection` carry `incompleteReason: "ROW_LIMIT" | "READ_BUDGET"` when `complete` is false. The screen shows the empty sentence only when the section is complete, and a budget cut has its own English and Arabic note.
+
+Class table, every db read in the three readers:
+
+| Reader | Read | Bound |
+| --- | --- | --- |
+| `paymentsReconciliation` | in-flight outbox events | `readBoundedStream`, shared budget |
+| | payables, seven statuses | `readBoundedStream` |
+| | each payable's journal entries and lines | `readBoundedStream`, 1,000-entry budget |
+| | queued reversals' original events | `pendingAffectingPostingState`, headroom before each get |
+| | accounts payable control account | one `unique()` document, no free-text field |
+| `outstanding` | payables, margin receivables, cost recoveries | `readBoundedStream` per family |
+| | linked sale and finance application per row | `budgetedReader`, headroom before each get |
+| `settled` | payables, claims, recoveries | `readSettledFamily` over `readBoundedStream` |
+| | claim receipts and their entries | `readBoundedStream`, 1,000-entry budget |
+| | receivable-from-suppliers control account | one `unique()` document, no free-text field |
+
+Evidence boundary: convex-test with `transactionLimits: true`; the headroom call is not proven against the Convex backend's metering (SCRUM-762). Not changed: a generic reversal of `SUPPLIER_PAYMENT_SETTLED` leaves `amountPaid` as it was, so the payable history can still say "Settled in full" (LOW, SCRUM-879).

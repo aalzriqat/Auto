@@ -35,12 +35,15 @@ const row = v.object({
   daysOverdue: v.union(v.number(), v.null()),
   bucket: v.string(),
 });
+/** ROW_LIMIT: more rows than the per-family cap. READ_BUDGET: the transaction had no room to read them all (bytes, not rows). */
+const incompleteReason = v.union(v.literal("ROW_LIMIT"), v.literal("READ_BUDGET"));
 const section = v.object({
   rows: v.array(row),
   totals: v.array(
     v.object({ currency: v.string(), grossMinor: v.number(), disputedMinor: v.number(), overdueMinor: v.number() })
   ),
   complete: v.boolean(),
+  incompleteReason: v.optional(incompleteReason),
 });
 
 const settledRow = v.object({
@@ -63,6 +66,7 @@ const settledSection = v.object({
   rows: v.array(settledRow),
   totals: v.array(v.object({ currency: v.string(), settledMinor: v.number() })),
   complete: v.boolean(),
+  incompleteReason: v.optional(incompleteReason),
   /** Margin claims with a recorded supplier receipt that could not be read back from the ledger; their cash is unknown. */
   unverifiedCount: v.number(),
 });
