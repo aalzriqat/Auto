@@ -1,0 +1,54 @@
+{
+  "id": "opening-unbalanced-credits-short-posts-suspense-credit",
+  "fingerprint": "27c5ce50627fe4f2bb05d011939c2791136aea4e252f999077ba649a89a24131",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-suspense",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "debitsMinor": 100000,
+        "creditsMinor": 60000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.totalDebitsEqualCredits",
+      "value": true
+    },
+    {
+      "observable": "suspense.creditMinor",
+      "value": 40000
+    },
+    {
+      "observable": "suspense.debitMinor",
+      "value": 0
+    },
+    {
+      "observable": "ownerCapital.openingLineMinor",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingSuspense.scrum858.test.ts",
+    "testName": "credits short of debits: the difference is posted as a suspense credit, not to equity"
+  },
+  "matrixRow": "SCRUM-858-opening-suspense"
+}

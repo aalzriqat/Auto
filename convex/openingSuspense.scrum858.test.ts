@@ -78,7 +78,12 @@ test("credits short of debits: the difference is posted as a suspense credit, no
 test("debits short of credits: the difference is posted as a suspense debit", () => withFrozenScheduler(async () => {
   const seed = await setup();
   await post(seed, 60_000, 100_000);
-  expect(await openingLines(seed)).toContainEqual({ systemKey: "OPENING_SUSPENSE", debitMinor: 40_000, creditMinor: 0 });
+  const lines = await openingLines(seed);
+  expect(lines).toContainEqual({ systemKey: "OPENING_SUSPENSE", debitMinor: 40_000, creditMinor: 0 });
+  expect(lines.filter((line) => line.systemKey === "RETAINED_EARNINGS")).toEqual([
+    { systemKey: "RETAINED_EARNINGS", debitMinor: 0, creditMinor: 100_000 },
+  ]);
+  expect(lines.reduce((sum, line) => sum + line.debitMinor, 0)).toBe(lines.reduce((sum, line) => sum + line.creditMinor, 0));
 }));
 
 test("a balanced opening set posts no suspense line", () => withFrozenScheduler(async () => {
