@@ -409,17 +409,31 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
     .filter(w => Object.values(workflowSchema.parse(parse(w.text)).jobs).some(job => job.steps?.some(step => invocation(step, "create"))));
 
   it("finds the known creators", () => {
-    // SCRUM-892: browser-attack-swarm.yml, pilot-role-audit.yml and
-    // trusted-accounting-rehearsal.yml left this census when they moved to
-    // runner-local Convex backends (owner ruling SCRUM-892 c24441). None of
-    // them creates, pins or deletes a cloud Preview, so none owes cleanup.
-    // The next test keeps the swarm out; each workflow's own test keeps the
-    // other two out.
+    // SCRUM-892 (owner ruling c24441): browser-attack-swarm.yml,
+    // pilot-role-audit.yml, trusted-accounting-rehearsal.yml and
+    // trusted-main-e2e.yml left this census when they moved to runner-local
+    // Convex backends. None of them creates, pins or deletes a cloud Preview,
+    // so none owes cleanup. The tests below keep the swarm, the rehearsal and
+    // Trusted Main E2E out; the role-audit workflow test keeps that one out.
     expect(creators.map((w) => w.file).sort()).toEqual([
       "deal-scenarios-e2e.yml",
       "hunt-preview.yml",
-      "trusted-main-e2e.yml",
     ]);
+  });
+  it("SCRUM-892: trusted main E2E owns no Preview: it creates, pins and deletes none", () => {
+    const mainText = readFileSync(path.join(dir, "trusted-main-e2e.yml"), "utf8");
+    const mainJobs = workflowSchema.parse(parse(mainText)).jobs;
+    expect(Object.keys(mainJobs)).toEqual(["playwright"]);
+    for (const [id, job] of Object.entries(mainJobs)) {
+      for (const entry of job.steps ?? []) {
+        for (const kind of ["create", "pin", "delete"] as const) {
+          expect(invocation(entry, kind), `${id} :: ${entry.name} ${kind}`).toBe(false);
+        }
+      }
+    }
+    expect(creators.map((w) => w.file)).not.toContain("trusted-main-e2e.yml");
+    expect(mainText).not.toContain("--preview-create");
+    expect(mainText).not.toContain("previewDeploymentLifecycle");
   });
 
   it.each(["browser-attack-swarm.yml", "trusted-accounting-rehearsal.yml"])("SCRUM-892: %s owns no Preview: it creates, pins and deletes none", (file) => {
@@ -554,34 +568,37 @@ describe("SCRUM-377 every preview-creating workflow retires its preview", () => 
   // SCRUM-892: the two tests below used the swarm's opening-prepare /
   // opening-cleanup / preview-cleanup lifecycle as their "actual workflow".
   // That lifecycle is gone, so the same properties are now proved against the
-  // actual trusted-main-e2e.yml lifecycle, which has the same create, pin and
-  // delete contract in one job. Each former mutation keeps its slot:
+  // actual deal-scenarios-e2e.yml lifecycle, which has the same create, pin and
+  // delete contract in one job (create, pin guarded by always(), delete as the
+  // final step guarded by CONVEX_PREVIEW_CREATED_AT). trusted-main-e2e.yml, which
+  // served as that fixture, moved to a local backend (owner ruling c24441) and has
+  // no lifecycle left to prove. Each former mutation keeps its slot:
   //   wrong cleanup identity -> weakened cleanup guard
   //   missing consumer -> missing cleanup
   //   warn-only opening deletion -> deletion that is not the final step
   //   missing cleanup identity check -> pin without its always() guard
-  function actualMainLifecycle() {
-    const main = creators.find(workflow => workflow.file === "trusted-main-e2e.yml");
-    if (!main) throw new Error("Actual main lifecycle unavailable");
+  function actualScenariosLifecycle() {
+    const main = creators.find(workflow => workflow.file === "deal-scenarios-e2e.yml");
+    if (!main) throw new Error("Actual scenarios lifecycle unavailable");
     const jobs = workflowSchema.parse(parse(main.text)).jobs;
     const entry = Object.entries(jobs).find(([, job]) => job.steps?.some(step => invocation(step, "create")));
-    if (!entry || !entry[1].steps) throw new Error("Actual main lifecycle incomplete");
+    if (!entry || !entry[1].steps) throw new Error("Actual scenarios lifecycle incomplete");
     const steps = entry[1].steps;
     const create = steps.findIndex(step => invocation(step, "create"));
     const pin = steps.findIndex(step => invocation(step, "pin"));
     const del = steps.findIndex(step => invocation(step, "delete"));
-    if (create < 0 || pin < 0 || del < 0) throw new Error("Actual main lifecycle incomplete");
+    if (create < 0 || pin < 0 || del < 0) throw new Error("Actual scenarios lifecycle incomplete");
     return { file: main.file, jobs, job: entry[1], steps, create, pin, del };
   }
 
   it("allows comments and quoted command examples without inventing another Preview owner", () => {
-    const actual = actualMainLifecycle();
+    const actual = actualScenariosLifecycle();
     actual.steps.splice(actual.pin + 1, 0, { run: '# pnpm exec convex deploy --preview-create example\n: node scripts/previewDeploymentLifecycle.mjs delete\necho "pnpm exec convex deploy --preview-create example"\necho --preview-create\nprintf "%s\\n" --preview-create' });
     expect(() => assertLifecycles(actual.file, actual.jobs)).not.toThrow();
   });
 
-  it.each(["missing pin", "weakened cleanup guard", "unpaired creator", "missing cleanup", "deletion that is not the final step", "pin without its always() guard", "wrapped unpaired creator"])("refuses an actual main lifecycle with %s", mutation => {
-    const actual = actualMainLifecycle();
+  it.each(["missing pin", "weakened cleanup guard", "unpaired creator", "missing cleanup", "deletion that is not the final step", "pin without its always() guard", "wrapped unpaired creator"])("refuses an actual deal-scenarios lifecycle with %s", mutation => {
+    const actual = actualScenariosLifecycle();
     expect(() => assertLifecycles(actual.file, structuredClone(actual.jobs))).not.toThrow();
     const { jobs, job, steps } = actual;
     if (mutation === "missing pin") steps.splice(actual.pin, 1);
