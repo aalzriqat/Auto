@@ -394,7 +394,7 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 Known simplifications, stated rather than hidden: `complete` is per family and per page walk (a caller must walk to the last page; totals are for the page only); a payable's ownership model is read from its sale's `supplierSettlementRoute` (no sale means OWNED ON_ACCOUNT); alerts (S8) are a separate section.
 ## SCRUM-869-DUE-ALERTS
 
-Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), the coordinator's Jira record of a chat ruling, not the owner's own text; the digest in `regression/rulings.json` covers the whole markdown body of that comment. Supplier obligations (payables, margin receivables, cost recoveries) raise in-app alerts through the existing `notifications` table: 3 days before the due date, on the due date, at 7 days overdue, then weekly. Disputed obligations and obligations with no due date are never alerted. Recipients are resolved on the server: the Owner, members holding `manage:finance` (Finance Manager) and members holding `view:finance` (authorised accounting staff), never an offboarding member and never a role of another organisation.
+Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), the coordinator's Jira record of a chat ruling, not the owner's own text; the digest in `regression/rulings.json` covers the whole markdown body of that comment. Supplier obligations (payables, margin receivables, cost recoveries) raise in-app alerts through the existing `notifications` table: 3 days before the due date, on the due date, at 7 days overdue, then weekly. Disputed obligations and obligations with no due date are never alerted. Recipients are resolved on the server: the Owner and members whose role holds both `view:finance` and `view:cost_price` (the `STATEMENT_PERMISSIONS` of the supplier statement and `supplierDueAging.list`, because the alert carries the cost-derived amount; SCRUM-901, OWASP A01:2021), never a holder of `manage:finance` alone or of `view:finance` without `view:cost_price`, never an offboarding member and never a role of another organisation.
 
 Design facts the cells rely on:
 
@@ -410,7 +410,7 @@ Evidence boundary: `convex-test` only. It has no runtime read limits, no OCC and
 
 | Cell | Expected | Bound test |
 | --- | --- | --- |
-| Payable due in 3 days | one in-app alert per recipient (Owner, manage:finance, view:finance), type due, amount `9500.000` JOD | `an obligation due in 3 days alerts each authorised recipient once, in-app` |
+| Payable due in 3 days | one in-app alert per recipient (Owner, view:finance + view:cost_price), type due, amount `9500.000` JOD | `an obligation due in 3 days alerts each authorised recipient once, in-app` |
 | Sweep on days -4..21 around one due date | one alert per step as it is reached: days -3, 0, 7, 14 and 21; none in between | `a run sends only the latest step reached, once, as the days pass` |
 | Cron skipped the due date | the due alert is sent on the next run, once | `a cron that skipped the due date sends the due alert on the next run` |
 | Gap past day 7 | the day-7 alert is sent once; the skipped earlier steps are not | `a gap past day 7 sends the day-7 alert once and none of the earlier skipped steps` |

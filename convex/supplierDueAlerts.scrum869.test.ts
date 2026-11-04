@@ -75,8 +75,8 @@ async function seedOrg(t: T, tag: string, plan: string = "professional"): Promis
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S8 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) => ctx.db.insert("subscriptions", { orgId, plan, status: "active", createdAt: Date.now(), updatedAt: Date.now() } as never));
   const ownerId = await addMember(t, orgId, tag, "owner", [], { isSystemOwnerRole: true });
-  const financeId = await addMember(t, orgId, tag, "finance", ["manage:finance"]);
-  const accountantId = await addMember(t, orgId, tag, "accountant", ["view:finance"]);
+  const financeId = await addMember(t, orgId, tag, "finance", ["manage:finance", "view:finance", "view:cost_price"]);
+  const accountantId = await addMember(t, orgId, tag, "accountant", ["view:finance", "view:cost_price"]);
   const salesId = await addMember(t, orgId, tag, "sales", ["view:sales"]);
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -316,7 +316,7 @@ describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
   test("a member without finance access, and an offboarding member, get nothing", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "c5");
-    const leaving = await addMember(t, s.orgId, "c5", "leaving", ["manage:finance"], {}, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
+    const leaving = await addMember(t, s.orgId, "c5", "leaving", ["manage:finance", "view:finance", "view:cost_price"], {}, { offboardingStatus: "PENDING_EXTERNAL_REMOVAL" });
     await addPayable(t, s, { paymentDueDate: NOW });
     await sweep(t);
     const got = recipients(await alerts(t));
@@ -342,6 +342,65 @@ describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
     await addPayable(t, s, { paymentDueDate: NOW });
     await sweep(t);
     expect(await alerts(t)).toHaveLength(0);
+  });
+});
+
+// SCRUM-901 (HIGH, privacy). The alert carries the cost-derived outstanding amount, so a recipient needs the
+// same authority as `supplierDueAging.list` and the supplier statement: STATEMENT_PERMISSIONS, view:finance AND
+// view:cost_price, or the system owner. OWASP A01:2021 Broken Access Control: authorization must hold on every
+// path to the data, a push notification included. Expected amounts come from the fixture, not from the code.
+describe("SCRUM-901 - alert recipients need the statement permissions", () => {
+  const AMOUNT_DUE = 7_654;
+  const EXPECTED_AMOUNT = "7654.000";
+
+  test("a role with only manage:finance gets no alert", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p1");
+    const manageOnly = await addMember(t, s.orgId, "p1", "manageonly", ["manage:finance"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    expect(recipients(await alerts(t))).not.toContain(String(manageOnly));
+  });
+
+  test("a role with view:finance but without view:cost_price gets no alert", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p2");
+    const financeOnly = await addMember(t, s.orgId, "p2", "financeonly", ["view:finance"]);
+    const financeAndManage = await addMember(t, s.orgId, "p2", "financemanage", ["view:finance", "manage:finance"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const got = recipients(await alerts(t));
+    expect(got).not.toContain(String(financeOnly));
+    expect(got).not.toContain(String(financeAndManage));
+  });
+
+  test("a role with view:finance and view:cost_price, and the owner, get the alert with the amount", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p3");
+    const reader = await addMember(t, s.orgId, "p3", "reader", ["view:finance", "view:cost_price"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const rows = await alerts(t);
+    expect(recipients(rows)).toEqual([s.ownerId, s.financeId, s.accountantId, reader].map(String).sort());
+    for (const userId of [reader, s.ownerId]) {
+      const mine = rows.filter((r) => String(r.userId) === String(userId));
+      expect(mine).toHaveLength(1);
+      expect(mine[0].data).toMatchObject({ currency: "JOD", amount: EXPECTED_AMOUNT });
+    }
+  });
+
+  test("no notification row anywhere carries the amount for a member who lacks the pair", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p4");
+    const lacking = [
+      await addMember(t, s.orgId, "p4", "manageonly", ["manage:finance"]),
+      await addMember(t, s.orgId, "p4", "financeonly", ["view:finance"]),
+      await addMember(t, s.orgId, "p4", "costonly", ["view:cost_price"]),
+    ].map(String);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const all = await t.run((ctx) => ctx.db.query("notifications").collect());
+    expect(all.filter((n) => lacking.includes(String(n.userId)))).toEqual([]);
   });
 });
 
@@ -580,7 +639,7 @@ describe("SCRUM-869 S8 - writes per transaction stay bounded however many recipi
   test("600 extra recipients and 3 obligations: no transaction writes past the ceiling, and each recipient is told once per obligation", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "w1");
-    const financeRole = await addRole(t, s.orgId, "Finance team w1", ["view:finance"]);
+    const financeRole = await addRole(t, s.orgId, "Finance team w1", ["view:finance", "view:cost_price"]);
     await addManyMembers(t, s.orgId, financeRole, "w1m", 600);
     for (const amountDue of [10, 20, 30]) await addPayable(t, s, { paymentDueDate: NOW, amountDue });
 
@@ -613,7 +672,7 @@ describe("SCRUM-869 S8 - recipients beyond the first thousand memberships", () =
     const s = await seedOrg(t, "m1");
     const salesRole = await addRole(t, s.orgId, "Sales team m1", ["view:sales"]);
     await addManyMembers(t, s.orgId, salesRole, "m1s", 1_000);
-    const lateFinance = await addMember(t, s.orgId, "m1", "latefinance", ["view:finance"]);
+    const lateFinance = await addMember(t, s.orgId, "m1", "latefinance", ["view:finance", "view:cost_price"]);
     await addPayable(t, s, { paymentDueDate: NOW });
     await sweep(t);
     expect(recipients(await alerts(t))).toEqual([s.ownerId, s.financeId, s.accountantId, lateFinance].map(String).sort());
@@ -622,11 +681,11 @@ describe("SCRUM-869 S8 - recipients beyond the first thousand memberships", () =
   test("a disabled user and a super-admin impersonation membership are not alerted", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "m2");
-    const disabled = await addMember(t, s.orgId, "m2", "disabled", ["manage:finance"]);
+    const disabled = await addMember(t, s.orgId, "m2", "disabled", ["manage:finance", "view:finance", "view:cost_price"]);
     await t.run((ctx) => ctx.db.patch(disabled, { disabled: true, disabledAt: NOW }));
     const impersonator = await t.run(async (ctx) => {
       const actor = await ctx.db.insert("users", { clerkId: "m2_actor", email: "m2.actor@e.com", name: "Super admin" });
-      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Copied finance role", permissions: ["manage:finance"] } as never);
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "Copied finance role", permissions: ["manage:finance", "view:finance", "view:cost_price"] } as never);
       const membershipId = await ctx.db.insert("memberships", { orgId: s.orgId, userId: actor, roleId } as never);
       const grantId = await ctx.db.insert("impersonationGrants", {
         actorUserId: actor, targetUserId: s.financeId, orgId: s.orgId, membershipId, reason: "support", grantedAt: NOW, expiresAt: NOW + DAY,
@@ -804,7 +863,7 @@ describe("SCRUM-869 S8 - the obligation page and recipient cursor boundary", () 
   test("100 payables x 23 recipients: every (obligation, recipient) once, the cursor resets per page, the chain ends, a replay sends nothing", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "b1");
-    const financeRole = await addRole(t, s.orgId, "Finance team b1", ["view:finance"]);
+    const financeRole = await addRole(t, s.orgId, "Finance team b1", ["view:finance", "view:cost_price"]);
     await addManyMembers(t, s.orgId, financeRole, "b1m", 20);
     for (let i = 0; i < 100; i += 1) await addPayable(t, s, { paymentDueDate: NOW, amountDue: 10 + i });
     const recipientCount = 23;

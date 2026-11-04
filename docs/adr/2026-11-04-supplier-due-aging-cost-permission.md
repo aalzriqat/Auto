@@ -28,8 +28,14 @@ obligations exist, and a zero would read as "nothing owed". Absent beats zeroed,
 - Permission: `view:finance` and `view:cost_price` both required, owner passes via `requireTenantAuth`.
 - No screen calls this query today (searched `app/`, `components/`, `apps/mobile`, `lib/`), so there is no refusal state to
   design and no EN/AR copy to add. A future screen must ask for the pair first and show the gated note, as the statement does.
-- The alert worker reads the same rows through `readObligationPage` (`convex/supplierDueAlerts.ts`), not through this query, and
-  notifies `view:finance` or `manage:finance` holders. Whether alert text carries amounts is a separate question for the alerts
-  slice (held branch), recorded in the PR body.
+- The alert worker is live on main and runs daily (`supplier-due-alerts` cron, `convex/supplierDueAlerts.ts`). It reads the same
+  rows through `readObligationPage`, not through this query, and its notifications carry the cost-derived outstanding `amount`
+  (`notifications.list` returns it to the browser). It used to notify any `manage:finance` or `view:finance` holder, so closing
+  the query alone left the amount reachable by push. It is now gated in this PR with the same `STATEMENT_PERMISSIONS`: a
+  recipient is the system owner or a role that holds both `view:finance` and `view:cost_price` (OWASP A01:2021, authorization
+  must hold on every path to the data). `manage:finance` alone, or `view:finance` without `view:cost_price`, no longer receives it.
+- Stored ACCOUNTANT roles seeded before the template change lack `view:cost_price`, so those members are refused by the query and
+  receive no alert until the Deploy production step 2e backfill (SCRUM-886) repairs the role. No screen shows this, because no
+  screen calls the query.
 - Other supplier-amount readers behind `view:finance` alone are listed in the PR body sweep table. They have screen consumers and
   are not changed here.
