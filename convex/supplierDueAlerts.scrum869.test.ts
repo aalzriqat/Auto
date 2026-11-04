@@ -158,9 +158,10 @@ describe("SCRUM-869 S8 - schedule and content", () => {
     await sweep(t);
     const rows = await alerts(t);
     expect(recipients(rows)).toEqual([s.ownerId, s.financeId, s.accountantId].map(String).sort());
-    expect(rows[0]).toMatchObject({ orgId: s.orgId, type: "accounting.supplierObligationDue", category: "finance", isRead: false });
-    expect(rows[0].data).toMatchObject({ currency: "JOD", dueDate: "2026-06-18", amount: "9500.000" });
-    expect(rows[0].link).toContain(String(s.orgId));
+    const ownerRow = rows.find((r) => String(r.userId) === String(s.ownerId))!;
+    expect(ownerRow).toMatchObject({ orgId: s.orgId, type: "accounting.supplierObligationDue", category: "finance", isRead: false });
+    expect(ownerRow.data).toMatchObject({ currency: "JOD", dueDate: "2026-06-18", amount: "9500.000" });
+    expect(ownerRow.link).toContain(String(s.orgId));
   });
 
   test("a run sends only the latest step reached, once, as the days pass", async () => {
@@ -249,7 +250,7 @@ describe("SCRUM-869 S8 - schedule and content", () => {
     await sweep(t);
     const rows = await alerts(t);
     expect(rows).toHaveLength(6);
-    expect(new Set(rows.map((r) => r.data?.amount))).toEqual(new Set(["3000.000", "200.000"]));
+    expect(new Set(rows.filter((r) => String(r.userId) === String(s.ownerId)).map((r) => r.data?.amount))).toEqual(new Set(["3000.000", "200.000"]));
   });
 });
 
@@ -310,7 +311,7 @@ describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
     const rows = await alerts(t);
     expect(rows.filter((r) => r.orgId === a.orgId)).toHaveLength(3);
     expect(rows.filter((r) => r.orgId === b.orgId)).toHaveLength(3);
-    expect(rows.filter((r) => r.orgId === b.orgId).every((r) => r.data?.amount === "700.000")).toBe(true);
+    expect(rows.filter((r) => r.orgId === b.orgId && String(r.userId) === String(b.ownerId)).map((r) => r.data?.amount)).toEqual(["700.000"]);
   });
 
   test("a member without finance access, and an offboarding member, get nothing", async () => {
@@ -342,6 +343,112 @@ describe("SCRUM-869 S8 - tenant isolation and recipients", () => {
     await addPayable(t, s, { paymentDueDate: NOW });
     await sweep(t);
     expect(await alerts(t)).toHaveLength(0);
+  });
+});
+
+// SCRUM-901 (HIGH, privacy). Recipients stay as owner ruling SCRUM-869#c23883 names them: the system owner, manage:finance
+// and view:finance. The amount is cost-derived, so it is sent only with the authority of `supplierDueAging.list` and the
+// supplier statement (STATEMENT_PERMISSIONS: view:finance AND view:cost_price) or to the system owner. Every other
+// recipient gets the same alert with no `amount` key at all (not 0, not null). OWASP A01:2021 Broken Access Control:
+// authorization must hold on every path to the data, a notification included. Expected values come from the fixture.
+describe("SCRUM-901 - recipients per c23883; the amount only with the statement permissions", () => {
+  const AMOUNT_DUE = 7_654;
+  const EXPECTED_AMOUNT = "7654.000";
+  const WITHOUT_AMOUNT = { kind: "PAYABLE", currency: "JOD", dueDate: "2026-06-15", daysOverdue: 0 };
+  const rowsOf = (rows: Alert[], userId: Id<"users">) => rows.filter((r) => String(r.userId) === String(userId));
+
+  test("a manage:finance-only recipient gets the alert with no amount key", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p1");
+    const manageOnly = await addMember(t, s.orgId, "p1", "manageonly", ["manage:finance"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const mine = rowsOf(await alerts(t), manageOnly);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].type).toBe("accounting.supplierObligationDue");
+    expect(mine[0].data).toEqual(WITHOUT_AMOUNT);
+    expect(Object.keys(mine[0].data ?? {})).not.toContain("amount");
+  });
+
+  test("a view:finance-only recipient gets the alert with no amount key, and so does view:finance with manage:finance", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p2");
+    const financeOnly = await addMember(t, s.orgId, "p2", "financeonly", ["view:finance"]);
+    const financeAndManage = await addMember(t, s.orgId, "p2", "financemanage", ["view:finance", "manage:finance"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const rows = await alerts(t);
+    for (const userId of [financeOnly, financeAndManage, s.financeId, s.accountantId]) {
+      const mine = rowsOf(rows, userId);
+      expect(mine).toHaveLength(1);
+      expect(mine[0].data).toEqual(WITHOUT_AMOUNT);
+      expect(Object.keys(mine[0].data ?? {})).not.toContain("amount");
+    }
+  });
+
+  test("a view:finance + view:cost_price recipient and the owner get the amount", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p3");
+    const reader = await addMember(t, s.orgId, "p3", "reader", ["view:finance", "view:cost_price"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const rows = await alerts(t);
+    expect(recipients(rows)).toEqual([s.ownerId, s.financeId, s.accountantId, reader].map(String).sort());
+    for (const userId of [reader, s.ownerId]) {
+      const mine = rowsOf(rows, userId);
+      expect(mine).toHaveLength(1);
+      expect(mine[0].data).toEqual({ ...WITHOUT_AMOUNT, amount: EXPECTED_AMOUNT });
+    }
+  });
+
+  // manage:finance makes this role a recipient, and nothing makes manage:finance imply view:finance, so only the
+  // view:finance half of the amount gate keeps the cost-derived amount out of its alert.
+  test("a manage:finance + view:cost_price recipient without view:finance gets no amount key", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p6");
+    const manageAndCost = await addMember(t, s.orgId, "p6", "managecost", ["manage:finance", "view:cost_price"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const mine = rowsOf(await alerts(t), manageAndCost);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].data).toEqual(WITHOUT_AMOUNT);
+    expect(Object.keys(mine[0].data ?? {})).not.toContain("amount");
+  });
+
+  test("a recipient who holds the cost permission but neither finance permission is still not a recipient", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p4");
+    const costOnly = await addMember(t, s.orgId, "p4", "costonly", ["view:cost_price"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    expect(recipients(await alerts(t))).not.toContain(String(costOnly));
+  });
+
+  test("the overdue step is redacted the same way and keeps its days overdue", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p5");
+    const due = Date.parse("2026-06-01T09:00:00Z");
+    await addPayable(t, s, { paymentDueDate: due, amountDue: AMOUNT_DUE });
+    await sweep(t, due + 7 * DAY);
+    const rows = await alerts(t);
+    expect(rowsOf(rows, s.financeId)[0]).toMatchObject({ type: "accounting.supplierObligationOverdue" });
+    expect(rowsOf(rows, s.financeId)[0].data).toEqual({ kind: "PAYABLE", currency: "JOD", dueDate: "2026-06-01", daysOverdue: 7 });
+    expect(rowsOf(rows, s.ownerId)[0].data).toEqual({ kind: "PAYABLE", currency: "JOD", dueDate: "2026-06-01", daysOverdue: 7, amount: EXPECTED_AMOUNT });
+  });
+
+  test("redaction does not change the idempotency keys: a replay sends nothing more, to readers and non-readers alike", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p6");
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const before = await counts(t);
+    await sweep(t);
+    expect(await counts(t)).toEqual(before);
+    expect(await alerts(t)).toHaveLength(3);
+    const keys = await t.run(async (ctx) =>
+      (await ctx.db.query("commandIdempotency").collect()).map((r) => String((r as { idempotencyKey?: string }).idempotencyKey))
+    );
+    expect(keys.filter((k) => k.includes(AMOUNT_DUE.toString()) || k.includes(EXPECTED_AMOUNT))).toEqual([]);
   });
 });
 
@@ -580,7 +687,7 @@ describe("SCRUM-869 S8 - writes per transaction stay bounded however many recipi
   test("600 extra recipients and 3 obligations: no transaction writes past the ceiling, and each recipient is told once per obligation", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "w1");
-    const financeRole = await addRole(t, s.orgId, "Finance team w1", ["view:finance"]);
+    const financeRole = await addRole(t, s.orgId, "Finance team w1", ["view:finance", "view:cost_price"]);
     await addManyMembers(t, s.orgId, financeRole, "w1m", 600);
     for (const amountDue of [10, 20, 30]) await addPayable(t, s, { paymentDueDate: NOW, amountDue });
 
@@ -594,7 +701,11 @@ describe("SCRUM-869 S8 - writes per transaction stay bounded however many recipi
     const amountsByUser = new Map<string, string[]>();
     for (const r of rows) amountsByUser.set(String(r.userId), [...(amountsByUser.get(String(r.userId)) ?? []), String(r.data?.amount)]);
     expect(amountsByUser.size).toBe(recipientCount);
-    for (const amounts of amountsByUser.values()) expect(amounts.sort()).toEqual(["10.000", "20.000", "30.000"]);
+    const redactedUsers = new Set([String(s.financeId), String(s.accountantId)]);
+    for (const [userId, amounts] of amountsByUser) {
+      // The owner and the 600 cost readers are told each amount once; the two seeded recipients without the cost permission get no amount key.
+      expect(amounts.sort()).toEqual(redactedUsers.has(userId) ? ["undefined", "undefined", "undefined"] : ["10.000", "20.000", "30.000"]);
+    }
     expect(steps.reduce((sum, step) => sum + step.sent, 0)).toBe(recipientCount * 3);
 
     // Replaying the whole chain (the next sweep the same day) adds nothing and reports nothing new.
@@ -804,7 +915,7 @@ describe("SCRUM-869 S8 - the obligation page and recipient cursor boundary", () 
   test("100 payables x 23 recipients: every (obligation, recipient) once, the cursor resets per page, the chain ends, a replay sends nothing", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "b1");
-    const financeRole = await addRole(t, s.orgId, "Finance team b1", ["view:finance"]);
+    const financeRole = await addRole(t, s.orgId, "Finance team b1", ["view:finance", "view:cost_price"]);
     await addManyMembers(t, s.orgId, financeRole, "b1m", 20);
     for (let i = 0; i < 100; i += 1) await addPayable(t, s, { paymentDueDate: NOW, amountDue: 10 + i });
     const recipientCount = 23;
@@ -818,7 +929,11 @@ describe("SCRUM-869 S8 - the obligation page and recipient cursor boundary", () 
     // Each (obligation, step, occurrence, recipient) is sent exactly once.
     const rows = await alerts(t);
     expect(rows).toHaveLength(100 * recipientCount);
-    const pairs = rows.map((r) => `${String(r.userId)}|${String(r.data?.amount)}`);
+    // Each of the 21 readers (owner + 20 cost-reading members) sees 100 distinct amounts; the two seeded recipients without the cost permission see none.
+    const redactedUsers = new Set([String(s.financeId), String(s.accountantId)]);
+    expect(rows.filter((r) => redactedUsers.has(String(r.userId)) && "amount" in (r.data ?? {}))).toEqual([]);
+    expect(rows.filter((r) => redactedUsers.has(String(r.userId)))).toHaveLength(2 * 100);
+    const pairs = rows.filter((r) => !redactedUsers.has(String(r.userId))).map((r) => `${String(r.userId)}|${String(r.data?.amount)}`);
     expect(new Set(pairs).size).toBe(pairs.length);
     expect(new Set(rows.map((r) => String(r.userId))).size).toBe(recipientCount);
     expect(steps.reduce((sum, step) => sum + step.sent, 0)).toBe(100 * recipientCount);

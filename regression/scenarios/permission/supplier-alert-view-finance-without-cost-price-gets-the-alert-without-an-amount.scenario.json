@@ -1,0 +1,60 @@
+{
+  "id": "supplier-alert-view-finance-without-cost-price-gets-the-alert-without-an-amount",
+  "fingerprint": "c235cc6ceaaaae0a5934d4ca82d361c0ab43605cb259b8c33b1156d57c34888d",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum901-pr765-finding",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "0d",
+        "amountDue": "7654",
+        "recipientRole": "VIEW_FINANCE_WITHOUT_COST_PRICE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recipientAlerts",
+      "value": 1
+    },
+    {
+      "observable": "data",
+      "value": "kind+currency+dueDate+daysOverdue"
+    },
+    {
+      "observable": "amountKey",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "a view:finance-only recipient gets the alert with no amount key, and so does view:finance with manage:finance"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-901",
+    "failingFirst": "ecc0808d201d1b13d76f1bda5287fb70cfc18a14"
+  }
+}
