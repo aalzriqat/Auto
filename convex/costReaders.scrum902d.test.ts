@@ -110,7 +110,7 @@ describe("SCRUM-902 expense readers", () => {
   test("expenses.list: a role holding both view:expenses and view:cost_price still gets the capitalized amount (SCRUM-902 positive control)", async () => {
     const s = await withExpense("exlboth", ["view:expenses", "view:cost_price"]);
     const result = await s.as.query(api.expenses.list, { orgId: s.orgId, paginationOpts: page });
-    expect(result.page[0].capitalizedAmount).toBe(100);
+    expect(result.page[0]).toMatchObject({ capitalizedAmount: 100 });
   });
   test("expenses.list: a role without view:cost_price asking for one car's expenses is refused (SCRUM-902)", async () => {
     const s = await withExpense("exlveh", ["view:expenses"]);

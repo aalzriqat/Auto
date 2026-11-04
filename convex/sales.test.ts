@@ -833,6 +833,7 @@ describe("cancelled sales must not stay on the P&L", () => {
 
     const range = { startDate: saleDate - 86_400_000, endDate: saleDate + 86_400_000 };
     const before = await asManager.query(api.reports.getProfitAndLoss, { orgId, ...range });
+    if (!before) throw new Error("report withheld");
     expect(before.totalRevenue).toBe(15000);
 
     await asManager.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
@@ -842,6 +843,7 @@ describe("cancelled sales must not stay on the P&L", () => {
     // the trade-in — but never the VEHICLE_SALE transaction row. So a sale that
     // was cancelled kept being reported as revenue indefinitely.
     const after = await asManager.query(api.reports.getProfitAndLoss, { orgId, ...range });
+    if (!after) throw new Error("report withheld");
     expect(after.totalRevenue).toBe(0);
   });
 });

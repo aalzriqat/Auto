@@ -1909,6 +1909,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(s.fiscalYear, 0, 1),
       endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
     });
+    if (!beforeOperational) throw new Error("report withheld");
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
@@ -1947,6 +1948,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         startDate: Date.UTC(s.fiscalYear, 0, 1),
         endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
       });
+      if (!operational) throw new Error("report withheld");
       expect(income.totalOtherIncome).toBe(200_000);
       expect(operational.totalRevenue).toBe(beforeOperational.totalRevenue);
       expect(operational.depositForfeitureIncome).toBe(200);
@@ -1968,6 +1970,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         startDate: Date.UTC(s.fiscalYear, 0, 1),
         endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
       });
+      if (!afterRemap) throw new Error("report withheld");
       expect(afterRemap.depositForfeitureIncome).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
 
@@ -2004,7 +2007,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       });
       const april = { orgId: s.orgId, startDate: Date.UTC(2025, 3, 1), endDate: Date.UTC(2025, 4, 1) - 1 };
       const may = { orgId: s.orgId, startDate: Date.UTC(2025, 4, 1), endDate: Date.UTC(2025, 5, 1) - 1 };
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april))?.totalRevenue).toBe(200);
       // SCRUM-815 c22806: the old receipt was posted to a liability. Only the
       // legacy report's mistaken turnover is corrected after forfeiture.
       const receiptPostingBefore = await s.t.run(async (ctx) => {
@@ -2039,7 +2042,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         idempotencyKey: "s486legacyforfeit-release",
       });
       const receiptMonth = await s.owner.as.query(api.reports.getProfitAndLoss, april);
+      if (!receiptMonth) throw new Error("report withheld");
       const forfeitureMonth = await s.owner.as.query(api.reports.getProfitAndLoss, may);
+      if (!forfeitureMonth) throw new Error("report withheld");
       expect(receiptMonth.totalRevenue).toBe(0);
       expect(receiptMonth.depositForfeitureIncome).toBe(0);
       expect(forfeitureMonth.totalRevenue).toBe(0);
@@ -2079,7 +2084,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
           payload: { ...(event.payload as Record<string, unknown>), holdId: holdId.toString() },
         });
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(0);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april))?.totalRevenue).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -2109,6 +2114,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalRevenue).toBe(0);
     expect(report.depositForfeitureIncome).toBe(0);
   });
@@ -2137,6 +2143,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalRevenue).toBe(129);
     expect(report.depositForfeitureIncome).toBe(0);
 
@@ -2160,7 +2167,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId,
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
-    })).totalRevenue).toBe(512);
+    }))?.totalRevenue).toBe(512);
     await s.t.run(async (ctx) => {
       const creator = await ctx.db.query("users").first();
       if (!creator) throw new Error("Missing test user");
@@ -2233,7 +2240,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         endDate: Date.UTC(year, monthIndex + 1, 1) - 1,
       });
 
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3))).depositForfeitureIncome).toBe(0);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3)))?.depositForfeitureIncome).toBe(0);
       vi.setSystemTime(Date.UTC(year, 4, 10));
       await s.approver.as.mutation(api.deposits.release, {
         orgId: s.orgId,
@@ -2248,7 +2255,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         if (!event) throw new Error("Missing forfeiture event fixture");
         return event._id;
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4)))?.depositForfeitureIncome).toBe(200);
 
       vi.setSystemTime(Date.UTC(year, 5, 10));
       const firstReversal = await s.owner.as.mutation(internal.accountingLedger.reverse, {
@@ -2258,8 +2265,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         reason: "Report month parity fixture",
         idempotencyKey: "s486forfeitdates-reverse-1",
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5))).depositForfeitureIncome).toBe(-200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4)))?.depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5)))?.depositForfeitureIncome).toBe(-200);
 
       vi.setSystemTime(Date.UTC(year, 6, 10));
       await s.owner.as.mutation(internal.accountingLedger.reverse, {
@@ -2269,12 +2276,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         reason: "Report reversal lineage fixture",
         idempotencyKey: "s486forfeitdates-reverse-2",
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6)))?.depositForfeitureIncome).toBe(200);
       const fullYear = await s.owner.as.query(api.reports.getProfitAndLoss, {
         orgId: s.orgId,
         startDate: Date.UTC(year, 0, 1),
         endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
       });
+      if (!fullYear) throw new Error("report withheld");
       expect(fullYear.depositForfeitureIncome).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
     } finally {

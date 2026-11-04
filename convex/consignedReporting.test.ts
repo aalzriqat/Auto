@@ -918,6 +918,7 @@ describe("every revenue consumer agrees on the same month", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     // The dashboard takes a coarse window rather than explicit dates.
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
@@ -976,6 +977,7 @@ describe("every revenue consumer agrees on the same month", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });
@@ -1085,6 +1087,7 @@ describe("historical consigned sales after the migration", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(SALE_PRICE);
   });
 
@@ -1106,6 +1109,7 @@ describe("historical consigned sales after the migration", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });

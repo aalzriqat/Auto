@@ -70,6 +70,7 @@ test("opening recognition without an expense appears once in operational and GL 
   expect(gl.totalExpenses).toBe(40_000);
   const profit = await seed.owner.query(api.reports.getProfitAndLoss, { orgId: seed.orgId,
     startDate: seed.openingDate, endDate: seed.endDate });
+  if (!profit) throw new Error("report withheld");
   expect(profit.operatingExpenses).toBe(40);
   expect(profit.netProfit).toBe(-40);
   const diagnostic = await seed.t.query(internal.diagnosePrepaidLedgerIntegrity.surveyPrepaidLedgerIntegrity, {});
