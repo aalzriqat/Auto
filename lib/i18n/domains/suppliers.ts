@@ -282,7 +282,7 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtDaysOverdue: ["{days} days overdue", "متأخر {days} يوماً"],
   SuppliersStmtDisputed: ["Disputed", "متنازع عليه"],
   SuppliersStmtOverdue: ["Overdue", "متأخر"],
-  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],
+  SuppliersStmtTotal: ["Total outstanding on linked lines", "إجمالي المستحق على البنود المرتبطة"],
   SuppliersStmtHistoryTitle: ["Settled history", "سجل التسويات"],
   SuppliersStmtHistoryPaidTitle: ["Paid to this supplier (A/P)", "المدفوع للمورّد (ذمم دائنة)"],
   SuppliersStmtHistoryReceivedTitle: ["Received from this supplier (A/R)", "المقبوض من المورّد (ذمم مدينة)"],
@@ -317,8 +317,8 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtReconSubledger: ["Paid (supplier record)", "المدفوع (سجل المورد)"],
   SuppliersStmtReconLedger: ["Ledger", "دفتر الأستاذ"],
   SuppliersStmtReconCreditNote: [
-    "Amounts owed to a supplier cannot be traced to one supplier in the ledger, so only payments are checked.",
-    "لا يمكن ربط المبالغ المستحقة للمورد بمورد محدد في دفتر الأستاذ، لذلك تُفحص الدفعات فقط.",
+    "Amounts owed to a supplier cannot be traced to one supplier in the ledger, so only payments are checked. This check does not flag an overpaid payable.",
+    "لا يمكن ربط المبالغ المستحقة للمورد بمورد محدد في دفتر الأستاذ، لذلك تُفحص الدفعات فقط. ولا يرصد هذا الفحص الدفعة الزائدة عن المستحق.",
   ],
   SuppliersStmtReconOpeningNote: [
     "{count} opening-balance record(s) are not part of this check.",

@@ -35,7 +35,7 @@ Add one read-only query, `api.supplierStatement.outstanding`, in a new `convex/s
 
 1. Settled history per supplier: done in slice 4 (amendment below). Still open: payer/payee, payment method and per-payment lines.
 2. The statement tab on `SupplierDetailScreen` (EN/AR, RTL): done in slice 1.
-3. Settlement allocation proof (done in slice 1); the audit entry gap was already closed (`markPaid`, `recordPartialPayment` and `setDisputed` call `auditLog`).
+3. Settlement allocation proof (done in slice 1); there is no audit entry gap: `markPaid`, `recordPartialPayment` and `setDisputed` already call `auditLog` (`convex/sourcingPayables.ts` lines 506, 672 and 782; SCRUM-879 seat finding L1).
 4. Per-supplier reconciliation to GL 2400/1240 (org-wide exists, #744).
 5. Informational net position: needs an owner ruling (design packet OQ-4). Not built.
 

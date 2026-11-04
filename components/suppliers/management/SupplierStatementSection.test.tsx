@@ -156,6 +156,12 @@ describe("supplier statement section", () => {
     expect(document.body.textContent).not.toMatch(/6,500|net position|balance/i);
   });
 
+  test("the total label says it counts linked lines only, so it cannot be read as the supplier's whole balance (SCRUM-879 L3)", () => {
+    expect(en.SuppliersStmtTotal).toMatch(/linked/i);
+    expect(ar.SuppliersStmtTotal).not.toBe("إجمالي المستحق");
+    expect(ar.SuppliersStmtTotal).toMatch(/المرتبط/);
+  });
+
   test("asks the server for this supplier only, with a validated clock argument", () => {
     renderIt();
     const call = world.queryCalls.find((c) => c.name === "supplierStatement:outstanding");
@@ -395,6 +401,8 @@ describe("supplier statement section", () => {
         expect(screen.getByRole("heading", { name: dict.SuppliersStmtReconTitle })).toBeTruthy();
         expect(screen.getByText(new RegExp(dict[c.key].replace(/[()]/g, "\\$&")))).toBeTruthy();
         expect(screen.getByText(dict.SuppliersStmtReconCreditNote)).toBeTruthy();
+        // SCRUM-879 L2: the check compares paid amounts only, so an overpaid payable is not flagged and the note says so.
+        expect(dict.SuppliersStmtReconCreditNote).toMatch(locale === "en" ? /overpa/i : /زائد|أكثر/);
         unmount();
       }
     }
