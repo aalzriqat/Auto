@@ -12,14 +12,6 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-// SCRUM-802 legacy-cash-lifecycle opt-out: the seed completes a THROUGH_DEALERSHIP sale with no customer deposit, which the
-// full-payment pilot gate refuses. The sale only seeds the supplier payable; the suite proves supplier settlement, not cash-sale
-// completion, which scrum486Certification and the SCRUM-802 attack suites cover with the real switch.
-vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
-  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
-}));
-
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -39,6 +31,8 @@ const PERMS = [
   "manage:finance", "view:finance",
   "view:commissions", "manage:commissions",
   "approve:requests",
+  // SCRUM-802: the pilot completes a CASH sale only once its full price is held as a deposit, which needs this authority.
+  "confirm:finance_disbursement",
 ];
 
 const SALE_PRICE = 12_500;
@@ -116,8 +110,15 @@ async function seed(tag: string) {
     })
   );
 
+  // Pilot-legal sale: a CASH quote whose full price is held as a deposit before the sale completes (SCRUM-802 Option A).
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: SALE_PRICE, downPayment: 0, termMonths: 0,
+  });
+  await asUser.mutation(api.deposits.create, {
+    orgId, quoteId, amount: SALE_PRICE, method: "CASH", idempotencyKey: `deposit-${tag}`,
+  });
   const saleId = await asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
-    orgId, vehicleId, customerId, salespersonId: userId,
+    orgId, quoteId, vehicleId, customerId, salespersonId: userId,
     salePrice: SALE_PRICE, saleDate: Date.now(), status: "COMPLETED" as const,
     supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
   });
@@ -174,6 +175,9 @@ describe("SCRUM-869 settlement allocation proof", () => {
       } as never)
     );
 
+    // The customer's 12_500 deposit already sits in cash (pilot-legal sale); assert supplier payments as movements from here.
+    const cashBase = (await ledger(s.t, s.orgId))[SYSTEM_KEYS.CASH_ON_HAND] ?? 0;
+    expect(cashBase).toBe(12_500_000);
     const before = await owed(s);
     expect(before.payable.totals).toEqual([expect.objectContaining({ currency: "JOD", grossMinor: 9_500_000 })]);
     expect(before.receivable.totals).toEqual([expect.objectContaining({ currency: "JOD", grossMinor: 3_000_000 })]);
@@ -196,7 +200,7 @@ describe("SCRUM-869 settlement allocation proof", () => {
     expect(after.payable.totals).toEqual([]);
     const gl = await ledger(s.t, s.orgId);
     expect(gl[SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS] ?? 0).toBe(0);
-    expect(gl[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(-9_500_000);
+    expect(gl[SYSTEM_KEYS.CASH_ON_HAND] ?? 0).toBe(cashBase - 9_500_000);
     // Paying the supplier did not touch what the supplier owes: no implicit offset.
     expect(after.receivable.totals).toEqual(before.receivable.totals);
     const receivable = await s.t.run((ctx) => ctx.db.get(receivableId));
@@ -222,7 +226,7 @@ describe("SCRUM-869 settlement allocation proof", () => {
     await pay();
     await pay();
     expect((await owed(s)).payable.totals[0]?.grossMinor).toBe(5_500_000);
-    expect((await ledger(s.t, s.orgId))[SYSTEM_KEYS.CASH_ON_HAND]).toBe(-4_000_000);
+    expect((await ledger(s.t, s.orgId))[SYSTEM_KEYS.CASH_ON_HAND]).toBe(12_500_000 - 4_000_000);
   });
 
   test("a disputed payable refuses settlement and stays inside the statement gross", async () => {
