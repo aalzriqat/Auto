@@ -84,6 +84,9 @@ export const reportsEn = {
   // SCRUM-902: shown instead of the journal to a role that has view:finance but not view:cost_price.
   LedgerCostAccessRequired:
     "Journal entries show what each car cost. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+  // SCRUM-902: shown instead of the trial balance, income statement and balance sheet to a role without view:cost_price.
+  FinancialStatementCostAccessRequired:
+    "This statement includes vehicle inventory and cost of goods sold. Your role needs cost-price access as well as finance access to see it. Ask an administrator to update your role.",
   PerformanceUnknownNotice:
     "{count} sale(s) could not have their earnings established, so the salespeople who made them are listed separately at the bottom and are not ranked. Their totals cover only the sales that are known.",
   /**
@@ -183,6 +186,8 @@ export const reportsAr = {
     "يعرض هذا التقرير تكلفة كل مركبة وما حققته من ربح. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية التقارير. اطلب من المسؤول تحديث دورك.",
   LedgerCostAccessRequired:
     "تعرض قيود اليومية تكلفة كل مركبة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+  FinancialStatementCostAccessRequired:
+    "يتضمن هذا الكشف مخزون المركبات وتكلفة البضاعة المباعة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
   PerformanceUnknownNotice:
     "تعذّر تحديد ما حققته {count} عملية بيع، لذلك يظهر البائعون الذين نفّذوها في أسفل الجدول بشكل منفصل ولا يدخلون في الترتيب. الإجماليات الخاصة بهم تشمل المبيعات المعروفة فقط.",
   ProfitKnownOnly: "{count} غير محتسبة",

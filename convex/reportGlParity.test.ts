@@ -88,6 +88,7 @@ async function assertParity(ctx: Ctx, from: number, to: number, expected: number
   const operational = await ctx.asOwner.query(api.reports.getExpensesReport, {
     orgId: ctx.orgId, startDate: from, endDate: to,
   });
+  if (!operational) throw new Error("report withheld");
   const ledger = await ctx.asOwner.query(api.accountingReports.incomeStatement, {
     orgId: ctx.orgId, fromDate: from, toDate: to,
   });
@@ -135,6 +136,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const ledger = await ctx.asOwner.query(api.accountingReports.incomeStatement, {
       orgId: ctx.orgId, fromDate: JAN_START, toDate: JAN_END,
     });
+    if (!report) throw new Error("report withheld");
 
     // The operational total is unchanged — this report has always meant "what
     // happened", and that's still 500.
@@ -168,6 +170,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
       orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalPending).toBeCloseTo(0, 6);
     expect(report.totalFailed).toBeCloseTo(500, 6);
@@ -185,6 +188,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
       orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalPosted).toBeCloseTo(500, 6);
     expect(report.totalCapitalized).toBeCloseTo(0, 6);
@@ -218,6 +222,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const ledger = await ctx.asOwner.query(api.accountingReports.incomeStatement, {
       orgId: ctx.orgId, fromDate: JAN_START, toDate: JAN_END,
     });
+    if (!report) throw new Error("report withheld");
 
     // Operationally the money was spent; on the P&L it's nowhere.
     expect(report.totalExpenses).toBeCloseTo(500, 6);
@@ -277,6 +282,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
       orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
     });
+    if (!report) throw new Error("report withheld");
 
     // Net pending is zero…
     expect(report.totalPending).toBeCloseTo(0, 6);
@@ -332,6 +338,7 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
       orgId: ctx.orgId, startDate: JAN_START, endDate: Date.UTC(YEAR, 1, 28, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalExpenses).toBeCloseTo(200, 6);
     expect(report.totalPosted).toBeCloseTo(100, 6);

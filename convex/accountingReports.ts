@@ -189,7 +189,8 @@ export const trialBalance = query({
     reportingCurrency: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the trial balance carries the vehicle inventory and COGS accounts, so it needs the cost permission too.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     // Include all accounts (active and inactive) so historical postings on
@@ -398,7 +399,8 @@ export const incomeStatement = query({
     toDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the income statement shows cost of goods sold and gross margin.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeIncomeStatement(ctx, args);
   },
@@ -412,7 +414,8 @@ export const balanceSheet = query({
     asOfDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the balance sheet carries the vehicle inventory line.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const accounts = await ctx.db

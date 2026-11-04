@@ -545,7 +545,9 @@ export const getExpensesReport = query({
     endDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // SCRUM-902: vehicle-linked expenses are landed cost per car. Withheld as a whole (null), as the sales report is.
+    if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
 
     const rateStatus = await rateLimiter.check(ctx, "heavyRead");
     if (!rateStatus.ok) {
@@ -838,6 +840,8 @@ export const getSalespersonPerformance = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // SCRUM-902: per-rep profit is revenue less acquisition cost. Withheld as a whole (null), as the sales report is.
+    if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
 

@@ -223,8 +223,8 @@ function ReportsContent() {
 
   const salesReport = useQuery(api.reports.getSalesAndProfitReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const inventoryReport = useQuery(api.reports.getInventoryReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId } : "skip");
-  const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
-  const performanceReport = useQuery(api.reports.getSalespersonPerformance, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const performanceReport = useQuery(api.reports.getSalespersonPerformance, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
 
@@ -567,6 +567,7 @@ function ReportsContent() {
 
           {/* EXPENSES REPORT */}
           <TabsContent value="expenses" className="space-y-4 m-0">
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -694,10 +695,12 @@ function ReportsContent() {
                 </TableBody>
               </Table>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* PERFORMANCE REPORT */}
           <TabsContent value="performance" className="space-y-4 m-0">
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -814,6 +817,7 @@ function ReportsContent() {
                 </TableBody>
               </Table>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* LEADS REPORT */}

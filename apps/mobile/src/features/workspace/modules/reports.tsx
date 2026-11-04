@@ -29,8 +29,8 @@ export function ReportsModule({ orgId, permissions }: { orgId: string; permissio
   }, [period]);
   const sales = useQuery(api.reports.getSalesAndProfitReport, canSeeCost ? { orgId, ...range } : "skip");
   const inventory = useQuery(api.reports.getInventoryReport, canSeeCost ? { orgId } : "skip");
-  const expenses = useQuery(api.reports.getExpensesReport, { orgId, ...range });
-  const performance = useQuery(api.reports.getSalespersonPerformance, { orgId, ...range });
+  const expenses = useQuery(api.reports.getExpensesReport, canSeeCost ? { orgId, ...range } : "skip");
+  const performance = useQuery(api.reports.getSalespersonPerformance, canSeeCost ? { orgId, ...range } : "skip");
   const leads = useQuery(api.reports.getLeadConversionReport, { orgId, ...range });
 
   return (
@@ -52,9 +52,9 @@ export function ReportsModule({ orgId, permissions }: { orgId: string; permissio
         <MetricCard title={locale === "ar" ? "الإيراد" : "Revenue"} value={canSeeCost ? money(sales?.totalRevenue, locale) : "—"} caption={locale === "ar" ? "المبيعات" : "Sales"} />
         <MetricCard title={locale === "ar" ? "الربح" : "Profit"} value={canSeeCost ? money(sales?.totalProfit, locale) : "—"} caption={locale === "ar" ? "صافي" : "Net"} />
         <MetricCard title={locale === "ar" ? "المخزون" : "Inventory"} value={canSeeCost ? compactNumber(inventory?.availableCount ?? 0, locale) : "—"} caption={canSeeCost ? money(inventory?.totalValue, locale) : "—"} />
-        <MetricCard title={locale === "ar" ? "المصاريف" : "Expenses"} value={money(expenses?.totalExpenses, locale)} caption={locale === "ar" ? "للفترة" : "Period"} />
+        <MetricCard title={locale === "ar" ? "المصاريف" : "Expenses"} value={canSeeCost ? money(expenses?.totalExpenses, locale) : "—"} caption={locale === "ar" ? "للفترة" : "Period"} />
         <MetricCard title={locale === "ar" ? "الفرص" : "Leads"} value={compactNumber(leads?.totalLeads ?? 0, locale)} caption={`${(leads?.overallConversionRate ?? 0).toFixed(1)}%`} />
-        <MetricCard title={locale === "ar" ? "مبيعات الفريق" : "Team sales"} value={compactNumber(performance?.reduce((sum, row) => sum + row.vehiclesSold, 0) ?? 0, locale)} caption={locale === "ar" ? "سيارات" : "Vehicles"} />
+        <MetricCard title={locale === "ar" ? "مبيعات الفريق" : "Team sales"} value={canSeeCost ? compactNumber(performance?.reduce((sum, row) => sum + row.vehiclesSold, 0) ?? 0, locale) : "—"} caption={locale === "ar" ? "سيارات" : "Vehicles"} />
       </View>
       <Text style={styles.sectionTitle}>{locale === "ar" ? "أفضل الأداء" : "Top performance"}</Text>
       {(performance ?? []).slice(0, 5).map((row) => (

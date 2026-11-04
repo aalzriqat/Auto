@@ -464,6 +464,7 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(report.commissionIncompleteSaleCount).toBe(0);
 
     const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    if (!perf) throw new Error("report withheld");
     expect(perf[0].totalProfit).toBe(5000);
     expect(perf[0].totalNetProfitAfterCommissions).toBe(4875);
   });
@@ -486,6 +487,7 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(report.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report.totalCommissions).toBeNull();
     const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    if (!perf) throw new Error("report withheld");
     expect(perf[0].totalCommissions).toBeNull();
   });
 });

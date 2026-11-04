@@ -45,6 +45,13 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
 | `reports.getSalesAndProfitReport`, `getInventoryReport` | per-sale cost and profit, per-vehicle `purchasePrice` / `sourceCost` / `totalInvestment` for the whole lot | view:reports | view:reports AND view:cost_price (else `null`) | GATED (Q2; fail-soft null) |
 | `accountingReports.supplierPayablesReconciliation`, `supplierReceivablesReconciliation`, `vehicleInventoryReconciliation` | per-currency supplier and inventory totals (one SOURCED car makes the total that car's cost) | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (Q3; refuses) |
 | `accountingLedger.listJournalEntries`, `getJournalEntry` | inventory and payable journal lines | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (Q3; refuses) |
+| `accountingReports.trialBalance` | debit and credit totals of every account, including vehicle inventory and COGS | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (class sweep; refuses) |
+| `accountingReports.incomeStatement` | cost of goods sold and gross margin | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (class sweep; refuses) |
+| `accountingReports.balanceSheet` | vehicle inventory asset line and retained earnings | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (class sweep; refuses) |
+| `accountingLedger.getAccountActivity` | every journal line of one account; the account can be inventory or COGS (the chart is per organization) | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (class sweep; refuses). Gating by account type would leave the aggregate recoverable and needs a type check per request, so the whole reader is gated |
+| `reports.getSalespersonPerformance` | per-rep revenue and profit; profit is revenue less `capitalizedCost` per sale | view:reports | view:reports AND view:cost_price (else `null`) | GATED (class sweep; fail-soft null) |
+| `reports.getExpensesReport` | expense rows with the related vehicle; vehicle-linked rows are landed cost per car | view:reports | view:reports AND view:cost_price (else `null`) | GATED (class sweep; fail-soft null). Trade-off: a report-only role loses the operational expense report, as with Q2 |
+| `accountingReports.subledgerReconciliation` | AR control accounts against the receivables subledger (customer and finance-company receivables) | view:finance | unchanged | NOT cost-bearing: it reads only AR accounts and customer receivables, no inventory, COGS, supplier or per-car cost. A scenario pins that `view:finance` alone still reads |
 
 ## Consequences
 
@@ -62,8 +69,12 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   no screen. `dashboard.stats` already degrades to the gross basis, so the dashboard screen is unchanged.
 - Trade-off of Q2: a report-only role loses revenue figures with the cost, because the report is one payload. The alternative is to
   withhold only cost columns; that is a separate change if the owner wants revenue kept.
-- Not gated, same class, awaiting a ruling: `reports.getSalespersonPerformance`, `getExpensesReport`, `accountingLedger.getAccountActivity`,
-  trial balance, balance sheet, `accountingReports.subledgerReconciliation`.
+- Class sweep (owner: "Yes, gate all", not to be asked again): the six readers left open by the first follow-up are classified in the
+  table above. Five are gated; `subledgerReconciliation` is not cost-bearing. `incomeStatement` was not on that list but carries COGS, so
+  it is gated with them. The web Financial Reports tab and the web and mobile reports screens skip the gated queries and show an English
+  and Arabic note; the VAT return tab is unchanged. `getAccountActivity` has no screen.
+- Still ungated by design: the AR aging and VAT readers (no cost figures). Any reader added later that returns inventory, COGS, supplier
+  or per-car cost needs a row in this table.
 - Evidence boundary: `convex-test` role fixtures and rendered screens at desktop and mobile widths. No production run.
 
 ## Owner questions (decided "Yes, gate all", recorded in SCRUM-902; the text below is the question as asked)

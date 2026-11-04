@@ -237,6 +237,7 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
     const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
     if (!report) throw new Error("report withheld");
     const performance = await s.owner.as.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...WINDOW() });
+    if (!performance) throw new Error("report withheld");
     const dashboard = await s.owner.as.query(api.dashboard.stats, { orgId: s.orgId, timeRange: "ALL_TIME" });
     expect(report.sales[0].isAgentSale).toBe(true);
     expect(report.sales[0].recognizedRevenue).toBe(2_125);

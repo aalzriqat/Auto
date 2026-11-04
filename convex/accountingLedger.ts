@@ -234,7 +234,8 @@ export const getAccountActivity = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: any account can be the inventory or COGS account, so the activity of every account needs the cost permission.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const account = await ctx.db.get(args.accountId);

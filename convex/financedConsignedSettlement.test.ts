@@ -4049,6 +4049,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       orgId: s.orgId,
       ...range(),
     });
+    if (!perf) throw new Error("report withheld");
 
     const row = perf.find((r: { totalProfit: number }) => r.totalProfit !== 0) ?? perf[0];
     expect(row.totalProfit).toBe(3_000);
@@ -4697,6 +4698,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       ...range(),
     });
+    if (!perf) throw new Error("report withheld");
 
     const row = perf[0]!;
     expect(row.totalProfit).toBe(0);

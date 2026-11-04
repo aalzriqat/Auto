@@ -45,6 +45,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 2, 1),
       endDate: Date.UTC(2026, 2, 31),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalExpenses).toBe(120);
     expect(report.expenses[0].recognizedAmount).toBe(120);
@@ -74,6 +75,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 2, 1),
       endDate: Date.UTC(2026, 2, 31),
     });
+    if (!marchReport) throw new Error("report withheld");
     expect(marchReport.totalExpenses).toBe(1000);
     expect(marchReport.expenses).toHaveLength(1);
     expect(marchReport.expenses[0].recognizedAmount).toBe(1000);
@@ -92,6 +94,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 0, 1),
       endDate: Date.UTC(2026, 0, 31),
     });
+    if (!januaryReport) throw new Error("report withheld");
     expect(januaryReport.totalExpenses).toBe(1000);
 
     // A window spanning all 6 months should recognize the full amount exactly once.
@@ -100,6 +103,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 0, 1),
       endDate: Date.UTC(2026, 5, 30),
     });
+    if (!fullYearReport) throw new Error("report withheld");
     expect(fullYearReport.totalExpenses).toBe(6000);
 
     // A report pulled after the amortization window closes shows no more recognition.
@@ -108,6 +112,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 6, 1),
       endDate: Date.UTC(2026, 6, 31),
     });
+    if (!laterReport) throw new Error("report withheld");
     expect(laterReport.totalExpenses).toBe(0);
     expect(laterReport.expenses).toHaveLength(0);
   });
@@ -133,6 +138,7 @@ describe("getExpensesReport — prepaid amortization", () => {
       startDate: Date.UTC(2026, 3, 1),
       endDate: Date.UTC(2026, 3, 30),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalExpenses).toBe(0);
     expect(report.expenses).toHaveLength(0);
   });
