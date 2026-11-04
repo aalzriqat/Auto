@@ -24,6 +24,7 @@ const world = vi.hoisted(() => ({
   statement: undefined as unknown,
   settled: undefined as unknown,
   recon: undefined as unknown,
+  plan: undefined as unknown,
   queryThrows: null as null | Error,
   queryCalls: [] as Array<{ name: string; args: unknown }>,
 }));
@@ -49,10 +50,11 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
     useQuery: (reference: never, args: unknown) => {
-      world.queryCalls.push({ name: getFunctionName(reference), args });
+      const name = getFunctionName(reference);
+      world.queryCalls.push({ name, args });
       if (world.queryThrows) throw world.queryThrows;
       if (args === "skip") return undefined;
-      const name = getFunctionName(reference);
+      if (name === "subscriptions:getMySubscription") return world.plan;
       if (name === "supplierStatement:paymentsReconciliation") return world.recon;
       return name === "supplierStatement:settled" ? world.settled : world.statement;
     },
@@ -91,7 +93,8 @@ const section = (over: Partial<Section> = {}): Section => ({
 
 beforeEach(() => {
   world.locale = "en";
-  world.permissions = [PERMISSIONS.VIEW_FINANCE];
+  world.permissions = [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
+  world.plan = { planDetails: { gates: { accounting: true } } };
   world.permissionsLoading = false;
   world.queryThrows = null;
   world.settled = undefined;
@@ -195,6 +198,36 @@ describe("supplier statement section", () => {
     const { container } = renderIt();
     expect(container.textContent).toBe("");
     expect(world.queryCalls.every((c) => c.args === "skip")).toBe(true);
+  });
+
+  test("needs view:cost_price as well as view:finance (SCRUM-886): with finance alone nothing is requested or shown", () => {
+    world.permissions = [PERMISSIONS.VIEW_FINANCE];
+    const { container } = renderIt();
+    expect(container.textContent).toBe("");
+    expect(world.queryCalls.every((c) => c.args === "skip")).toBe(true);
+  });
+
+  test("a plan without accounting gets a truthful gated note, not an error, and the statement is never requested", () => {
+    world.plan = { planDetails: { gates: { accounting: false } } };
+    renderIt();
+    expect(screen.getByRole("note").textContent).toContain(en.SuppliersStmtPlanGate);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(world.queryCalls.filter((c) => c.name === "supplierStatement:outstanding").every((c) => c.args === "skip")).toBe(true);
+  });
+
+  test("never claims nothing is owed: opening-balance and unlinked lines are disclosed as not included, even when both lists are empty", () => {
+    world.statement = { supplierId: "sup_1", payable: section(), receivable: section() };
+    renderIt();
+    expect(screen.getByText(en.SuppliersStmtScopeNote)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Nothing is outstanding|owes us nothing/i);
+    // The settled-history empty states carry the same linked-lines-only scope (opening payments are not listed).
+    world.settled = { supplierId: "sup_1", payable: { rows: [], totals: [], complete: true }, receivable: { rows: [], totals: [], complete: true } };
+    cleanup();
+    renderIt();
+    expect(document.body.textContent).not.toMatch(/Nothing has been (paid|received)/i);
+    expect(en.SuppliersStmtScopeNote).toMatch(/opening/i);
+    expect(ar.SuppliersStmtScopeNote).toBeTruthy();
+    expect(ar.SuppliersStmtScopeNote).not.toBe(en.SuppliersStmtScopeNote);
   });
 
   test("Arabic: headings and notes come from the Arabic dictionary, amounts use the Arabic currency label", () => {

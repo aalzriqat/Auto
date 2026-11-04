@@ -20,7 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seed(tag: string, permissions: string[] = ["view:finance"]) {
+async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   const t = convexTestWithComponents(schema, MODULES);
@@ -160,13 +160,20 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
       ctx.db.insert("subscriptions", { orgId: orgB, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
     );
     const supplierB = await addSupplier(a.t, orgB, "Foreign Supplier", a.userId);
-    await expect(statement(a, supplierB), "foreign supplier in own org").rejects.toThrow();
+    await expect(statement(a, supplierB), "foreign supplier in own org").rejects.toThrow(/Supplier not found/);
     await expect(
       a.asUser.query(api.supplierStatement.outstanding, { orgId: orgB, supplierId: supplierB, nowMs: NOW } as never),
       "other org"
     ).rejects.toThrow();
-    const noFinance = await seed("tc", ["view:vehicles"]);
-    await expect(statement(noFinance), "no finance").rejects.toThrow();
+    const noFinance = await seed("tc", ["view:vehicles", "view:cost_price"]);
+    await expect(statement(noFinance), "no finance").rejects.toThrow(/view:finance/);
+    // SCRUM-886 / ACC-10: a SOURCED car's supplier entitlement is its acquisition cost, so finance access alone is not enough.
+    const financeOnly = await seed("td", ["view:finance"]);
+    await addPayable(financeOnly);
+    await expect(statement(financeOnly), "finance without cost access").rejects.toThrow(/view:cost_price/);
+    const bothGrants = await seed("te");
+    await addPayable(bothGrants);
+    expect((await statement(bothGrants)).payable.totals[0]?.grossMinor).toBe(9_500_000);
     await expect(statement(a, a.supplierId, { nowMs: NOW + 5 * DAY }), "stale clock").rejects.toThrow(/nowMs/);
   });
   test("settled history never eats the read bound: 101 PAID rows plus one open row still gives a complete statement", async () => {
@@ -291,5 +298,12 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
     ).rejects.toThrow();
     const noFinance = await seed("sh6", ["view:vehicles"]);
     await expect(settledOf(noFinance), "no finance").rejects.toThrow();
+    // SCRUM-886 / ACC-10: what was paid for a SOURCED car is its acquisition cost, so finance access alone is not enough.
+    const financeOnly = await seed("sh7", ["view:finance"]);
+    await addPayable(financeOnly, { status: "PAID", amountPaid: 9_500 });
+    await expect(settledOf(financeOnly), "finance without cost access").rejects.toThrow(/view:cost_price/);
+    const bothGrants = await seed("sh8");
+    await addPayable(bothGrants, { status: "PAID", amountPaid: 9_500 });
+    expect((await settledOf(bothGrants)).payable.totals[0]?.settledMinor).toBe(9_500_000);
   });
 });
