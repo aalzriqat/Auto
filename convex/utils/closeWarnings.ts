@@ -97,4 +97,4 @@ export const OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY = {
  * dialog translates it at display time only.
  */
 export const OPENING_SUSPENSE_OPEN_WARNING =
-  "The opening-balance suspense account still carries a balance. Classify it to its real accounts with a manual journal; it is never moved to equity automatically.";
+  "The opening-balance suspense account still carries a balance. Clearing it to its real accounts needs a manual journal, and manual journals are turned off during the pilot, so it stays open for now; it is never moved to equity automatically.";

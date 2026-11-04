@@ -269,12 +269,32 @@ type OpeningEntryLine = {
   bankAccountId?: Id<"bankAccounts">;
 };
 
+/** English text equals `ServerError_OPENING_TOTAL_TOO_LARGE` in lib/i18n/domains/common.ts. */
+export const OPENING_TOTAL_TOO_LARGE_MESSAGE =
+  "The opening balances are too large to post exactly: the debit or credit total exceeds the largest amount that can be stored safely. Nothing has been changed. Check the amounts and enter them in smaller units.";
+
+/** Exact debit and credit totals of the entered lines, or null when a line amount is not a safe integer. */
+function exactOpeningTotals(lines: readonly OpeningEntryLine[]): { debit: bigint; credit: bigint } | null {
+  let debit = 0n;
+  let credit = 0n;
+  for (const line of lines) {
+    if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
+    debit += BigInt(line.debitMinor);
+    credit += BigInt(line.creditMinor);
+  }
+  return { debit, credit };
+}
+
 /**
  * Owner ruling 2026-11-04 (SCRUM-858/852, "Suspense account"): when the entered opening lines do not balance,
  * the difference is posted to the opening-balance suspense account, never to owner's capital, and stays there
  * as an open item (the close checklist reports it) until an accountant classifies it. The line is added to the
- * stored draft, so the approver reads exactly what will post. Amounts that are not safe integers are returned
- * unchanged: `validateManualJournalLines` then refuses them by line, as before.
+ * stored draft, so the approver reads exactly what will post. A line amount that is not a safe integer is
+ * returned unchanged: `validateManualJournalLines` then refuses it by line, as before.
+ *
+ * The totals are summed exactly (BigInt), never in a double. `validateManualJournalLines` compares double totals,
+ * and a double cannot hold an integer above Number.MAX_SAFE_INTEGER exactly, so a total above it could round to
+ * "balanced" while the journal is a minor unit out. Such a set is refused (OPENING_TOTAL_TOO_LARGE) on every door.
  */
 async function withSuspenseBalancing(
   ctx: MutationCtx,
@@ -282,8 +302,14 @@ async function withSuspenseBalancing(
   actorId: Id<"users">,
   lines: OpeningEntryLine[],
 ): Promise<OpeningEntryLine[]> {
-  const difference = lines.reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0);
-  if (difference === 0 || !Number.isSafeInteger(difference)) return lines;
+  const totals = exactOpeningTotals(lines);
+  if (!totals) return lines;
+  const largest = totals.debit > totals.credit ? totals.debit : totals.credit;
+  if (largest > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
+  }
+  const difference = Number(totals.debit - totals.credit);
+  if (difference === 0) return lines;
   const accountId = await ensureOpeningSuspenseAccount(ctx, orgId, actorId);
   return [...lines, {
     accountId,

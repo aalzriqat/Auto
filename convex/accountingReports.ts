@@ -1595,32 +1595,54 @@ async function evaluateControlProvenance(
   getJournal: (id: Id<"journalEntries">) => Promise<Doc<"journalEntries"> | null>,
   getEvent: (id: Id<"accountingEvents">) => Promise<Doc<"accountingEvents"> | null>,
 ): Promise<ProvenanceVerdict> {
+  const neededOriginals = await collectNeededOriginals(orgId, distinctJournalIds, family, getJournal);
+  if (neededOriginals === null) return "SOURCE_FAMILY_UNSUPPORTED";
+  for (const original of neededOriginals.values()) {
+    const event = original.accountingEventId ? await getEvent(original.accountingEventId) : null;
+    if (!eventConfirmsOriginal(event, original, orgId, family)) return "SOURCE_FAMILY_UNSUPPORTED";
+  }
+  return null;
+}
+
+/** The distinct original journals whose accounting event must be checked, or null when any control journal falls
+ * outside the family. The organization's own OPENING_BALANCE cutover needs no event. */
+async function collectNeededOriginals(
+  orgId: Id<"organizations">,
+  distinctJournalIds: ReadonlySet<Id<"journalEntries">>,
+  family: ReconciliationControlFamily,
+  getJournal: (id: Id<"journalEntries">) => Promise<Doc<"journalEntries"> | null>,
+): Promise<Map<Id<"journalEntries">, Doc<"journalEntries">> | null> {
   const config = SUPPORTED_SOURCE_FAMILIES[family];
   const inFamily = (journal: Doc<"journalEntries"> | null): journal is Doc<"journalEntries"> =>
     journal !== null && journal.orgId === orgId && config.journalSourceTypes.includes(journal.sourceType ?? "");
   const neededOriginals = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
   for (const journalId of distinctJournalIds) {
     const journal = await getJournal(journalId);
-    if (!inFamily(journal)) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (!inFamily(journal)) return null;
     if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
     const original = journal.reversalOfJournalEntryId ? await getJournal(journal.reversalOfJournalEntryId) : journal;
-    if (!inFamily(original)) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (!inFamily(original)) return null;
     if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) continue;
-    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (!original.accountingEventId) return null;
     neededOriginals.set(original._id, original);
   }
-  for (const original of neededOriginals.values()) {
-    const event = original.accountingEventId ? await getEvent(original.accountingEventId) : null;
-    if (
-      !event ||
-      event.orgId !== orgId ||
-      event.journalEntryId !== original._id ||
-      event.sourceType !== original.sourceType ||
-      event.sourceId !== original.sourceId ||
-      !reconciliationEventFamilySupported(event, family)
-    ) return "SOURCE_FAMILY_UNSUPPORTED";
-  }
-  return null;
+  return neededOriginals;
+}
+
+function eventConfirmsOriginal(
+  event: Doc<"accountingEvents"> | null,
+  original: Doc<"journalEntries">,
+  orgId: Id<"organizations">,
+  family: ReconciliationControlFamily,
+): boolean {
+  return (
+    event !== null &&
+    event.orgId === orgId &&
+    event.journalEntryId === original._id &&
+    event.sourceType === original.sourceType &&
+    event.sourceId === original.sourceId &&
+    reconciliationEventFamilySupported(event, family)
+  );
 }
 
 /** Prove family coverage independently of surviving subledger rows. All cumulative lines count, including
@@ -1638,17 +1660,8 @@ async function controlSourceFamilyRefusal(
   controls: ReadonlySet<Id<"chartOfAccounts">>,
   family: ReconciliationControlFamily,
 ): Promise<ProvenanceVerdict> {
-  let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const distinctJournalIds = new Set<Id<"journalEntries">>();
-  for (const accountId of controls) {
-    const lines = await ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
-      .take(remaining + 1);
-    if (lines.length > remaining) return "OVER_LIMIT";
-    remaining -= lines.length;
-    for (const line of lines) distinctJournalIds.add(line.journalEntryId);
-  }
+  const distinctJournalIds = await readControlJournalIds(ctx, orgId, controls);
+  if (distinctJournalIds === "OVER_LIMIT") return "OVER_LIMIT";
   if (distinctJournalIds.size === 0) return null;
 
   if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
@@ -1665,31 +1678,55 @@ async function controlSourceFamilyRefusal(
 
   const config = SUPPORTED_SOURCE_FAMILIES[family];
   let docsLeft = PROVENANCE_BATCH_DOC_BUDGET;
-  const journalsById = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
-  for (const sourceType of config.journalSourceTypes) {
-    const batch = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
-      .take(docsLeft + 1);
-    if (batch.length > docsLeft) return "OVER_LIMIT";
-    docsLeft -= batch.length;
-    for (const journal of batch) journalsById.set(journal._id, journal);
-  }
-  const eventsById = new Map<Id<"accountingEvents">, Doc<"accountingEvents">>();
-  for (const sourceType of config.eventSourceTypes) {
-    const batch = await ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
-      .take(docsLeft + 1);
-    if (batch.length > docsLeft) return "OVER_LIMIT";
-    docsLeft -= batch.length;
-    for (const event of batch) eventsById.set(event._id, event);
-  }
+  const journalBatches = await readSourceBatches(config.journalSourceTypes, docsLeft, (sourceType, take) =>
+    ctx.db.query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)).take(take));
+  if (journalBatches === "OVER_LIMIT") return "OVER_LIMIT";
+  docsLeft -= journalBatches.size;
+  const eventBatches = await readSourceBatches(config.eventSourceTypes, docsLeft, (sourceType, take) =>
+    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)).take(take));
+  if (eventBatches === "OVER_LIMIT") return "OVER_LIMIT";
   return evaluateControlProvenance(
     orgId, distinctJournalIds, family,
-    (id) => Promise.resolve(journalsById.get(id) ?? null),
-    (id) => Promise.resolve(eventsById.get(id) ?? null),
+    (id) => Promise.resolve(journalBatches.get(id) ?? null),
+    (id) => Promise.resolve(eventBatches.get(id) ?? null),
   );
+}
+
+/** Distinct journal ids on the control accounts, or OVER_LIMIT past the shared control-line read limit. */
+async function readControlJournalIds(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  controls: ReadonlySet<Id<"chartOfAccounts">>,
+): Promise<Set<Id<"journalEntries">> | "OVER_LIMIT"> {
+  let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const distinctJournalIds = new Set<Id<"journalEntries">>();
+  for (const accountId of controls) {
+    const lines = await ctx.db
+      .query("journalLines")
+      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
+      .take(remaining + 1);
+    if (lines.length > remaining) return "OVER_LIMIT";
+    remaining -= lines.length;
+    for (const line of lines) distinctJournalIds.add(line.journalEntryId);
+  }
+  return distinctJournalIds;
+}
+
+/** Every row of `table` for the given indexed source types, or OVER_LIMIT once `budget` documents are exceeded. */
+async function readSourceBatches<Row extends { _id: Id<"journalEntries"> | Id<"accountingEvents"> }>(
+  sourceTypes: readonly string[],
+  budget: number,
+  readBatch: (sourceType: string, take: number) => Promise<Row[]>,
+): Promise<Map<Row["_id"], Row> | "OVER_LIMIT"> {
+  let left = budget;
+  const byId = new Map<Row["_id"], Row>();
+  for (const sourceType of sourceTypes) {
+    const batch = await readBatch(sourceType, left + 1);
+    if (batch.length > left) return "OVER_LIMIT";
+    left -= batch.length;
+    for (const row of batch) byId.set(row._id, row);
+  }
+  return byId;
 }
 async function addSystemAccount(
   ctx: QueryCtx,
@@ -1704,15 +1741,22 @@ async function addSystemAccount(
   if (account) accounts.add(account._id);
 }
 
+/** Whole-ledger balances at a cutoff, shared by readers that run in one transaction. The close checklist runs three
+ * opening-family readers at the same cutoff; each used to read the whole ledger itself (SCRUM-858 R6 Seat 2: 38,061
+ * documents against 24,674 on main, past Convex's 32,000-document function limit,
+ * https://docs.convex.dev/production/state/limits). One shared read serves all three. */
+export type SharedGlBalances = (cutoff: number) => Promise<Awaited<ReturnType<typeof getCumulativeBalancesAsOf>>>;
+
 async function glNetByAccounts(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   cutoff: number,
   accounts: ReadonlySet<Id<"chartOfAccounts">>,
-  normalSide: "DEBIT" | "CREDIT"
+  normalSide: "DEBIT" | "CREDIT",
+  shared?: SharedGlBalances,
 ): Promise<Map<string, number>> {
   const byCurrency = new Map<string, number>();
-  for (const balance of await getCumulativeBalancesAsOf(ctx, orgId, cutoff)) {
+  for (const balance of await (shared ? shared(cutoff) : getCumulativeBalancesAsOf(ctx, orgId, cutoff))) {
     if (!accounts.has(balance.accountId)) continue;
     const net = normalSide === "DEBIT" ? balance.debitMinor - balance.creditMinor : balance.creditMinor - balance.debitMinor;
     byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + net);
@@ -1741,7 +1785,8 @@ export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizati
 export async function computeEmployeeAdvancesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
@@ -1766,7 +1811,7 @@ export async function computeEmployeeAdvancesReconciliation(
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
   const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "EMPLOYEE_ADVANCE");
   if (familyRefusal) return unavailableFamilyResult(familyRefusal);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1793,7 +1838,8 @@ export const employeeAdvancesReconciliation = query({
 export async function computeSupplierRecoverablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
@@ -1820,7 +1866,7 @@ export async function computeSupplierRecoverablesReconciliation(
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
   const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "SUPPLIER_RECOVERABLE");
   if (familyRefusal) return unavailableFamilyResult(familyRefusal);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1863,7 +1909,8 @@ function addDatedPartnerMovements(
 export async function computePartnerCapitalReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
 ): Promise<OpeningFamilyReconciliationResult> {
   const now = Date.now();
   const cutoff = toDate ?? now;
@@ -1892,7 +1939,7 @@ export async function computePartnerCapitalReconciliation(
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_CAPITAL);
   // Draws debit Partner Drawings, a separate account that lowers each partner's balance.
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_DRAWINGS);
-  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "CREDIT");
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "CREDIT", shared);
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",

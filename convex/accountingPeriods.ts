@@ -35,13 +35,58 @@ import {
   GlVsSubledgerResult,
   OpeningFamilyReconciliationResult,
   SupplierPayablesReconciliationResult,
+  type SharedGlBalances,
 } from "./accountingReports";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 const OPENING_SOURCE_FAMILY_WARNINGS = {
   EMPLOYEE_ADVANCES: EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
   SUPPLIER_RECOVERABLES: SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
   PARTNER_CAPITAL: OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL,
 } as const;
+
+type OpeningFamilyKey = keyof typeof OPENING_SOURCE_FAMILY_WARNINGS;
+
+/** Close warnings for the opening-family readers. An "unavailable" reading only warrants a warning where an
+ * opening balance exists to reconcile; elsewhere these families are ordinary current-state subledgers. */
+async function openingFamilyWarnings(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  families: ReadonlyArray<readonly [OpeningFamilyKey, OpeningFamilyReconciliationResult]>,
+): Promise<string[]> {
+  const out: string[] = [];
+  const hasOpeningHistory = families.some(([, recon]) => recon.status === "UNAVAILABLE")
+    ? await orgHasOpeningHistory(ctx, orgId)
+    : false;
+  for (const [family, recon] of families) {
+    if (recon.status === "UNAVAILABLE") {
+      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") out.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
+      else if (hasOpeningHistory) out.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+    } else if (recon.unexplainedOpeningDifference) out.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  }
+  return out;
+}
+
+/** Close warnings for sale commissions the ledger does not recognize, or recognizes at a different amount.
+ * Reported separately on purpose: "never recognized" is a migration backlog, "different amount" needs a person. */
+function commissionDivergenceWarnings(
+  d: Awaited<ReturnType<typeof computeCommissionRecognitionDivergence>>,
+): string[] {
+  const out: string[] = [];
+  if (d.unrecognizedCount > 0) {
+    out.push(`${d.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`);
+  }
+  if (d.strandedCount > 0) {
+    out.push(`${d.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`);
+  }
+  if (d.noPeriodCount > 0) {
+    out.push(`${d.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`);
+  }
+  if (d.divergentCount > 0) {
+    out.push(`${d.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`);
+  }
+  return out;
+}
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -453,6 +498,15 @@ export async function computeCloseChecklist(
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
 
+  // The three opening-family readers below compare the whole ledger at this same cutoff. Read it once for all
+  // three: each reading it alone pushed the checklist past the per-transaction document limit.
+  let glRead: ReturnType<SharedGlBalances> | undefined;
+  const sharedGl: SharedGlBalances = (cutoff) => {
+    if (cutoff !== period.endDate) return getCumulativeBalancesAsOf(ctx, orgId, cutoff);
+    glRead ??= getCumulativeBalancesAsOf(ctx, orgId, cutoff);
+    return glRead;
+  };
+
   const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
   const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
 
@@ -498,9 +552,9 @@ export async function computeCloseChecklist(
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
         sales: allSales,
       }),
-      computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate),
-      computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate),
-      computePartnerCapitalReconciliation(ctx, orgId, period.endDate),
+      computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate, sharedGl),
+      computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate, sharedGl),
+      computePartnerCapitalReconciliation(ctx, orgId, period.endDate, sharedGl),
     ]);
 
   const blockers: string[] = [];
@@ -562,22 +616,13 @@ export async function computeCloseChecklist(
   const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
-  const openingFamilies = [
-    ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
-    ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
-    ["PARTNER_CAPITAL", partnerCapitalRecon],
-  ] as const;
-  // An "unavailable" reading is only worth a warning where an opening balance exists to reconcile;
-  // elsewhere these families are ordinary current-state subledgers with no new close obligation.
-  const hasOpeningHistory = openingFamilies.some(([, recon]) => recon.status === "UNAVAILABLE")
-    ? await orgHasOpeningHistory(ctx, orgId)
-    : false;
-  for (const [family, recon] of openingFamilies) {
-    if (recon.status === "UNAVAILABLE") {
-      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") warnings.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
-      else if (hasOpeningHistory) warnings.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
-    } else if (recon.unexplainedOpeningDifference) warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
-  }
+  warnings.push(
+    ...(await openingFamilyWarnings(ctx, orgId, [
+      ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
+      ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
+      ["PARTNER_CAPITAL", partnerCapitalRecon],
+    ])),
+  );
   if (customerDepositsRecon.status === "UNAVAILABLE") {
     // Could not compare as of the period end: never reported as reconciled, and never as a difference
     // in an empty list of currencies. An unavailable opening liability basis already has its own warning
@@ -623,26 +668,7 @@ export async function computeCloseChecklist(
   // made an ordinary migration backlog read as ledger corruption — and a
   // warning that must be acknowledged verbatim on every close is exactly how
   // people learn to click through the ones that matter.
-  if (commissionRecognitionDivergence.unrecognizedCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`
-    );
-  }
-  if (commissionRecognitionDivergence.strandedCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`
-    );
-  }
-  if (commissionRecognitionDivergence.noPeriodCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`
-    );
-  }
-  if (commissionRecognitionDivergence.divergentCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
-    );
-  }
+  warnings.push(...commissionDivergenceWarnings(commissionRecognitionDivergence));
 
   return {
     canClose: blockers.length === 0,

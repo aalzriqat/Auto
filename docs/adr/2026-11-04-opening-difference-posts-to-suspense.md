@@ -18,7 +18,10 @@ classifies it.
 - The suspense line is stored in the draft, so the approver reads exactly what will post. The account's opening policy is
   `LEDGER_ONLY`: it takes no allocation and changes no subledger.
 - While the account carries a balance, or its balance cannot be read in full, the close checklist emits
-  `OPENING_SUSPENSE_OPEN_WARNING`. Nothing closes the balance to equity. Classifying it is a manual journal.
+  `OPENING_SUSPENSE_OPEN_WARNING`. Nothing closes the balance to equity. Clearing it to its real accounts needs a manual
+  journal. Manual journals are turned off during the pilot (`MANUAL_JOURNALS_PILOT_DISABLED`, both doors refuse), so
+  while the pilot lasts nothing can clear the balance and the texts say so. Whether to keep posting to suspense under that
+  condition is an open owner question; this change does not enable manual journals or add another route.
 - The opening card accepts a valid unbalanced set and shows the amount that will go to suspense.
 
 ## Two readings the owner accepted
@@ -36,7 +39,12 @@ The narrow pilot is unchanged. Receipt, refund and correction stay blocked serve
 
 ## Consequences
 
-- A typing error in an opening set now posts instead of refusing. The close warning is the only prompt to classify it, so
-  the checklist must be read before a period closes.
-- The suspense account stays on the balance sheet until a manual journal clears it. That is the intended visibility.
+- A typing error in an opening set now posts instead of refusing. The close warning is the only prompt, so the checklist
+  must be read before a period closes.
+- The suspense account stays on the balance sheet until a manual journal clears it. That is the intended visibility. During
+  the pilot no such journal can be posted, so the balance cannot be cleared until manual journals are enabled by a separate
+  owner decision.
+- A set whose debit or credit total exceeds `Number.MAX_SAFE_INTEGER` is refused (`OPENING_TOTAL_TOO_LARGE`), because the
+  journal validator compares double totals and cannot balance such a set exactly. The suspense difference itself is computed
+  exactly (BigInt).
 - Read limits: the balance read is bounded at 2,000 journal lines. Past that, the account reads as open.

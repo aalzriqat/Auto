@@ -103,12 +103,51 @@ test("the suspense balance stays an open item in the close checklist and is not 
   expect(journals.filter((journal) => journal.status === "POSTED")).toHaveLength(1);
 }));
 
+test("the suspense warning does not offer a route that is switched off during the pilot", () => {
+  // R6 Seat 1: it used to say "classify it with a manual journal" while both manual-journal doors refuse.
+  expect(OPENING_SUSPENSE_OPEN_WARNING).toMatch(/manual journals are turned off during the pilot/);
+  expect(OPENING_SUSPENSE_OPEN_WARNING).not.toMatch(/^.*Classify it/);
+});
+
 test("no suspense warning when the opening set balanced", () => withFrozenScheduler(async () => {
   const seed = await setup();
   await post(seed, 100_000, 100_000);
   await settleScheduledOnly(seed.t, seed.orgId);
   const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.periodId });
   expect(checklist.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
+}));
+
+// R6 Seat 2: the totals were summed in a double. 9_007_199_254_740_991 + 2 against 9_007_199_254_740_991 has an
+// exact gap of 2 but rounds to 1, so the suspense line was one minor unit short and the journal one unit out.
+const SAFE_MAX = Number.MAX_SAFE_INTEGER;
+const hugeLines = (seed: Awaited<ReturnType<typeof setup>>) => [
+  { accountId: seed.cash._id, debitMinor: SAFE_MAX, creditMinor: 0 },
+  { accountId: seed.cash._id, debitMinor: 2, creditMinor: 0 },
+  { accountId: seed.retained._id, debitMinor: 0, creditMinor: SAFE_MAX },
+];
+
+test("direct post: a total above the safe-integer range is refused with a coded error and posts nothing", () => withFrozenScheduler(async () => {
+  const seed = await setup();
+  await expect(seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+    orgId: seed.orgId, expectedCurrency: "JOD", asOfDate: seed.asOfDate, lines: hugeLines(seed),
+  })).rejects.toThrow(/OPENING_TOTAL_TOO_LARGE/);
+  const journals = await seed.t.run((ctx) => ctx.db.query("journalEntries").collect());
+  expect(journals.filter((journal) => journal.category === "OPENING_BALANCE")).toHaveLength(0);
+}));
+
+test("draft path: a total above the safe-integer range is refused with a coded error and saves no draft", () => withFrozenScheduler(async () => {
+  const seed = await setup();
+  await expect(seed.owner.mutation(api.accountingCutover.draftOpeningBalance, {
+    orgId: seed.orgId, expectedCurrency: "JOD", asOfDate: seed.asOfDate, lines: hugeLines(seed),
+  })).rejects.toThrow(/OPENING_TOTAL_TOO_LARGE/);
+  expect(await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").first())).toBeNull();
+}));
+
+test("the largest exactly representable gap still balances to the unit", () => withFrozenScheduler(async () => {
+  const seed = await setup();
+  await post(seed, SAFE_MAX, SAFE_MAX - 2);
+  const lines = await openingLines(seed);
+  expect(lines).toContainEqual({ systemKey: "OPENING_SUSPENSE", debitMinor: 0, creditMinor: 2 });
 }));
 
 test("the saved-for-approval path stores the suspense line in the draft the approver sees", () => withFrozenScheduler(async () => {

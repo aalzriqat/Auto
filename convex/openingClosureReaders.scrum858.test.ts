@@ -1065,6 +1065,50 @@ test("pilot-scale native advance and recovery history with reversals fits within
   expect(obsChecklist.reads.documents).toBeLessThan(32000);
 }), 60_000);
 
+// SCRUM-858 R6 (Seat 2 MEDIUM): the three opening-family readers in one checklist transaction used to read the whole
+// ledger once each (38,061 documents against 24,674 on main with 1,024 reversed pairs per control; the Convex limit is
+// 32,000 per function, https://docs.convex.dev/production/state/limits). Every whole-ledger read starts with one read
+// of the organization's accounting periods, so counting those reads counts the whole-ledger reads. Harness evidence only.
+const countTableQueries = (table: string) => {
+  const counter = { queries: 0 };
+  const wrap = <T extends object>(db: T): T =>
+    new Proxy(db, {
+      get(object, key, receiver) {
+        const member: unknown = Reflect.get(object, key, receiver);
+        if (key !== "query" || typeof member !== "function") return member;
+        return (name: string) => {
+          if (name === table) counter.queries += 1;
+          return Reflect.apply(member, object, [name]);
+        };
+      },
+    });
+  return { counter, wrap };
+};
+
+test("the close checklist reads the whole ledger once for the three opening-family readers, and stays inside the document limit", () => withFrozenScheduler(async () => {
+  const seed = await fixture();
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find((a) => a.systemKey === "EMPLOYEE_ADVANCES");
+  if (!advances) throw new Error("Missing system accounts");
+  const actor = await t.run(async (ctx) => ctx.db.query("users").first());
+  if (!actor) throw new Error("Missing actor");
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 1024, "budget");
+  const period = await t.run((ctx) => ctx.db.get(periodId));
+  const periodReads = countTableQueries("accountingPeriods");
+  const documents = makeObserver();
+  const checklist = await t.run((ctx) =>
+    computeCloseChecklist({ ...ctx, db: documents.observed(periodReads.wrap(ctx.db)) }, orgId, period!)
+  );
+  expect(checklist.employeeAdvancesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  // The literal is the checklist's own reads of the periods (measured with the three readers sharing one ledger read).
+  // Before the fix it was this plus two: each of the other two opening readers read the whole ledger on its own.
+  expect(periodReads.counter.queries).toBe(EXPECTED_PERIOD_READS);
+  expect(documents.reads.documents).toBeLessThan(32_000);
+  expect(documents.reads.ranges).toBeLessThan(4_096);
+}), 120_000);
+const EXPECTED_PERIOD_READS = 5;
+
 // SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide
 // history of other families must never make a small control history unavailable, and the scan must stay inside
 // an explicit, stated read budget whichever strategy it picks. Observed counts are harness evidence only.

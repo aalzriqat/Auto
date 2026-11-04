@@ -467,6 +467,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "An opening reservation deposit may be named only once per customer and vehicle.",
     "لا يجوز تسمية عربون حجز افتتاحي إلا مرة واحدة لكل عميل ومركبة.",
   ],
+  ServerError_OPENING_TOTAL_TOO_LARGE: [
+    "The opening balances are too large to post exactly: the debit or credit total exceeds the largest amount that can be stored safely. Nothing has been changed. Check the amounts and enter them in smaller units.",
+    "الأرصدة الافتتاحية كبيرة جداً بحيث لا يمكن ترحيلها بدقة: إجمالي المدين أو الدائن يتجاوز أكبر مبلغ يمكن تخزينه بأمان. لم يتم تغيير أي شيء. راجع المبالغ وأدخلها بوحدات أصغر.",
+  ],
   // SCRUM-795 (SCRUM-50): manual journals are off for the pilot.
   ServerError_MANUAL_JOURNALS_DISABLED: [
     "Manual journal entries are turned off during the pilot. Nothing has been changed.",
@@ -1241,8 +1245,8 @@ export const commonEn = {
   OpeningBalanceTotals: "Totals",
   OpeningBalanceBalanced: "Balanced",
   OpeningBalanceUnbalanced: "Debits and credits must match",
-  OpeningBalanceSuspenseNotice: "The difference of {amount} will be posted to the Opening Balance Suspense account and stays an open item until you classify it. It is never moved to equity automatically.",
-  ClosePeriodWarnOpeningSuspenseOpen: "The opening-balance suspense account still carries a balance. Classify it to its real accounts with a manual journal; it is never moved to equity automatically.",
+  OpeningBalanceSuspenseNotice: "The difference of {amount} will be posted to the Opening Balance Suspense account and stays an open item. Clearing it to its real accounts needs a manual journal, and manual journals are turned off during the pilot, so it cannot be cleared yet. It is never moved to equity automatically.",
+  ClosePeriodWarnOpeningSuspenseOpen: "The opening-balance suspense account still carries a balance. Clearing it to its real accounts needs a manual journal, and manual journals are turned off during the pilot, so it stays open for now; it is never moved to equity automatically.",
   OpeningBalanceInvalidAmount: "Enter amounts using the currency's exact decimal places, without grouping or exponent notation.",
   OpeningBalanceCurrencyChanged: "The showroom currency changed while this form was open. Close and reopen it before submitting.",
   OpeningAllocationSection: "Historical allocations",
@@ -2413,8 +2417,8 @@ export const commonAr = {
   OpeningBalanceTotals: "الإجمالي",
   OpeningBalanceBalanced: "متوازن",
   OpeningBalanceUnbalanced: "يجب أن يتساوى المدين مع الدائن",
-  OpeningBalanceSuspenseNotice: "سيُرحَّل الفرق البالغ {amount} إلى حساب «حساب معلق للأرصدة الافتتاحية» ويبقى بنداً مفتوحاً حتى تقوم بتصنيفه. لا يُنقل إلى حقوق الملكية تلقائياً.",
-  ClosePeriodWarnOpeningSuspenseOpen: "حساب الأرصدة الافتتاحية المعلق ما زال يحمل رصيداً. صنّفه إلى حساباته الفعلية بقيد يدوي؛ ولا يُنقل إلى حقوق الملكية تلقائياً.",
+  OpeningBalanceSuspenseNotice: "سيُرحَّل الفرق البالغ {amount} إلى حساب «حساب معلق للأرصدة الافتتاحية» ويبقى بنداً مفتوحاً. تصفيته إلى حساباته الفعلية تحتاج إلى قيد يدوي، والقيود اليدوية متوقفة خلال فترة التجربة، لذا لا يمكن تصفيته الآن. ولا يُنقل إلى حقوق الملكية تلقائياً.",
+  ClosePeriodWarnOpeningSuspenseOpen: "حساب الأرصدة الافتتاحية المعلق ما زال يحمل رصيداً. تصفيته إلى حساباته الفعلية تحتاج إلى قيد يدوي، والقيود اليدوية متوقفة خلال فترة التجربة، لذا يبقى مفتوحاً حالياً؛ ولا يُنقل إلى حقوق الملكية تلقائياً.",
   OpeningBalanceInvalidAmount: "أدخل المبالغ بعدد المنازل العشرية الصحيح للعملة، دون فواصل الآلاف أو الصيغة الأسية.",
   OpeningBalanceCurrencyChanged: "تغيرت عملة المعرض أثناء فتح النموذج. أغلقه ثم افتحه مجددًا قبل الإرسال.",
   OpeningAllocationSection: "التوزيعات الافتتاحية التاريخية",

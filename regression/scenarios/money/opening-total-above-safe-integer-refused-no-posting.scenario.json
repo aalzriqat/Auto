@@ -1,0 +1,46 @@
+{
+  "id": "opening-total-above-safe-integer-refused-no-posting",
+  "fingerprint": "25713ebeafd3d217f25dec72989f93098d8cf75e2b0047770af6699ded7b05d2",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-suspense",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "debitsMinor": "9007199254740991+2",
+        "creditsMinor": 9007199254740991
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "OPENING_TOTAL_TOO_LARGE"
+    },
+    {
+      "observable": "openingJournal.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingSuspense.scrum858.test.ts",
+    "testName": "direct post: a total above the safe-integer range is refused with a coded error and posts nothing"
+  },
+  "matrixRow": "SCRUM-858-opening-suspense"
+}
