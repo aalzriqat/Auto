@@ -293,8 +293,9 @@ export const requestUpdate = mutation({
       throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
     }
     const submittedPayload = normalizeVehicleEditPayload(args.payload);
+    // Preserve the amount refusal before SOURCED conflict checks or echo removal.
+    assertVehicleCostPrecision(submittedPayload, await getOrgCurrency(ctx, args.orgId), vehicle);
     const payload = normalizeSourcedCostUpdate(vehicle, submittedPayload);
-    assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,

@@ -252,3 +252,114 @@ production or final-head SonarCloud result is claimed.
 
 After the final scenario metadata edit, scenarioRecord.test.ts passes 67/67
 with --maxWorkers=1 --testTimeout=20000 (E:/tmp/scrum907-final-scenario.log).
+
+## Precision refusal regression at d33662da
+
+Decision (a): preserve `SUPPLIER_AMOUNT_PRECISION` before
+`VEHICLE_SOURCED_COST_CONFLICT` for an invalid submitted purchase amount.
+The existing SCRUM-880 legacy-cost test failed at requestUpdate, not at the
+preceding direct update. Direct update and UPDATE approval already validate
+precision before applying the SOURCED mirror rule. Only requestUpdate needed
+its existing precision assertion moved before `normalizeSourcedCostUpdate`.
+It checks `submittedPayload`, retaining the existing unchanged-legacy exemption.
+The permission check still precedes amount comparisons. No source helper,
+accounting write, ownership gate or lifecycle operation changes.
+
+The choice follows Google's semantic API compatibility guidance
+(https://google.aip.dev/180), OWASP's boundary validation guidance
+(https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html),
+and Convex's documented client-visible application error payloads
+(https://docs.convex.dev/functions/error-handling/application-errors).
+These sources support preserving the established specific refusal; they do not
+prescribe this application's exact precedence. The SCRUM-880 contract and the
+owner's instruction determine that order.
+
+Failing-first commit `83c5ff28a05cc3c919ac2d2eebddfba8d557a0b0` adds one
+parameterized public-seam control for direct update, requestUpdate and resolve.
+Each submits an excess-precision purchasePrice that also conflicts with the
+SOURCED cost, requires the exact precision code, and compares every main-schema
+table before and after refusal. Approval uses an older pending payload and must
+leave it pending. With d33662da production code: requestUpdate fails with the
+conflict code, direct and resolve pass. After the reorder, all three pass.
+The original legacy-cost test is unchanged and passes too.
+
+Five predicted regressions and their controls: precision masked by conflict
+(new three-door control); legacy precision echoes refused (original SCRUM-880
+test); SOLD/opening/posted echoes rewrite history (M1/M2 controls); a real live
+cost change fails to mirror (existing mirror controls); a valid-precision
+conflict becomes accepted (existing direct/request/approval conflict controls).
+Both complete focused files pass, 44 tests. No new spending or reversal path
+exists, and no historical repair behavior changes.
+
+Verification commands for this follow-up, all run from E:/tmp/auto-907:
+
+```powershell
+# Red: 1 failed / 2 passed, request returns the wrong code.
+pnpm exec vitest run convex/sourcingPayables.test.ts --maxWorkers=1 --testTimeout=30000 -t "SCRUM-907:.*refuses excess purchase precision"
+# Green: 44 passed, including the whole sourcingPayables file and M1/M2.
+pnpm exec vitest run convex/sourcingPayables.test.ts convex/sourcedCostMirror.scrum907.test.ts --maxWorkers=1 --testTimeout=30000
+# Broad rerun of every previously named non-coverage Vitest file, plus sourcingPayables.
+pnpm exec vitest run convex/sourcedCostMirror.scrum907.test.ts convex/vehicleCostDisclosureWrites.scrum886.test.ts convex/vehicleCostFieldVisibility.scrum886.test.ts convex/aggregateWiring.test.ts scripts/sourcedCostMirrorRollout.test.ts scripts/accountantCostPriceRollout.test.ts scripts/tenantWriteGuard.test.ts scripts/regression/scenarioRecord.test.ts components/vehicles/VehicleDialog.buyout.test.tsx convex/vehicles.ownershipRemediation.test.ts convex/vehicles.test.ts convex/vehiclesSelector.test.ts convex/vehicleSupplierFirstLink.scrum868.test.ts convex/vehicleSupplierIdentity.test.ts convex/vehicleEdits.approvalGuards.test.ts convex/vehicleEdits.test.ts convex/supplierConcession.scrum766c.test.ts convex/scrum486Certification.test.ts convex/applicationsIndexReads.test.ts scripts/regression/implFixture.test.ts scripts/regression/localExecution.test.ts scripts/regression/refreshRulings.test.ts convex/sourcingPayables.test.ts --maxWorkers=1 --testTimeout=30000
+# 215 passed; releaseGuard 99.31% lines, 97.63% branches. Native thresholds pass.
+pnpm exec vitest run scripts/releaseGuard.test.ts scripts/sourcedCostMirrorRollout.test.ts scripts/accountantCostPriceRollout.test.ts scripts/supplierIdentityRollout.test.ts scripts/supplierRegistryRollout.test.ts scripts/supplierVatHoldRollout.test.ts --maxWorkers=1 --testTimeout=30000 --coverage --coverage.include=scripts/releaseGuard.ts --coverage.reportsDirectory=E:/tmp/scrum907-precedence-release-coverage
+# 517 passed; both measured files pass unchanged native thresholds.
+pnpm exec vitest run convex/vehicleOwnershipIntake.test.ts convex/vehicles.ownershipRemediation.test.ts convex/vehicleEdits.approvalGuards.test.ts convex/vehicleCostDisclosureWrites.scrum886.test.ts convex/sourcedCostMirror.scrum907.test.ts convex/vehicleEdits.test.ts convex/sourcingPayables.test.ts convex/vehicleSupplierFirstLink.scrum868.test.ts convex/vehicleSupplierIdentity.test.ts convex/vehicleCostFieldVisibility.scrum886.test.ts convex/vehicles.test.ts convex/vehiclesSelector.test.ts convex/supplierConcession.scrum766c.test.ts --maxWorkers=1 --testTimeout=30000 --coverage --coverage.include=convex/utils/vehicleSourceShape.ts --coverage.include=convex/vehicleEdits.ts --coverage.reportsDirectory=E:/tmp/scrum907-precedence-writer-coverage
+# 15 passed. Jest uses its single-worker mode and never watches.
+pnpm --filter @autoflow/mobile exec jest src/features/workspace/modules/vehicles.ownership.test.tsx --runInBand --watch=false --testTimeout=30000
+pnpm typecheck
+pnpm typecheck:convex
+pnpm mobile:typecheck
+pnpm exec eslint convex/vehicleEdits.ts convex/sourcingPayables.test.ts
+node --check scripts/rolloutRelease.mjs
+```
+
+An initial coverage run used the first seven files of the writer command and
+the same two coverage includes/options. All 142 tests passed, but it failed
+the unchanged 90% statement threshold at 88.17%. Expanding to the remaining
+already-named writer suites above passes with 91.75% statements, 94.11% lines,
+85.95% branches and 100% functions. vehicleEdits alone has 90% statements and
+92.85% lines; vehicleSourceShape retains 98.30% lines and 95.72% branches.
+LCOV reports `DA:297,46` for the sole changed executable production line:
+1/1 changed lines covered, 100%. Neither thresholds nor coverage exclusions
+were changed.
+
+All three typechecks exit 0. Root excludes convex, test-utils, apps, packages
+and dealer-worker as roots; Convex includes convex and test-utils, excluding
+generated roots; mobile checks the Expo project. Targeted lint exits 0 with
+two existing any warnings in vehicleEdits and no test warnings. The rollout
+syntax check exits 0. Clean-code-guard and test-guard self-review found no new
+smell. No NOSONAR or new production function/control-flow branch was added;
+the reorder adds zero cognitive complexity. This is author inspection, not a
+final-head SonarCloud verdict.
+
+No client file was edited or had its lines shifted. The coordinator's contract
+skew baseline and every protected path named in the task remain untouched.
+Only the test, vehicleEdits and this ADR belong to this follow-up. The existing
+.gitignore and .ignore changes remain unmodified and unstaged. No push, merge,
+backend call, deployment, browser hunter, real-backend rehearsal or independent
+seat was run. Convex-test results do not certify the platform or concurrency.
+
+The 23-file broad command exited 1: 903 tests passed, one test failed in
+localExecution.test.ts, and refreshRulings.test.ts failed before registering
+tests. The latter is the same Vite/Rolldown shebang-transform failure recorded
+in round 4. Both refreshRulings files are unchanged from ca621c5c through
+d33662da and this follow-up. The localExecution failure was its beforeEach
+hook exceeding the unchanged 10-second hook timeout, at line 739, while
+preparing the harness checkout for the skip-worktree reporter case. The same
+case passes when retried alone. Runner/reporter source and tests are unchanged
+from d33662da. No timeout, test, threshold or gate was relaxed.
+
+```powershell
+# Targeted retry: 1 passed, 192 unselected.
+pnpm exec vitest run scripts/regression/localExecution.test.ts --maxWorkers=1 --testTimeout=30000 -t "a reporter edit that is skip-worktree never runs"
+# Complete runner retry: 193 passed, unchanged timeout settings.
+pnpm exec vitest run scripts/regression/localExecution.test.ts --maxWorkers=1 --testTimeout=30000
+```
+
+Raw logs for this follow-up are E:/tmp/scrum907-precedence-{red,green,broad,
+source-coverage,writer-coverage,release-coverage,mobile,root-typecheck,
+convex-typecheck,mobile-typecheck,lint,localExecution-rerun,
+localExecution-whole}.log. The initial narrow coverage failure and the broad
+failures remain in that evidence; neither is reported as a passing run.
+The standalone complete localExecution retry exits 0 with 193/193 passed in
+460.51 seconds. The refreshRulings parse failure remains unresolved.
