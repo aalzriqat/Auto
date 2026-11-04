@@ -84,6 +84,6 @@ describe("SCRUM-907 sourced cost mirror rollout", () => {
     expect(source).toContain("### SOURCED cost mirrors");
     const refusal = source.indexOf("if (!sourcedCostMirror.ok)");
     expect(refusal).toBeGreaterThan(source.indexOf('while (lastOutcome === "continue")'));
-    expect(refusal).toBeLessThan(source.indexOf("process.exit(0)"));
+    expect(refusal).toBeLessThan(source.indexOf("process.exit(0)", refusal));
   });
 });

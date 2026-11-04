@@ -72,10 +72,12 @@ describe("SCRUM-907 sourced cost mirror", () => {
     expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ color: "Blue", sourceCost: 9900, purchasePrice: 10250 });
     const edits = await t.run(ctx => ctx.db.query("vehicleEdits").collect());
     expect(edits.find(edit => edit.type === "UPDATE")?.payload).toEqual({ color: "Blue" });
-    await expect(asUser.mutation(api.vehicles.update, { orgId, vehicleId, purchasePrice: 9800 })).rejects.toThrow(/VEHICLE_SOURCED_COST_CONFLICT/);
+    for (const purchasePrice of [9800, 9900]) {
+      await expect(asUser.mutation(api.vehicles.update, { orgId, vehicleId, purchasePrice })).rejects.toThrow(/VEHICLE_SOURCED_COST_CONFLICT/);
+    }
   });
 
-  test.each(["SOLD", "opening", "posted"] as const)("M2 unchanged sourceCost echo preserves %s history through every update door", async lock => {
+  async function assertEchoPreservesHistory(lock: "SOLD" | "opening" | "posted") {
     const fixture = await setup();
     const { t, orgId, vehicleId, userId, asUser } = fixture;
     await t.run(async ctx => {
@@ -92,18 +94,28 @@ describe("SCRUM-907 sourced cost mirror", () => {
     expect(await t.run(ctx => ctx.db.query("vehicleEdits").collect())).toEqual(editsBefore);
     await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 9900, notes: "direct note" });
     expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ sourceCost: 9900, purchasePrice: 10250, notes: "direct note" });
-    await expect(asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceCost: 9900 } })).rejects.toThrow(/No changes detected/);
-    const requestId = await asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceCost: 9900, notes: "requested note" } });
+    await expect(asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceType: "SOURCED", sourceCost: 9900 } })).rejects.toThrow(/No changes detected/);
+    const requestId = await asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceType: "SOURCED", sourceCost: 9900, notes: "requested note" } });
     expect((await t.run(ctx => ctx.db.get(requestId)))?.payload).toEqual({ notes: "requested note" });
     await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
     const oldRequestId = await t.run(ctx => ctx.db.insert("vehicleEdits", {
-      orgId, vehicleId, requestedBy: userId, type: "UPDATE", payload: { sourceCost: 9900, purchasePrice: 10250, notes: "legacy note" }, status: "PENDING", createdAt: Date.now(),
+      orgId, vehicleId, requestedBy: userId, type: "UPDATE", payload: { sourceType: "SOURCED", sourceCost: 9900, purchasePrice: 10250, notes: "legacy note" }, status: "PENDING", createdAt: Date.now(),
     }));
     await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId: oldRequestId, status: "APPROVED" });
     expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ sourceCost: 9900, purchasePrice: 10250, notes: "legacy note" });
     const edits = await t.run(ctx => ctx.db.query("vehicleEdits").collect());
     expect(edits.filter(edit => edit.type === "UPDATE").every(edit => !("purchasePrice" in edit.payload))).toBe(true);
-  });
+    const echoRequestId = await t.run(ctx => ctx.db.insert("vehicleEdits", {
+      orgId, vehicleId, requestedBy: userId, type: "UPDATE", payload: { sourceCost: 9900 }, status: "PENDING", createdAt: Date.now(),
+    }));
+    const beforeEchoApproval = await t.run(ctx => ctx.db.get(vehicleId));
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId: echoRequestId, status: "APPROVED" });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toEqual(beforeEchoApproval);
+  }
+
+  test("M2 unchanged sourceCost echo preserves SOLD history through every update door", () => assertEchoPreservesHistory("SOLD"));
+  test("M2 unchanged sourceCost echo preserves opening history through every update door", () => assertEchoPreservesHistory("opening"));
+  test("M2 unchanged sourceCost echo preserves posted history through every update door", () => assertEchoPreservesHistory("posted"));
 
   test("STOCK-to-SOURCED normalization derives the mirror without opening the pilot gate", () => {
     expect(sourcedCostMirrorPatch({ sourceType: "STOCK", purchasePrice: 8000 }, {
