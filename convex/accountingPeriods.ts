@@ -14,6 +14,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
+  OPENING_SUSPENSE_OPEN_WARNING,
   supplierPayablesUnavailableWarning,
 } from "./utils/closeWarnings";
 import {
@@ -29,6 +30,7 @@ import {
   computeSupplierRecoverablesReconciliation,
   computePartnerCapitalReconciliation,
   orgHasOpeningHistory,
+  openingSuspenseIsOpen,
   CustomerDepositsReconciliationResult,
   GlVsSubledgerResult,
   OpeningFamilyReconciliationResult,
@@ -555,6 +557,8 @@ export async function computeCloseChecklist(
   if (supplierPayablesRecon.unexplainedOpeningDifference) {
     warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
   }
+  // Owner ruling 2026-11-04: the opening difference sits in suspense as an open item until classified.
+  if (await openingSuspenseIsOpen(ctx, orgId, period.endDate)) warnings.push(OPENING_SUSPENSE_OPEN_WARNING);
   const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");

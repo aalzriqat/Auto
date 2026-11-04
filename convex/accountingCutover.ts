@@ -41,7 +41,7 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { materializeOpeningAllocations, openingPolicyForAccount, prepareOpeningAllocations } from "./accounting/openingAllocations";
 import type { OpeningAllocationPlan } from "./accounting/openingAllocations";
 import { isOpeningPartnerAccount } from "./accounting/openingPartnerAllocations";
-import { resolveSystemAccount } from "./chartOfAccounts";
+import { ensureOpeningSuspenseAccount, resolveSystemAccount } from "./chartOfAccounts";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
@@ -261,6 +261,38 @@ function refuseOpeningAfterLedgerActivity(): never {
   throwAppError(AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, POSTED_LEDGER_ACTIVITY_MESSAGE);
 }
 
+type OpeningEntryLine = {
+  accountId: Id<"chartOfAccounts">;
+  debitMinor: number;
+  creditMinor: number;
+  description?: string;
+  bankAccountId?: Id<"bankAccounts">;
+};
+
+/**
+ * Owner ruling 2026-11-04 (SCRUM-858/852, "Suspense account"): when the entered opening lines do not balance,
+ * the difference is posted to the opening-balance suspense account, never to owner's capital, and stays there
+ * as an open item (the close checklist reports it) until an accountant classifies it. The line is added to the
+ * stored draft, so the approver reads exactly what will post. Amounts that are not safe integers are returned
+ * unchanged: `validateManualJournalLines` then refuses them by line, as before.
+ */
+async function withSuspenseBalancing(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  lines: OpeningEntryLine[],
+): Promise<OpeningEntryLine[]> {
+  const difference = lines.reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0);
+  if (difference === 0 || !Number.isSafeInteger(difference)) return lines;
+  const accountId = await ensureOpeningSuspenseAccount(ctx, orgId, actorId);
+  return [...lines, {
+    accountId,
+    debitMinor: difference < 0 ? -difference : 0,
+    creditMinor: difference > 0 ? difference : 0,
+    description: "Opening balance difference (suspense)",
+  }];
+}
+
 export const draftOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -296,7 +328,8 @@ export const draftOpeningBalance = mutation({
       refuseOpeningAfterLedgerActivity();
     }
 
-    validateManualJournalLines(args.lines as ManualJournalLine[]);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    validateManualJournalLines(lines as ManualJournalLine[]);
 
     // Every account must belong to this org — an opening balance is a
     // direct-lines insert (no applyPostingRule resolution in between), so
@@ -308,26 +341,26 @@ export const draftOpeningBalance = mutation({
     // though — seeding a starting balance into an account the org has retired
     // is always a mistake, and (unlike system accounts) a custom account can be
     // deactivated while still technically allowing manual posting.
-    for (const line of args.lines) {
+    for (const line of lines) {
       const account = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
       if (!account.active) {
         throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
 
-    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
+    await assertOpeningBankIdentities(ctx, args.orgId, lines, args.expectedCurrency);
 
     if (!(await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate))) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
 
-    await prepareOpeningAllocations(ctx, { ...args, currency: args.expectedCurrency, actorId: user._id });
+    await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
       status: "PENDING_APPROVAL",
-      lines: args.lines,
+      lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
       allocations: args.allocations,
@@ -349,8 +382,8 @@ export const draftOpeningBalance = mutation({
       actionType: "CREATE_MANUAL_JOURNAL_DRAFT",
       resourceType: "openingBalanceDrafts",
       resourceId: draftId.toString(),
-      description: `Opening balance draft submitted for approval: ${args.lines.length} lines.`,
-      after: { lines: args.lines.length },
+      description: `Opening balance draft submitted for approval: ${lines.length} lines.`,
+      after: { lines: lines.length },
     });
 
     return { draftId: draftId.toString() };
@@ -647,10 +680,11 @@ export const postOpeningBalanceDirect = mutation({
       refuseOpeningAfterLedgerActivity();
     }
 
-    validateManualJournalLines(args.lines as ManualJournalLine[]);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    validateManualJournalLines(lines as ManualJournalLine[]);
 
     // Before the draft insert: a refused bank identity must leave no row behind.
-    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
+    await assertOpeningBankIdentities(ctx, args.orgId, lines, args.expectedCurrency);
 
     // The denomination to stamp on the row. Already proved vouchable AND equal
     // to what the caller converted under by the assertion above, which is why
@@ -658,13 +692,13 @@ export const postOpeningBalanceDirect = mutation({
     // at the boundary. (The shared poster re-checks vouchability independently
     // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
-    await prepareOpeningAllocations(ctx, { ...args, currency: orgDenomination, actorId: user._id });
+    await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
       status: "PENDING_APPROVAL",
-      lines: args.lines,
+      lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
       createdBy: user._id,

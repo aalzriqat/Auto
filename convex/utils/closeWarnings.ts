@@ -89,3 +89,12 @@ export const OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY = {
   SUPPLIER_RECOVERABLES: "Supplier recoverables reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
   PARTNER_CAPITAL: "Partner capital reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
 } as const;
+
+/**
+ * SCRUM-858/852 (owner ruling 2026-11-04): the opening-balance difference was posted to the suspense account
+ * and nobody has classified it yet. Emitted while that account carries a balance (or its balance cannot be
+ * read in full), so the open item is seen at every close. Server text is the acknowledgement key; the close
+ * dialog translates it at display time only.
+ */
+export const OPENING_SUSPENSE_OPEN_WARNING =
+  "The opening-balance suspense account still carries a balance. Classify it to its real accounts with a manual journal; it is never moved to equity automatically.";

@@ -337,6 +337,18 @@ export async function ensureFixedAssetAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.LOSS_ON_DISPOSAL, "6600");
 }
 
+/** Charts initialized before the opening-balance suspense account existed get it here, when first needed. */
+export async function ensureOpeningSuspenseAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<Id<"chartOfAccounts">> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OPENING_SUSPENSE, "1900");
+  const account = await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.OPENING_SUSPENSE);
+  if (!account) throw new ConvexError("The opening-balance suspense account could not be resolved.");
+  return account;
+}
+
 /**
  * GL Phase 12 self-heal, scoped to the partner-equity hooks and the legacy
  * migration. Includes RETAINED_EARNINGS since profit distributions debit it

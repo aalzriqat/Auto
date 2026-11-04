@@ -25,6 +25,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
+  OPENING_SUSPENSE_OPEN_WARNING,
   SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
@@ -58,6 +59,8 @@ const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconInconsistentReference",
   [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
   [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
+  // Owner ruling 2026-11-04: the opening difference sits in suspense as an open item, never closed to equity.
+  [OPENING_SUSPENSE_OPEN_WARNING]: "ClosePeriodWarnOpeningSuspenseOpen",
 };
 
 function displayWarning(warning: string, t: Translate): string {

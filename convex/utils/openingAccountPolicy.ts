@@ -79,6 +79,7 @@ const OPENING_POLICIES: Readonly<Record<string, OpeningPolicy | undefined>> = {
   INSURANCE_EXPENSE: "LEDGER_ONLY",
   OWNERSHIP_TRANSFER_EXPENSE: "LEDGER_ONLY",
   SELLING_EXPENSE: "LEDGER_ONLY",
+  OPENING_SUSPENSE: "LEDGER_ONLY",
 } satisfies Record<SystemKey, OpeningPolicy>;
 
 /** The writer and entry UI use one classification authority. A custom equity

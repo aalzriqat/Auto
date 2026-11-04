@@ -1720,6 +1720,23 @@ async function glNetByAccounts(
   return byCurrency;
 }
 
+/** Documents the suspense balance read may scan: one snapshot per period plus the open period's lines. */
+const OPENING_SUSPENSE_READ_LIMIT = 2000;
+
+/** True while the opening-balance suspense account carries a balance as of `cutoff`, or when that balance
+ * cannot be read in full: an unproven zero is never reported as cleared. An org that never used suspense
+ * has no such account and no open item. */
+export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number): Promise<boolean> {
+  const account = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE))
+    .first();
+  if (!account) return false;
+  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT);
+  if (gl.status !== "OK") return true;
+  return gl.balances.some((balance) => balance.debitMinor !== balance.creditMinor);
+}
+
 /** Employee Advances asset (GL, debit-normal) vs the unrecovered remainder of every live advance. */
 export async function computeEmployeeAdvancesReconciliation(
   ctx: QueryCtx,

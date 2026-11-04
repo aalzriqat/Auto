@@ -141,6 +141,10 @@ export const SYSTEM_KEYS = {
   INSURANCE_EXPENSE: "INSURANCE_EXPENSE",
   OWNERSHIP_TRANSFER_EXPENSE: "OWNERSHIP_TRANSFER_EXPENSE",
   SELLING_EXPENSE: "SELLING_EXPENSE",
+  // Owner ruling 2026-11-04 (SCRUM-858/852): the amount by which an entered opening-balance set fails to
+  // balance is posted here, never to owner's capital, and stays an open item until an accountant
+  // classifies it with a manual journal.
+  OPENING_SUSPENSE: "OPENING_SUSPENSE",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -353,6 +357,19 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.ACCUMULATED_DEPRECIATION,
+  },
+  {
+    // A clearing account: it may carry either side. Debit-normal because the pilot's first use is a
+    // short opening set; a credit balance shows as a negative and still needs the same classification.
+    // Manual posting stays allowed so an accountant can move the balance to its real account.
+    code: "1900",
+    name: "Opening Balance Suspense",
+    nameAr: "حساب معلق للأرصدة الافتتاحية",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.OPENING_SUSPENSE,
   },
 
   // ── Liabilities ──────────────────────────────────────────────────────────
