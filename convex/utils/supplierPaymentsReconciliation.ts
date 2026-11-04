@@ -71,10 +71,9 @@ const unavailable = (unavailableReason: PaymentsReconciliationUnavailableReason)
   creditSide: "NOT_ATTRIBUTABLE",
 });
 
-type Reason = PaymentsReconciliationUnavailableReason;
 /** A read that either produced its value or says why the whole comparison is unavailable. */
-type Read<T> = { ok: true; value: T } | { ok: false; reason: Reason };
-const refuse = (reason: Reason): { ok: false; reason: Reason } => ({ ok: false, reason });
+type Read<T> = { ok: true; value: T } | { ok: false; reason: PaymentsReconciliationUnavailableReason };
+const refuse = (reason: PaymentsReconciliationUnavailableReason): { ok: false; reason: PaymentsReconciliationUnavailableReason } => ({ ok: false, reason });
 
 /** Postings still in flight: the GL is about to move, so a comparison now is not the truth. */
 async function readInFlight(ctx: Pick<QueryCtx, "db"> & HeadroomCtx, orgId: Id<"organizations">): Promise<Read<Doc<"pendingAccountingEvents">[]>> {
@@ -96,7 +95,7 @@ async function readInFlight(ctx: Pick<QueryCtx, "db"> & HeadroomCtx, orgId: Id<"
 async function pendingPostingsReason(
   ctx: Pick<QueryCtx, "db"> & HeadroomCtx,
   inFlight: Doc<"pendingAccountingEvents">[],
-): Promise<Reason | null> {
+): Promise<PaymentsReconciliationUnavailableReason | null> {
   // A queued reversal of a supplier payment is typed JOURNAL_REVERSAL, which the AP classification marks false:
   // unknown must not read as safe, so any queued reversal makes this unavailable.
   if (inFlight.some((event) => event.eventType === "JOURNAL_REVERSAL")) return "PENDING_POSTINGS";
