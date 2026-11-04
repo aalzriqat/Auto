@@ -12,6 +12,7 @@ import { runWithIdempotency } from "./utils/idempotency";
 import { NOTIFICATION_TYPES } from "../lib/notifications/types";
 import { fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { alertStepFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type ObligationRow } from "./utils/supplierObligationDue";
 
 /**
@@ -75,42 +76,55 @@ const ALERT_OPERATION = "supplier-due-alert";
 
 /**
  * The members of one membership page who are alerted: Owner, Finance Manager (manage:finance) and
- * authorised accounting staff (view:finance), and only active ones. An offboarding member, a super
- * admin's temporary impersonation membership (it copies the target's role) and a disabled user are
- * not recipients, the same predicates `requireTenantAuth` and `countOwners` apply.
+ * authorised accounting staff (view:finance), and only active ones (owner ruling SCRUM-869#c23883). An
+ * offboarding member, a super admin's temporary impersonation membership (it copies the target's role)
+ * and a disabled user are not recipients, the same predicates `requireTenantAuth` and `countOwners` apply.
+ *
+ * Each recipient also says whether they may read the amount (SCRUM-901). The amount is cost-derived, so it
+ * goes only to the system owner or a role that holds every permission in `STATEMENT_PERMISSIONS`
+ * (view:finance and view:cost_price), the authority `supplierDueAging.list` and the supplier statement
+ * require; any other recipient is told the same alert without it. OWASP A01:2021 Broken Access Control:
+ * authorization must hold on every path to the data, a notification included.
  */
+interface Recipient {
+  userId: Id<"users">;
+  mayReadAmount: boolean;
+}
+
 async function eligibleRecipients(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   memberships: Doc<"memberships">[]
-): Promise<Id<"users">[]> {
-  const rolesHoldingFinance = new Map<Id<"roles">, boolean>();
-  const recipients = new Set<Id<"users">>();
+): Promise<Recipient[]> {
+  const roleStanding = new Map<Id<"roles">, { recipient: boolean; mayReadAmount: boolean }>();
+  const recipients = new Map<Id<"users">, Recipient>();
   for (const membership of memberships) {
     if (membership.offboardingStatus || membership.impersonationGrantId) continue;
-    let holdsFinance = rolesHoldingFinance.get(membership.roleId);
-    if (holdsFinance === undefined) {
+    let standing = roleStanding.get(membership.roleId);
+    if (standing === undefined) {
       const role = await ctx.db.get(membership.roleId);
-      holdsFinance =
-        !!role &&
-        role.orgId === orgId &&
-        (isSystemOwnerRole(role) ||
-          role.permissions.includes(PERMISSIONS.MANAGE_FINANCE) ||
-          role.permissions.includes(PERMISSIONS.VIEW_FINANCE));
-      rolesHoldingFinance.set(membership.roleId, holdsFinance);
+      const sameOrg = !!role && role.orgId === orgId;
+      const isOwner = sameOrg && isSystemOwnerRole(role);
+      standing = {
+        recipient:
+          sameOrg &&
+          (isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE)),
+        mayReadAmount: sameOrg && (isOwner || STATEMENT_PERMISSIONS.every((permission) => role.permissions.includes(permission))),
+      };
+      roleStanding.set(membership.roleId, standing);
     }
-    if (!holdsFinance) continue;
+    if (!standing.recipient) continue;
     const user = await ctx.db.get(membership.userId);
     if (!user || user.disabled) continue;
-    recipients.add(membership.userId);
+    recipients.set(membership.userId, { userId: membership.userId, mayReadAmount: standing.mayReadAmount });
   }
-  return [...recipients];
+  return [...recipients.values()];
 }
 
+/** The alert's fields that every recipient may see. The amount is added per recipient, never stored here. */
 function alertData(row: ObligationRow): Record<string, string | number> {
   return {
     kind: row.kind,
-    amount: fromMinorUnits(row.outstandingMinor, row.currency).toFixed(scaleForCurrency(row.currency)),
     currency: row.currency,
     dueDate: row.dueDate ?? "",
     daysOverdue: Math.max(0, row.daysOverdue ?? 0),
@@ -120,6 +134,8 @@ function alertData(row: ObligationRow): Record<string, string | number> {
 interface PlannedAlert {
   type: ReturnType<typeof alertTypeFor>;
   data: Record<string, string | number>;
+  /** Cost-derived: added to `data` only for a recipient who may read it, so the key is absent for everyone else. */
+  amount: string;
   idempotencyKey: string;
 }
 
@@ -137,6 +153,7 @@ function planAlert(row: ObligationRow): PlannedAlert | null {
   return {
     type: alertTypeFor(plan.step),
     data: alertData(row),
+    amount: fromMinorUnits(row.outstandingMinor, row.currency).toFixed(scaleForCurrency(row.currency)),
     idempotencyKey: `${row.kind}:${row.id}:${plan.step}:${plan.occurrence}`,
   };
 }
@@ -204,9 +221,12 @@ export const processOrgSupplierDueAlerts = internalMutation({
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .paginate({ cursor: args.recipientCursor ?? null, numItems: Math.max(1, Math.floor(SEND_BUDGET / planned.length)) });
       const recipients = await eligibleRecipients(ctx, args.orgId, membershipPage.page);
-      for (const { type, data, idempotencyKey } of planned) {
+      for (const { type, data: sharedData, amount, idempotencyKey } of planned) {
         const def = NOTIFICATION_TYPES[type];
-        for (const userId of recipients) {
+        for (const { userId, mayReadAmount } of recipients) {
+          // The key is absent, not 0 or null, for a recipient who may not read it. The idempotency key names
+          // the recipient and carries no amount, so redaction cannot make two sends of one alert disagree.
+          const data = mayReadAmount ? { ...sharedData, amount } : sharedData;
           let sent = false;
           // Non-economic: this command writes one in-app notification row and moves no money.
           await runWithIdempotency(

@@ -1,7 +1,7 @@
 import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { requireFeature } from "./subscriptions";
 import { OBLIGATION_PAGE_DEFAULT, readObligationPage } from "./utils/supplierObligationDue";
 
@@ -51,7 +51,8 @@ export const list = query({
     continueCursor: v.string(),
   }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // Every family here is cost-derived for SOURCED cars (SCRUM-901, SCRUM-886 / ACC-10): both grants, as the statement.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
       throw new ConvexError("nowMs must be a whole number of milliseconds within one day of the server clock.");
