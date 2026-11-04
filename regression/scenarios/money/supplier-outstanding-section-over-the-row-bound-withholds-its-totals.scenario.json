@@ -1,0 +1,60 @@
+{
+  "id": "supplier-outstanding-section-over-the-row-bound-withholds-its-totals",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-round4",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertPayables",
+      "input": {
+        "status": "DUE_ON_SALE",
+        "count": 101
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.complete",
+      "value": false
+    },
+    {
+      "observable": "payable.totals",
+      "value": "withheld"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStatement.scrum869.test.ts",
+    "testName": "a section over the row bound withholds its totals too (W14), as settled history does"
+  },
+  "matrixRow": "SCRUM869-supplier-read-limits",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "8c98ed31f2633a817689fe615c8eba408082cc0b"
+  },
+  "fingerprint": "bcac2270506db2329ef03a7466fd4b8fdf39e684ac562e5c87ab3acf71cd67b8"
+}

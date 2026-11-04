@@ -1,0 +1,86 @@
+{
+  "id": "supplier-history-spent-budget-never-counts-a-deposit-only-claim-unverified",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-round4",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openClaim",
+      "input": {
+        "depositJod": 1000,
+        "receipts": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openClaimWithReceipt",
+      "input": {
+        "receiptJod": 500,
+        "extraLedgerEntries": 20,
+        "memoChars": 900000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.complete",
+      "value": false
+    },
+    {
+      "observable": "receivable.totals",
+      "value": "withheld"
+    },
+    {
+      "observable": "receivable.unverifiedCount",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "the older deposit-only claim holds no supplier receipt to verify: only the newer, budget-exhausting claim is unverified"
+  },
+  "matrixRow": "SCRUM869-supplier-read-limits",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "8c98ed31f2633a817689fe615c8eba408082cc0b"
+  },
+  "fingerprint": "ea7be033ca397991921b1eb611badc537d1cfc4c66ac648ffddcbc560c7c8919"
+}

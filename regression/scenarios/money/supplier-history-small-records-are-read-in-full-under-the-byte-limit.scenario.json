@@ -1,0 +1,75 @@
+{
+  "id": "supplier-history-small-records-are-read-in-full-under-the-byte-limit",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review-r2",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openClaimsWithReceipts",
+      "input": {
+        "claims": 20,
+        "receiptJodEach": 100,
+        "receiptNotesChars": 100
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.rows",
+      "value": 20
+    },
+    {
+      "observable": "receivable.total.settledJod",
+      "value": 2000
+    },
+    {
+      "observable": "receivable.complete",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "CONTROL: 20 small-note claims are read in full with the limits enforced: every row, the total, complete"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c94a39db33cc550c7b4d3c848716d90088cf9d64"
+  },
+  "fingerprint": "1f670b7ce09ec6db6b2419bc6f99dfd9232521bfeaa8a39f7cb0554342582893"
+}
