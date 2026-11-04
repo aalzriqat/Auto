@@ -1,0 +1,54 @@
+{
+  "id": "payables-reconciliation-foreign-line-under-own-journal-is-unavailable",
+  "fingerprint": "6d7bef7ff53098fab812db9a2337d660c53042fcefd97a1f416e8bd1cff941c7",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "lineOwner": "B",
+        "journalParent": "A_POSTED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "INCONSISTENT_REFERENCE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B1: an org-B line under an org-A POSTED entry on the A/P account is UNAVAILABLE, not org A's GL balance"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "ce4edcd2c4ec645a79a48fd06656db469671fbfc"
+  }
+}

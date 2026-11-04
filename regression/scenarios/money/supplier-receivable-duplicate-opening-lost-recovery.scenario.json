@@ -1,0 +1,44 @@
+{
+  "id": "supplier-receivable-duplicate-opening-lost-recovery",
+  "fingerprint": "6d255b1d3a2e98580ae6de4ae4686307c158541287368d2feab3b608d64a1be4",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-both-seat-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "openingMinor": 100000,
+        "duplicateLiveJournal": true,
+        "deleteRecovery": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "duplicate live opening journals refuse even with no surviving recovery"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

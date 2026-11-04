@@ -19,12 +19,16 @@
  */
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
+import { PERMISSIONS, isSystemOwnerRole } from "./permissions";
 import { assertNoHeldSupplierConcession } from "./supplierConcession";
+import { normalizeNameKey } from "./supplierNames";
 import {
   SUPPLIER_ERROR,
   snapshotSupplier,
   snapshotSupplierForProvenReplay,
+  supplierNameEvidence,
   throwSupplierError,
+  type SupplierNameEvidence,
   type SupplierSnapshot,
 } from "./supplierRegistry";
 import { parseVehicleSourceType, storedVehicleSourceType } from "./vehicleSourceShape";
@@ -34,6 +38,10 @@ export const SUPPLIER_ROLE_CONFLICT_MESSAGE =
   "This supplier was sent in a role the vehicle does not have. A consignment supplier belongs to a consignment vehicle, and a purchase creditor belongs to an owned vehicle bought on account.";
 export const SUPPLIER_LINK_FROZEN_MESSAGE =
   "This vehicle's supplier can no longer be changed because money has already been recorded against it. Ask your accountant for a reviewed correction.";
+export const SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER_MESSAGE =
+  "This vehicle has money recorded against it but no supplier yet. Only a finance manager can set its first supplier. Ask a finance manager to link the vehicle on the vehicle edit screen; an edit request cannot do it.";
+export const SUPPLIER_FIRST_LINK_NOT_PROVEN_MESSAGE =
+  "This supplier cannot be linked because the supplier name stored on the vehicle and on its money records does not match this supplier's name or one of its aliases. Pick the supplier those records were made for, or ask a finance manager to add the old name as an alias of that supplier first. Nothing was changed.";
 
 /** The two supplier ids a vehicle write may carry, plus the facts that decide which one applies. */
 export interface VehicleSupplierSubmission {
@@ -259,19 +267,137 @@ export async function vehicleSupplierLinkHasMoney(
 }
 
 /**
+ * Rows read from each money table by the first-link proof. A table that fills this bound is refused (fail
+ * closed): the proof must see every row it vouches for. A consignment car has a handful of rows.
+ */
+const FIRST_LINK_ROW_BOUND = 100;
+
+/** What the first-link proof established; the caller records it in the audit log. Read-only data. */
+export interface FirstLinkProof {
+  /** How the name stored on the VEHICLE matched the picked supplier. */
+  readonly nameMatchedOn: "DISPLAY_NAME" | "ALIAS";
+  /** How many id-less (or already bound to this supplier) rows of each table were checked. */
+  readonly rowsChecked: { readonly payables: number; readonly receivables: number; readonly recoveries: number };
+}
+
+/** The slice of a role the first-link permission check reads (the same two facts `requireTenantAuth` reads). */
+export type FirstLinkActorRole = Pick<Doc<"roles">, "permissions" | "isSystemOwnerRole" | "isDeleted" | "name">;
+
+/** The fields every supplier money row that carries a supplier name has in common. */
+interface NamedSupplierRow {
+  orgId: Id<"organizations">;
+  sourcedFromName: string;
+  supplierId?: Id<"suppliers">;
+  supplierSnapshotVersion?: number;
+}
+
+function throwFirstLinkNotProven(): never {
+  return throwSupplierError(SUPPLIER_ERROR.FIRST_LINK_NOT_PROVEN, SUPPLIER_FIRST_LINK_NOT_PROVEN_MESSAGE);
+}
+
+/**
+ * The FIRST link of a consignment car that already has money and no supplier (SCRUM-868 P4/P5 round 4).
+ *
+ * The operator picked `link.supplierId`. The picked id is confirmed, never chosen, by names:
+ *   - the name stored on the VEHICLE is that supplier's display name or one of its aliases (ACTIVE or
+ *     RETIRED), compared by the registry's own `normalizeNameKey` (`supplierNameEvidence`);
+ *   - every payable, receivable and cost recovery of the vehicle that has no supplier id carries a stored
+ *     name that matches the same way, and a snapshot version the master has reached (the exact rules the
+ *     release repair will apply to bind the row next, so a link this accepts is a link the repair accepts);
+ *   - a row already bound to this supplier agrees; a row bound to ANOTHER supplier refuses.
+ * Supplier-borne expenses carry no supplier name; they are confirmed by the vehicle's name alone.
+ * Read-only: it binds nothing, posts nothing and changes no amount. The existing repair binds the rows.
+ */
+async function proveFirstLink(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  vehicle: Pick<Doc<"vehicles">, "_id" | "sourcedFromName">,
+  supplierId: Id<"suppliers">,
+): Promise<FirstLinkProof> {
+  // Many rows repeat one name; the evidence for a name is the same every time, so read it once.
+  const evidenceByKey = new Map<string, SupplierNameEvidence>();
+  const evidenceFor = async (name: string): Promise<SupplierNameEvidence> => {
+    const key = normalizeNameKey(name);
+    const cached = evidenceByKey.get(key);
+    if (cached) return cached;
+    const evidence = await supplierNameEvidence(ctx, orgId, supplierId, name);
+    evidenceByKey.set(key, evidence);
+    return evidence;
+  };
+  const vehicleEvidence = await evidenceFor(vehicle.sourcedFromName ?? "");
+  if (vehicleEvidence.kind !== "MATCH") return throwFirstLinkNotProven();
+
+  const rowAgrees = async (row: NamedSupplierRow): Promise<boolean> => {
+    if (row.orgId !== orgId) return false;
+    if (row.supplierId !== undefined) return row.supplierId === supplierId;
+    const evidence = await evidenceFor(row.sourcedFromName);
+    if (evidence.kind !== "MATCH") return false;
+    const version = row.supplierSnapshotVersion;
+    return version === undefined || (Number.isSafeInteger(version) && version >= 1 && version <= evidence.version);
+  };
+  const allAgree = async (rows: readonly NamedSupplierRow[]): Promise<number> => {
+    if (rows.length > FIRST_LINK_ROW_BOUND) return throwFirstLinkNotProven();
+    for (const row of rows) {
+      if (!(await rowAgrees(row))) return throwFirstLinkNotProven();
+    }
+    return rows.length;
+  };
+
+  const payables = await ctx.db
+    .query("vehicleSupplierPayables")
+    .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle._id))
+    .take(FIRST_LINK_ROW_BOUND + 1);
+  const receivables = await ctx.db
+    .query("vehicleSupplierReceivables")
+    .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicle._id))
+    .take(FIRST_LINK_ROW_BOUND + 1);
+  const recoveries = await ctx.db
+    .query("supplierCostRecoveries")
+    .withIndex("by_org_vehicle_status", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicle._id))
+    .take(FIRST_LINK_ROW_BOUND + 1);
+  return {
+    nameMatchedOn: vehicleEvidence.matchedOn,
+    rowsChecked: {
+      payables: await allAgree(payables),
+      receivables: await allAgree(receivables),
+      recoveries: await allAgree(recoveries),
+    },
+  };
+}
+
+/**
  * Refuses a change of the vehicle's supplier link (id or snapshot name) once money exists (N11), and
  * while an open deal holds the supplier terms (its own refusal). `link` is the new snapshot, or
  * undefined when the patch keeps the link; an unchanged link is never refused.
+ *
+ * One narrow exception, the FIRST link: a SOURCED car with money and NO link (`sourcedSupplierId` unset)
+ * may be linked to the supplier the operator picked, when the caller holds manage:finance (`actor`) and
+ * `proveFirstLink` confirms the picked id against the stored names. Any other link change on a car with
+ * money (X to Y, X to none, a car that is not SOURCED) is refused exactly as before. A caller that passes
+ * no `actor` (the edit-request doors) can never take the exception: a sales-originated request gains no
+ * finance power. Returns the proof when the exception was taken, so the caller can audit it; undefined
+ * otherwise.
  */
 export async function assertSupplierLinkChangeAllowed(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
-  vehicle: Pick<Doc<"vehicles">, "_id" | "sourcedSupplierId">,
+  vehicle: Pick<Doc<"vehicles">, "_id" | "sourcedSupplierId" | "sourceType" | "sourcedFromName">,
   link: SupplierSnapshot | undefined,
-): Promise<void> {
-  if (link === undefined || link.supplierId === vehicle.sourcedSupplierId) return;
+  actor?: { readonly role: FirstLinkActorRole },
+): Promise<FirstLinkProof | undefined> {
+  if (link === undefined || link.supplierId === vehicle.sourcedSupplierId) return undefined;
   await assertNoHeldSupplierConcession(ctx, orgId, vehicle._id);
-  if (await vehicleSupplierLinkHasMoney(ctx, orgId, vehicle._id)) {
-    throwSupplierError(SUPPLIER_ERROR.LINK_FROZEN, SUPPLIER_LINK_FROZEN_MESSAGE);
+  if (!(await vehicleSupplierLinkHasMoney(ctx, orgId, vehicle._id))) return undefined;
+  const isFirstLink = vehicle.sourcedSupplierId === undefined && storedVehicleSourceType(vehicle.sourceType) === "SOURCED";
+  if (!isFirstLink) return throwSupplierError(SUPPLIER_ERROR.LINK_FROZEN, SUPPLIER_LINK_FROZEN_MESSAGE);
+  const holdsFinanceAuthority =
+    actor !== undefined &&
+    (isSystemOwnerRole(actor.role) || actor.role.permissions.includes(PERMISSIONS.MANAGE_FINANCE));
+  if (!holdsFinanceAuthority) {
+    return throwSupplierError(
+      SUPPLIER_ERROR.FIRST_LINK_NEEDS_FINANCE_MANAGER,
+      SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER_MESSAGE,
+    );
   }
+  return await proveFirstLink(ctx, orgId, vehicle, link.supplierId);
 }

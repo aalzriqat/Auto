@@ -13,6 +13,7 @@ import { internalMutation, mutation } from "./functions";
 import { vehiclesByOrg, LIVE, OWN_STOCK, SOURCED, SUM_EPOCH } from "./aggregates";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwnedRow } from "./utils/tenancy";
+import { writeAuditLog } from "./utils/auditLog";
 import { projectSaleRow } from "./utils/saleRowProjection";
 import { assertNoHeldSupplierConcession } from "./utils/supplierConcession";
 import {
@@ -32,6 +33,7 @@ import {
   withServerSupplierNames,
 } from "./utils/vehicleSupplierIdentity";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { canReadVehicleCost, editPayloadCarriesCost, projectVehicleForRole } from "./utils/vehicleCostVisibility";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
@@ -40,6 +42,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { internal } from "./_generated/api";
 import { getOrgCurrency, isPostableNow, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits, fromMinorUnits, assertFiniteNumber, assertMajorAmountRepresentable, toMinorSameCurrencyOrUndefined } from "./utils/money";
+import { assertVehicleCostPrecision, requireSupplierAmountMinor } from "./utils/supplierPaymentAmounts";
 import { settlementView, deriveSettlementStatus } from "./utils/supplierSettlement";
 import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { PURCHASE_IMPORT_MAX_ROWS } from "./utils/importLimits";
@@ -208,6 +211,7 @@ export async function postVehicleAcquisitionIfOwned(
 
   const now = Date.now();
   const currency = await getOrgCurrency(ctx, args.orgId);
+  requireSupplierAmountMinor(args.purchasePrice, currency);
   const bankMethod = args.purchasePaymentMethod === "BANK_TRANSFER" ||
     args.purchasePaymentMethod === "CARD" || args.purchasePaymentMethod === "CHEQUE";
   if (bankMethod) {
@@ -416,7 +420,6 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let q;
 
@@ -447,10 +450,8 @@ export const list = query({
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
         const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
-        const { purchasePrice, ...rest } = vehicle;
         return {
-          ...rest,
-          ...(canViewCostPrice ? { purchasePrice } : {}),
+          ...projectVehicleForRole(vehicle, role),
           imageUrls,
           addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
           pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
@@ -477,7 +478,6 @@ export const listAll = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let vehicles;
 
@@ -522,17 +522,8 @@ export const listAll = query({
           (vehicle.imageIds || []).map((id) => ctx.storage.getUrl(id))
         );
 
-        let purchasePrice = vehicle.purchasePrice;
-        let sourceCost = vehicle.sourceCost;
-        if (!canViewCostPrice) {
-          purchasePrice = undefined;
-          sourceCost = undefined;
-        }
-
         return {
-          ...vehicle,
-          purchasePrice,
-          sourceCost,
+          ...projectVehicleForRole(vehicle, role),
           pendingStatusRequest: pendingMap.get(vehicle._id) || null,
           imageUrls: docUrls,
         };
@@ -556,7 +547,7 @@ export const exportData = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const canViewCostPrice = canReadVehicleCost(role);
 
     const orgVehicles = await ctx.db
       .query("vehicles")
@@ -623,7 +614,6 @@ export const get = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
-    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -640,10 +630,8 @@ export const get = query({
       .filter((q) => q.eq(q.field("status"), "PENDING"))
       .first();
 
-    const { purchasePrice, ...rest } = vehicle;
     return {
-      ...rest,
-      ...(canViewCostPrice ? { purchasePrice } : {}),
+      ...projectVehicleForRole(vehicle, role),
       imageUrls,
       addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
       pendingStatusRequest: pendingRequest?.requestedStatus ?? null,
@@ -660,14 +648,15 @@ export const getByVin = query({
     vin: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    return await ctx.db
+    const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_org_vin", (q) =>
         q.eq("orgId", args.orgId).eq("vin", args.vin.trim().toUpperCase())
       )
       .unique();
+    return vehicle ? projectVehicleForRole(vehicle, role) : null;
   },
 });
 
@@ -758,12 +747,16 @@ export const getLandedCosts = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
+
+    // The landed-cost breakdown is cost by definition: a caller who may not read vehicle cost
+    // gets the same answer as for a car with no breakdown, which the screens already handle.
+    if (!canReadVehicleCost(role)) return null;
 
     return await ctx.db
       .query("vehicleLandedCosts")
@@ -1040,6 +1033,7 @@ export const create = mutation({
     // an on-account purchase must name its creditor (AP-Suppliers credit and the
     // supplier payable need a name).
     const isSourced = assertVehicleIntake(args) === "SOURCED";
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
     // stable placeholder so schema uniqueness stays valid. Users update it when
@@ -1379,13 +1373,28 @@ export const update = mutation({
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     validateInput(UpdateVehicleSchema, args);
 
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
     if (vehicle.isDeleted) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+    // SCRUM-886: a caller who cannot read cost must not submit one. Every later check compares the
+    // submitted cost with the stored one (precision, no-change, posted acquisition), so the outcome
+    // would confirm a guess. Decided by key presence alone (`editPayloadCarriesCost`; an
+    // unclassified key counts as cost), before any comparison. The one exemption is an ownership
+    // change by a `manage:finance` holder: a consignment buy-out must carry its purchase terms. The
+    // change is detected from the stored and submitted `sourceType` only (both OPEN), never from a
+    // client flag, so it reveals nothing about the stored cost.
+    if (!canReadVehicleCost(role)) {
+      const ownershipChange = requestedVehicleSourceTypeChange(vehicle, args) !== null;
+      const financeAuthority = role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
+      const { orgId: _orgId, vehicleId: _vehicleId, ...submitted } = args;
+      if (!(ownershipChange && financeAuthority) && editPayloadCarriesCost(submitted)) {
+        throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+      }
     }
     // The limiter writes component state, so refuse ownership changes before it.
     if (requestedVehicleSourceTypeChange(vehicle, args)) {
@@ -1406,6 +1415,8 @@ export const update = mutation({
       nextStatus: args.status,
     });
     await assertVehicleImagesAllowed(ctx, args.imageIds);
+
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId), vehicle);
 
     // SCRUM-717 (D-45): the same coherence rule `create` enforces, applied only
     // when this patch CHANGES the type, the supplier or the cost — an existing
@@ -1549,7 +1560,25 @@ export const update = mutation({
     // SCRUM-868 P2: the consignment supplier link (N3: the name is the server's snapshot; N11: it cannot
     // be swapped once money exists against the vehicle). Refused before any write.
     if (sourcedSnapshot) {
-      await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot);
+      // This is the one door that can give a consignment car with money its FIRST supplier link: it passes
+      // the caller's role (manage:finance is checked inside, next to the proof of the picked supplier).
+      // The edit-request doors in vehicleEdits.ts pass no role and can never take that exception.
+      const firstLinkProof = await assertSupplierLinkChangeAllowed(ctx, args.orgId, vehicle, sourcedSnapshot, { role });
+      if (firstLinkProof) {
+        await writeAuditLog(ctx, user, {
+          action: "vehicle.supplierFirstLink",
+          targetTable: "vehicles",
+          targetId: vehicle._id,
+          orgId: args.orgId,
+          before: { sourcedSupplierId: null, sourcedFromName: vehicle.sourcedFromName ?? null },
+          after: {
+            sourcedSupplierId: sourcedSnapshot.supplierId,
+            sourcedFromName: sourcedSnapshot.name,
+            nameMatchedOn: firstLinkProof.nameMatchedOn,
+            rowsChecked: firstLinkProof.rowsChecked,
+          },
+        });
+      }
       // Written only when the link actually moves. Re-sending the supplier the vehicle already has changes
       // nothing: the stored name stays the snapshot taken when the link was made (N3), and the "supplier
       // terms changed" guard below does not fire on an echo.
@@ -1724,7 +1753,16 @@ export const upsertLandedCosts = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // SCRUM-886 (OWASP API3:2023): the landed-cost breakdown is cost by definition (`getLandedCosts`
+    // returns null to a caller who cannot read cost, for every source type), so a caller who cannot
+    // read it may not write it. Every later check compares the submitted items with the stored ones
+    // (the paid-item door, the bank identity check), so their outcomes would confirm a guessed
+    // amount. Refused before any read of the vehicle or the stored items, and by role alone, so the
+    // answer carries no signal about the stored row. No exemption: every item carries an amount.
+    if (!canReadVehicleCost(role)) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
 
     const vehicle = await requireOwnedRow(ctx, args.orgId, "vehicles", args.vehicleId, "Vehicle not found in this organization.");
     if (vehicle.isDeleted) {
@@ -2214,7 +2252,7 @@ export const correctAcquisitionCost = mutation({
     // be stored as typed but posted rounded, so the vehicle and the ledger would disagree by
     // the rounding. Refused before any write.
     try {
-      assertMajorAmountRepresentable(args.newCost, currency, "New purchase cost");
+      requireSupplierAmountMinor(args.newCost, currency);
     } catch (error) {
       console.error(error);
       throwAppError(
@@ -3065,6 +3103,7 @@ export const createSourced = mutation({
     assertFiniteNumber(args.mileage, "mileage");
     // SCRUM-717 (D-45): the shared shape rule — supplier named, cost positive.
     assertSourcedShape(args.sourcedFromName, args.sourceCost);
+    assertVehicleCostPrecision(args, await getOrgCurrency(ctx, args.orgId));
     // The ranges are lifted from CreateVehicleSchema, the schema the `create`
     // path does run, so the two entry points accept the same numbers. They are
     // deliberately not stricter than it: `sellingPrice: 0` is legal there and
@@ -3703,7 +3742,8 @@ const ownershipOf = (row: { sourceType?: string }) => storedVehicleSourceType(ro
  */
 function ownershipTermsMismatch(
   existing: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number },
-  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number }
+  row: { sourceType?: string; sourcedFromName?: string; sourcedSupplierId?: string; sourceCost?: number; purchasePrice?: number },
+  mayReadCost: boolean
 ): string | null {
   const was = ownershipOf(existing);
   const now = ownershipOf(row);
@@ -3725,6 +3765,8 @@ function ownershipTermsMismatch(
   }
   const incomingCost = row.sourceCost ?? row.purchasePrice;
   if (existing.sourceCost !== incomingCost) {
+    // SCRUM-886: see `mayReadCost` in importBulk. Null falls through to the generic collision refusal.
+    if (!mayReadCost) return null;
     return `recorded at a supplier cost of ${existing.sourceCost}, this file says ${incomingCost}`;
   }
   return null;
@@ -3867,7 +3909,37 @@ export const importBulk = mutation({
       );
     }
 
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    // SCRUM-886 (OWASP API3:2023): creating vehicles does not imply reading their cost. A stored cost is
+    // COST tier, so a caller who may not read it gets the same generic "already recorded under this VIN"
+    // refusal whether the file's figure matches or differs: no stored amount and no equality signal.
+    // Callers who may read cost keep the detailed reasons. Every refusal below that compares a row with
+    // an existing vehicle's cost, currency, payment route or creditor follows this rule. Since the
+    // round-8 gate right below, only a PURCHASE import reaches those refusals and a caller without
+    // cost access never gets that far, so the `!mayReadCost` branches are defence in depth.
+    const mayReadCost = canReadVehicleCost(role);
+    // SCRUM-886 (OWASP API3:2023; Convex: authorize inside the function from `ctx.auth`, never from a
+    // client argument). INVARIANT: a caller who cannot read vehicle cost never submits a cost-bearing
+    // value into a path that compares it with a stored value or a stored fingerprint of it.
+    // Two import modes run exactly such a path, and both are decided here, by the caller's role and the
+    // request's mode alone, before any evidence lookup, fingerprint, supplier read or comparison:
+    //  - PURCHASE hashes every row with `importRowFingerprint` (purchasePrice, sourceCost, supplier,
+    //    the file's payment method and bank) and looks the (import, row) evidence up with it, twice
+    //    (the proven-replay probe below and the evidence loop). A match is `alreadyRecorded`, a
+    //    mismatch is IDEMPOTENCY_CONFLICT, so a replayed key plus guessed figures confirms the stored
+    //    ones. The mode always carries cost: a payment method is required, and a priceless row still
+    //    hashes `purchasePrice: null` against a stored price, so no row shape is exempt.
+    //  - OPENING_STOCK with an import id runs a retry proof that compares the price and the cost in
+    //    minor units by design. The import and row ids are OPEN fields on the vehicle.
+    // The import key is a client-supplied idempotency token, not a credential: "no reader exposes it"
+    // is no defence. Neutralising the comparison would weaken the proof readers rely on, so the call
+    // is refused instead. What stays open to a caller without cost access is the legacy opening-stock
+    // call with no import id: it posts nothing, keeps no proof and reads no stored cost (an existing
+    // VIN is counted as skipped, a VIN is an open field). `vehicles.update` and
+    // `vehicleEdits.requestUpdate` follow the same rule through `editPayloadCarriesCost`.
+    if ((postsAcquisitions || tracksOpeningStock) && !mayReadCost) {
+      throwVehicleSourceShape("VEHICLE_COST_EDIT_NEEDS_COST_ACCESS");
+    }
     // SCRUM-868 P2: a row whose (import, row) evidence already exists and whose fingerprint matches is a
     // PROVEN REPLAY. It writes nothing now, so it must not be refused because its supplier was
     // deactivated after the original run. Only the inactive refusal is relaxed for these rows (below);
@@ -3902,6 +3974,7 @@ export const importBulk = mutation({
     // for NaN — so NaN passed straight into vehicles and vehicleValuations. Every
     // numeric field is validated up front, before any row is written, so a bad
     // cell fails the whole import rather than half-applying it.
+    const costCurrency = await getOrgCurrency(ctx, args.orgId);
     for (const row of args.vehicles) {
       assertFiniteNumber(row.year, "year");
       assertFiniteNumber(row.sellingPrice, "selling price");
@@ -3918,6 +3991,22 @@ export const importBulk = mutation({
       // PURCHASE refuses the file), so this only adds what was silently guessed.
       if (parseVehicleSourceType(row.sourceType) === "SOURCED") continue;
       assertVehicleIntakeSourceShape(row);
+    }
+
+    // Preserve the purchase-cost refusal before checking currency precision.
+    // Both validations run for the whole batch before any writes.
+    if (postsAcquisitions) {
+      const negativeCost = args.vehicles.filter(
+        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
+      );
+      if (negativeCost.length > 0) {
+        throw new ConvexError(
+          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
+        );
+      }
+    }
+    for (const row of args.vehicles) {
+      assertVehicleCostPrecision(row, costCurrency);
     }
 
     // The import wizard supplies an import and source-row identity. For that
@@ -4130,20 +4219,6 @@ export const importBulk = mutation({
       const wouldCapitalize = (row: { sourceType?: string; purchasePrice?: number }) =>
         parseVehicleSourceType(row.sourceType) !== "SOURCED" && (row.purchasePrice ?? 0) > 0;
 
-      // (0) A NEGATIVE COST IS NOT A PURCHASE. `assertFiniteNumber` above rejects
-      // NaN and Infinity but not sign, and `wouldCapitalize` tests `> 0`, so a
-      // negative price slips past BOTH: the row is inserted, nothing posts, and
-      // the import reports success having created exactly the uncapitalized
-      // inventory row SCRUM-59 exists to prevent.
-      const negativeCost = args.vehicles.filter(
-        (row) => (row.purchasePrice ?? 0) < 0 || (row.sourceCost ?? 0) < 0
-      );
-      if (negativeCost.length > 0) {
-        throw new ConvexError(
-          `${negativeCost.length} row(s) have a negative cost. A purchase cannot cost less than nothing — correct the amounts and import again.`
-        );
-      }
-
       // (1) TWO ROWS IN THIS FILE THAT ARE THE SAME CAR. The per-row dedup below
       // reads this mutation's own writes, so the second row silently resolves to
       // the vehicle the first row just inserted and is counted as "skipped" —
@@ -4295,7 +4370,7 @@ export const importBulk = mutation({
         // disagrees is far more useful than "this VIN exists", and where
         // everything agrees the message has to be honest that agreement is
         // exactly what cannot settle the question.
-        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row);
+        const factsMismatch = vehicleFactsMismatch(existing, row) ?? ownershipTermsMismatch(existing, row, mayReadCost);
         if (factsMismatch) {
           contradictions.push(`${normalized}: ${factsMismatch}`);
           continue;
@@ -4317,7 +4392,9 @@ export const importBulk = mutation({
             args.bankAccountId
           );
           if (moneyMismatch) {
-            contradictions.push(`${normalized}: ${moneyMismatch}`);
+            // SCRUM-886: see `mayReadCost` above.
+            if (mayReadCost) contradictions.push(`${normalized}: ${moneyMismatch}`);
+            else collisions.push(normalized);
             continue;
           }
           if (args.purchasePaymentMethod === "ON_ACCOUNT") {
@@ -4331,6 +4408,11 @@ export const importBulk = mutation({
                 ? payable.supplierId === row.purchaseSupplierId
                 : sameText(payable.sourcedFromName, supplier);
             if (!payables.some(sameCreditor)) {
+              // SCRUM-886: the creditor is COST tier (purchaseSupplierName); see `mayReadCost` above.
+              if (!mayReadCost) {
+                collisions.push(normalized);
+                continue;
+              }
               contradictions.push(
                 payables.length === 0
                   ? `${normalized}: recorded on account, but no supplier payable exists to compare against`

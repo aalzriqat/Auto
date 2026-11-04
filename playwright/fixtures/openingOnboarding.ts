@@ -9,6 +9,15 @@ const DRAFT = "accountingCutover:draftOpeningBalance";
 const APPROVE = "accountingCutover:approveOpeningBalance";
 const TRACKED = new Set([DIRECT, DRAFT, APPROVE]);
 const DENIED = new Set(["clever-mockingbird-719", "kindly-hound-172", "affable-eel-180"]);
+/**
+ * SCRUM-892: the runner-local Convex origin. Inlined (not imported from
+ * scripts/intelligence/swarmConvexOrigin.mjs) because Playwright loads this
+ * fixture as CommonJS; a test pins it equal to that module's constant.
+ */
+const LOCAL_CONVEX_ORIGIN = "http://127.0.0.1:3210";
+function isLocalConvexOrigin(value: string): boolean {
+  return value === LOCAL_CONVEX_ORIGIN;
+}
 const MINOR = { receivable: 100003, prepaid: 200000, capital: 300003 };
 type Receipt = { fn: string; args: Record<string, unknown>; connection: string };
 type ObservedReceipt = Receipt & {
@@ -38,8 +47,12 @@ function workflowTarget(baseURL: string | undefined): URL {
   const app = new URL(baseURL ?? "http://localhost:3000");
   const target = new URL(process.env.NEXT_PUBLIC_CONVEX_URL ?? "");
   const deployment = /^([a-z0-9-]+)\.convex\.cloud$/.exec(target.hostname)?.[1];
-  if (!["localhost", "127.0.0.1"].includes(app.hostname) || target.protocol !== "https:" ||
-      target.pathname !== "/" || !deployment || DENIED.has(deployment)) {
+  // SCRUM-892: the exact runner-local self-hosted backend is a valid target
+  // (a throwaway container inside this runner), and nothing else on loopback is.
+  const rawTarget = process.env.NEXT_PUBLIC_CONVEX_URL ?? "";
+  const local = rawTarget === LOCAL_CONVEX_ORIGIN || rawTarget === LOCAL_CONVEX_ORIGIN + "/";
+  if (!["localhost", "127.0.0.1"].includes(app.hostname) || target.pathname !== "/" ||
+      (!local && (target.protocol !== "https:" || !deployment || DENIED.has(deployment)))) {
     throw new Error("Opening browser proof refuses a nonlocal app or non-Preview target");
   }
   return target;
@@ -50,15 +63,24 @@ function observe(page: Page, expected: URL, app: URL) {
   const connections: { url: string; received: boolean }[] = [];
   const receipts: ObservedReceipt[] = [];
   let wrongTarget = false;
+  const expectedLocal = isLocalConvexOrigin(expected.origin);
   page.on("request", request => {
     const url = new URL(request.url());
-    if (/\.convex\.(cloud|site)$/.test(url.hostname) &&
-        (url.hostname !== expected.hostname || url.protocol !== "https:")) wrongTarget = true;
+    const cloudHost = /\.convex\.(cloud|site)$/.test(url.hostname);
+    // A Convex cloud host is wrong when the target is local; the local backend
+    // is wrong when the target is a cloud Preview.
+    if (cloudHost && (expectedLocal || url.hostname !== expected.hostname || url.protocol !== "https:")) wrongTarget = true;
+    if (!expectedLocal && isLocalConvexOrigin(url.origin)) wrongTarget = true;
   });
   page.on("websocket", socket => {
     const url = new URL(socket.url());
-    if (!/\.convex\.(cloud|site)$/.test(url.hostname)) return;
-    if (url.hostname !== expected.hostname || url.protocol !== "wss:") { wrongTarget = true; return; }
+    const cloudHost = /\.convex\.(cloud|site)$/.test(url.hostname);
+    const localHost = url.hostname === new URL(LOCAL_CONVEX_ORIGIN).hostname && url.port === new URL(LOCAL_CONVEX_ORIGIN).port;
+    if (!cloudHost && !localHost) return;
+    const exact = expectedLocal
+      ? localHost && url.protocol === "ws:"
+      : cloudHost && url.hostname === expected.hostname && url.protocol === "wss:";
+    if (!exact) { wrongTarget = true; return; }
     const connection = { url: socket.url(), received: false };
     connections.push(connection);
     const requests = new Map<number, ObservedReceipt>();

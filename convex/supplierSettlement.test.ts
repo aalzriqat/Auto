@@ -92,13 +92,25 @@ async function seed() {
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 12_500,
       status: "SOLD", sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
     });
+    const supplierId = await ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    });
     const customerId = await ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B" });
     const saleId = await ctx.db.insert("sales", {
       orgId, vehicleId, customerId, salespersonId: userId,
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED",
     });
     const payableId = await ctx.db.insert("vehicleSupplierPayables", {
-      orgId, vehicleId, saleId, sourcedFromName: "Amman Importer Co",
+      orgId, vehicleId, saleId, sourcedFromName: "Amman Importer Co", supplierId,
       amountDue: 9_500, currency: "JOD", status: "DUE_ON_SALE",
       createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     });

@@ -1,12 +1,16 @@
 /** Re-evaluate referenced local reports after edits/deletion, using main's code. */
 import { fileURLToPath } from "node:url";
-import { check, getJson } from "./checkPrSkillEvidence.mjs";
+import { check, getJson, positiveInteger, repositoryPrefix } from "./checkPrSkillEvidence.mjs";
 import { localReviewUrl } from "./prSkillEvidence.mjs";
 
 async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
-  const repositoryPath = repo.split("/").map(encodeURIComponent).join("/");
-  const response = await fetchImpl(`https://api.github.com/repos/${repositoryPath}/check-runs${suffix}`, {
+  const prefix = repositoryPrefix(repo);
+  const url = new URL(`${prefix}/check-runs${suffix}`, "https://api.github.com");
+  if (url.origin !== "https://api.github.com" || !url.pathname.startsWith(`${prefix}/check-runs`))
+    throw new Error("Unsafe GitHub checks API path refused.");
+  const response = await fetchImpl(url, {
     method,
+    redirect: "error",
     headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -17,10 +21,9 @@ async function writeCheck(fetchImpl, token, repo, method, suffix, body) {
 export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchImpl = fetch) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(REPO ?? "") || !/^\d+$/.test(PR_NUMBER ?? "") ||
       REPO.split("/").some((part) => part === "." || part === "..") ||
-      !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !GH_TOKEN) throw new Error("Invalid refresh environment");
-  const repositoryPath = REPO.split("/").map(encodeURIComponent).join("/");
-  const prPath = `/repos/${repositoryPath}/pulls/${encodeURIComponent(PR_NUMBER)}`;
-  const pr = await getJson(fetchImpl, GH_TOKEN, prPath);
+      !/^[1-9]\d*$/.test(COMMENT_ID ?? "") || !positiveInteger(PR_NUMBER) || !GH_TOKEN) throw new Error("Invalid refresh environment");
+  const prPath = `${repositoryPrefix(REPO)}/pulls/${encodeURIComponent(PR_NUMBER)}`;
+  const pr = await getJson(fetchImpl, GH_TOKEN, prPath, REPO);
   const expected = `https://github.com/${REPO}/pull/${PR_NUMBER}#issuecomment-${COMMENT_ID}`;
   if (pr.state !== "open" || localReviewUrl(pr.body) !== expected) return { refreshed: false };
   const head = pr.head.sha;
@@ -40,7 +43,7 @@ export async function refresh({ REPO, PR_NUMBER, COMMENT_ID, GH_TOKEN }, fetchIm
     result = { exitCode: 1, lines: ["PR head changed or could not be measured during revalidation; refusing approval."] };
   }
   const conclusion = result.exitCode === 0 ? "success" : "failure";
-  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${Number(started.id)}`, {
+  await writeCheck(fetchImpl, GH_TOKEN, REPO, "PATCH", `/${encodeURIComponent(started.id)}`, {
     status: "completed", conclusion,
     output: { title: `Skill Evidence: ${conclusion}`, summary: result.lines.join("\n") },
   });

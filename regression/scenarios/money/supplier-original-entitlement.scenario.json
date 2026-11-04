@@ -1,0 +1,55 @@
+{
+  "id": "supplier-original-entitlement",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum880-seat-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "sourceCost": 128.0005,
+        "currency": "JOD",
+        "controlSourceCost": 128.001,
+        "controlExpectedMinor": 128001
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "SUPPLIER_AMOUNT_PRECISION"
+    },
+    {
+      "observable": "financialStateUnchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/financedConsignedSettlement.test.ts",
+    "testName": "SCRUM-880: finalization preserves original supplier entitlement"
+  },
+  "matrixRow": "SCRUM-486-SUPPLIER-ORIGINAL-ENTITLEMENT",
+  "sourceGlobs": [
+    "convex/sourcingPayables.ts",
+    "convex/utils/supplierPaymentAmounts.ts",
+    "convex/vehicles.ts",
+    "convex/vehicleEdits.ts",
+    "convex/utils/saleCompletion.ts"
+  ],
+  "fingerprint": "cc4dfa0cb2af5fb85878793cc2ddc14fac3bb23a60684bdbb8ea8ca3bc56aa3c"
+}

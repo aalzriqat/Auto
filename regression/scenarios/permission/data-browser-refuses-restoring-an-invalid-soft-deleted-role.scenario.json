@@ -1,0 +1,54 @@
+{
+  "id": "data-browser-refuses-restoring-an-invalid-soft-deleted-role",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round5",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-03"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SUPER_ADMIN",
+        "org": "A"
+      },
+      "action": "adminData.adminRestoreRecords",
+      "input": {
+        "table": "roles",
+        "ids": "VALID_ROLE_ID+INVALID_ROLE_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restore.refusal",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "invalidRole.isDeleted",
+      "value": "true"
+    },
+    {
+      "observable": "validRole.isDeleted",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "(c) adminRestoreRecords of a soft-deleted role that completes sales without view:cost_price is refused and the role stays deleted"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "dbb09a7cb8343dc43099356ea56c5394dabb9cbd"
+  },
+  "fingerprint": "19326d8ac5df5ba60633dabc6b2ef52657d6e26eceed7a3adf94cca358faa064"
+}

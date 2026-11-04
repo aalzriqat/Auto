@@ -1,0 +1,64 @@
+{
+  "id": "accountant-backfill-adds-view-cost-price-idempotently-and-in-bounded-pages",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "ACCOUNTANT_WITHOUT_COST_ACCESS"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "ACCOUNTANT_WITHOUT_COST_ACCESS",
+        "run": "SECOND_RUN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstRun.updatedCount",
+      "value": 1
+    },
+    {
+      "observable": "secondRun.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "customAndDeletedRoles.changed",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the backfill adds view:cost_price to an ACCOUNTANT role lacking it"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "459acdc9264b0fc05a4b34d60655886d3d48af654fc75be3f699a98de85c2161"
+}

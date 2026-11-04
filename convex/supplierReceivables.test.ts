@@ -45,6 +45,8 @@ const PERMS = [
   "view:commissions", "manage:commissions",
   "approve:requests",
   "create:expenses",
+  // SCRUM-886 round 13: completing a SOURCED sale needs cost access.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;
@@ -113,11 +115,26 @@ async function seed(tag: string, withOpening = false) {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag })
   );
+  const supplierId = await t.run((ctx) =>
+    ctx.db.insert("suppliers", {
+      orgId,
+      displayName: "Amman Importer Co",
+      displayNameKey: "amman importer co",
+      status: "ACTIVE",
+      version: 1,
+      origin: "MANUAL",
+      createdBy: userId,
+      createdAt: Date.now(),
+      updatedBy: userId,
+      updatedAt: Date.now(),
+    })
+  );
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: `VINSR${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
+      sourcedSupplierId: supplierId,
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
     })
   );
@@ -132,7 +149,7 @@ async function seed(tag: string, withOpening = false) {
     ctx.db.query("vehicleSupplierReceivables").collect()
   ))[0]!;
 
-  return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, vehicleId, saleId, receivable };
+  return { t, orgId, userId, bankAccountId, asUser, asManager, customerId, supplierId, vehicleId, saleId, receivable };
 }
 
 test("shared supplier control refuses DIRECT commission even after its row is deleted or a recovery offset hides it", () => withFrozenScheduler(async () => {
@@ -170,19 +187,19 @@ test("later native payable cannot conceal a cancelled opening at a historical cu
     });
     clock.mockReturnValue(Date.UTC(year, 5, 10));
     const vehicleId = await s.t.run(ctx => ctx.db.insert("vehicles", { orgId: s.orgId, vin: "VINLATERPAYABLE", make: "Toyota", model: "Camry", year: 2024,
-      mileage: 0, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 35, status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Synthetic supplier", sourceCost: 30 }));
+      mileage: 0, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 35, status: "AVAILABLE", sourceType: "SOURCED", sourcedSupplierId: s.supplierId, sourcedFromName: "Synthetic supplier", sourceCost: 30 }));
     const saleId = await s.asUser.mutation(api.sales.create, { orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 35, saleDate: Date.now(), status: "COMPLETED", supplierSettlementRoute: "THROUGH_DEALERSHIP", idempotencyKey: "later-payable" });
     await settleScheduledOnly(s.t, s.orgId);
     clock.mockReturnValue(Date.UTC(year, 5, 20));
     const args = { orgId: s.orgId, toDate: Date.UTC(year, 5, 5) };
-    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, args)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
+    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, args)).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "POST_CUTOFF_ACTIVITY", isReconciled: false });
     expect((await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId })).byCurrency.JOD.discrepancyMinor).toBe(30_000);
     const payable = await s.t.run(ctx => ctx.db.query("vehicleSupplierPayables").withIndex("by_sale", q => q.eq("saleId", saleId)).unique());
     if (!payable) throw new Error("Missing native payable fixture");
     await s.asUser.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId: payable._id, idempotencyKey: "later-native-payment" });
     await settleScheduledOnly(s.t, s.orgId);
-    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId, toDate: Date.UTC(year, 5, 15) })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
+    expect(await s.asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId, toDate: Date.UTC(year, 5, 15) })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "POST_CUTOFF_ACTIVITY", isReconciled: false });
   } finally { clock.mockRestore(); }
 }));
 
@@ -309,6 +326,7 @@ describe("the claim a direct-settled sale opens", () => {
         orgId: s.orgId, vin: "VINSRTHRU2", make: "Kia", model: "Rio", year: 2023, mileage: 5,
         color: "Red", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedSupplierId: s.supplierId,
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );
@@ -512,7 +530,7 @@ describe("what a supplier still owes", () => {
     expect(summary.totalReceived).toBe(1_000);
     expect(summary.totalOutstanding).toBe(MARGIN - 1_000);
     expect(summary.bySupplier).toEqual([
-      { sourcedFromName: "Amman Importer Co", outstanding: MARGIN - 1_000, claims: 1 },
+      { supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", snapshots: ["Amman Importer Co"], outstanding: MARGIN - 1_000, claims: 1 },
     ]);
 
     // And it reconciles with the ledger account it summarizes.
@@ -537,7 +555,7 @@ describe("what a supplier still owes", () => {
     expect(summary.totalOutstanding).toBe(MARGIN - 1_000 + SUPPLIER_COST);
     expect(summary.costRecoveryOutstanding).toBe(SUPPLIER_COST);
     expect(summary.bySupplier).toEqual([
-      { sourcedFromName: "Amman Importer Co", outstanding: MARGIN - 1_000 + SUPPLIER_COST, claims: 2 },
+      { supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", snapshots: ["Amman Importer Co"], outstanding: MARGIN - 1_000 + SUPPLIER_COST, claims: 2 },
     ]);
 
     const gl = await ledger(s.t, s.orgId);
@@ -600,6 +618,7 @@ describe("a deposit applied to the settlement", () => {
         orgId: base.orgId, vin: "VINSRDEP2", make: "Toyota", model: "Yaris", year: 2024, mileage: 8,
         color: "Grey", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "AVAILABLE", sourceType: "SOURCED",
+        sourcedSupplierId: base.supplierId,
         sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
       })
     );

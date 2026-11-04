@@ -578,7 +578,9 @@ export default function VehiclesPage() {
             </Button>
           )}
           <VehicleExportButton />
-          {canCreate && (
+          {/* SCRUM-886: an import compares cost with a stored fingerprint, so `importBulk` refuses a
+              caller without view:cost_price; the entry point is not offered to one. */}
+          {canCreate && canViewCost && (
             <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
               <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import" as any)}
             </Button>
@@ -942,6 +944,7 @@ export default function VehiclesPage() {
         vehicle={editingVehicle}
         canCreate={canCreate}
         canEdit={canEdit}
+        canViewCost={canViewCost}
       />
 
       <VehicleHistoryDialog

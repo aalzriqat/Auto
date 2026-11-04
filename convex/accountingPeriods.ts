@@ -9,15 +9,12 @@ import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
-  SUPPLIER_PAYABLES_RECON_DATE_WARNING,
   SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
   EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
-  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
-  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
-  SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  supplierPayablesUnavailableWarning,
 } from "./utils/closeWarnings";
 import {
   computeSubledgerReconciliation,
@@ -548,13 +545,7 @@ export async function computeCloseChecklist(
     // Could not see everything (too many rows to read, or AP-affecting postings
     // still in flight): never report that as reconciled, and never as a
     // difference in an empty list of currencies either.
-    const warningByReason = {
-      PENDING_POSTINGS: SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
-      OPENING_SOURCE_UNAVAILABLE: SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
-      AS_OF_DATE_UNSUPPORTED: SUPPLIER_PAYABLES_RECON_DATE_WARNING,
-      OVER_LIMIT: SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
-    };
-    warnings.push(warningByReason[supplierPayablesRecon.unavailableReason ?? "OVER_LIMIT"]);
+    warnings.push(supplierPayablesUnavailableWarning(supplierPayablesRecon.unavailableReason));
   } else if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
     warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);

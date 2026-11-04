@@ -1,0 +1,61 @@
+{
+  "id": "payables-reconciliation-pass-refuses-before-the-transaction-read-limit",
+  "fingerprint": "01a22b379bec4cfd5457f44d3c5e58ea900f423e098b54fa93e9ebc5d3aff383",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "transactionLimits": "enforced",
+        "balancedJournals": "16",
+        "apLinesPerJournal": "2",
+        "apLineDescriptionChars": "400000",
+        "unchangedReaderSucceeds": "true"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    },
+    {
+      "observable": "currencies",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 headroom: 16 journals (12.8 MB) the unchanged reader reads answer OVER_LIMIT through the public query, they do not throw"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "bc2fd36eb859479fb43eaf7dfb3cd00e8ee31bc9"
+  }
+}

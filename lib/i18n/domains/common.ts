@@ -155,11 +155,34 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "VAT cannot be reclassified on this payable.",
     "لا يمكن إعادة تصنيف ضريبة القيمة المضافة على هذه الذمة.",
   ],
+  ServerError_SUPPLIER_AMOUNT_PRECISION: [
+    "Purchase and supplier payment amounts must match the currency's decimal places. Correct the amount before paying.",
+    "يجب أن تتوافق مبالغ الشراء ودفعات المورّد مع عدد المنازل العشرية للعملة. صحّح المبلغ قبل الدفع.",
+  ],
+  ServerError_TRADE_IN_VALUE_PRECISION: [
+    "The trade-in value must match the currency's decimal places. Correct the trade-in value before completing the sale.",
+    "يجب أن تتوافق قيمة الاستبدال مع عدد المنازل العشرية للعملة. صحّح قيمة الاستبدال قبل إتمام البيع.",
+  ],
+  ServerError_SUPPLIER_PAYMENT_CHANGED: [
+    "The amount outstanding has changed. Close and reopen the payment dialog before confirming.",
+    "تغيّر المبلغ المستحق. أغلق نافذة الدفع وافتحها مجدداً قبل التأكيد.",
+  ],
   // SCRUM-563. The English text must equal the server message in convex/utils/idempotency.ts,
   // and convex/adminOrgs.ts respectively.
   ServerError_COMMAND_RECORDED_BEFORE_RESET: [
     "This request was recorded before the organization's financial data was reset and can no longer be replayed. Start a new operation.",
     "سُجّل هذا الطلب قبل إعادة ضبط البيانات المالية للمنشأة ولم يعد بالإمكان إعادة إرساله. يرجى بدء عملية جديدة.",
+  ],
+  // SCRUM-886. The English text must equal the server message in convex/utils/idempotency.ts.
+  ServerError_COMMAND_IDENTITY_FOREIGN_ACTOR: [
+    "This request was started by a different user and cannot be repeated from this account. Start a new operation.",
+    "بدأ هذا الطلب مستخدم آخر ولا يمكن إعادة إرساله من هذا الحساب. يرجى بدء عملية جديدة.",
+  ],
+  // SCRUM-886 round 10. The English text must equal CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE in
+  // convex/utils/saleCompletion.ts. It names no amount: the sender may not read vehicle cost.
+  ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS: [
+    "This sale cannot be completed as entered because of the supplier terms recorded on the car. Ask someone who can see vehicle costs to review them. Nothing has been changed.",
+    "لا يمكن إتمام هذا البيع بالشكل المُدخل بسبب شروط المورّد المسجّلة على السيارة. اطلب من شخص يملك صلاحية الاطلاع على تكلفة السيارات مراجعتها. لم يتم تغيير أي شيء.",
   ],
   // SCRUM-571 S1. The English text must equal the server message in convex/paymentIntents.ts
   // and convex/collections.ts respectively.
@@ -579,6 +602,15 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "اسم المورّد مطلوب للمركبة المشتراة على الحساب.",
   ],
   // SCRUM-868 P2: canonical supplier identity. English equals the server message exactly.
+  ServerError_SUPPLIER_IDENTITY_UNRESOLVED: [
+    "Supplier identity is unresolved for this record. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the record is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "هوية المورّد غير محددة لهذا السجل. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط السجل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
+  ],
+  // SCRUM-868 P3 round 2. English equals the server message exactly.
+  ServerError_SUPPLIER_CONCESSION_BASIS_UNBOUND: [
+    "This supplier concession was recorded before suppliers were tracked by identity, and it is not linked to its supplier yet. Do not record it again: it cannot be changed after handover. Check that the vehicle is linked to the right supplier. If the vehicle has no supplier, a finance manager can link it on the vehicle edit screen; the concession is then linked to that supplier by the next supplier identity repair, which runs with every release.",
+    "سُجّل تنازل المورّد هذا قبل تتبّع المورّدين بالهوية، ولم يُربط بمورّده بعد. لا تُسجّله من جديد، فلا يمكن تغييره بعد التسليم. تأكد من ربط المركبة بالمورّد الصحيح. وإن لم يكن للمركبة مورّد، يستطيع المدير المالي ربطها به من شاشة تعديل المركبة؛ ثم يُربط التنازل بذلك المورّد في أقرب عملية إصلاح لهوية المورّدين، وهي تعمل مع كل إصدار.",
+  ],
   ServerError_SUPPLIER_IDENTITY_REQUIRED: [
     "A supplier is required.",
     "المورّد مطلوب.",
@@ -594,6 +626,14 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ServerError_SUPPLIER_LINK_FROZEN: [
     "This vehicle's supplier can no longer be changed because money has already been recorded against it. Ask your accountant for a reviewed correction.",
     "لا يمكن تغيير مورّد هذه المركبة بعد الآن لأنه سُجّل عليها مبلغ مالي. اطلب من المحاسب تصحيحاً مراجعاً.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NEEDS_FINANCE_MANAGER: [
+    "This vehicle has money recorded against it but no supplier yet. Only a finance manager can set its first supplier. Ask a finance manager to link the vehicle on the vehicle edit screen; an edit request cannot do it.",
+    "سُجّل على هذه المركبة مبلغ مالي ولا مورّد لها بعد. المدير المالي وحده يستطيع تحديد مورّدها الأول. اطلب من مدير مالي ربط المركبة من شاشة تعديل المركبة؛ فطلب التعديل لا يستطيع ذلك.",
+  ],
+  ServerError_SUPPLIER_FIRST_LINK_NOT_PROVEN: [
+    "This supplier cannot be linked because the supplier name stored on the vehicle and on its money records does not match this supplier's name or one of its aliases. Pick the supplier those records were made for, or ask a finance manager to add the old name as an alias of that supplier first. Nothing was changed.",
+    "لا يمكن ربط هذا المورّد لأن اسم المورّد المحفوظ على المركبة وعلى سجلاتها المالية لا يطابق اسم هذا المورّد ولا أحد أسمائه البديلة. اختر المورّد الذي أُنشئت له هذه السجلات، أو اطلب من مدير مالي إضافة الاسم القديم اسماً بديلاً لهذا المورّد أولاً. لم يتم تغيير أي شيء.",
   ],
   ServerError_SUPPLIER_ROLE_CONFLICT: [
     "This supplier was sent in a role the vehicle does not have. A consignment supplier belongs to a consignment vehicle, and a purchase creditor belongs to an owned vehicle bought on account.",
@@ -631,8 +671,19 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
     "هذه المركبة برسم البيع، لذلك لا يمكن ترحيل شراء لها. لم يتم ترحيل أي مبلغ.",
   ],
+  // SCRUM-886. `vehicleEdits.requestUpdate` and `vehicles.update` refuse a cost field from a caller without
+  // view:cost_price; `vehicles.upsertLandedCosts` and an opening-stock `vehicles.importBulk` refuse the call.
+  ServerError_VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: [
+    "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
+    "تغيير تكلفة المركبة أو تفاصيل شرائها أو الحد الأدنى للربح يتطلب صلاحية الاطلاع على التكلفة. اطلب من المدير إجراء هذا التغيير.",
+  ],
   // SCRUM-413. `roles.create` / `roles.update` refuse a newly added retired permission. The
   // authority names match the FinancedDeal* labels in settings.ts.
+  // SCRUM-886 round 13. The English text must equal SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE in convex/roles.ts.
+  ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS: [
+    "A role that can create sales or confirm finance disbursements must also be able to see vehicle costs, because completing the sale of a sourced car depends on them. Add \"View Cost Price\" to this role, or remove the sales permission.",
+    "الدور الذي يستطيع إنشاء المبيعات أو تأكيد صرف التمويل يجب أن يملك أيضاً صلاحية الاطلاع على تكلفة السيارات، لأن إتمام بيع سيارة المورّد يعتمد عليها. أضف صلاحية \"عرض سعر التكلفة\" إلى هذا الدور، أو أزل صلاحية المبيعات.",
+  ],
   ServerError_PERMISSION_RETIRED: [
     "The \"Finalize financed deal\" permission is no longer used. Grant \"Record the supplier payment route\" or \"Cancel a closed financed deal\" instead.",
     "صلاحية \"إتمام الصفقة الممولة\" لم تعد مستخدمة. امنح صلاحية \"تسجيل مسار الدفع للمورّد\" أو \"إلغاء صفقة ممولة مغلقة\" بدلاً منها.",
@@ -927,6 +978,11 @@ export const commonEn = {
   AutoFlowPro: "AutoFlow PRO",
   DealershipPlanActive: "Dealership Plan Active",
   ToggleNavigationMenu: "Toggle navigation menu",
+  NavMainLabel: "Main navigation",
+  NavGroupCustomersSales: "Customers & sales",
+  NavGroupInventorySourcing: "Inventory & sourcing",
+  NavGroupFinanceReports: "Finance & reports",
+  CommissionRules: "Commission rules",
   Accounting: "Accounting",
   FinanceSettings: "Finance Settings",
   GeneralSettings: "General Settings",
@@ -1429,7 +1485,6 @@ export const commonEn = {
   ClosePeriodNoIssues: "No blockers or warnings for this period.",
   ClosePeriodWarnSupplierPayablesReconPending: "Supplier payables reconciliation could not be completed: accounting postings or drafts that affect supplier payables are still pending. Resolve them, then re-check.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.",
-  ClosePeriodWarnSupplierPayablesReconOpeningSource: "Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.",
   ClosePeriodWarnSupplierPayablesReconDate: "Supplier payables reconciliation could not be completed as of the requested date: the current subledger cannot be compared with the ledger at that date. Review supplier payables manually.",
   ClosePeriodWarnSupplierRecoverablesReconFamily: "Supplier recoverables reconciliation could not be completed: the control account includes source families outside supplier cost recoveries. Reconcile the whole control account manually.",
   ClosePeriodWarnEmployeeAdvancesReconFamily: "Employee advances reconciliation could not be completed: the control account includes source families outside payroll advances. Reconcile the whole control account manually.",
@@ -1440,6 +1495,9 @@ export const commonEn = {
   ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances: "Employee advances reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
   ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables: "Supplier recoverables reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
   ClosePeriodWarnOpeningReconUnavailablePartnerCapital: "Partner capital reconciliation could not be completed: accounting postings are still pending, the opening source is unavailable, the requested date cannot be reconstructed, or there are too many records to verify. Resolve them, then re-check.",
+  ClosePeriodWarnSupplierPayablesReconPostCutoff: "Supplier payables reconciliation could not be completed as of the period end: supplier payable or accounts payable activity is dated after that date (or the date is not usable), and the payables cannot be restated to it. Review supplier payables manually.",
+  ClosePeriodWarnSupplierPayablesReconInconsistentReference: "Supplier payables reconciliation could not be completed: a journal line on the supplier payables account is not consistent with this organization's records (its journal entry is missing or belongs to another organization, or the line carries another organization's id). Review the ledger manually.",
+  ClosePeriodWarnSupplierPayablesReconOpeningSource: "Supplier payables reconciliation could not be completed: the opening-balance source records of a supplier payable could not be verified. Review the opening balances manually.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "Customer deposits reconciliation could not be completed as of the period end: deposit activity was recorded after that date, and the deposit side cannot be restated to it. Review customer deposits manually.",
   ClosePeriodOverrideReasonLabel: "Override reason",
   ClosePeriodOverrideReasonPlaceholder: "Explain why this period is being closed despite open blockers.",
@@ -1773,6 +1831,13 @@ export const commonEn = {
   CashierReconciliation: "Cashier Reconciliation",
   CashierReconciliationDraftDesc: "{count} cash payment(s), expected {amount}",
   CashierReconciliationIncomplete: "This day has too many unreconciled payments to total safely, so it cannot be submitted here. Contact support.",
+  CollectionReportIncomplete: "Incomplete: this report reads a limited number of rows and more matched, so these figures may be lower than the true total. Narrow the date range or contact support.",
+  CollectionMetricIncomplete: "Incomplete: at least this amount",
+  CollectionReportIncompleteNet: "Incomplete: this report reads a limited number of rows and more matched. Refunds are subtracted from these figures, so the true total may be higher or lower. Narrow the date range or contact support.",
+  CollectionMetricIncompleteNet: "Incomplete: partial figure, the true amount may be higher or lower",
+  CollectionMetricDateUncertain: "Incomplete: a payment cannot be placed on one day and is left out, so the true amount may be higher or lower",
+  CollectionReportDateUncertain: "Incomplete: a payment in this period cannot be placed on one day, so it is left out of these figures and the true total may be higher or lower. Contact support.",
+  CashierReconciliationDateUncertain: "A payment in this business day cannot be placed on one day, so the day cannot be submitted here yet. Contact support.",
   LoadingExpectedCash: "Loading expected cash...",
   CountedCash: "Counted cash",
   Current: "Current",
@@ -2086,6 +2151,11 @@ export const commonAr = {
   AutoFlowPro: "أوتو فلو برو",
   DealershipPlanActive: "خطة المعرض مفعلة",
   ToggleNavigationMenu: "تبديل قائمة التنقل",
+  NavMainLabel: "التنقل الرئيسي",
+  NavGroupCustomersSales: "العملاء والمبيعات",
+  NavGroupInventorySourcing: "المخزون والتوريد",
+  NavGroupFinanceReports: "المالية والتقارير",
+  CommissionRules: "قواعد العمولات",
   Accounting: "المحاسبة",
   FinanceSettings: "إعدادات المالية",
   GeneralSettings: "الإعدادات العامة",
@@ -2585,7 +2655,6 @@ export const commonAr = {
   ClosePeriodNoIssues: "لا توجد معوقات أو تحذيرات لهذه الفترة.",
   ClosePeriodWarnSupplierPayablesReconPending: "تعذّر إكمال تسوية ذمم الموردين: ما زالت قيود الترحيل المحاسبية أو المسودات المؤثرة على ذمم الموردين معلقة. عالجها ثم أعد التحقق.",
   ClosePeriodWarnSupplierPayablesReconTooMany: "تعذّر إكمال تسوية ذمم الموردين: عدد السجلات أكبر من أن يُتحقق منه في مرة واحدة. راجع ذمم الموردين يدوياً.",
-  ClosePeriodWarnSupplierPayablesReconOpeningSource: "تعذّر إكمال تسوية ذمم الموردين: تعذّر التحقق من مصدر الأرصدة الافتتاحية. راجع المصدر ثم أعد التحقق.",
   ClosePeriodWarnSupplierPayablesReconDate: "تعذّر إكمال تسوية ذمم الموردين في التاريخ المطلوب: لا يمكن مقارنة سجل الذمم الحالي بدفتر الأستاذ في ذلك التاريخ. راجع ذمم الموردين يدوياً.",
   ClosePeriodWarnSupplierRecoverablesReconFamily: "تعذّر إكمال تسوية مستحقات الموردين القابلة للاسترداد: يتضمن حساب الرقابة أنواع مصادر خارج مستردات تكاليف الموردين. طابق حساب الرقابة بالكامل يدوياً.",
   ClosePeriodWarnEmployeeAdvancesReconFamily: "تعذّر إكمال تسوية سلف الموظفين: يتضمن حساب الرقابة أنواع مصادر خارج سلف الرواتب. طابق حساب الرقابة بالكامل يدوياً.",
@@ -2596,6 +2665,9 @@ export const commonAr = {
   ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances: "تعذّر إكمال تسوية سلف الموظفين: ما زالت قيود الترحيل المحاسبية معلقة، أو مصدر الأرصدة الافتتاحية غير متاح، أو يتعذّر إعادة بناء الأرصدة في التاريخ المطلوب، أو عدد السجلات أكبر من أن يُتحقق منه. عالجها ثم أعد التحقق.",
   ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables: "تعذّر إكمال تسوية مستحقات الموردين القابلة للاسترداد: ما زالت قيود الترحيل المحاسبية معلقة، أو مصدر الأرصدة الافتتاحية غير متاح، أو يتعذّر إعادة بناء الأرصدة في التاريخ المطلوب، أو عدد السجلات أكبر من أن يُتحقق منه. عالجها ثم أعد التحقق.",
   ClosePeriodWarnOpeningReconUnavailablePartnerCapital: "تعذّر إكمال تسوية رأس مال الشركاء: ما زالت قيود الترحيل المحاسبية معلقة، أو مصدر الأرصدة الافتتاحية غير متاح، أو يتعذّر إعادة بناء الأرصدة في التاريخ المطلوب، أو عدد السجلات أكبر من أن يُتحقق منه. عالجها ثم أعد التحقق.",
+  ClosePeriodWarnSupplierPayablesReconPostCutoff: "تعذّر إكمال تسوية ذمم الموردين حتى نهاية الفترة: يوجد نشاط على ذمم الموردين أو حساب الذمم الدائنة مؤرخ بعد ذلك التاريخ (أو أن التاريخ غير صالح)، ولا يمكن إعادة احتساب الذمم إلى تاريخ النهاية. راجع ذمم الموردين يدوياً.",
+  ClosePeriodWarnSupplierPayablesReconInconsistentReference: "تعذّر إكمال تسوية ذمم الموردين: يوجد سطر قيد على حساب ذمم الموردين غير متسق مع سجلات هذه المؤسسة (قيد اليومية الخاص به مفقود أو يعود إلى مؤسسة أخرى، أو أن السطر يحمل معرّف مؤسسة أخرى). راجع الأستاذ العام يدوياً.",
+  ClosePeriodWarnSupplierPayablesReconOpeningSource: "تعذّر إكمال تسوية ذمم الموردين: لم يمكن التحقق من سجلات مصدر الرصيد الافتتاحي لإحدى ذمم الموردين. راجع الأرصدة الافتتاحية يدوياً.",
   ClosePeriodWarnCustomerDepositsReconUnavailable: "تعذّر إكمال تسوية عربونات العملاء حتى نهاية الفترة: سُجّل نشاط على العربونات بعد ذلك التاريخ ولا يمكن إعادة احتساب جانب العربونات إلى تاريخ النهاية. راجع عربونات العملاء يدوياً.",
   ClosePeriodOverrideReasonLabel: "سبب التجاوز",
   ClosePeriodOverrideReasonPlaceholder: "اشرح سبب إغلاق هذه الفترة رغم وجود معوقات.",
@@ -2928,6 +3000,13 @@ export const commonAr = {
   CashierReconciliation: "تسوية الصندوق",
   CashierReconciliationDraftDesc: "{count} دفعة نقدية، المتوقع {amount}",
   CashierReconciliationIncomplete: "يحتوي هذا اليوم على عدد كبير جداً من الدفعات غير المسوّاة لا يمكن جمعها بأمان، لذا لا يمكن تقديمه من هنا. تواصل مع الدعم.",
+  CollectionReportIncomplete: "غير مكتمل: يقرأ هذا التقرير عدداً محدوداً من السجلات وهناك سجلات أخرى مطابقة، لذا قد تكون هذه الأرقام أقل من الإجمالي الفعلي. ضيّق نطاق التاريخ أو تواصل مع الدعم.",
+  CollectionMetricIncomplete: "غير مكتمل: المبلغ لا يقل عن هذا الرقم",
+  CollectionReportIncompleteNet: "غير مكتمل: يقرأ هذا التقرير عدداً محدوداً من السجلات وهناك سجلات أخرى مطابقة. تُخصم المبالغ المستردة من هذه الأرقام، لذا قد يكون الإجمالي الفعلي أعلى أو أدنى منها. ضيّق نطاق التاريخ أو تواصل مع الدعم.",
+  CollectionMetricIncompleteNet: "غير مكتمل: رقم جزئي، وقد يكون المبلغ الفعلي أعلى أو أدنى",
+  CollectionMetricDateUncertain: "غير مكتمل: تعذّر تحديد يوم واحد لإحدى الدفعات فاستُبعدت، وقد يكون المبلغ الفعلي أعلى أو أدنى",
+  CollectionReportDateUncertain: "غير مكتمل: تعذّر تحديد يوم واحد لإحدى الدفعات في هذه الفترة فاستُبعدت من هذه الأرقام، وقد يكون الإجمالي الفعلي أعلى أو أدنى. تواصل مع الدعم.",
+  CashierReconciliationDateUncertain: "تعذّر تحديد يوم واحد لإحدى الدفعات في يوم العمل هذا، لذا لا يمكن تقديمه من هنا بعد. تواصل مع الدعم.",
   LoadingExpectedCash: "جاري تحميل النقد المتوقع...",
   CountedCash: "النقد المعدود",
   Current: "حالي",

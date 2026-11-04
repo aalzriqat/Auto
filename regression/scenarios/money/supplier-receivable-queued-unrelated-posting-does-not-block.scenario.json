@@ -1,0 +1,46 @@
+{
+  "id": "supplier-receivable-queued-unrelated-posting-does-not-block",
+  "fingerprint": "051578f74c24df4f91a5d9994a68bbe4dd537a8654270c7b84d592a7a6debf31",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000,
+        "queued": "COMMISSION_PAID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a queued posting that cannot touch 1240 does not block the comparison"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

@@ -28,6 +28,7 @@ import {
   recordedSupplierGrossReceipt,
 } from "./utils/vehicleOwnership";
 import type { Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -110,12 +111,12 @@ type Seeded = Awaited<ReturnType<typeof seedDealer>>;
 
 /** A completed consigned sale through the real writer, so every frozen field is real. */
 async function sellConsigned(s: Seeded, vin: string) {
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
     })
   );
   const saleId = await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -1319,12 +1320,12 @@ describe("CX-C — an id that references nothing is not provenance", () => {
     // but the case is pinned so a future weakening of the rule is caught here.
     const s = await seedDealer("cxcOtherCar");
     const { saleId } = await financedDirectWithReceipt(s, "VINCXC8");
-    const otherVehicleId = await s.t.run((ctx) =>
+    const otherVehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINCXC8B", make: "Kia", model: "Sportage", year: 2023,
         mileage: 5, color: "Black", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Other Importer", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Other Importer", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Other Importer"), sourceCost: ENTITLEMENT,
       })
     );
     const otherCustomerId = await s.t.run((ctx) =>

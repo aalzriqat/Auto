@@ -1,0 +1,75 @@
+{
+  "id": "data-browser-refuses-renaming-or-undeleting-an-invalid-role",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round5",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-03"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SUPER_ADMIN",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "table": "roles",
+        "id": "INVALID_ROLE_ID",
+        "patch": {
+          "name": "ACCOUNTANT"
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "SUPER_ADMIN",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "table": "roles",
+        "id": "DELETED_INVALID_ROLE_ID",
+        "patch": {
+          "isDeleted": false
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "step2.refusal",
+      "value": "SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "role.name",
+      "value": "unchanged"
+    },
+    {
+      "observable": "deletedRole.isDeleted",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "(b2) adminUpdateRecord that only renames a stored invalid role is refused too, and un-deleting through a patch is refused"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "dbb09a7cb8343dc43099356ea56c5394dabb9cbd"
+  },
+  "fingerprint": "fe5e7ebbe60101b1ca49c5d06be5b6df4f558248faea8e461f1406db27d32a4b"
+}

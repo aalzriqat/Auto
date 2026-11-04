@@ -9,12 +9,14 @@ import { PaymentMethodSelect, type Translate } from "@/components/payments/Payme
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatExactMinorAmount } from "@/lib/moneyDisplay";
 import { SUPPLIER_SETTLEMENT_PILOT_METHODS, type SupplierSettlementPilotMethod } from "@/convex/utils/supplierSettlementContainment";
 
 type SupplierPaymentDetails = {
   vehicleDesc: string;
   sourcedFromName: string;
   amountDue: number;
+  settlementAmountMinor: number | null;
   currency: string;
 };
 
@@ -70,10 +72,13 @@ export function SupplierPaymentDialog({
               <p><strong>{t("SourceDealer" as any)}:</strong> {payable.sourcedFromName}</p>
               <p>
                 <strong>{t("Amount" as any)}:</strong>{" "}
-                <span className="font-semibold text-orange-600">{payable.amountDue.toLocaleString(locale === "ar" ? "ar-JO" : "en-JO")} {payable.currency}</span>
+                <span data-testid="supplier-payment-amount" dir="ltr" className="font-semibold text-orange-600">{payable.settlementAmountMinor == null ? "—" : formatExactMinorAmount(payable.settlementAmountMinor, payable.currency)} {payable.currency}</span>
               </p>
             </div>
             <p className="text-sm text-muted-foreground">{t("MarkPaidWarning" as any)}</p>
+            {payable.settlementAmountMinor == null ? (
+              <p role="alert" className="text-sm text-destructive">{t("ServerError_SUPPLIER_AMOUNT_PRECISION")}</p>
+            ) : null}
             <div className="space-y-1.5">
               <Label>{t("PaymentMethodLabel" as any)}</Label>
               <PaymentMethodSelect t={t} methods={SUPPLIER_SETTLEMENT_PILOT_METHODS} value={paymentMethod} onValueChange={onPaymentMethodChange} />
@@ -127,7 +132,7 @@ export function SupplierPaymentDialog({
               <Button variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any)}
               </Button>
-              <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={onConfirm} disabled={isPaying || (bankMethod && (!bankAccountId || !bankOptions || bankOptions.truncated || !bankOptions.banks.some((bank) => bank._id === bankAccountId)))}>
+              <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={onConfirm} disabled={isPaying || payable.settlementAmountMinor == null || (bankMethod && (!bankAccountId || !bankOptions || bankOptions.truncated || !bankOptions.banks.some((bank) => bank._id === bankAccountId)))}>
                 {isPaying ? `${t("Processing" as any)}...` : t("ConfirmPayment" as any)}
               </Button>
             </div>

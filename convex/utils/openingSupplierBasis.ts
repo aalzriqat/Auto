@@ -11,12 +11,8 @@ const refuse = () =>
     "The opening obligation cannot be verified. Ask finance to review it before settlement.",
   );
 type Ctx = QueryCtx | MutationCtx;
-async function parentReference(
-  ctx: Ctx,
-  orgId: Id<"organizations">,
-  id: string,
-  family: "recovery" | "payable",
-) {
+/** The result rows of every POSTED opening draft; refuses when there are too many to read in full. */
+async function postedOpeningResults(ctx: Ctx, orgId: Id<"organizations">) {
   const drafts = await ctx.db
     .query("openingBalanceDrafts")
     .withIndex("by_org_status", (q) =>
@@ -24,8 +20,31 @@ async function parentReference(
     )
     .take(101);
   if (drafts.length > 100) throw refuse();
-  const references = drafts
-    .flatMap((draft) => draft.allocationResults ?? [])
+  return drafts.flatMap((draft) => draft.allocationResults ?? []);
+}
+/**
+ * Every recovery id that a POSTED opening draft claims as its own result, with how many times, from
+ * one read of the drafts. A caller that checks many native recoveries uses this instead of a draft
+ * scan per row (parentReference); a native recovery that appears here, or appears twice, is a
+ * contradiction. Throws the same refusal as parentReference when the drafts cannot be read in full.
+ */
+export async function openingRecoveryReferenceCounts(
+  ctx: Ctx,
+  orgId: Id<"organizations">,
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const row of await postedOpeningResults(ctx, orgId)) {
+    if ("recoveryId" in row) counts.set(row.recoveryId, (counts.get(row.recoveryId) ?? 0) + 1);
+  }
+  return counts;
+}
+async function parentReference(
+  ctx: Ctx,
+  orgId: Id<"organizations">,
+  id: string,
+  family: "recovery" | "payable",
+) {
+  const references = (await postedOpeningResults(ctx, orgId))
     .filter((row) =>
       family === "recovery"
         ? "recoveryId" in row && row.recoveryId === id

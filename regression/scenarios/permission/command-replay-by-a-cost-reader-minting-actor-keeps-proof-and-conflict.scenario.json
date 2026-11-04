@@ -1,0 +1,68 @@
+{
+  "id": "command-replay-by-a-cost-reader-minting-actor-keeps-proof-and-conflict",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "costreader",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "STORED_PRICE"
+      }
+    },
+    {
+      "actor": {
+        "role": "costreader",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "EQUALS_STORED"
+      }
+    },
+    {
+      "actor": {
+        "role": "costreader",
+        "org": "A"
+      },
+      "action": "vehicles.create",
+      "input": {
+        "key": "KEY_1",
+        "price": "DIFFERS_FROM_STORED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.replay.vehicleId",
+      "value": "SAME_AS_FIRST_CALL"
+    },
+    {
+      "observable": "create.conflict.message",
+      "value": "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_CONTENT"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/idempotencyActorBinding.scrum886.test.ts",
+    "testName": "control: a holder of view:cost_price keeps the proven replay and the conflict on its own key"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round9",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "7f671db463de6da60972a7559ad9eba85423de31094c49f177f91011c5753255"
+}

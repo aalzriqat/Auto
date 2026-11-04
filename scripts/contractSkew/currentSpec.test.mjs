@@ -8,6 +8,7 @@ import { specProblems } from "./specIndex.mjs";
 import { compareContracts } from "./compare.mjs";
 import { classifyBreaking } from "./classify.mjs";
 import { clientNode } from "./contractTree.mjs";
+import { writeBaselineDirectory } from "./baselineTestSupport.mjs";
 
 const cli = path.resolve("scripts/contractSkew/cli.mjs");
 const renderer = path.resolve("scripts/contractSkew/renderCurrentSpec.mjs");
@@ -91,9 +92,9 @@ a({ label: "new" }); b({}); }`);
     fs.writeFileSync(path.join(root, "complete.json"), JSON.stringify({ functions: [
       fn("a.js:update", { label: { fieldType: { type: "string" }, optional: false } }), fn("b.js:update", {}),
     ] }));
-    fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
+    writeBaselineDirectory(path.join(root, "baseline"), []);
     for (const extra of [[], ["--current", "partial.json"], ["--current", "complete.json"]]) {
-      const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json", "--baseline", "baseline.json", "--json", "report.json", ...extra],
+      const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json", "--baseline", "baseline", "--json", "report.json", ...extra],
         { cwd: root, encoding: "utf8", timeout: 30_000 });
       assert.ifError(run.error);
       assert.equal(run.status, 7, run.stderr);
@@ -134,9 +135,9 @@ declare const api: { good: { read: unknown }, aaBad: { read: unknown } };
 export function useRead() { useQuery(api.good.read, { label: "new" }); useQuery(api.aaBad.read, {}); }`);
     fs.writeFileSync(path.join(root, "current.json"), JSON.stringify(together));
     fs.writeFileSync(path.join(root, "deployed.json"), '{"functions":[]}');
-    fs.writeFileSync(path.join(root, "baseline.json"), '{"version":1,"entries":[]}');
+    writeBaselineDirectory(path.join(root, "baseline"), []);
     const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json", "--current", "current.json",
-      "--baseline", "baseline.json", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+      "--baseline", "baseline", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     assert.ifError(run.error);
     assert.equal(run.status, 7, run.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes,
@@ -193,9 +194,9 @@ export function useRead() { return useQuery(api.unstable.read, { label: "new" })
         functionType: "Query", visibility: { kind: "public" }, args: { type: "object", value: {} } }] }));
       const current = await renderCurrentSpec(root);
       fs.writeFileSync(path.join(root, "current.json"), JSON.stringify(current));
-      fs.writeFileSync(path.join(root, "baseline.json"), JSON.stringify({ version: 1, entries: [] }));
+      writeBaselineDirectory(path.join(root, "baseline"), []);
       const run = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json",
-        "--current", "current.json", "--baseline", "baseline.json", "--json", "report.json"],
+        "--current", "current.json", "--baseline", "baseline", "--json", "report.json"],
       { cwd: root, encoding: "utf8", timeout: 30_000 });
       assert.ifError(run.error);
       assert.equal(run.status, 7, run.stderr);
@@ -420,9 +421,9 @@ test(`${scenario} publishes no partial spec, removes stale output, and leaves ev
 declare const api: { alias: { renamed: unknown }, broken: { read: unknown } };
 export function useRead() { useQuery(api.alias.renamed, { label: "new" }); useQuery(api.broken.read, {}); }`);
     fs.writeFileSync(path.join(root, "deployed.json"), '{"functions":[]}');
-    fs.writeFileSync(path.join(root, "baseline.json"), '{"version":1,"entries":[]}');
+    writeBaselineDirectory(path.join(root, "baseline"), []);
     const comparison = spawnSync(process.execPath, [cli, "--mode", "production", "--spec", "deployed.json",
-      "--baseline", "baseline.json", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+      "--baseline", "baseline", "--json", "report.json"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     assert.ifError(comparison.error);
     assert.equal(comparison.status, 7, comparison.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, "report.json"), "utf8")).classification.callOutcomes,

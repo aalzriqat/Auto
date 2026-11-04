@@ -1,0 +1,66 @@
+{
+  "id": "collections-daily-list-files-a-historical-utc-midnight-payment-in-amman",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-11-01",
+        "orgTimeZone": "Asia.Amman",
+        "storedRow": "NO_DATE_KIND_CREATEDAT_EQUALS_PAYMENTDATE"
+      },
+      "action": "collections.dailyCollectionList"
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-11-01",
+        "orgTimeZone": "Asia.Amman"
+      },
+      "action": "collections.getReconciliationDraft"
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "step1.incomplete",
+      "value": false
+    },
+    {
+      "observable": "step1.paymentDateUncertain",
+      "value": false
+    },
+    {
+      "observable": "step2.complete",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "east of UTC (Amman) both readings are 1 Nov, so it is filed there with no warning"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-3",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "3a7ee44a446f28829363232313d3bd34302b6b358c1c8d2ea71377bf4eec8101"
+}

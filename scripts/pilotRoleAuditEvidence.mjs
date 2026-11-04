@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { closeSync, createReadStream, createWriteStream, openSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { finished, pipeline } from "node:stream/promises";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { SCREEN_AUDIT_ROUTES } from "../playwright/fixtures/screenAuditRoutes.ts";
 import { diagnosePreviewAttestation } from "./previewAttestationDiagnostic.mjs";
+import { resolveGit } from "./contractSkew/gitExecutable.mjs";
 
 const ROLES = ["OWNER", "MANAGER", "SALES", "RECEPTION", "ACCOUNTANT", "SENIOR_ACCOUNTANT"];
 const LOCALES = ["en", "ar"];
@@ -34,6 +35,7 @@ const ROLE_CASE_PROJECTS = new Map([
 ]);
 const ROLE_REGRESSION_TITLES = new Set(ROLE_CASE_PROJECTS.keys());
 const ROLE_CASE_PROJECT_NAMES = new Set(ROLE_CASE_PROJECTS.values());
+const SCRIPT_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_GPG = process.platform === "win32" ? "C:/Program Files/Git/usr/bin/gpg.exe" : "/usr/bin/gpg";
 const DEFAULT_TAR = process.platform === "win32" ? "C:/Windows/System32/tar.exe" : "/usr/bin/tar";
 const POWERSHELL = path.join(process.env.SystemRoot ?? "C:/Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -42,9 +44,14 @@ const PROBE_OPERATIONS = new Set(["foreign organization read", "foreign customer
   "foreign organization update", "foreign customer delete", "foreign row delete under own org"]);
 const runContextSchema = z.object({ runId: z.string().regex(/^\d+$/), attempt: z.string().regex(/^[1-9]\d*$/),
   workflowRef: z.string().regex(/^[\w.-]+\/[\w.-]+\/\.github\/workflows\/pilot-role-audit\.yml@refs\/heads\/main$/) }).strict();
+// Playwright's JSON reporter writes `errorLocation` and `errors[].location` as { file, line, column } with an
+// absolute runner path. A malformed one is dropped (undefined), never an error that makes the report absent.
+const reportLocationSchema = z.object({ file: z.string(), line: z.number() }).passthrough().optional().catch(undefined);
+const roleAttemptSchema = z.object({ status: z.string(), errorLocation: reportLocationSchema,
+  errors: z.array(z.object({ location: reportLocationSchema }).passthrough()).optional().catch(undefined) }).passthrough();
 const roleSuiteSchema = z.object({
   specs: z.array(z.object({ file: z.string(), title: z.string(), ok: z.boolean(), tests: z.array(z.object({
-    projectName: z.string(), expectedStatus: z.string(), status: z.string(), results: z.array(z.object({ status: z.string() }).passthrough()),
+    projectName: z.string(), expectedStatus: z.string(), status: z.string(), results: z.array(roleAttemptSchema),
   }).passthrough()) }).passthrough()),
   suites: z.array(z.unknown()).optional(),
 }).passthrough();
@@ -86,25 +93,131 @@ export class AuditEvidenceError extends Error {
   constructor(code) { super(code); this.name = "AuditEvidenceError"; }
 }
 
+/** The one shape that counts as a pass: the single attempt passed as expected.
+ * @param {RoleCase} item */
+function isPassedRoleCase({ ok, row }) {
+  return ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
+    Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed";
+}
+
+/** Closed verdict for one observed case. A case is "skipped" only when Playwright expected
+ * it to skip (declared or decided at run time) and it has at least one attempt
+ * and every attempt skipped. Playwright 1.61 records one skipped attempt for each genuine
+ * skip (runner skipWholeJob, worker testEnd). It also reports status "skipped" for a test
+ * with no attempt, an interrupted-only test and a skipped attempt of a test expected to
+ * pass; those could not run, so they are "failed", as is anything else that is not the
+ * exact pass shape, including a status this version does not know.
+ * @param {RoleCase} item */
+function roleCaseStatus(item) {
+  if (isPassedRoleCase(item)) return "passed";
+  const { expectedStatus, status, results } = item.row;
+  const allSkipped = Array.isArray(results) && results.length > 0 && results.every((attempt) => attempt.status === "skipped");
+  return expectedStatus === "skipped" && status === "skipped" && allSkipped ? "skipped" : "failed";
+}
+
+/** Repository files under playwright/ that git tracks, as repo-relative POSIX paths. This is the
+ * semantic check on a report-derived path (OWASP Input Validation Cheat Sheet): a path is
+ * publishable only when it names a file of this checkout. Empty when git cannot list them, so
+ * every location is then withheld. Git is run by absolute path, never a PATH lookup (Sonar S4036).
+ * @param {string} repoRoot
+ * @param {() => string | undefined} [findGit]
+ * @returns {Set<string>} */
+export function trustedPlaywrightFiles(repoRoot, findGit = resolveGit) {
+  const git = findGit();
+  if (!git) return new Set();
+  try {
+    const listing = execFileSync(git, ["ls-files", "-z", "--", "playwright"],
+      { cwd: repoRoot, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+    return new Set(listing.split("\0").filter((entry) => entry !== ""));
+  } catch { return new Set(); }
+}
+
+/** The only report-derived text that may be published: `<tracked repo path>:<line>`. The path
+ * is the matching member of the trusted set (the candidate is equal to it by Set membership); the runner's
+ * absolute prefix, the column and every other report field are dropped. A dot, empty or
+ * traversal segment cannot equal a tracked path, so it never matches.
+ * @param {{ file: string, line: number } | undefined} location
+ * @param {ReadonlySet<string>} trustedFiles
+ * @returns {string | null} */
+function publishableLocation(location, trustedFiles) {
+  if (!location || !Number.isSafeInteger(location.line) || location.line < 1) return null;
+  const segments = location.file.replaceAll("\\", "/").split("/");
+  for (let start = segments.indexOf("playwright"); start >= 0; start = segments.indexOf("playwright", start + 1)) {
+    const candidate = segments.slice(start).join("/");
+    if (trustedFiles.has(candidate)) return `${candidate}:${location.line}`;
+  }
+  return null;
+}
+
+/** Location of the last attempt that failed (not passed, not skipped), or null.
+ * @param {RoleCase} item @param {ReadonlySet<string>} trustedFiles
+ * @returns {string | null} */
+function failingLocation({ row }, trustedFiles) {
+  const failing = row.results.findLast((attempt) => attempt.status !== "passed" && attempt.status !== "skipped");
+  if (!failing) return null;
+  for (const candidate of [failing.errorLocation, ...(failing.errors ?? []).map((error) => error.location)]) {
+    const published = publishableLocation(candidate, trustedFiles);
+    if (published) return published;
+  }
+  return null;
+}
+
+/** Closed verdict and optional location for one allowlisted case, from what the report
+ * showed for its title. Title and project come from the constant; the report supplies
+ * only the status and a sanitised location of a failure.
+ * @param {string} project @param {RoleCase[] | undefined} seenForTitle @param {ReadonlySet<string>} trustedFiles
+ * @returns {{ status: string, location: string | null }} */
+function classifyRoleCase(project, seenForTitle, trustedFiles) {
+  const seen = seenForTitle ?? [];
+  if (seen.length === 0) return { status: "missing", location: null };
+  if (seen.length > 1) return { status: "duplicate", location: null };
+  if (seen[0].row.projectName !== project) return { status: "wrong-project", location: null };
+  const status = roleCaseStatus(seen[0]);
+  return { status, location: status === "failed" ? failingLocation(seen[0], trustedFiles) : null };
+}
+
+/** @param {RoleCase[]} observed
+ * @returns {Map<string, RoleCase[]>} */
+function groupByTitle(observed) {
+  /** @type {Map<string, RoleCase[]>} */
+  const byTitle = new Map();
+  for (const item of observed) {
+    const group = byTitle.get(item.title);
+    if (group) group.push(item);
+    else byTitle.set(item.title, [item]);
+  }
+  return byTitle;
+}
+
+/** One entry per allowlisted case, in constant order.
+ * @param {Map<string, RoleCase[]>} byTitle @param {ReadonlySet<string>} trustedFiles */
+function roleCaseVerdicts(byTitle, trustedFiles) {
+  return Array.from(ROLE_CASE_PROJECTS, ([title, project]) => ({
+    title, project, ...classifyRoleCase(project, byTitle.get(title), trustedFiles),
+  }));
+}
+
+const ABSENT_ROLE_CASES = Object.freeze(roleCaseVerdicts(new Map(), new Set()).map((entry) => Object.freeze(entry)));
+
 /** Measure exact real-role cases from the JSON reporter of this invocation.
- * @param {unknown} report */
-export function roleRegressionOutcome(report) {
-  const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE" };
+ * `cases` and `unlisted` are the only report-derived values that may be published:
+ * constant titles with a closed status and a sanitised `playwright/...:line` of a
+ * failure, and a count of cases whose title is not on the allowlist.
+ * @param {unknown} report @param {ReadonlySet<string>} [trustedFiles] tracked repository files; none means no location is published */
+export function roleRegressionOutcome(report, trustedFiles = new Set()) {
+  const absent = { expected: ROLE_REGRESSION_TITLES.size, observed: 0, verified: false, measurement: "UNAVAILABLE",
+    cases: ABSENT_ROLE_CASES, unlisted: 0 };
   const parsed = roleReportSchema.safeParse(report);
   if (!parsed.success || parsed.data.errors.length !== 0) return absent;
   const observed = collectRoleCases(parsed.data.suites);
   if (observed === null) return absent;
-  const titles = new Set(observed.map((item) => item.title));
-  const verified = observed.length === ROLE_REGRESSION_TITLES.size && titles.size === ROLE_REGRESSION_TITLES.size &&
-      [...titles].every((title) => ROLE_REGRESSION_TITLES.has(title)) && observed.every(({ title, ok, row }) =>
-        ROLE_CASE_PROJECTS.get(title) === row.projectName &&
-        ok === true && row.expectedStatus === "passed" && row.status === "expected" &&
-        Array.isArray(row.results) && row.results.length === 1 && row.results[0]?.status === "passed");
+  const cases = roleCaseVerdicts(groupByTitle(observed), trustedFiles);
+  const unlisted = observed.filter((item) => !ROLE_REGRESSION_TITLES.has(item.title)).length;
+  const verified = cases.every((entry) => entry.status === "passed") && unlisted === 0;
   let measurement = "FAIL";
   if (verified) measurement = "PASS";
   else if (observed.length < ROLE_REGRESSION_TITLES.size) measurement = "UNAVAILABLE";
-  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified,
-    measurement };
+  return { expected: ROLE_REGRESSION_TITLES.size, observed: observed.length, verified, measurement, cases, unlisted };
 }
 
 /** @template T @param {() => Promise<T>} operation
@@ -315,10 +428,12 @@ function completed(child) {
  * @param {{resultsRoot: string, privateLog: string, publicRoot: string, role: string, sha: string,
  * publicKey: string, fingerprint: string, gpgBinary?: string, tarBinary?: string, roleReportFile?: string,
  * execution?: "SUCCEEDED" | "FAILED" | "UNAVAILABLE",
- * runContext?: {runId: string, attempt: string, workflowRef: string}}} options
+ * runContext?: {runId: string, attempt: string, workflowRef: string}, repoRoot?: string,
+ * trustedFiles?: ReadonlySet<string>}} options
  */
 export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot, role, sha, publicKey, fingerprint,
-  gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext, roleReportFile }) {
+  gpgBinary = DEFAULT_GPG, tarBinary = DEFAULT_TAR, execution = "UNAVAILABLE", runContext, roleReportFile,
+  repoRoot = SCRIPT_REPO_ROOT, trustedFiles = trustedPlaywrightFiles(repoRoot) }) {
   if (!member(role, ROLES) || !SHA.test(sha) || !member(execution, ["SUCCEEDED", "FAILED", "UNAVAILABLE"]) ||
       (runContext && !runContextSchema.safeParse(runContext).success)) {
     throw new AuditEvidenceError("INVALID_CONTEXT");
@@ -389,7 +504,7 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
         const stat = await regularFile(roleReportFile);
         if (stat.size > 0 && stat.size <= MAX_ROLE_REPORT_BYTES && capturedBytes + stat.size <= MAX_BYTES) {
           roleReportBytes = await fs.readFile(roleReportFile);
-          roleCases = roleRegressionOutcome(JSON.parse(roleReportBytes.toString("utf8")));
+          roleCases = roleRegressionOutcome(JSON.parse(roleReportBytes.toString("utf8")), trustedFiles);
         }
       }
     } catch { roleReportBytes = undefined; }
@@ -397,6 +512,7 @@ export async function packageAuditEvidence({ resultsRoot, privateLog, publicRoot
       complete: execution === "SUCCEEDED" && summary.cellsComplete && roleCases.verified, execution,
       roleRegressionsExpected: roleCases.expected, roleRegressionsObserved: roleCases.observed,
       roleRegressionsVerified: roleCases.verified, roleRegressionsMeasurement: roleCases.measurement,
+      roleRegressionCases: roleCases.cases, roleRegressionsUnlistedCount: roleCases.unlisted,
       runContext: runContext ?? "UNAVAILABLE" };
     await fs.mkdir(path.join(archiveRoot, "captures"), { recursive: true, mode: 0o700 });
     /** @type {{path: string, bytes: number, sha256: string}[]} */
@@ -491,9 +607,9 @@ const recipientSchema = z.object({ fingerprint: z.string().regex(FINGERPRINT),
 /** Native orchestration. The browser entry point is injectable only by direct
  * module callers for synthetic controls; the CLI always resolves Playwright.
  * @param {{cwd?: string, env?: NodeJS.ProcessEnv, browserCli?: string,
- * diagnosticSpawn?: Parameters<typeof diagnosePreviewAttestation>[1]}} options
+ * diagnosticSpawn?: Parameters<typeof diagnosePreviewAttestation>[1], trustedFiles?: ReadonlySet<string>}} options
  */
-export async function runRoleAudit({ cwd = process.cwd(), env = process.env, browserCli, diagnosticSpawn } = {}) {
+export async function runRoleAudit({ cwd = process.cwd(), env = process.env, browserCli, diagnosticSpawn, trustedFiles } = {}) {
   const role = env.HUNT_AUDIT_ROLE ?? "";
   const sha = env.GITHUB_SHA ?? "";
   if (!member(role, ROLES) || !SHA.test(sha) || !env.RUNNER_TEMP) throw new AuditEvidenceError("INVALID_CONTEXT");
@@ -531,7 +647,7 @@ export async function runRoleAudit({ cwd = process.cwd(), env = process.env, bro
     await fs.mkdir(captures, { recursive: true, mode: 0o700 });
     const summary = await packageAuditEvidence({ resultsRoot: captures, privateLog, publicRoot, role, sha,
       publicKey, fingerprint: recipient.data.fingerprint, gpgBinary, execution: result.execution === "SUCCEEDED" ? "SUCCEEDED" : "FAILED",
-      roleReportFile, runContext: reportedRun.success ? reportedRun.data : undefined });
+      roleReportFile, runContext: reportedRun.success ? reportedRun.data : undefined, repoRoot: cwd, trustedFiles });
     return summary;
   }, async () => {
     if (homeArgument) {

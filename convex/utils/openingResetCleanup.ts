@@ -6,6 +6,20 @@ import { orgResetState } from "./orgResetGeneration";
 type OpeningCleanupSource = NonNullable<Doc<"organizations">["openingCleanupReferenceScan"]>["source"];
 const cleanupPending = { deleted: 0, remaining: 1 };
 
+/**
+ * Page budget of both opening-cleanup scans (discovery and reference). Exported so the E2E cleanup fixture derives its row
+ * size from the budget it must trip instead of repeating the numbers (SCRUM-892). These are the production caps; never
+ * tune them for a fixture.
+ */
+export const OPENING_CLEANUP_PAGE_ROWS = 50;
+export const OPENING_CLEANUP_PAGE_ROWS_READ = 100;
+export const OPENING_CLEANUP_PAGE_BYTES = 512_000;
+export const OPENING_CLEANUP_PAGE_OPTIONS = {
+  numItems: OPENING_CLEANUP_PAGE_ROWS,
+  maximumRowsRead: OPENING_CLEANUP_PAGE_ROWS_READ,
+  maximumBytesRead: OPENING_CLEANUP_PAGE_BYTES,
+} as const;
+
 /** Runtime-owned optional reference cleared atomically before its target is deleted. */
 export const OPENING_ATOMIC_REFERENCE_CLEARS = [
   "openingCommissionLiabilities.paidPayrollItemId->payrollItems",
@@ -66,7 +80,7 @@ async function clearLargeOpeningPayablesBatch(ctx: MutationCtx, orgId: Id<"organ
   if (!state || (state.pendingDraftIds.length === 0 && !state.complete)) {
     // Leave scan headroom so a normal full page does not hit the row-read cap.
     const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
-      .paginate({ cursor: state?.cursor ?? null, numItems: 50, maximumRowsRead: 100, maximumBytesRead: 512_000 });
+      .paginate({ cursor: state?.cursor ?? null, ...OPENING_CLEANUP_PAGE_OPTIONS });
     if (page.pageStatus === "SplitRequired") {
       console.error("OPENING_CLEANUP_SPLIT_REQUIRED_DISCOVERY");
       throw new ConvexError("Opening cleanup could not be verified. Please contact support.");
@@ -141,7 +155,7 @@ export async function clearNewOpeningResultReference(
       return true;
     }
     const page = await ctx.db.query("openingBalanceDrafts").withIndex("by_org", q => q.eq("orgId", orgId))
-      .paginate({ cursor: state.cursor, numItems: 50, maximumRowsRead: 100, maximumBytesRead: 512_000 });
+      .paginate({ cursor: state.cursor, ...OPENING_CLEANUP_PAGE_OPTIONS });
     if (page.pageStatus === "SplitRequired") {
       console.error("OPENING_CLEANUP_SPLIT_REQUIRED_REFERENCE");
       throw new ConvexError("Opening cleanup could not be verified. Please contact support.");

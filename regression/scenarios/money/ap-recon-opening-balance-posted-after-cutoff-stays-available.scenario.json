@@ -1,0 +1,75 @@
+{
+  "id": "ap-recon-opening-balance-posted-after-cutoff-stays-available",
+  "fingerprint": "37eb016b93ff75cfa3dbc72d37c3560019bcfcf5b7d290c4f586cf5aa19d8c37",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "creditMinor": 100000,
+        "kind": "SUPPLIER_PAYABLE",
+        "asOf": "laterPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "laterPeriodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": true
+    },
+    {
+      "observable": "later.glBalanceMinor",
+      "value": 100000
+    },
+    {
+      "observable": "later.subledgerBalanceMinor",
+      "value": 100000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.opening.test.ts",
+    "testName": "CONTROL: an opening balance posted AFTER the cutoff does not make a pre-cutover period unavailable"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

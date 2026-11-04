@@ -1,0 +1,55 @@
+{
+  "id": "default-manager-is-refused-a-cost-correction-for-lack-of-manage-finance",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round15",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "default-manager",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "correctionType": "PRIOR_PERIOD_RESTATEMENT",
+        "vehicle": "CASH_ACQUIRED_IN_A_CLOSED_PERIOD",
+        "newCost": "9800"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "refusal.message",
+      "value": "forbidden-missing-manage-finance"
+    },
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": "12500"
+    },
+    {
+      "observable": "correction.writes",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24368",
+      "digest": "6e07fd3b7bf70820e53084687b713ec53d0ff1c928f685d4afc843d7cb7a7eb8"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the default MANAGER template holds view:cost_price but not manage:finance, is refused FORBIDDEN at vehicles.correctAcquisitionCost and nothing is written"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "fingerprint": "d4c5704d639ec72d609d46ce0caa895dc63ce9516ab66943b34fc20377803117"
+}

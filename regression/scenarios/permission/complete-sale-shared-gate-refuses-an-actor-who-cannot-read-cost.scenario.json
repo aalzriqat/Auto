@@ -1,0 +1,50 @@
+{
+  "id": "complete-sale-shared-gate-refuses-an-actor-who-cannot-read-cost",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "completeSale.direct",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "actor": "NON_READER_OR_NO_MEMBERSHIP"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "CONSIGNED_SALE_NEEDS_COST_ACCESS"
+    },
+    {
+      "observable": "refusal.identicalAtEveryPrice",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "completeSale called directly for an actor who cannot read cost (a non-reader, and a user with no membership) on a SOURCED car is refused with the coded response at every price"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "8d722b14c809237d2d07a7bf9fe937cfa9dee0f67e26aff4c794ed7fe89ffbb1"
+}

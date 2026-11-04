@@ -1,0 +1,122 @@
+{
+  "id": "supplier-management-finance-viewer-reads-and-every-write-is-refused",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.listForManagement",
+      "input": {
+        "orgId": "ORG_A",
+        "paginationOpts": {
+          "cursor": null,
+          "numItems": 25
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.create",
+      "input": {
+        "orgId": "ORG_A",
+        "displayName": "NEW_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.update",
+      "input": {
+        "expectedVersion": 1,
+        "orgId": "ORG_A",
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.deactivate",
+      "input": {
+        "reason": "REASON",
+        "orgId": "ORG_A",
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.reactivate",
+      "input": {
+        "orgId": "ORG_A",
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.addAlias",
+      "input": {
+        "orgId": "ORG_A",
+        "alias": "ALIAS",
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_FINANCE_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.retireAlias",
+      "input": {
+        "orgId": "ORG_A",
+        "aliasId": "ALIAS_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.rows",
+      "value": "ROWS_RETURNED"
+    },
+    {
+      "observable": "steps2to7.refusal",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "suppliers.changed",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM887-suppliers-management-permission",
+  "impl": {
+    "file": "convex/suppliers.management.scrum887.test.ts",
+    "testName": "VIEW_FINANCE without MANAGE_FINANCE reads, and every write is refused by the server"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum887-suppliers-screen",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "583c9de31fed0aadd07d460b9e7a965e60c5d7120e0c063fac67d3c9e4c2a371"
+}

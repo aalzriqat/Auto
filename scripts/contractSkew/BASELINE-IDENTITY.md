@@ -8,7 +8,9 @@ node scripts/contractSkew/relocateBaseline.mjs --base <reviewed-base-sha>
 node scripts/contractSkew/relocateBaseline.mjs --base <reviewed-base-sha> --write
 ```
 
-Both commands accept `--baseline <file>`. The helper requires a revision where
+Both commands accept `--baseline <directory>`: the baseline is the directory
+`scripts/contractSkew/needs-evidence-baseline/`, one JSON shard per client file (see
+"Sharded layout" below). The helper requires a revision where
 the reviewed expressions still occupy their recorded coordinates. Use the PR
 base SHA for a new line shift. An already-stranded baseline may need an older
 revision; selecting a revision does not renew its review.
@@ -21,8 +23,10 @@ human review. Invalid UTF-8 is refused rather than normalized. Multiple findings
 on one call can move together; different old calls cannot claim one destination.
 Candidates already named by another baseline call are refused. Other review
 fields are preserved. JSON formatting is normalized when a write occurs.
-Writes are staged in a sibling temporary file and then renamed over the baseline;
-this avoids truncating the original while preparing its replacement.
+Each shard is staged in a sibling temporary file and then renamed over the original;
+this avoids truncating a shard while preparing its replacement. The set of shards is
+not replaced atomically: the writer checks that the directory still matches the
+snapshot it read, and the loader refuses any half-written state.
 
 Exit 0 means the scoped operation completed without stranded/refused entries;
 10 means identity drift or human review is needed; 3 means evidence was
@@ -56,10 +60,39 @@ base branch. No production secret is used. This change does not edit branch
 protection, `.github/release-waivers.json`, or the baseline JSON. It does not claim
 that a new standalone check is required by branch protection.
 
+## Sharded layout (SCRUM-873)
+
+The baseline used to be one file, `needs-evidence-baseline.json`. Any two PRs that
+touched it conflicted, and the certificate carry in
+`scripts/skillEnforcement/checkPrSkillEvidence.mjs` refuses whenever main changed a
+file the PR also changed. It is now a directory with one shard per baselined client
+file. A PR that changes a client file touches only that file's shard, so the carry
+rule applies unchanged.
+
+- Shard name: the client file path encoded injectively, then `.json`. `[a-z0-9._-]`
+  stay, `/` becomes `+`, an uppercase letter becomes `=` and its lowercase form, any
+  other UTF-8 byte becomes `~` and two hex digits. Example:
+  `app+~28dashboard~29+dashboard+page.tsx.json`. The name is derived from the path,
+  so the loader can check the two agree, and two paths cannot differ only by case.
+- Shard content: `{ "version": 1, "file": "<path>", "entries": [...] }`. Entries are
+  sorted (surface, line, column, callSiteId, functionId, contractPath, kind), written
+  with two-space indent and a trailing newline. The loader requires exactly that
+  form, so every entry has one textual representation.
+- Identity is unchanged: surface, file, callSiteId, functionId, contractPath, kind.
+  The old and new layouts hold the same entries; `verifyShardEquivalence.mjs` proves it.
+- The loader (`baselineShards.mjs`) refuses, with every problem listed: an empty or
+  missing directory, a malformed shard, a duplicate entry (across or inside shards),
+  an entry whose file is not its shard's file, a shard whose name does not match its
+  declared file, a stray file or subdirectory, and a shard with no entries.
+- The one-time split and the PR-conflict helper live in `shardBaseline.mjs`:
+  `--split` converts the old file; `--from-branch <ref>` takes the entry changes of a
+  branch cut before the split and reapplies them to the shards, by identity.
+
 ## Empty baseline
 
 `checkBaselineIdentity.mjs` refuses a baseline with no entries (exit 3, "has no
-baseline entries"). "0 entries matched" is vacuously true and is also what a
+baseline entries"). An empty directory is refused for the same reason; git cannot
+store one, so the explicit "no debt" state is the single file `~empty.json`. "0 entries matched" is vacuously true and is also what a
 truncated or mispointed file looks like. Retiring all reviewed debt is a reviewed
 decision, stated on the command line with `--allow-empty`; the flag never excuses a
 non-empty baseline that has drifted (exit 10 still applies).

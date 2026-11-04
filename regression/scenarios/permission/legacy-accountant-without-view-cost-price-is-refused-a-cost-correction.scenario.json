@@ -1,0 +1,55 @@
+{
+  "id": "legacy-accountant-without-view-cost-price-is-refused-a-cost-correction",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round14b",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "legacy-accountant",
+        "org": "A"
+      },
+      "action": "vehicles.correctAcquisitionCost",
+      "input": {
+        "correctionType": "PRIOR_PERIOD_RESTATEMENT",
+        "vehicle": "CASH_ACQUIRED_IN_A_CLOSED_PERIOD",
+        "newCost": "9800"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "refusal.message",
+      "value": "forbidden-missing-view-cost-price"
+    },
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": "12500"
+    },
+    {
+      "observable": "correction.writes",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "a legacy stored ACCOUNTANT without view:cost_price is refused FORBIDDEN at vehicles.correctAcquisitionCost and nothing is written"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "fingerprint": "3372ebd6f538f90cb4c2ce9bc3ef8b110ed3a6b66e7d0177d0d87b6eca9f0e2c"
+}

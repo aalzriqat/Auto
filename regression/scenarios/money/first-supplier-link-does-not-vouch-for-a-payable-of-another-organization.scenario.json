@@ -1,0 +1,81 @@
+{
+  "id": "first-supplier-link-does-not-vouch-for-a-payable-of-another-organization",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierReceivable",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "storedName": "SUPPLIER_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierPayable",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "org": "B"
+      }
+    },
+    {
+      "actor": {
+        "role": "FINANCE_MANAGER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step3.refusal",
+      "value": "SUPPLIER_FIRST_LINK_NOT_PROVEN"
+    },
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "world.rowCounts.changed",
+      "value": false
+    },
+    {
+      "observable": "audit.firstLinkRows",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P4-first-link",
+  "impl": {
+    "file": "convex/vehicleSupplierFirstLink.scrum868.test.ts",
+    "testName": "a payable of ANOTHER organization on this vehicle id is not vouched for (fail closed)"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4-first-link",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "d535404f30e59395df6ace2159df81ff042ef419357ab2a4032fe172a5ab0e4f"
+}

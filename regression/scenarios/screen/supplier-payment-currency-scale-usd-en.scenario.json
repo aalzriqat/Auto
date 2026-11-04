@@ -1,0 +1,78 @@
+{
+  "id": "supplier-payment-currency-scale-usd-en",
+  "fingerprint": "3c4ba16a1122b7e21982fac1ffa8762ebf1558cef83df0cc0e42e8b140e326d3",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum880-jsdom-money-display",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierPaymentDialog.render",
+      "input": {
+        "renderer": "jsdom",
+        "locale": "en",
+        "currency": "USD",
+        "amountDue": 9999,
+        "vatAllowed": true,
+        "taxAmount": "12.34",
+        "settlementAmountMinor": 925050
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "settlementAmountMinor.groupedNumberParts",
+      "value": [
+        "9",
+        "250",
+        "50"
+      ]
+    },
+    {
+      "observable": "settlementAmountMinor.currencySuffix",
+      "value": "USD"
+    },
+    {
+      "observable": "settlementAmountMinor.digits",
+      "value": "latn"
+    },
+    {
+      "observable": "settlementAmountMinor.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "dialog.direction",
+      "value": "ltr"
+    },
+    {
+      "observable": "vat.inputValue",
+      "value": "12.34"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "components/sourcing/SupplierPaymentDialog.money.test.tsx",
+    "testName": "SCRUM-880: EN supplier amount shows USD scale and Latin digits"
+  },
+  "bugRef": {
+    "key": "SCRUM-880",
+    "failingFirst": "9edad00a0a9879882e1765cff90d3f1f280b3657"
+  },
+  "sourceGlobs": [
+    "components/sourcing/SupplierPaymentDialog.tsx",
+    "lib/moneyDisplay.ts"
+  ]
+}

@@ -56,7 +56,7 @@
  * Every sentinel below is a value that appears nowhere else in the fixture, so
  * a hit is always this deal's protected figure and never a coincidence.
  */
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -568,6 +568,110 @@ async function assertCalculatorLive(seeded: Seeded) {
 }
 
 describe("the finance-application read boundary (SCRUM-117)", () => {
+  /**
+   * Deterministic system time fixture to prevent millisecond timestamp collisions
+   * with numeric sentinels.
+   *
+   * Measured CI defect (run 41214612992, 2026-10-31 15:30:06.011Z = 1793460606011):
+   * When Date.now() / _creationTime hit 1793460606011, the numeric string contained
+   * substring "606011", colliding with SENTINEL.customerShare (606_011) across
+   * every response that returned a row timestamp, falsely failing slice 2.
+   * Setting a deterministic fixture timestamp where no sentinel is a substring
+   * eliminates false-positive timestamp collisions while keeping whole-response
+   * scanning 100% strict.
+   */
+  const DETERMINISTIC_FIXTURE_TIME = new Date("2026-01-01T00:00:00.000Z");
+
+  beforeAll(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(DETERMINISTIC_FIXTURE_TIME);
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
+  test("offending clock reproduction (1793460606011) and leak mutation detection", async () => {
+    // 1. Offending clock reproduction: set time to exact failing millisecond
+    vi.setSystemTime(new Date("2026-10-31T15:30:06.011Z"));
+    try {
+      expect(Date.now()).toBe(1793460606011);
+      expect(String(Date.now())).toContain(String(SENTINEL.customerShare));
+
+      const seeded = await seedSentinelDeal("clockRepro");
+      const caller = await seeded.asRole(templateFor("SALES"));
+      const doors = await allDoors(seeded, caller);
+
+      // Reproduces the exact 5 doors reporting 'leaks 606011' from CI run 41214612992
+      const hits = scan(doors, [String(SENTINEL.customerShare)]);
+      expect(hits.sort()).toEqual([
+        "applications.dealCockpit leaks 606011",
+        "applications.get leaks 606011",
+        "applications.list leaks 606011",
+        "financingEconomics.getEconomics leaks 606011",
+        "financingEconomics.listNeedingReconciliation leaks 606011",
+      ]);
+
+      // Prove that all matches are purely timestamp properties and NOT actual protected economic fields
+      for (const [name, response] of doors) {
+        if (!hits.some((h) => h.startsWith(name))) continue;
+        const matchingPaths: string[] = [];
+        const inspectObj = (obj: unknown, path = ""): void => {
+          if (obj === null || obj === undefined) return;
+          if (typeof obj === "number" || typeof obj === "string") {
+            if (String(obj).includes(String(SENTINEL.customerShare))) {
+              matchingPaths.push(path);
+            }
+          } else if (Array.isArray(obj)) {
+            obj.forEach((item, idx) => inspectObj(item, `${path}[${idx}]`));
+          } else if (typeof obj === "object") {
+            for (const [k, v] of Object.entries(obj)) {
+              inspectObj(v, path ? `${path}.${k}` : k);
+            }
+          }
+        };
+        inspectObj(response);
+        // Every match path must be a timestamp field (_creationTime, createdAt, updatedAt, or changedAt)
+        expect(matchingPaths.length).toBeGreaterThan(0);
+        for (const p of matchingPaths) {
+          expect(p).toMatch(/(?:_creationTime|createdAt|updatedAt|changedAt)$/);
+        }
+      }
+    } finally {
+      // Restore deterministic fixture time
+      vi.setSystemTime(DETERMINISTIC_FIXTURE_TIME);
+    }
+
+    // 2. Under deterministic fixture time, identical doors yield clean zero-leak verdict
+    const cleanSeeded = await seedSentinelDeal("cleanClock");
+    const cleanCaller = await cleanSeeded.asRole(templateFor("SALES"));
+    const cleanDoors = await allDoors(cleanSeeded, cleanCaller);
+    expect(
+      scan(cleanDoors, [
+        ...FINANCE_ONLY_SENTINELS,
+        ...APPROVAL_SENTINELS,
+        ...GAP_ALLOCATION_SENTINELS,
+        ...DISBURSEMENT_SENTINELS,
+      ])
+    ).toEqual([]);
+
+    // 3. Mutation control: real protected-value leak is STILL detected even under deterministic clock
+    const mutatedDoors: Array<[string, unknown]> = cleanDoors.map(([name, resp]) => {
+      if (name === "applications.get") {
+        return [
+          name,
+          {
+            ...(resp as Record<string, unknown>),
+            customerGapShareMinor: SENTINEL.customerShare,
+          },
+        ];
+      }
+      return [name, resp];
+    });
+    expect(scan(mutatedDoors, [String(SENTINEL.customerShare)])).toEqual([
+      "applications.get leaks 606011",
+    ]);
+  });
   test("the calculator's stored-row branch is live in this fixture", async () => {
     await assertCalculatorLive(await seedSentinelDeal("calcLive"));
   });

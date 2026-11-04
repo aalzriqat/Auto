@@ -1,0 +1,51 @@
+{
+  "id": "supplier-receivable-idle-custom-asset-does-not-block",
+  "fingerprint": "f6c54e7c955342042e1fb3d96b352297f1c7d5f205922256488e44b97a86bad7",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-round5-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "customAssetAccounts": 1,
+        "customAssetGlActivity": "none",
+        "directSale": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.complete",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "r5 H2 CONTROL: a custom asset account with no GL activity does not block the comparison"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

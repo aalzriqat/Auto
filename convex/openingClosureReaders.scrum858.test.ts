@@ -14,6 +14,7 @@ import type { Doc } from "./_generated/dataModel";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
+  SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
 } from "./utils/closeWarnings";
 import { computeCloseChecklist } from "./accountingPeriods";
 import {
@@ -317,7 +318,7 @@ test("lost allocation metadata cannot hide retained payables GL", () => expectLo
 test("lost allocation metadata cannot hide retained recoverables GL", () => expectLostAllocationUnavailable("recoverables", "rec-custom"));
 test("lost allocation metadata cannot hide retained partners GL", () => expectLostAllocationUnavailable("partners", "cap-b"));
 
-function expectFutureOpeningUnavailable(endpoint: ReconciliationEndpoint | typeof api.accountingReports.supplierPayablesReconciliation) {
+function expectFutureOpeningUnavailable(endpoint: ReconciliationEndpoint) {
   return withFrozenScheduler(async () => {
   const year = new Date().getUTCFullYear();
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(year, 5, 15));
@@ -338,13 +339,32 @@ function expectFutureOpeningUnavailable(endpoint: ReconciliationEndpoint | typeo
 test("future-dated opening refuses earlier advances populations", () => expectFutureOpeningUnavailable(api.accountingReports.employeeAdvancesReconciliation));
 test("future-dated opening refuses earlier recoverables populations", () => expectFutureOpeningUnavailable(api.accountingReports.supplierRecoverablesReconciliation));
 test("future-dated opening refuses earlier partners populations", () => expectFutureOpeningUnavailable(api.accountingReports.partnerCapitalReconciliation));
-test("future-dated opening refuses earlier payables populations", () => expectFutureOpeningUnavailable(api.accountingReports.supplierPayablesReconciliation));
+// Supplier payables is the one family whose subledger is rebuilt AS OF the cutoff (SCRUM-876, #739): an opening dated
+// after the cutoff is then absent from BOTH sides, so an earlier cutoff reconciles at zero instead of refusing.
+test("future-dated opening refuses earlier payables populations", () => withFrozenScheduler(async () => {
+  const year = new Date().getUTCFullYear();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(year, 5, 15));
+  try {
+    const openingDate = Date.UTC(year, 5, 17);
+    const seed = await fixture(openingDate);
+    expect(await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId, toDate: openingDate })).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+    const before = await ledger(seed);
+    for (const toDate of [undefined, Date.UTC(year, 5, 16)]) {
+      expect(await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId, toDate })).toMatchObject({
+        status: "AVAILABLE", isReconciled: true, byCurrency: {},
+      });
+    }
+    expect(await ledger(seed)).toEqual(before);
+  } finally { clock.mockRestore(); }
+}));
 
 test("supplier payables refuses past cutoffs and non-finite dates", () => withFrozenScheduler(async () => {
   const seed = await fixture();
-  for (const toDate of [Date.now() - 60_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+  // A finite past cutoff is supported (dated reconstruction, SCRUM-876); only a non-finite one is refused.
+  expect(await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId, toDate: Date.now() - 60_000 })).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  for (const toDate of [Number.NaN, Number.POSITIVE_INFINITY]) {
     expect(await seed.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: seed.orgId, toDate })).toMatchObject({
-      status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false, currencies: [], byCurrency: {},
+      status: "UNAVAILABLE", unavailableReason: "INVALID_DATE", isReconciled: false, currencies: [], byCurrency: {},
     });
   }
 }));
@@ -387,7 +407,7 @@ test("missing payable provenance has a truthful close warning", () => withFrozen
     await ctx.db.delete(draft._id);
   });
   const checklist = await seed.owner.query(api.accountingPeriods.closeChecklist, { orgId: seed.orgId, periodId: seed.periodId });
-  expect(checklist.warnings).toContain("Supplier payables reconciliation could not be completed: the opening source could not be verified. Review the opening source, then re-check.");
+  expect(checklist.warnings).toContain(SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING);
   expect(checklist.warnings).not.toContain("Supplier payables reconciliation could not be completed: there are too many records to verify in one pass. Review supplier payables manually.");
 }));
 

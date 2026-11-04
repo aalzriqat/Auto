@@ -21,6 +21,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -89,14 +90,14 @@ async function seed(tag: string) {
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
 async function vehicle(s: Seeded, tag: string, sourced: boolean) {
-  return await s.t.run((ctx) =>
+  return await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin: `VINREV${tag}`, make: "Toyota", model: "Camry", year: 2024,
       mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
       sellingPrice: sourced ? SALE_PRICE : OWNED_PRICE,
       status: "AVAILABLE",
       ...(sourced
-        ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT }
+        ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT }
         : { sourceType: "STOCK" as const, purchasePrice: OWNED_COST }),
     })
   );

@@ -1,0 +1,59 @@
+{
+  "id": "supplier-management-list-refuses-vehicle-only-role-and-keeps-picker-narrow",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "VIEW_VEHICLES_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.listForManagement",
+      "input": {
+        "orgId": "ORG_A",
+        "paginationOpts": {
+          "cursor": null,
+          "numItems": 25
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "VIEW_VEHICLES_ONLY",
+        "org": "A"
+      },
+      "action": "suppliers.list",
+      "input": {
+        "orgId": "ORG_A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "step2.rowKeys",
+      "value": "PICKER_FIELDS_ONLY"
+    }
+  ],
+  "matrixRow": "SCRUM887-suppliers-management-permission",
+  "impl": {
+    "file": "convex/suppliers.management.scrum887.test.ts",
+    "testName": "VIEW_VEHICLES alone is refused, and the picker projection stays narrow for it"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum887-suppliers-screen",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "bfafc0b1d076effff0b4c5a3a84d292c77536dcf1c49a55b41cdddc967f267b1"
+}

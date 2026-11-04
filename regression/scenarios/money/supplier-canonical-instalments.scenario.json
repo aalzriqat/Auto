@@ -1,0 +1,62 @@
+{
+  "id": "supplier-canonical-instalments",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum880-precision-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "currency": "JOD",
+        "amountDue": 5,
+        "instalments": [
+          1.48,
+          1.48,
+          1.48
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "canonicalPaid",
+      "value": 4.44
+    },
+    {
+      "observable": "remainingMinor",
+      "value": 560
+    },
+    {
+      "observable": "finalStatus",
+      "value": "PAID"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcingPayables.test.ts",
+    "testName": "new fractional instalments stay canonical before the final payment"
+  },
+  "matrixRow": "SCRUM-486-SUPPLIER-INSTALMENTS",
+  "sourceGlobs": [
+    "convex/sourcingPayables.ts",
+    "convex/utils/supplierPaymentAmounts.ts",
+    "convex/vehicles.ts",
+    "convex/vehicleEdits.ts",
+    "convex/utils/saleCompletion.ts"
+  ],
+  "fingerprint": "69d12c15968ad26d27249a157606dad666b37f705f610898863a81258bb80432"
+}

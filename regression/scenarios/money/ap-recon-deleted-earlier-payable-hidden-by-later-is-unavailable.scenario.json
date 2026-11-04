@@ -1,0 +1,77 @@
+{
+  "id": "ap-recon-deleted-earlier-payable-hidden-by-later-is-unavailable",
+  "fingerprint": "c21ca847b27c91a86d32e24f1f6598790f40b6806c4198481637a97db9ce7010",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr714-seat-review",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.deleteEarlierPayable",
+      "input": {
+        "glKept": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "earlierPeriodEnd"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "earlier"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "POST_CUTOFF_ACTIVITY"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "closeChecklist.postCutoffWarning",
+      "value": true
+    },
+    {
+      "observable": "closeChecklist.canClose",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "REPRO 1: the earlier payable is deleted but its GL stays; a same-sized later payable must not make the earlier period read reconciled"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}

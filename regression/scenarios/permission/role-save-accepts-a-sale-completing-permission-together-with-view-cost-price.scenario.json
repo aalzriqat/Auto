@@ -1,0 +1,59 @@
+{
+  "id": "role-save-accepts-a-sale-completing-permission-together-with-view-cost-price",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "permissions": "create:sales+view:cost_price"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "addPermission": "create:sales+view:cost_price"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.refusal",
+      "value": "absent"
+    },
+    {
+      "observable": "update.refusal",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the refusal is accepted once view:cost_price is granted with the sale-completing permission, on create and on update"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "de9e41ae432c22e23011b796b975eadfd6de70f08e99e8e26c308a8709d8ab77"
+}

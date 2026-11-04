@@ -113,6 +113,12 @@ describe("money entry points reject NaN", () => {
       ctx.db.query("vehicles").withIndex("by_org", (q: any) => q.eq("orgId", ids.orgId)).collect()
     );
     expect(rows).toHaveLength(1);
+    const effects = await t.run(async (ctx) => ({
+      edits: await ctx.db.query("vehicleEdits").collect(),
+      payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(),
+    }));
+    expect(effects).toEqual({ edits: [], payables: [], events: [] });
   });
 
   test("workOrders.create refuses a NaN task cost instead of silently dropping the GL posting", async () => {

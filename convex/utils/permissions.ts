@@ -7,6 +7,7 @@
  */
 
 import { isForwardPlanVersion } from "./financedSalePostingPlan";
+import { AppErrorCode, throwAppError } from "./errors";
 
 export const PERMISSIONS = {
   // Organizations
@@ -285,6 +286,44 @@ export function cancelAuthorityFor(status: string, planVersion: number): Permiss
     : [[PERMISSIONS.CREATE_FINANCE_APPLICATION]];
 }
 
+/**
+ * SCRUM-886 round 13 (owner ruling comment 24358): the permissions that admit a sale-completion door.
+ * `create:sales` admits `sales.create`, `sales.completeDraft` and `sales.completeFromQuote`; `confirm:finance_disbursement` admits
+ * `applications.finalizeDeal`. Completing a SOURCED (consigned) car's sale also needs `view:cost_price`, so storing a role that
+ * holds either without it is refused (`assertRoleMayBeStored`: `roles.create`, `roles.update`, the Data Browser role edits) and every default template that holds either also holds it.
+ * Derived from the `requireTenantAuth` lists of the four doors that call `completeSale`, `completeSalesForLineItems` and
+ * `completeExistingSale`; add a permission here when a new completion door is added.
+ */
+export const SALE_COMPLETING_PERMISSIONS: readonly Permission[] = [
+  PERMISSIONS.CREATE_SALES,
+  PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+];
+
+/** True when `permissions` completes a sale but cannot read vehicle cost: the combination a role may not be saved with. */
+export function completesSalesWithoutCostAccess(permissions: readonly string[]): boolean {
+  return (
+    SALE_COMPLETING_PERMISSIONS.some((permission) => permissions.includes(permission)) &&
+    !permissions.includes(PERMISSIONS.VIEW_COST_PRICE)
+  );
+}
+
+/** Shown to the dealer when a role save is refused by Rule 3; its English text is the `ServerError_SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS` dictionary entry. */
+export const SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE =
+  'A role that can create sales or confirm finance disbursements must also be able to see vehicle costs, because completing the sale of a sourced car depends on them. Add "View Cost Price" to this role, or remove the sales permission.';
+
+/**
+ * SCRUM-896 R4-F1: the one Rule 3 refusal (owner ruling SCRUM-886 c24358), shared by every role writer so none can store the
+ * state the per-deploy ACCOUNTANT backfill repairs. Pass the role's FINAL permission set: the submitted one, or the stored one
+ * when a save submits none. Throws `SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS`; the caller must run it before any write (or, in a
+ * loop, rely on the throw rolling the whole mutation back). The deploy backfill is the only writer that may touch the state:
+ * it repairs it.
+ */
+export function assertRoleMayBeStored(permissions: readonly string[]): void {
+  if (completesSalesWithoutCostAccess(permissions)) {
+    throwAppError(AppErrorCode.SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS, SALE_COMPLETING_ROLE_NEEDS_COST_ACCESS_MESSAGE);
+  }
+}
+
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
   {
     name: SYSTEM_OWNER_ROLE_NAME,
@@ -424,6 +463,9 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.MANAGE_SUPPLIER_SETTLEMENT,
+      // SCRUM-886 round 13 (owner ruling comment 24358): finalizing a SOURCED car's deal needs the right to read vehicle cost, and
+      // this role holds CONFIRM_FINANCE_DISBURSEMENT, so it must hold this too (see SALE_COMPLETING_PERMISSIONS).
+      PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_PAYROLL,
       PERMISSIONS.MANAGE_PAYROLL,
     ],

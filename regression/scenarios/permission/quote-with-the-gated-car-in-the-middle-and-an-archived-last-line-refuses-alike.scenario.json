@@ -1,0 +1,65 @@
+{
+  "id": "quote-with-the-gated-car-in-the-middle-and-an-archived-last-line-refuses-alike",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.completeFromQuote",
+      "input": {
+        "firstLine": "AVAILABLE_CONSIGNED_CAR",
+        "middleLine": "SOURCED_CAR_GATED",
+        "lastLine": "ARCHIVED_AFTER_SAVE",
+        "route": "DIRECT_TO_SUPPLIER",
+        "middleLinePrice": "PRICES_1_SHORT_AT_E_20000"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.identicalAtEveryPrice",
+      "value": "true"
+    },
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.kind",
+      "value": "lastLineArchived"
+    },
+    {
+      "observable": "refusal.message.storedSupplierEntitlement",
+      "value": "absent"
+    },
+    {
+      "observable": "world.writtenByRefusedCommand",
+      "value": "nothing"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/saleCompletionBatchPrecedence.scrum886.test.ts",
+    "testName": "the cost-gated car in the MIDDLE of three lines does not tell the caller anything either: the last line is archived"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round12",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "824e741e0d07de867c7b56fbf6a150320cb4aad0"
+  },
+  "fingerprint": "b2e0873f88d921bb5ebf721231611e7778bc4105baf0eec6a3c03d4bff6ba860"
+}

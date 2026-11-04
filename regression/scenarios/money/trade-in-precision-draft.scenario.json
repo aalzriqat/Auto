@@ -1,0 +1,63 @@
+{
+  "id": "trade-in-precision-draft",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum880-round5-seat-reproductions",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.completeDraft",
+      "input": {
+        "currency": "JOD",
+        "tradeInValue": 128.0005,
+        "correctedValue": 128.001,
+        "containment": "legacy-cash-fixture-opt-out"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusalCode",
+      "value": "TRADE_IN_VALUE_PRECISION"
+    },
+    {
+      "observable": "refusedState",
+      "value": "unchanged"
+    },
+    {
+      "observable": "correctedInventoryDebitMinor",
+      "value": 128001
+    },
+    {
+      "observable": "correctedReceivableCreditMinor",
+      "value": 128001
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingVehicleInventory.test.ts",
+    "testName": "SCRUM-880: draft refuses fractional trade-in value atomically with field-specific EN/AR text"
+  },
+  "matrixRow": "SCRUM-486-TRADE-IN-PRECISION-DRAFT",
+  "sourceGlobs": [
+    "convex/sourcingPayables.ts",
+    "convex/utils/supplierPaymentAmounts.ts",
+    "convex/vehicles.ts",
+    "convex/vehicleEdits.ts",
+    "convex/utils/saleCompletion.ts"
+  ],
+  "fingerprint": "4e3d83023e0e05909f7c757fe0e6731425be28e2cd54101a2023f3cfbe0a19dd"
+}

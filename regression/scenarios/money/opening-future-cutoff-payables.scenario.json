@@ -1,6 +1,6 @@
 {
   "id": "opening-future-cutoff-payables",
-  "fingerprint": "b0db0fa8b4fe35ce8704cfa8b5b29dcedb0922414369052ef240eaa23f44c56e",
+  "fingerprint": "cb1e251ec13caee772f9d7757aedbc52db36c9b1f216192f9fc89c03869fd2de",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -60,15 +60,11 @@
   "expected": [
     {
       "observable": "reconciliation.status",
-      "value": "UNAVAILABLE"
-    },
-    {
-      "observable": "reconciliation.unavailableReason",
-      "value": "AS_OF_DATE_UNSUPPORTED"
+      "value": "AVAILABLE"
     },
     {
       "observable": "reconciliation.isReconciled",
-      "value": false
+      "value": true
     },
     {
       "observable": "reconciliation.ledgerChanged",

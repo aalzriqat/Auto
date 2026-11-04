@@ -1,0 +1,50 @@
+{
+  "id": "supplier-receivable-native-recovery-claimed-by-opening-draft-is-unavailable",
+  "fingerprint": "e5e77eefe470e804d398d719a35066932eeca58b0152a91724446d4509f89f4d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "nativeRecovery": true,
+        "claimedByPostedOpeningDraft": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OPENING_SOURCE_UNAVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a native recovery that a POSTED opening draft claims as its result is UNAVAILABLE"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

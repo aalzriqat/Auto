@@ -1,0 +1,88 @@
+{
+  "id": "first-supplier-link-of-a-consignment-car-with-money-is-audited-and-moves-no-money",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "FIXTURE",
+        "org": "A"
+      },
+      "action": "fixture.insertSupplierCostRecovery",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "vehicleLink": "NONE"
+      }
+    },
+    {
+      "actor": {
+        "role": "FINANCE_MANAGER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "vehicleId": "VEHICLE_ID",
+        "sourceType": "SOURCED",
+        "sourcedSupplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OPERATOR",
+        "org": "A"
+      },
+      "action": "supplierIdentityRepair.repairPage",
+      "input": {
+        "phase": "RECOVERIES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.sourcedSupplierId",
+      "value": "SUPPLIER_ID"
+    },
+    {
+      "observable": "step2.moneyTables.changed",
+      "value": false
+    },
+    {
+      "observable": "audit.firstLinkRows",
+      "value": 1
+    },
+    {
+      "observable": "step3.repaired",
+      "value": 1
+    },
+    {
+      "observable": "step3.unresolved",
+      "value": 0
+    },
+    {
+      "observable": "release.unresolvedCount",
+      "value": 0
+    }
+  ],
+  "matrixRow": "SCRUM868-P4-first-link",
+  "impl": {
+    "file": "convex/vehicleSupplierFirstLink.scrum868.test.ts",
+    "testName": "production shape (a cost recovery and its supplier-borne expense): linked, audited, nothing posted, then repaired and counted clean"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4-first-link",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "4b5d753f96642c8a580f47dd7359b115d95379d4e10e67028e22613a5d031a45"
+}

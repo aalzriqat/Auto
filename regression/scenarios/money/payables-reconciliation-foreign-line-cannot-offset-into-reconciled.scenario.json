@@ -1,0 +1,54 @@
+{
+  "id": "payables-reconciliation-foreign-line-cannot-offset-into-reconciled",
+  "fingerprint": "11da775e28e7273d562d6272be3238f85844c4e4201a050ea8b726fe3aaa7681",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "lineOwner": "B_credit_plus_A_debit_offset",
+        "journalParent": "A_POSTED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "INCONSISTENT_REFERENCE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B1 offset: a foreign line plus an offsetting org-A line must not read as reconciled"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "ce4edcd2c4ec645a79a48fd06656db469671fbfc"
+  }
+}

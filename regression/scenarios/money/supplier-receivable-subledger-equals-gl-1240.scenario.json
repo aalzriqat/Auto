@@ -1,0 +1,58 @@
+{
+  "id": "supplier-receivable-subledger-equals-gl-1240",
+  "fingerprint": "dbb9d8bf28a983738d90615e4a749c413c0631f0e674c868763f21411048c9eb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000,
+        "receipts": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "jod.glMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "jod.subledgerMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    },
+    {
+      "observable": "complete",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "CONTROL: a fresh direct-settled sale reconciles - A/R subledger equals 1240"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

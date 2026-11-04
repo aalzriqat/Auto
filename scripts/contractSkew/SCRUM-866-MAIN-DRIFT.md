@@ -109,7 +109,11 @@ with `renewBaselineReviewed.mjs --blob-evidence` after reviewing the one-line
 toast diff. Their identities, fingerprints, causes, multiplicity and expiry
 (2026-12-01) are unchanged. No call-site relocation was needed in this follow-up.
 
-Count commands (PowerShell; rerun at the landing commit):
+Count commands (PowerShell; rerun at the landing commit). Note (SCRUM-873): the baseline was one file,
+`scripts/contractSkew/needs-evidence-baseline.json`, when these counts were taken. It is now a directory of
+shards, `scripts/contractSkew/needs-evidence-baseline/`, one per client file. The commands below
+still work against any revision up to 446368ae0 (the last one that held the single file) if `HEAD` is replaced by that
+revision; at later revisions load the shards with `loadShardedBaseline` in `baselineShards.mjs`.
 
 ```powershell
 (Get-Content scripts/contractSkew/needs-evidence-baseline.json -Raw | ConvertFrom-Json).entries.Count

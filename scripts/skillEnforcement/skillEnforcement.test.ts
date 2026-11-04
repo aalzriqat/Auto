@@ -548,13 +548,13 @@ describe("verified local Claude evidence (SCRUM-760)", () => {
       "- Seat 1 session is the implementing session. Seat 1 must be a separate session.",
     ]);
   });
-  test("a consistent older own-PR review fails only the current-head rule", async () => {
+  test("a consistent older own-PR review requires the head when carry evidence is unavailable", async () => {
     const prior = "b".repeat(40);
     const result = await check(env, api({ body: body().replace(`Seat 1 SHA: ${sha}`, `Seat 1 SHA: ${prior}`),
       report: report().replace(sha, prior) }));
     expect(result.exitCode).toBe(1);
     expect(result.lines.filter((text) => text.startsWith("- "))).toEqual([
-      "- Local review must certify the full current PR head SHA.",
+      "- Local review must certify the full current PR head SHA. Carry refused: PR commit list is incomplete or at the 250-commit limit.",
     ]);
   });
   test.each(["BLOCK", "deleted"])("revoking a green report to %s publishes a failing check on that PR head", async (revocation) => {

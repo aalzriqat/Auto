@@ -40,12 +40,16 @@ async function run() {
   // against the wrong deployment — must produce a refusal, not a credential
   // delivered somewhere unintended. Moving the URL out of argv removed one way
   // to set it wrongly; it did not remove the need to check.
-  const targetMatch = /^https:\/\/[a-z0-9-]{1,64}\.convex\.cloud$/.exec(
+  //
+  // SCRUM-892: the trusted rehearsal runs on the runner-local backend, whose
+  // only URL is exactly http://127.0.0.1:3210 (localConvexBackend.mjs
+  // LOCAL_CONVEX_URL). That one origin is accepted too.
+  const targetMatch = /^(?:https:\/\/[a-z0-9-]{1,64}\.convex\.cloud|http:\/\/127\.0\.0\.1:3210)$/.exec(
     typeof convexUrl === "string" ? convexUrl : ""
   );
   if (targetMatch === null) {
     throw new Error(
-      `Refusing to send an authenticated mutation to ${String(convexUrl)} — only a Convex cloud deployment URL is accepted.`
+      `Refusing to send an authenticated mutation to ${String(convexUrl)} — only a Convex cloud deployment URL or the runner-local backend is accepted.`
     );
   }
   const target = targetMatch[0];

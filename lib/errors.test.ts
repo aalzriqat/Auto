@@ -324,6 +324,24 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
   });
 
+  it("SCRUM-886 round 10 consigned-sale cost-access refusal resolves to Arabic in ar, keeps the server text in en, and names no amount", async () => {
+    const { dictionaries } = await import("./i18n/dictionaries");
+    const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;
+    const en = (key: string) => (dictionaries.en as Record<string, string>)[key] ?? key;
+    const { CONSIGNED_SALE_NEEDS_COST_ACCESS_MESSAGE: serverText } = await import("../convex/utils/saleCompletion");
+    const { AppErrorCode } = await import("../convex/utils/errors");
+    expect(Object.values(AppErrorCode)).toContain("CONSIGNED_SALE_NEEDS_COST_ACCESS");
+    const error = new ConvexError({ code: "CONSIGNED_SALE_NEEDS_COST_ACCESS", message: serverText });
+    const arText = getLocalizedErrorMessage(error, ar);
+    expect(arText).toMatch(/[؀-ۿ]/);
+    expect(arText).not.toBe(serverText);
+    expect(arText).toBe((dictionaries.ar as Record<string, string>)["ServerError_CONSIGNED_SALE_NEEDS_COST_ACCESS"]);
+    expect(getLocalizedErrorMessage(error, en)).toBe(serverText);
+    // Neutral in both languages: no digit at all, so no amount can be carried in either text.
+    expect(serverText).not.toMatch(/[0-9٠-٩]/);
+    expect(arText).not.toMatch(/[0-9٠-٩]/);
+  });
+
   it("SCRUM-869 supplier margin-claim cancel refusal carries a stable code and resolves to Arabic in ar and the server text in en", async () => {
     const { dictionaries } = await import("./i18n/dictionaries");
     const ar = (key: string) => (dictionaries.ar as Record<string, string>)[key] ?? key;

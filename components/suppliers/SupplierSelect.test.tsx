@@ -352,7 +352,15 @@ describe("the dictionaries carry every picker string in both languages", () => {
   });
 
   test("each supplier identity refusal code has an English and an Arabic server-error text", () => {
-    for (const code of ["IDENTITY_REQUIRED", "NOT_FOUND", "INACTIVE", "LINK_FROZEN", "ROLE_CONFLICT"]) {
+    for (const code of [
+      "IDENTITY_REQUIRED",
+      "NOT_FOUND",
+      "INACTIVE",
+      "LINK_FROZEN",
+      "ROLE_CONFLICT",
+      "FIRST_LINK_NEEDS_FINANCE_MANAGER",
+      "FIRST_LINK_NOT_PROVEN",
+    ]) {
       expect(en[`ServerError_SUPPLIER_${code}`], code).toBeTruthy();
       expect(ar[`ServerError_SUPPLIER_${code}`], code).toBeTruthy();
     }

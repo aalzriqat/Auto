@@ -136,7 +136,11 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     form.status,
     form.status,
   );
-  const firstPurchaseEdit = !!editing && editing.sourceType !== "SOURCED" &&
+  // SCRUM-886: the server refuses a cost key from a caller without `view:cost_price` (a submitted
+  // cost would confirm a guess at the stored one), and a vehicle read for that caller carries no cost.
+  // So such a caller's edit offers no purchase-price field and sends no cost or settlement key.
+  const canViewCost = permissions.includes("view:cost_price");
+  const firstPurchaseEdit = canViewCost && !!editing && editing.sourceType !== "SOURCED" &&
     !(editing.purchasePrice !== undefined && editing.purchasePrice > 0) &&
     (parseOptionalNumber(form.purchasePrice) ?? 0) > 0;
   const showPurchaseSettlement = !editing ? form.ownership === "STOCK" : firstPurchaseEdit;
@@ -389,7 +393,8 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       };
       if (editing) {
         await updateVehicle({
-          ...payload, purchasePrice, vehicleId: editing._id,
+          ...payload, vehicleId: editing._id,
+          ...(canViewCost ? { purchasePrice } : {}),
           ...(firstPurchase ? { purchasePaymentMethod: form.purchasePaymentMethod as Exclude<MobileAcquisitionMethod, ""> } : {}),
           ...(firstPurchase && form.purchasePaymentMethod === "ON_ACCOUNT" ? { purchaseSupplierName: form.purchaseSupplierName.trim() } : {}),
           ...(bankPurchase ? { bankAccountId: form.purchaseBankAccountId } : {}),
@@ -611,7 +616,9 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
               <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
               {editing ? (
-                <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+                canViewCost ? (
+                  <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+                ) : null
               ) : (
                 <>
                   <Text style={styles.photoSectionLabel}>{locale === "ar" ? "ملكية السيارة" : "Vehicle ownership"}</Text>

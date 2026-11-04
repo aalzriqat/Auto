@@ -78,11 +78,13 @@ async function seedOrg(t: T, tag: string) {
  * carries the sale. The worked case from the ticket: 18,000 owed, 20,000 sale.
  */
 async function seedConsignedPayable(t: T, orgId: Id<"organizations">, userId: Id<"users">) {
+  const supplierId = await seedSupplier(t, { orgId, userId, displayName: "Sister Dealer Co" });
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: "S781SOURCED00001", make: "Kia", model: "Sportage", year: 2023, mileage: 0, color: "White",
       fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000, status: "SOLD",
       sourceType: "SOURCED", sourcedFromName: "Sister Dealer Co", sourceCost: 18000,
+      sourcedSupplierId: supplierId,
     })
   );
   const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Doe" }));
@@ -93,6 +95,7 @@ async function seedConsignedPayable(t: T, orgId: Id<"organizations">, userId: Id
     ctx.db.insert("vehicleSupplierPayables", {
       orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", amountDue: 18000, currency: "JOD",
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
+      supplierId,
     })
   );
   return { vehicleId, saleId, payableId };

@@ -1,0 +1,49 @@
+{
+  "id": "default-role-templates-grant-view-cost-price-to-every-sale-completing-role",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roleTemplates.inspect",
+      "input": {
+        "template": "ACCOUNTANT_AND_EVERY_TEMPLATE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "accountant.holds.view:cost_price",
+      "value": "true"
+    },
+    {
+      "observable": "templatesCompletingWithoutCostAccess",
+      "value": "0"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "the default ACCOUNTANT template holds view:cost_price, and so do the other templates that complete a sale"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "b59177787f2295df52189bf206e02893cc1872229061295becb94c6b768e013c"
+}

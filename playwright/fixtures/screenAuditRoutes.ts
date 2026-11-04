@@ -4,7 +4,7 @@ export const SCREEN_AUDIT_ROUTES = [
   "leads", "marketplace/requests", "messages", "notifications", "payroll", "reports", "sales", "sales/sales",
   "settings/billing", "settings/branches", "settings/commission", "settings/custom-fields", "settings/feedback",
   "settings/finance", "settings/general", "settings/integrations", "settings/lead-sources", "settings/marketplace",
-  "settings/pipeline", "settings/valuation-companies", "settings/website", "social-inbox", "sourcing", "tasks", "team", "vehicles",
+  "settings/pipeline", "settings/valuation-companies", "settings/website", "social-inbox", "sourcing", "suppliers", "tasks", "team", "vehicles",
 ] as const;
 
 export type ScreenAuditRoute = typeof SCREEN_AUDIT_ROUTES[number];
@@ -35,7 +35,7 @@ export const ROLE_ROUTE_GUARDS: Partial<Record<ScreenAuditRoute, readonly string
   leads: ["view:leads"], payroll: ["view:payroll"], reports: ["view:reports"],
   sales: ["view:sales"], "sales/sales": ["view:sales"], "social-inbox": ["view:leads"],
   tasks: ["view:tasks"], team: ["view:users"], vehicles: ["view:vehicles"],
-  sourcing: ["view:finance"],
+  sourcing: ["view:finance"], suppliers: ["view:finance"],
   "marketplace/requests": ["marketplace:respond"],
 };
 

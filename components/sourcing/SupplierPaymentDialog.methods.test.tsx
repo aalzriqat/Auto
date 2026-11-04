@@ -27,7 +27,7 @@ afterEach(cleanup);
 function renderDialog() {
   return render(
     <SupplierPaymentDialog
-      payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, currency: "JOD" }}
+      payable={{ vehicleDesc: "Camry", sourcedFromName: "Supplier", amountDue: 100, settlementAmountMinor: 100000, currency: "JOD" }}
       open isPaying={false} notes="" paymentMethod="CASH" bankAccountId={null}
       bankOptions={undefined} taxAmount="" vatAllowed t={(key) => key}
       onOpenChange={() => undefined} onNotesChange={() => undefined}

@@ -1,0 +1,50 @@
+{
+  "id": "deposit-refusal-not-from-supplier-cost-keeps-its-sentence-for-a-cost-reader",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-reader",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "THROUGH_DEALERSHIP",
+        "quote": "QUOTE_WITH_HELD_DEPOSIT",
+        "depositTreatment": "APPLY_TO_TRANSACTION_SETTLEMENT",
+        "salePrice": "BELOW_DEPOSIT",
+        "supplierCost": "LOW"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "absent"
+    },
+    {
+      "observable": "refusal.message.exceedsBilledAmount",
+      "value": "present"
+    }
+  ],
+  "matrixRow": "SCRUM886-vehicle-cost-writes",
+  "impl": {
+    "file": "convex/consignedDepositResolution.test.ts",
+    "testName": "control: a deposit refusal that is not derived from the supplier cost keeps its own sentence for a cost reader"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum886-round10",
+    "firstSeen": "2026-11-02"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "fingerprint": "79e85cb285a10158b2c6ba7600e5fa1e33a7bf5ece567bb6d86c611ddeefbd05"
+}

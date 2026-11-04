@@ -1,0 +1,93 @@
+{
+  "id": "accountant-backfill-does-not-grant-a-renamed-or-recreated-custom-accountant",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum896-round4",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT_WITHOUT_COST_ACCESS",
+        "rename": "OTHER_NAME"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "name": "ACCOUNTANT",
+        "permissions": "view:vehicles+view:finance+manage:finance"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCostPriceAccess",
+      "input": {
+        "role": "CUSTOM_ACCOUNTANT_NO_COMPLETING"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "vehicles.getAcquisitionCostCorrectionContext",
+      "input": {
+        "role": "CUSTOM_ACCOUNTANT_NO_COMPLETING"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "backfill.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "customRole.storedPermissions",
+      "value": "unchanged"
+    },
+    {
+      "observable": "renamedRole.storedPermissions",
+      "value": "unchanged"
+    },
+    {
+      "observable": "vehicles.get.purchasePrice",
+      "value": "withheld"
+    },
+    {
+      "observable": "correctionContext.refusal",
+      "value": "FORBIDDEN-view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24372",
+      "digest": "bbf278d6f8d6e64a7b05d6c5ef2e896dbb4405940e2e634920588394364f351b"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "an owner renames the seeded ACCOUNTANT, then creates a custom role named ACCOUNTANT without completing permissions: the backfill does not grant it and cost stays withheld"
+  },
+  "matrixRow": "SCRUM896-accountant-backfill-predicate",
+  "bugRef": {
+    "key": "SCRUM-896",
+    "failingFirst": "a79d324b3f1e1360ea901d6a37e5b1986543dcc2"
+  },
+  "fingerprint": "2ad9c39cd71ddec6549217ed0943a2afaa24ee2665b34a4ef01f638f6fdb77b9"
+}

@@ -1,0 +1,57 @@
+{
+  "id": "default-accountant-finalizes-a-financed-sourced-deal",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "default-accountant",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "deal": "FINANCED_SOURCED_DEAL"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "finalize.refusal",
+      "value": "absent"
+    },
+    {
+      "observable": "application.status",
+      "value": "CLOSED"
+    },
+    {
+      "observable": "sales.count",
+      "value": "1"
+    },
+    {
+      "observable": "vehicle.status",
+      "value": "SOLD"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "a default ACCOUNTANT finalizes a FINANCED SOURCED deal"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "bugRef": {
+    "key": "SCRUM-886",
+    "failingFirst": "08e650426229adefc74ebd2647b997864b6c89c5"
+  },
+  "fingerprint": "bbfb843e8f33dfe0aa814ecacdcec0392cddaee40592bc5e4c0d404ffacacf50"
+}

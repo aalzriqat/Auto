@@ -37,3 +37,14 @@ cec5f13009eda47dbe6e773a7634ed00cd971ef2:lib/offlineSwarmClerk.test.ts:generic-a
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:161
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:270
 603e7a4360bdce0d8eabb0c1baee371b8e44845a:convex/openingNamedDeposits.scrum858.test.ts:generic-api-key:327
+# SCRUM-264: commit 846791bb7 (Seat 2 round-2 fix) listed IANA zone names in the property
+# test; generic-api-key read the "Api" in "Pacific/Apia" as a keyword and the next zone
+# name as its value. Zone names are public identifiers, not credentials. The next commit
+# moved "Pacific/Apia" to the end of the list, so only this historical commit carries it.
+846791bb7c5eb3dec16227222a55284a4ebde891:convex/utils/orgBusinessDayProperty.scrum264.test.ts:generic-api-key:27
+#
+# f5e2307da browserEgressContainment.test.ts:258 - a WebSocket handshake fixture sent the
+# sample nonce published in RFC 6455 section 1.3 (base64 of an English phrase), a
+# protocol example rather than a credential. The fixture now generates a random nonce
+# per handshake (28d471b47); the historical blob is still in the scanned PR range.
+f5e2307da320cbd604c28fd2ca0bd373c4cef017:scripts/intelligence/browserEgressContainment.test.ts:generic-api-key:258

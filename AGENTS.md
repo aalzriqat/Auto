@@ -67,7 +67,7 @@ Two gates now exist and must not be confused:
   full receipt, refund and correction lifecycle is **not** required to launch.
   The gate passes only when the narrow scope is independently verified (the
   three bug hunters, the scenario library run against a real backend under
-  SCRUM-762, and the trusted cloud rehearsal). The verifier is two independent
+  SCRUM-762, and the trusted exact-SHA rehearsal). The verifier is two independent
   agent seats (Codex and Opus), never the implementing session; there is no
   second person and no human review is claimed. The evidence required is:
   - every enabled workflow preserves the accounting invariants;
@@ -100,27 +100,49 @@ is necessary but not sufficient for the pilot: independent verification,
 server-side block evidence and the exact-SHA rehearsal are still required, and
 it never satisfies full-lifecycle certification.
 
-### Exact-SHA cloud rehearsal before a release
+### Exact-SHA rehearsal before a release
 
 `Accounting Cloud Rehearsal` validates case definitions. The release operator
 also dispatches the typed `autoflow-release-accounting-rehearsal` repository
 event with `client_payload.commit_sha` equal to main's full current SHA. GitHub
-loads `Trusted Accounting Cloud Rehearsal` from the default branch; that
+loads `Trusted Accounting Cloud Rehearsal` from the default branch. That
 controller refuses if the requested SHA, live main, workflow SHA and event SHA
-differ. It creates a disposable Convex preview with `--preview-create`, stages
-the backend at that SHA as data, runs the public API cases and deletes the
-preview. The result is the producer-bound
+differ.
+
+Since owner ruling SCRUM-892 c24441, the release rehearsal runs on the same
+runner-local backend as the pull-request rehearsal, and no Convex preview is
+created. The job starts a disposable self-hosted Convex container
+(`scripts/localConvexBackend.mjs start`), sets its environment allowlist,
+stages the backend at that SHA as data, and deploys it with the trusted CLI.
+`mark` then records the tripwire baseline. The job runs the public API cases,
+and `verify` fails the job unless the backend still matches that baseline. The
+evidence check requires `deploymentType: "local"` and the URL
+`http://127.0.0.1:3210`. An `always()` step removes the container.
+
+The result is the producer-bound
 `github-actions/trusted-accounting-release-verdict` check at that exact SHA.
 The release gate requires it in addition to the definition check. Missing,
-zero-case, skipped, failed, mismatched-preview, wrong-SHA, or duplicate
-same-SHA attempts refuse the release. Inspect the run's uploaded evidence and
-cleanup step; a green unit harness or PR rehearsal does not replace them.
+zero-case, skipped, failed, wrong-target, wrong-SHA, or duplicate same-SHA
+attempts refuse the release. Inspect the run's uploaded evidence and its
+`verify` step. A green unit harness or PR rehearsal does not replace them.
 An incorrectly targeted dispatch still fails visibly, but its job uses a
 different check name so it cannot permanently poison the current main tip.
-The cloud gate passed at the 2026-10-21 releases (SCRUM-759's FD1 failure no
-longer blocks it): Accounting Cloud Rehearsal run 39628786851 and trusted
-verdict run 39628833593 at a6086d11, released by Deploy production runs
-39608097817 (3a31e4b8) and 39634067343 (a6086d11). Any red result is a blocker.
+
+⚠️ **Accepted residual gap (owner ruling SCRUM-892 option A, c24422, extended to
+the release by c24441).** Once deployed, candidate `"use node"` actions can mint
+an admin key for the local backend and change it. The `mark`/`verify` tripwire
+detects a change to the items it records (`TRIPWIRE.verified` in
+`scripts/localConvexBackend.mjs`). It prevents nothing, and it cannot see a
+change made inside the container below the admin API. A cloud preview did not
+have this gap. A local rehearsal also does not exercise Convex cloud behaviour,
+such as its limits and its scheduling under real load.
+
+The cloud form of this gate last passed at the 2026-10-21 releases:
+Accounting Cloud Rehearsal run 39628786851 and trusted verdict run 39628833593
+at a6086d11, released by Deploy production runs 39608097817 (3a31e4b8) and
+39634067343 (a6086d11). The local form has not yet run in CI: the workflow is
+loaded from the default branch, so its first run is the first release after
+this change merges. Any red result is a blocker.
 
 ### Release order at the tip (learned 2026-10-21)
 
@@ -135,12 +157,17 @@ more than one result shares the same producer and name. So, in this order:
    duplicate result. To retry a failed run, use Re-run on the push run.
 2. Wait for `Trusted Main E2E` to be green at the exact tip.
 3. Dispatch `accounting-rehearsal.yml` and the `autoflow-release-accounting-rehearsal`
-   repository event for the full tip SHA, and confirm both are green (a red
-   rehearsal refuses the release; see above).
-4. Wait for SonarCloud to report on the tip. The push already runs `Sonar Main`
-   (it can take 30 to 50 minutes). Dispatch `sonar-main.yml` only if that run is
-   missing or cancelled; a second manual run can leave two results and refuse the
-   release, so cancel the extra one.
+   repository event for the full tip SHA, and confirm both are green. The
+   repository event runs the rehearsal on a runner-local Convex backend, not a
+   cloud preview, so it uses no Convex quota. A red rehearsal, or a red `verify`
+   step, refuses the release (see above).
+4. Wait for SonarCloud to report on the tip. `Sonar Main` does not run on the push
+   itself: it starts when the `Tests` run for that push completes, reuses the
+   coverage that `Tests` produced (it runs no tests of its own), then scans. It
+   refuses when `Tests` failed, so a red `Tests` run means no Sonar result until
+   that run is re-run green (see below). Dispatch `sonar-main.yml` only if its
+   run is missing or cancelled after a green `Tests` run; a second manual run can
+   leave two results and refuse the release, so cancel the extra one.
 5. Dispatch **Deploy production** for the full tip SHA. Its `authorize` job runs
    the release guard; the `deploy` job then waits for the human approval.
 6. Merge nothing to `main` while the approval waits: any new commit moves the tip
@@ -482,22 +509,39 @@ The gate is evaluated twice — in `authorize`, and again after approval — so 
 flake in either window refuses the release. That is fail-closed and correct. It
 does mean a release can need a CI re-run for reasons that have nothing to do with
 the release, and the right response is to re-run the job and read the result, not
-to loosen the required list. `unit-and-integration` is an aggregator over four
-`unit-and-integration slice N/4` jobs (SCRUM-359): after a flaky slice use
+to loosen the required list. `unit-and-integration` is an aggregator over eight
+`unit-and-integration slice N/8` jobs (SCRUM-359): after a flaky slice use
 "Re-run failed jobs", because re-running only the aggregator repeats the
 slice's failure. Slice coverage blobs are kept for one day, so after 24 hours
 use "Re-run all jobs".
 
 **SonarCloud is enforced with no waiver (SCRUM-128, 2026-09-26).** The release
 needs `sonarqubecloud / SonarCloud Code Analysis` = success at the exact tip. That
-result comes from the **Sonar Main** workflow (`sonar-main.yml`), which runs on
-every push to `main`, with a timeout sized for coverage plus the scan (SCRUM-384).
-Two separate problems:
+result comes from the **Sonar Main** workflow (`sonar-main.yml`). It starts when
+the `Tests` run for a push to `main` completes, and reuses that run's
+`coverage-report` artifact instead of re-running the suite (SCRUM-764). Before it
+scans, a trusted copy of the validator proves that the artifact came from the
+exact tip SHA, from a successful `Tests` push run on `main` in this repository,
+and that its manifest, byte length and SHA-256 match. Any mismatch, or a missing
+or ambiguous artifact, refuses the scan and leaves no Sonar result at that tip.
+
+Re-running `Tests` after a flaky job is admitted. The validator reads the jobs of
+every attempt, finds the successful `unit-and-integration` job (the one that
+uploads `coverage-report`), takes the attempt in which it actually executed, and
+accepts only the one `coverage-report` created while that job ran. So both
+"Re-run failed jobs" (the passed coverage job is reused from attempt 1) and
+"Re-run all jobs" (one artifact per attempt) work. If the re-run does not start
+`Sonar Main` by itself, dispatch it. The artifact is kept for 7 days
+(`retention-days: 7`), so past that window the commit needs a "Re-run all jobs"
+or a new commit. Re-running a `Tests` run that is already green on the tip fires
+`Sonar Main` again and can produce a second SonarCloud result at the same SHA,
+which the release guard refuses; re-run `Tests` only after a failure, and cancel
+any extra `Sonar Main` run. Two separate problems:
 
 - **Missing or cancelled at the tip:** the release refuses. Dispatch Sonar Main
-  on `main` (only when the push-triggered run did not report, see the release
-  order above), then confirm the producer-bound result at that exact SHA before
-  re-running the release:
+  on `main` (only when the run that follows a green `Tests` run did not report,
+  see the release order above), then confirm the producer-bound result at that
+  exact SHA before re-running the release:
 
   ```bash
   gh workflow run sonar-main.yml --repo aalzriqat/Auto --ref main

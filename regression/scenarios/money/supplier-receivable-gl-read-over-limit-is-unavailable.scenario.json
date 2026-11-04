@@ -1,0 +1,50 @@
+{
+  "id": "supplier-receivable-gl-read-over-limit-is-unavailable",
+  "fingerprint": "d3bf894f6232a2401bb35a23a420f26f499083a3378715aefd0bf13b7aa3a14d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "controlAccountSnapshots": 7,
+        "readLimit": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "complete",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "more control-account snapshot rows than the read limit is UNAVAILABLE (OVER_LIMIT), never a partial total"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

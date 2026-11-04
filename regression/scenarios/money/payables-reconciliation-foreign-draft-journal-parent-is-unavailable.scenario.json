@@ -1,0 +1,54 @@
+{
+  "id": "payables-reconciliation-foreign-draft-journal-parent-is-unavailable",
+  "fingerprint": "dce4b7e5e18b72ebb88bc55f05a4ac1b16b62b4f581bfe4808c11ff8d1b0ea27",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "lineOwner": "A",
+        "journalParent": "B_DRAFT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "INCONSISTENT_REFERENCE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": "false"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B1-reverse: a foreign parent in DRAFT is UNAVAILABLE too, its status cannot decide whether the line is skipped"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "ce4edcd2c4ec645a79a48fd06656db469671fbfc"
+  }
+}

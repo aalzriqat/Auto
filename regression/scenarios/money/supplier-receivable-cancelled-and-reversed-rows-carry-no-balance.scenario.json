@@ -1,0 +1,47 @@
+{
+  "id": "supplier-receivable-cancelled-and-reversed-rows-carry-no-balance",
+  "fingerprint": "c1fc1e840bd92737376842ceffd4b02457268444729c73183cfa449d1bc17569",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000,
+        "cancelledRow": 900,
+        "reversedRecovery": 200
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "jod.subledgerMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "jod.glMinor",
+      "value": 3200000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a CANCELLED receivable and a REVERSED recovery carry no balance"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

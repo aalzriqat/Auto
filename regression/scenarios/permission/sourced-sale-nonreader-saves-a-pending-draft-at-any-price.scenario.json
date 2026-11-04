@@ -1,0 +1,60 @@
+{
+  "id": "sourced-sale-nonreader-saves-a-pending-draft-at-any-price",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum886-round13",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-02"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-clerk",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "SOURCED_CAR",
+        "route": "DIRECT_TO_SUPPLIER",
+        "commissionMode": "AUTO_MEMBER",
+        "salePrice": "ONE_FILS_BELOW_THEN_AT_ENTITLEMENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nonReader.createDraft.responseShape",
+      "value": "one-sale-id-at-both-prices"
+    },
+    {
+      "observable": "world.writtenByDraftSave",
+      "value": "one-sale-row-and-claim-identical-at-both-prices"
+    },
+    {
+      "observable": "draft.status",
+      "value": "PENDING"
+    },
+    {
+      "observable": "draft.commissionAmount",
+      "value": "absent"
+    },
+    {
+      "observable": "vehicle.status",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/consignedSaleCostAccessRule.scrum886.test.ts",
+    "testName": "sales.createDraft saves a PENDING draft of a SOURCED car for a role without view:cost_price at one fils below the entitlement and at it with the same response shape and the same writes"
+  },
+  "matrixRow": "SCRUM886-cost-access-rule",
+  "fingerprint": "145b7afe6c457dcdd27b4514110572d5da4d28a7630b5e82081b58b0b0ac303f"
+}

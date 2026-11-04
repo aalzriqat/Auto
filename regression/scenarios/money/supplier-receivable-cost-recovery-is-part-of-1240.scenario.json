@@ -1,0 +1,84 @@
+{
+  "id": "supplier-receivable-cost-recovery-is-part-of-1240",
+  "fingerprint": "4b4a57066728d9e7f3b1123e1f9c43a4a7307983986e35f86ca84c3503465296",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "costBearer": "SUPPLIER",
+        "cost": 200
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "receipt": 80
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "jod.glMinor",
+      "value": 3120000
+    },
+    {
+      "observable": "jod.subledgerMinor",
+      "value": 3120000
+    },
+    {
+      "observable": "jod.recoveryMinor",
+      "value": 120000
+    },
+    {
+      "observable": "isReconciled",
+      "value": "true"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a supplier-borne cost recovery is part of the 1240 total, and its receipt lowers both sides"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

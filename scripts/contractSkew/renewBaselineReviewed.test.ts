@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { resolveGit } from "./gitExecutable.mjs";
+import { snapshotBaseline, writeBaselineDirectory } from "./baselineTestSupport.mjs";
 import { createBackendDefinitionResolver } from "./backendDefinition.mjs";
 import { createImportClosure } from "./importClosure.mjs";
 import {
@@ -748,17 +749,28 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
     fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
     fs.writeFileSync(path.join(dir, file), text);
   };
-  const baseline = path.join(dir, "scripts/contractSkew/needs-evidence-baseline.json");
+  const baseline = path.join(dir, "scripts/contractSkew/needs-evidence-baseline");
+  /** Replace the baseline directory with exactly these shard files (raw text, so malformed ones can be planted). */
+  const plant = (files: Record<string, string>) => {
+    fs.rmSync(baseline, { recursive: true, force: true });
+    fs.mkdirSync(baseline, { recursive: true });
+    for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(baseline, name), text);
+  };
   const cli = path.join(dir, "scripts/contractSkew/renewBaselineReviewed.mjs");
   let reviewed: string;
   let unrelated: string;
   const check = (revision: string, ...args: string[]) => spawnSync(process.execPath, [cli,
     "--reviewed", revision, "--check-evidence", "--baseline", baseline, ...args,
   ], { cwd: dir, encoding: "utf8", timeout: 20_000 });
-  const renewed = (sha: string) => serialize([entry({
+  const renewed = (sha: string) => [entry({
     expires: RENEWED_EXPIRES,
     renewal: `SCRUM-866 round 10 review against origin/main ${sha}: app/page.tsx, convex/vehicles.ts and convex/definition.ts reviewed.`,
-  })]);
+  })];
+  /** Write entries as shards and return the resulting directory text, to assert it is left byte-identical. */
+  const save = (entries: Array<Record<string, unknown>>) => {
+    writeBaselineDirectory(baseline, entries);
+    return snapshotBaseline(baseline);
+  };
   beforeAll(() => {
     expect(git, "git must be locatable; cannot-run is a failure, not a skip").toBeTruthy();
     for (const file of fs.readdirSync(path.resolve("scripts/contractSkew")).filter((file) => file.endsWith(".mjs"))) {
@@ -768,7 +780,7 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
     write("convex/definition.ts", 'declare function mutation(options: unknown): unknown; export const update = mutation({ args: { orgId: "string" } });');
     write("convex/vehicles.ts", 'export { update } from "./definition";');
     write("app/page.tsx", "export const payload: unknown = {};");
-    write("scripts/contractSkew/needs-evidence-baseline.json", serialize([entry()]));
+    writeBaselineDirectory(baseline, [entry()]);
     run("init", "-q");
     run("config", "core.longpaths", "true");
     run("add", "--", "app", "convex", "scripts/contractSkew");
@@ -778,51 +790,60 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
     unrelated = run("commit-tree", "HEAD^{tree}", "-m", "unrelated fixture root");
   });
   const missingSha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+  const shard = "app+page.tsx.json";
   test.each([
-    ["truncated", '{"version": 1, "entries": [', "Unexpected end of JSON input"],
-    ["malformed", "{ invalid JSON }", "JSON"],
-    ["missing entries", JSON.stringify({ version: 1 }, null, 2) + "\n", "the baseline has no entries array"],
-    ["non-array entries", JSON.stringify({ version: 1, entries: {} }, null, 2) + "\n", "the baseline has no entries array"],
-    ["empty entries", serialize([]), "baseline has no entries to check"],
-  ])("refuses %s evidence input without writing", (_name, text, diagnostic) => {
-    fs.writeFileSync(baseline, text);
+    ["truncated", { [shard]: '{"version": 1, "entries": [' }, "is not valid JSON"],
+    ["malformed", { [shard]: "{ invalid JSON }" }, "is not valid JSON"],
+    ["missing entries", { [shard]: JSON.stringify({ version: 1, file: "app/page.tsx" }, null, 2) + "\n" }, "no `entries` array"],
+    ["non-array entries", { [shard]: JSON.stringify({ version: 1, file: "app/page.tsx", entries: {} }, null, 2) + "\n" }, "no `entries` array"],
+    ["empty directory", {}, "holds no shards"],
+    ["stray file", { "notes.txt": "x" }, "stray or unknown file"],
+  ])("refuses %s evidence input without writing", (_name, files, diagnostic) => {
+    plant(files);
+    const text = snapshotBaseline(baseline);
     const result = check("HEAD");
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain(diagnostic);
     expect(result.stdout).not.toContain("entries checked");
-    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+    expect(snapshotBaseline(baseline)).toBe(text);
+  });
+  test("an explicitly empty baseline has no entries to check", () => {
+    const text = save([]);
+    const result = check("HEAD");
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(3);
+    expect(result.stderr).toContain("baseline has no entries to check");
+    expect(result.stdout).not.toContain("entries checked");
+    expect(snapshotBaseline(baseline)).toBe(text);
   });
   test.each(["--write", "--expires", "--renewal"])("evidence check refuses mutation option %s", (option) => {
-    const text = serialize([entry()]);
-    fs.writeFileSync(baseline, text);
+    const text = save([entry()]);
     const result = check("HEAD", option, ...(option === "--write" ? [] : [option === "--expires" ? RENEWED_EXPIRES : "reason"]));
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain("--check-evidence is read-only");
-    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+    expect(snapshotBaseline(baseline)).toBe(text);
   });
   test.each(["reviewed revision", "recorded evidence revision"])("refuses unavailable %s with a history diagnostic", (role) => {
-    const text = renewed(missingSha);
-    fs.writeFileSync(baseline, text);
+    const text = save(renewed(missingSha));
     const result = check(role === "reviewed revision" ? missingSha : "HEAD");
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain(`${role} ${missingSha} is unavailable`);
     expect(result.stderr).toContain("fetch full Git history");
     expect(result.stdout).not.toContain("entries checked");
-    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+    expect(snapshotBaseline(baseline)).toBe(text);
   }, 25_000);
 
   test.each(["reviewed revision", "recorded evidence revision"])("refuses non-ancestor %s with a coded diagnostic", (role) => {
-    const text = renewed(role === "reviewed revision" ? reviewed : unrelated);
-    fs.writeFileSync(baseline, text);
+    const text = save(renewed(role === "reviewed revision" ? reviewed : unrelated));
     const result = check(role === "reviewed revision" ? unrelated : reviewed);
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(3);
     expect(result.stderr).toContain(`HISTORY_ANCESTRY_REFUSED: ${role} ${unrelated} is not a verified ancestor of HEAD`);
     expect(result.stderr).not.toContain("Command failed");
-    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+    expect(snapshotBaseline(baseline)).toBe(text);
   });
 
   test.each([
@@ -833,8 +854,7 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
     run("add", "--", "convex/vehicles.ts");
     run("commit", "-q", "--allow-empty", "-m", "export fixture");
     const evidence = run("rev-parse", "HEAD");
-    const text = renewed(evidence);
-    fs.writeFileSync(baseline, text);
+    const text = save(renewed(evidence));
     const before = check(reviewed);
     expect(before.error).toBeUndefined();
     expect(before.status, before.stderr).toBe(0);
@@ -851,7 +871,7 @@ describe("renewal evidence CLI missing history (SCRUM-866 round 8)", () => {
     expect(after.stdout).toContain("changed after review convex/definition.ts");
     expect(after.stdout).toContain("unresolved \n");
     expect(fs.readFileSync(path.join(dir, "convex/vehicles.ts"), "utf8")).toBe(exportSource);
-    expect(fs.readFileSync(baseline, "utf8")).toBe(text);
+    expect(snapshotBaseline(baseline)).toBe(text);
   }, 25_000);
 });
 

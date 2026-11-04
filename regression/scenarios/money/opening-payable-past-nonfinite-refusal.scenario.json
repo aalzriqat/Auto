@@ -1,6 +1,6 @@
 {
   "id": "opening-payable-past-nonfinite-refusal",
-  "fingerprint": "96f5a4a1eb155269facef89661bcb9613a3130f5f08b84981f601fb1f990aefb",
+  "fingerprint": "f79e9e830af6bd78a1eb5df25dc9a14ff07a71a44bbb8c84ff8ae5b0e36434b4",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -26,7 +26,6 @@
       "action": "accountingReports.supplierPayablesReconciliation",
       "input": {
         "cutoffs": [
-          "past",
           "NaN",
           "Infinity"
         ]
@@ -40,7 +39,7 @@
     },
     {
       "observable": "reconciliation.unavailableReason",
-      "value": "AS_OF_DATE_UNSUPPORTED"
+      "value": "INVALID_DATE"
     },
     {
       "observable": "reconciliation.isReconciled",

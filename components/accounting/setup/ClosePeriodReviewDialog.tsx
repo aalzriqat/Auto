@@ -25,9 +25,11 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
-  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
+  SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
+  SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
 } from "@/convex/utils/closeWarnings";
 import type { PeriodSummary, Translate } from "./types";
 import { periodLabel } from "./types";
@@ -44,7 +46,6 @@ const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING]: "ClosePeriodWarnEmployeeAdvancesReconFamily",
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
-  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
   // SCRUM-858: opening-balance reconciliation. A difference is reported, never posted away.
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES]: "ClosePeriodWarnOpeningDiffSupplierPayables",
   [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningDiffEmployeeAdvances",
@@ -53,6 +54,9 @@ const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances",
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables",
   [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningReconUnavailablePartnerCapital",
+  [SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING]: "ClosePeriodWarnSupplierPayablesReconPostCutoff",
+  [SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconInconsistentReference",
+  [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
   [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
 };
 

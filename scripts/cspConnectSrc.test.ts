@@ -15,15 +15,26 @@ import { describe, expect, it } from "vitest";
  * importing it: next.config.ts imports lib/env, which throws without the
  * real NEXT_PUBLIC_* variables.
  */
-const configSource = readFileSync(resolve(__dirname, "..", "next.config.ts"), "utf8");
+// SCRUM-892: the policy is built in lib/security/contentSecurityPolicy.ts,
+// which next.config.ts uses as its only Content-Security-Policy value.
+const configSource = readFileSync(
+  resolve(__dirname, "..", "lib", "security", "contentSecurityPolicy.ts"),
+  "utf8",
+);
+const nextConfigSource = readFileSync(resolve(__dirname, "..", "next.config.ts"), "utf8");
 
 function directive(name: string): string[] {
   const match = configSource.match(new RegExp(`"${name}([^"]*)"`));
-  if (!match) throw new Error(`CSP directive ${name} not found in next.config.ts`);
+  if (!match) throw new Error(`CSP directive ${name} not found in lib/security/contentSecurityPolicy.ts`);
   return match[1].trim().split(/\s+/);
 }
 
 describe("Content-Security-Policy connect-src", () => {
+  it("next.config.ts takes its policy from the shared builder", () => {
+    expect(nextConfigSource).toContain("value: contentSecurityPolicy,");
+    expect(nextConfigSource).toContain("buildContentSecurityPolicy(process.env)");
+  });
+
   const connectSrc = directive("connect-src");
 
   it("allows the Convex reactive client host", () => {

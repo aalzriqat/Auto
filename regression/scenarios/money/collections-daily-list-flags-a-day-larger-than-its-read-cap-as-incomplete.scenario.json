@@ -1,0 +1,57 @@
+{
+  "id": "collections-daily-list-flags-a-day-larger-than-its-read-cap-as-incomplete",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.recordPayment",
+      "input": {
+        "method": "CASH",
+        "paymentCount": 501,
+        "businessDate": "2026-10-31"
+      }
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "action": "collections.dailyCollectionList",
+      "input": {
+        "businessDate": "2026-10-31"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step2.incomplete",
+      "value": true
+    },
+    {
+      "observable": "step2.rowCount",
+      "value": 500
+    }
+  ],
+  "matrixRow": "SCRUM265-capped-reports",
+  "impl": {
+    "file": "convex/collectionsOrgDay.scrum264.test.ts",
+    "testName": "dailyCollectionList reports a complete day exactly at the cap and an incomplete one above it"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum265-capped-reports",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "9b5664a020af2e92213ecf91446dddf32942bddb02e842d73ed928a99f1d98d2"
+}

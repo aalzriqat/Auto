@@ -1,3 +1,4 @@
+import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
@@ -71,6 +72,8 @@ export async function openSupplierReceivable(
     orgId: Id<"organizations">;
     vehicleId: Id<"vehicles">;
     saleId: Id<"sales">;
+    supplierId?: Id<"suppliers">;
+    supplierSnapshotVersion?: number;
     sourcedFromName: string;
     amountDue: number;
     currency: string;
@@ -86,6 +89,8 @@ export async function openSupplierReceivable(
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     saleId: args.saleId,
+    supplierId: args.supplierId,
+    supplierSnapshotVersion: args.supplierSnapshotVersion,
     sourcedFromName: args.sourcedFromName,
     amountDue: args.amountDue,
     currency: args.currency,
@@ -170,6 +175,13 @@ export const listReceiptBankOptions = query({
 const OUTSTANDING_SUMMARY_LIMIT = 1000;
 
 /**
+ * The grouping key of an obligation that carries no supplier id (written before SCRUM-868 P3).
+ * Its OWN row id: a name is a snapshot, not an identity (N2), so two unresolved rows with the same
+ * text must never be reported as one party. Each stays a separate, unattributed entry until an
+ * identity is assigned; totals are summed independently of this grouping.
+ */
+const unresolvedPartyKey = (rowId: string): string => `unresolved:${rowId}`;
+/**
  * What suppliers still owe the dealership, in total and by supplier. The aging
  * view the GL balance alone could never produce.
  *
@@ -202,7 +214,16 @@ export const outstandingSummary = query({
     let totalReceived = 0;
     let totalOutstanding = 0;
     let disputedAmount = 0;
-    const bySupplier = new Map<string, { outstanding: number; claims: number }>();
+    const bySupplier = new Map<
+      string,
+      {
+        supplierId?: Id<"suppliers">;
+        sourcedFromName: string;
+        snapshots: string[];
+        outstanding: number;
+        claims: number;
+      }
+    >();
 
     for (const row of rows) {
       if (row.status === "CANCELLED") continue;
@@ -212,10 +233,20 @@ export const outstandingSummary = query({
       totalOutstanding += view.remainingAmount;
       if (row.status === "DISPUTED") disputedAmount += view.remainingAmount;
       if (view.remainingAmount > 0) {
-        const entry = bySupplier.get(row.sourcedFromName) ?? { outstanding: 0, claims: 0 };
+        const key = row.supplierId ? String(row.supplierId) : unresolvedPartyKey(row._id);
+        const entry = bySupplier.get(key) ?? {
+          supplierId: row.supplierId,
+          sourcedFromName: row.sourcedFromName,
+          snapshots: [],
+          outstanding: 0,
+          claims: 0,
+        };
         entry.outstanding += view.remainingAmount;
         entry.claims += 1;
-        bySupplier.set(row.sourcedFromName, entry);
+        if (!entry.snapshots.includes(row.sourcedFromName)) {
+          entry.snapshots.push(row.sourcedFromName);
+        }
+        bySupplier.set(key, entry);
       }
     }
 
@@ -243,10 +274,20 @@ export const outstandingSummary = query({
       totalOutstanding += remaining;
       costRecoveryOutstanding += remaining;
       if (remaining > 0) {
-        const entry = bySupplier.get(recovery.sourcedFromName) ?? { outstanding: 0, claims: 0 };
+        const key = recovery.supplierId ? String(recovery.supplierId) : unresolvedPartyKey(recovery._id);
+        const entry = bySupplier.get(key) ?? {
+          supplierId: recovery.supplierId,
+          sourcedFromName: recovery.sourcedFromName,
+          snapshots: [],
+          outstanding: 0,
+          claims: 0,
+        };
         entry.outstanding += remaining;
         entry.claims += 1;
-        bySupplier.set(recovery.sourcedFromName, entry);
+        if (!entry.snapshots.includes(recovery.sourcedFromName)) {
+          entry.snapshots.push(recovery.sourcedFromName);
+        }
+        bySupplier.set(key, entry);
       }
     }
 
@@ -258,8 +299,7 @@ export const outstandingSummary = query({
       /** The part of `totalOutstanding` that is supplier-borne vehicle cost (SCRUM-389). */
       costRecoveryOutstanding,
       complete,
-      bySupplier: Array.from(bySupplier.entries())
-        .map(([sourcedFromName, v2]) => ({ sourcedFromName, ...v2 }))
+      bySupplier: Array.from(bySupplier.values())
         .sort((a, b) => b.outstanding - a.outstanding),
     };
   },
@@ -297,6 +337,11 @@ export const recordReceipt = mutation({
     // `postDatedCheques` custody row, so it could never be deposited or reverse on a bounce.
     // Refused before the idempotency claim or any read-for-write, so nothing is recorded.
     assertSupplierSettlementMethodAllowed(receiptMethod, "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED");
+    await requireResolvedSupplierId(
+      ctx,
+      args.orgId,
+      await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.")
+    );
 
     return await runWithIdempotency(
       ctx,
@@ -324,6 +369,7 @@ export const recordReceipt = mutation({
       },
       async () => {
         const row = await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.");
+        await requireResolvedSupplierId(ctx, args.orgId, row);
 
         // CARD and CHEQUE were refused above, so the bank-funded method is BANK_TRANSFER alone.
         if (receiptMethod === "BANK_TRANSFER") {
@@ -467,6 +513,11 @@ export const setDisputed = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireResolvedSupplierId(
+      ctx,
+      args.orgId,
+      await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.")
+    );
     return await runWithIdempotency(
       ctx,
       {

@@ -2,7 +2,6 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { SUPPLIER_PAYABLES_RECON_DATE_WARNING } from "./utils/closeWarnings";
 import { toMinorUnits, fromMinorUnits, scaleForCurrency, isValidMinorAmount, assertSameCurrency, makeMoney, moneyFromDecimal } from "./utils/money";
 import { SYSTEM_KEYS, REQUIRED_SYSTEM_KEYS } from "./utils/defaultChart";
 
@@ -317,11 +316,7 @@ describe("Phase 1 — accounting periods", () => {
       openImmediately: true,
     });
 
-    const checklist = await asUser.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
-    expect(checklist.supplierPayablesReconciliation).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "AS_OF_DATE_UNSUPPORTED", isReconciled: false });
-    expect(checklist.warnings).toEqual([SUPPLIER_PAYABLES_RECON_DATE_WARNING]);
-    await expect(asUser.mutation(api.accountingPeriods.close, { orgId, periodId })).rejects.toThrow("Review and acknowledge every warning before closing");
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
     const closed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
     expect(closed?.status).toBe("CLOSED");
     expect(closed?.closedAt).toBeTruthy();
@@ -376,7 +371,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
     await makeOwner(t, orgId, userId);
     await asUser.mutation(api.accountingPeriods.reopen, {
       orgId,
@@ -401,7 +396,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
     // seedPhase1Dealer's role has manage:finance but not reopen:accounting_periods
     // — reopening is deliberately narrower than plain finance management.
@@ -425,7 +420,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
     // Locking is strictly irreversible — reopen() refuses LOCKED outright, and
     // nothing in the product transitions a period back out of it. So it must be
@@ -452,7 +447,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
     await t.run(async (ctx) => {
       const membership = await ctx.db
@@ -486,7 +481,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
     await grantReopenPermission(t, orgId, userId);
     await asUser.mutation(api.accountingPeriods.lock, { orgId, periodId });
     await makeOwner(t, orgId, userId);
@@ -511,7 +506,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
     await makeOwner(t, orgId, userId);
 
     await expect(
@@ -701,7 +696,6 @@ describe("Phase 1 — accounting periods", () => {
       orgId,
       periodId,
       overrideReason: "Known rounding discrepancy, accepted",
-      acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING],
     });
 
     const closed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
@@ -738,7 +732,7 @@ describe("Phase 1 — accounting periods", () => {
       endDate: JAN_2026_END,
       openImmediately: true,
     });
-    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: [SUPPLIER_PAYABLES_RECON_DATE_WARNING] });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
     await expect(
       t.run(async (ctx) => {

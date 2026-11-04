@@ -1,0 +1,46 @@
+{
+  "id": "payables-reconciliation-context-without-metrics-has-no-headroom",
+  "fingerprint": "07b8f1579a532b74b907f5cf0ea58f72b7b1e579e0275941dcbdee4efabde2c5",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum889",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountSnapshots.getCumulativeBalancesAsOfChecked",
+      "input": {
+        "apLines": "1",
+        "contextReportsMetrics": "false"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "checkedRead.status",
+      "value": "OVER_LIMIT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/reconciliationOrgReferences.scrum889.test.ts",
+    "testName": "B4 headroom: a context that cannot report its metrics has no headroom (fails closed, never open)"
+  },
+  "matrixRow": "SCRUM-889-RECON-ORG-REFS",
+  "bugRef": {
+    "key": "SCRUM-889",
+    "failingFirst": "57b7bd09f0c5fcbc09f4d3e7f4b2d8cfd46d7217"
+  }
+}

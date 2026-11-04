@@ -23,6 +23,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -118,13 +119,13 @@ async function seedDealership(tag: string, opts: SeedOpts) {
     ctx.db.insert("orgCustomerStatuses", { orgId, label: "Eligible", isActive: true, order: 1 })
   );
   const mkVehicle = (vin: string) =>
-    t.run((ctx) =>
+    t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId, vin: `VIN390${tag}${vin}`, make: "Kia", model: "Sportage", year: 2024, mileage: 10,
         color: "Blue", fuelType: "Gasoline", transmission: "Automatic",
         sellingPrice: opts.price, status: "AVAILABLE",
         ...(opts.sourced
-          ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourceCost: opts.cost }
+          ? { sourceType: "SOURCED" as const, sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Amman Importer Co"), sourceCost: opts.cost }
           : { sourceType: "STOCK" as const, ...(opts.cost !== undefined ? { purchasePrice: opts.cost } : {}) }),
       })
     );

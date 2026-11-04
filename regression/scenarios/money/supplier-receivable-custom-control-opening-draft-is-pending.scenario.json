@@ -1,0 +1,46 @@
+{
+  "id": "supplier-receivable-custom-control-opening-draft-is-pending",
+  "fingerprint": "6a36446681ceb8c1fd6199097e80c18b70910b3d79b8a8e33bedbc6c49efee53",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-seat2-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "openingAccount": 1999,
+        "draftTable": "openingBalanceDrafts"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "PENDING_POSTINGS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a pending openingBalanceDrafts on a declared opening control account refuses the comparison"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

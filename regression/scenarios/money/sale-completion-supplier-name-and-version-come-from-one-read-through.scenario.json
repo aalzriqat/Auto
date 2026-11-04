@@ -1,0 +1,74 @@
+{
+  "id": "sale-completion-supplier-name-and-version-come-from-one-read-through",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum868-p3-review-fixes",
+    "hunter": "scripted",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "action": "vehicles.create",
+      "actor": {
+        "org": "A",
+        "role": "OWNER"
+      },
+      "input": {
+        "sourceCost": 9000,
+        "sourcedSupplierId": "SUPPLIER_ID",
+        "sourceType": "SOURCED"
+      }
+    },
+    {
+      "action": "suppliers.update",
+      "actor": {
+        "org": "A",
+        "role": "OWNER"
+      },
+      "input": {
+        "displayName": "RENAMED_DISPLAY_NAME",
+        "supplierId": "SUPPLIER_ID"
+      }
+    },
+    {
+      "action": "sales.create",
+      "actor": {
+        "org": "A",
+        "role": "OWNER"
+      },
+      "input": {
+        "route": "THROUGH_DEALERSHIP",
+        "sourcedSupplierId": "SUPPLIER_ID",
+        "sourceType": "SOURCED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "obligation.sourcedFromName",
+      "value": "RENAMED_DISPLAY_NAME"
+    },
+    {
+      "observable": "obligation.supplierSnapshotVersion",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67",
+      "id": "SCRUM-868#c23794"
+    },
+    {
+      "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44",
+      "id": "SCRUM-760#c23812"
+    }
+  ],
+  "impl": {
+    "testName": "THROUGH_DEALERSHIP: a supplier renamed after intake gives a payable whose name and version are both the master's at completion",
+    "file": "convex/supplierSettlementIdentity.test.ts"
+  },
+  "matrixRow": "SCRUM868-P3-supplier-settlement",
+  "fingerprint": "ff413982f6dcbd9da34e54bcb08d24a5b8656fe1ffe371adda6542e48638a114"
+}

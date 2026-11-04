@@ -21,6 +21,7 @@ import { api, internal } from "./_generated/api";
 import { saleEconomics } from "./utils/vehicleOwnership";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import type { Id } from "./_generated/dataModel";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 
 // SCRUM-802 legacy-cash-lifecycle opt-out: this suite uses a cash completion only as a FIXTURE (it completes a cash sale, then collects or
 // cancels it, to test something else), so it runs with the SCRUM-802 pilot containment off. The containment
@@ -109,12 +110,12 @@ async function seedDealer(tag: string, opts: { withAccounting?: boolean } = {}) 
 }
 
 async function sellConsigned(s: Awaited<ReturnType<typeof seedDealer>>, vin: string) {
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "AVAILABLE", sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
     })
   );
   return await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -142,12 +143,12 @@ async function sellConsignedAsLegacyPrincipal(
   s: Awaited<ReturnType<typeof seedDealer>>,
   vin: string
 ) {
-  const vehicleId = await s.t.run((ctx) =>
+  const vehicleId = await s.t.run(async (ctx) =>
     ctx.db.insert("vehicles", {
       orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
       color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
       status: "SOLD", sourceType: "SOURCED",
-      sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+      sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
     })
   );
   return await s.t.run((ctx) =>
@@ -726,12 +727,12 @@ describe("ranking a salesperson whose earnings are not fully known", () => {
     vin: string,
     salespersonId: string
   ) {
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin, make: "Toyota", model: "Camry", year: 2024, mileage: 10,
         color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: SALE_PRICE,
         status: "SOLD", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     // Inserted rather than written through `sales.create`, which now refuses
@@ -1184,20 +1185,20 @@ describe("the consigned preview on a multi-vehicle quote", () => {
 
   async function twoCarQuote(tag: string) {
     const s = await seedDealer(tag);
-    const first = await s.t.run((ctx) =>
+    const first = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINPREV${tag}A`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
-    const second = await s.t.run((ctx) =>
+    const second = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINPREV${tag}B`, make: "Lexus", model: "ES", year: 2024,
         mileage: 12, color: "Black", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SECOND_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: SECOND_ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: SECOND_ENTITLEMENT,
       })
     );
     const quoteId = await s.t.run((ctx) =>
@@ -1242,12 +1243,12 @@ describe("the consigned preview on a multi-vehicle quote", () => {
 
   test("refuses a vehicle that is not a line on the quote", async () => {
     const { s, quoteId } = await twoCarQuote("prevOther");
-    const stranger = await s.t.run((ctx) =>
+    const stranger = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINPREVSTRANGE", make: "Kia", model: "Rio", year: 2023,
         mileage: 5, color: "Red", fuelType: "Gas", transmission: "Auto",
         sellingPrice: OWNED_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: 1_000,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: 1_000,
       })
     );
 
@@ -1293,12 +1294,12 @@ describe("tax on an agency sale, with no open accounting period", () => {
     opts: { withAccounting: boolean; taxAmount?: number; salePrice?: number }
   ) {
     const s = await seedDealer(tag, { withAccounting: opts.withAccounting });
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINTAX${tag}`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     return {
@@ -1334,12 +1335,12 @@ describe("tax on an agency sale, with no open accounting period", () => {
    */
   test("recognizes the margin the journal posted, without float drift", async () => {
     const s = await seedDealer("marginScale", { withAccounting: false });
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINSCALE1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: 12_500.7, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: 9_500.5,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: 9_500.5,
       })
     );
     await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
@@ -1458,17 +1459,28 @@ describe("tax on an agency sale, with no open accounting period", () => {
  * case, because who financed the buyer has never changed whose car it was.
  */
 describe("a financed consigned sale settled directly with the supplier", () => {
+  async function supplierCompletionState(s: Awaited<ReturnType<typeof seedDealer>>, vehicleId: Id<"vehicles">) {
+    return await s.t.run(async ctx => ({
+      vehicle: await ctx.db.get(vehicleId), sales: await ctx.db.query("sales").collect(),
+      payables: await ctx.db.query("vehicleSupplierPayables").collect(),
+      receivables: await ctx.db.query("vehicleSupplierReceivables").collect(),
+      events: await ctx.db.query("accountingEvents").collect(), pending: await ctx.db.query("pendingAccountingEvents").collect(),
+      journals: await ctx.db.query("journalEntries").collect(), lines: await ctx.db.query("journalLines").collect(),
+      commands: await ctx.db.query("commandIdempotency").collect(),
+    }));
+  }
+
   async function financedDirect(
     tag: string,
     overrides: { financingType?: "CASH" | "FINANCED" | "LEASE"; route?: "THROUGH_DEALERSHIP" | "DIRECT_TO_SUPPLIER" } = {}
   ) {
     const s = await seedDealer(tag);
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: `VINFIN${tag}`, make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE_PRICE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT,
       })
     );
     return {
@@ -1518,75 +1530,88 @@ describe("a financed consigned sale settled directly with the supplier", () => {
    * What the supplier owes must be the figure the journal posted, to the unit.
    *
    * The GL debit on the direct route is built from `marginMinor`
-   * (`toMinorUnits(salePrice) - costMinor`). The receivable was built from
-   * `toMinorUnits(salePrice - costAmount)` — `round(a) - round(b)` against
-   * `round(a - b)`. Where either amount carries more decimals than the currency
-   * scale those differ by a minor unit, and a claim that disagrees with its own
-   * posting by one fils can never be settled to zero. It sits on the aging
-   * report forever, which is the exact outcome the comment above it set out to
-   * prevent.
-   *
-   * The same defect was fixed for `recognizedRevenueAmount`; this is its
-   * sibling, two hundred lines further down the same function.
+   * (`toMinorUnits(salePrice) - costMinor`). SCRUM-880 now refuses an original
+   * supplier cost finer than one fils before either calculation. Keep the old
+   * invalid fixture as a refusal check and retain the journal equality control
+   * with an entitlement representable at the currency's scale.
    */
   test("the supplier receivable equals the journal's margin, to the minor unit", async () => {
     const s = await seedDealer("claimScale");
-    // Both carry sub-fils precision, so round(a-b) and round(a)-round(b) split.
+    // The sale-price conversion remains independent of supplier-cost admission.
     const SALE = 12_500.7005;
     const COST = 9_500.5002;
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINCLAIM1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: SALE, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+    const complete = () => s.asUser.mutation(api.sales.create, { idempotencyKey: "claimScale-completion",
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: SALE, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,
       supplierSettlementRoute: "DIRECT_TO_SUPPLIER" as const,
     });
 
+    const before = await supplierCompletionState(s, vehicleId);
+    await expect(complete()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await supplierCompletionState(s, vehicleId)).toEqual(before);
+    await s.t.run(ctx => ctx.db.patch(vehicleId, { sourceCost: 9_500.5 }));
+    const saleId = await complete();
+
     const receivable = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierReceivables").collect()).find((r) => r.vehicleId === vehicleId)
     );
-    // marginMinor = round(12500.7005*1000) - round(9500.5002*1000) = 3000201.
+    // Rounded sale consideration minus the exact supplier entitlement is 3000201 fils.
     expect(receivable?.amountDue).toBe(3_000.201);
+    const debitMinor = await s.t.run(async ctx => {
+      const event = (await ctx.db.query("accountingEvents").collect())
+        .find(row => row.sourceId === saleId && row.eventType === "SALE_COMPLETED");
+      const account = (await ctx.db.query("chartOfAccounts").collect())
+        .find(row => row.systemKey === SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
+      if (!event?.journalEntryId || !account) throw new Error("Supplier receivable did not post");
+      return (await ctx.db.query("journalLines").collect())
+        .find(row => row.journalEntryId === event.journalEntryId && row.accountId === account._id)?.debitMinor;
+    });
+    expect(debitMinor).toBe(3_000_201);
   });
 
   /**
    * And what the dealership owes is stored at the currency's scale.
    *
-   * `sourceCost` is a decimal a person typed, and the capitalized cost is a sum
-   * of them. Stored raw, a payable of 9500.5002 is one no payment can ever
-   * close: `recordPayment` refuses to overpay, so the last fraction of a fils
-   * is unpayable and the row never reaches PAID. The receivable side already
-   * rounds through the currency; this side did not.
+   * SCRUM-880 refuses sub-fils entitlements instead of silently rounding them.
+   * A valid three-decimal entitlement must survive completion unchanged.
    */
   test("the supplier payable is stored at the currency's scale", async () => {
     const s = await seedDealer("payScale");
     const COST = 9_500.5002;
-    const vehicleId = await s.t.run((ctx) =>
+    const vehicleId = await s.t.run(async (ctx) =>
       ctx.db.insert("vehicles", {
         orgId: s.orgId, vin: "VINPAY1", make: "Toyota", model: "Camry", year: 2024,
         mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto",
         sellingPrice: 12_500, status: "AVAILABLE", sourceType: "SOURCED",
-        sourcedFromName: "Amman Importer Co", sourceCost: COST,
+        sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: COST,
       })
     );
-    await s.asUser.mutation(api.sales.create, { idempotencyKey: crypto.randomUUID(),
+    const complete = () => s.asUser.mutation(api.sales.create, { idempotencyKey: "payScale-completion",
       orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 12_500, saleDate: Date.now(), status: "COMPLETED" as const,
       financingType: "CASH" as const,
       supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
     });
 
+    const before = await supplierCompletionState(s, vehicleId);
+    await expect(complete()).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+    expect(await supplierCompletionState(s, vehicleId)).toEqual(before);
+    await s.t.run(ctx => ctx.db.patch(vehicleId, { sourceCost: 9_500.501 }));
+    await complete();
+
     const payable = await s.t.run(async (ctx) =>
       (await ctx.db.query("vehicleSupplierPayables").collect()).find((p) => p.origin !== "OPENING" && p.vehicleId === vehicleId)
     );
-    expect(payable?.amountDue).toBe(9_500.5);
+    expect(payable?.amountDue).toBe(9_500.501);
   });
 
   test("the refusal leaves the car unsold rather than half-completing it", async () => {
@@ -1693,7 +1718,7 @@ describe("turnover past the dashboard's costing cap", () => {
           sellingPrice: price, status: "SOLD", sourceType,
           ...(sourceType === "STOCK"
             ? { purchasePrice: OWNED_COST }
-            : { sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT }),
+            : { sourcedFromName: "Amman Importer Co", sourcedSupplierId: await supplierIdInCtx(ctx, s.orgId, "Amman Importer Co"), sourceCost: ENTITLEMENT }),
         });
         await ctx.db.insert("sales", {
           orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,

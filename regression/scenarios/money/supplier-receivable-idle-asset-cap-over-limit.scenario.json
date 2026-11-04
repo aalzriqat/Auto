@@ -1,0 +1,55 @@
+{
+  "id": "supplier-receivable-idle-asset-cap-over-limit",
+  "fingerprint": "05771d1814c51210014a44601092cbefea81be5b938fcf043f74046b3a8641ea",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2-round5-remediation",
+    "firstSeen": "2026-10-31"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "directSale": true,
+        "idleCustomAssetAccountsFirst": 30,
+        "idleCustomAssetAccountsThen": 31
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.at30IdleAccounts",
+      "value": "AVAILABLE_COMPLETE_RECONCILED"
+    },
+    {
+      "observable": "reconciliation.at31IdleAccounts.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.at31IdleAccounts.unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "reconciliation.at31IdleAccounts.complete",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "r5 H2: exactly 30 idle custom asset accounts reconcile; a 31st is OVER_LIMIT, never a partial look"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

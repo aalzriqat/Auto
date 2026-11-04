@@ -1,0 +1,46 @@
+{
+  "id": "supplier-receivable-pending-draft-on-1240-reports-pending",
+  "fingerprint": "8f51937aa9c4d2ed65197cf46172b54295c025d673a557df22e245b68fbf3eeb",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-s2",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {
+        "margin": 3000,
+        "draftOn": "1240"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "PENDING_POSTINGS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "a pending draft that touches the 1240 account reports pending"
+  },
+  "matrixRow": "SCRUM-869-AR-1240-RECON"
+}

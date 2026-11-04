@@ -1,0 +1,66 @@
+{
+  "id": "collections-recon-refuses-a-historical-payment-at-a-utc-midnight-west-of-utc",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York",
+        "storedRow": "NO_DATE_KIND_CREATEDAT_EQUALS_PAYMENTDATE"
+      },
+      "action": "collections.dailyCollectionList"
+    },
+    {
+      "actor": {
+        "role": "ACCOUNTANT",
+        "org": "A"
+      },
+      "input": {
+        "businessDate": "2026-10-31",
+        "orgTimeZone": "America.New_York"
+      },
+      "action": "collections.getReconciliationDraft"
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.incomplete",
+      "value": true
+    },
+    {
+      "observable": "step1.paymentDateUncertain",
+      "value": true
+    },
+    {
+      "observable": "step2.complete",
+      "value": false
+    },
+    {
+      "observable": "step2.reason",
+      "value": "DATE_UNCERTAIN"
+    }
+  ],
+  "matrixRow": "SCRUM264-org-day",
+  "impl": {
+    "file": "convex/collectionsOrgDayProvenance.scrum264.test.ts",
+    "testName": "west of UTC both days are incomplete and uncertain, and the reconciliation refuses both"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum264-review-round-3",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "fingerprint": "94bf2dcc762c606686c625afd30c8eed69a85d2ef852d2b18a2ff147f411b681"
+}

@@ -623,14 +623,14 @@ describe("SCRUM-650 the purchase-cost lock", () => {
 // SCRUM-650 batch 2: review fixes
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function memberFromTemplate(d: Dealer, templateName: string, suffix: string) {
+async function memberFromTemplate(d: Dealer, templateName: string, suffix: string, without: readonly string[] = []) {
   const template = DEFAULT_ROLE_TEMPLATES.find((r) => r.name === templateName);
   if (!template) throw new Error(`no role template ${templateName}`);
   const userId = await d.t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `tpl_${suffix}`, email: `tpl.${suffix}@example.com`, name: templateName })
   );
   const roleId = await d.t.run((ctx) =>
-    ctx.db.insert("roles", { orgId: d.orgId, name: `${templateName} ${suffix}`, permissions: [...template.permissions] })
+    ctx.db.insert("roles", { orgId: d.orgId, name: `${templateName} ${suffix}`, permissions: template.permissions.filter((p) => !without.includes(p)) })
   );
   await d.t.run((ctx) => ctx.db.insert("memberships", { orgId: d.orgId, userId, roleId }));
   return d.t.withIdentity({ subject: `tpl_${suffix}`, clerkId: `tpl_${suffix}` });
@@ -639,11 +639,14 @@ async function memberFromTemplate(d: Dealer, templateName: string, suffix: strin
 const RESTATE = { reason: "wrong", correctionType: "PRIOR_PERIOD_RESTATEMENT" as const };
 
 describe("SCRUM-650 batch 2 A1: the cost-visibility gate", () => {
-  test("the default ACCOUNTANT template (MANAGE_FINANCE, no VIEW_COST_PRICE) is refused by the query and the mutation; SENIOR_ACCOUNTANT is allowed", async () => {
+  // SCRUM-886 round 13 (owner ruling c24358): the default ACCOUNTANT template now holds VIEW_COST_PRICE, because completing a
+  // SOURCED sale needs it. So an ACCOUNTANT role stored BEFORE that change (MANAGE_FINANCE, no VIEW_COST_PRICE) is the case that
+  // proves the gate; the second test records what the new template can do.
+  test("an ACCOUNTANT role stored without VIEW_COST_PRICE (MANAGE_FINANCE only) is refused by the query and the mutation; SENIOR_ACCOUNTANT is allowed", async () => {
     const d = await seedDealer("b1");
     const vehicleId = await createCashVehicle(d);
     await bookAcquisitionInClosedPeriod(d, vehicleId);
-    const asAccountant = await memberFromTemplate(d, "ACCOUNTANT", "b1acc");
+    const asAccountant = await memberFromTemplate(d, "ACCOUNTANT", "b1acc", ["view:cost_price"]);
     const asSenior = await memberFromTemplate(d, "SENIOR_ACCOUNTANT", "b1sen");
     const before = await snapshot(d.t, d.orgId, vehicleId);
 
@@ -659,6 +662,15 @@ describe("SCRUM-650 batch 2 A1: the cost-visibility gate", () => {
     expect(context.currentCost).toBe(12500);
     await asSenior.mutation(api.vehicles.correctAcquisitionCost, { orgId: d.orgId, vehicleId, newCost: 9800, ...RESTATE });
     expect((await d.t.run((ctx) => ctx.db.get(vehicleId)))?.purchasePrice).toBe(9800);
+  });
+
+  test("the default ACCOUNTANT template, which holds VIEW_COST_PRICE since SCRUM-886 round 13, passes this permission gate like SENIOR_ACCOUNTANT (disclosed authority change)", async () => {
+    const d = await seedDealer("b1t");
+    const vehicleId = await createCashVehicle(d);
+    await bookAcquisitionInClosedPeriod(d, vehicleId);
+    const asAccountant = await memberFromTemplate(d, "ACCOUNTANT", "b1tacc");
+    const context = await asAccountant.query(api.vehicles.getAcquisitionCostCorrectionContext, { orgId: d.orgId, vehicleId });
+    expect(context.currentCost).toBe(12500);
   });
 });
 

@@ -1,0 +1,64 @@
+{
+  "id": "ap-recon-gl-balance-without-a-payable-is-reported-as-a-difference",
+  "fingerprint": "8ed69726fca196ed972195d37f5d4dc51666a28fce1cc535be63d6b7520603d0",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum876-pr739-seat-review-3",
+    "firstSeen": "2026-11-01"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.postApCredit",
+      "input": {
+        "creditMajor": 19000,
+        "dated": "earlierPeriod"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierPayablesReconciliation",
+      "input": {
+        "toDate": "periodEnd"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "isReconciled",
+      "value": false
+    },
+    {
+      "observable": "glBalanceMajor",
+      "value": 19000
+    },
+    {
+      "observable": "subledgerBalanceMajor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPayablesReconciliation.scrum876.test.ts",
+    "testName": "CONTROL: with no payable row, a January GL balance is still reported as a difference (never hidden, never unavailable)"
+  },
+  "matrixRow": "SCRUM876-supplier-payables-recon-cutoff"
+}
