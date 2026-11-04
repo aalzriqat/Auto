@@ -1255,6 +1255,14 @@ async function sourcedMirrorRepairLocked(ctx: MutationCtx, vehicle: Doc<"vehicle
   }
 }
 
+type SourcedMirrorRepairOutcome = "UNCHANGED" | "INVALID" | "LOCKED" | "REPAIR";
+
+async function sourcedMirrorRepairOutcome(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<SourcedMirrorRepairOutcome> {
+  if (vehicle.isDeleted || vehicle.sourceType !== "SOURCED" || vehicle.purchasePrice === vehicle.sourceCost) return "UNCHANGED";
+  if (!await validSourcedMirrorCost(ctx, vehicle)) return "INVALID";
+  return await sourcedMirrorRepairLocked(ctx, vehicle) ? "LOCKED" : "REPAIR";
+}
+
 /** SCRUM-907. Internal rollout only, one native page per transaction; never rewrites posted cost history. */
 export const backfillSourcedCostMirror = internalMutation({
   args: {
@@ -1272,23 +1280,15 @@ export const backfillSourcedCostMirror = internalMutation({
         throw new ConvexError("Invalid repair page size.");
       }
       const page = await ctx.db.query("vehicles").paginate({ numItems: size, cursor: args.cursor ?? null });
-      let updated = 0;
-      let skippedLocked = 0;
-      let skippedInvalid = 0;
-      for (const vehicle of page.page) {
-        if (vehicle.isDeleted || vehicle.sourceType !== "SOURCED" || vehicle.purchasePrice === vehicle.sourceCost) continue;
-        if (!await validSourcedMirrorCost(ctx, vehicle)) {
-          skippedInvalid += 1;
-          continue;
-        }
-        if (await sourcedMirrorRepairLocked(ctx, vehicle)) {
-          skippedLocked += 1;
-          continue;
-        }
-        await ctx.db.patch(vehicle._id, { purchasePrice: vehicle.sourceCost });
-        updated += 1;
-      }
-      return { scanned: page.page.length, updated, skippedLocked, skippedInvalid, isDone: page.isDone, continueCursor: page.continueCursor };
+      // Probes only read; the page's patches then run together. Any unexpected failure still rejects the whole page.
+      const outcomes = await Promise.all(page.page.map((vehicle) => sourcedMirrorRepairOutcome(ctx, vehicle)));
+      const repairs = page.page.filter((_, index) => outcomes[index] === "REPAIR");
+      await Promise.all(repairs.map((vehicle) => ctx.db.patch(vehicle._id, { purchasePrice: vehicle.sourceCost })));
+      const count = (outcome: SourcedMirrorRepairOutcome): number => outcomes.filter((o) => o === outcome).length;
+      return {
+        scanned: page.page.length, updated: repairs.length, skippedLocked: count("LOCKED"), skippedInvalid: count("INVALID"),
+        isDone: page.isDone, continueCursor: page.continueCursor,
+      };
     } catch (error) {
       console.error("SOURCED cost mirror repair failed", error);
       // Throw, never return an error after a write: the entire page must roll back.
