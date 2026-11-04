@@ -404,14 +404,16 @@ describe("SCRUM-869 S3a - bounded reads, tenancy, permission", () => {
 
   // SCRUM-901 (SCRUM-886 / ACC-10 class). A SOURCED car's supplier entitlement equals its acquisition
   // cost, so every family on this list is cost-derived. view:finance alone must not reveal it.
-  for (const kind of ["PAYABLE", "RECEIVABLE", "RECOVERY"] as const) {
-    test(`${kind}: a role with view:finance but without view:cost_price is refused (SCRUM-901)`, async () => {
-      freezeNow();
-      const s = await seed(`nocost${kind}`, ["view:finance", "manage:finance"]);
-      await addPayable(s, { paymentDueDate: NOW - DAY });
-      await expect(list(s, kind)).rejects.toThrow(/view:cost_price/);
-    });
-  }
+  // Literal test names: the regression library binds a scenario to one named test (R4).
+  const refusedWithoutCost = async (kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY") => {
+    freezeNow();
+    const s = await seed(`nocost${kind}`, ["view:finance", "manage:finance"]);
+    await addPayable(s, { paymentDueDate: NOW - DAY });
+    await expect(list(s, kind)).rejects.toThrow(/view:cost_price/);
+  };
+  test("PAYABLE: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("PAYABLE"));
+  test("RECEIVABLE: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("RECEIVABLE"));
+  test("RECOVERY: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("RECOVERY"));
 
   test("a role holding both view:finance and view:cost_price still reads the list (SCRUM-901 positive control)", async () => {
     freezeNow();
