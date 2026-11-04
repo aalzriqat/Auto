@@ -50,6 +50,16 @@ async function parityWithSources(sources: Readonly<Record<string, string>>) {
 
 describe("SCRUM-810 review negative controls", () => {
   test.each([
+    ["const off: boolean = true; export { off as REVIEW_PILOT_DISABLED };", true],
+    ["const off: boolean = Boolean(true); export { off as REVIEW_PILOT_DISABLED };", null],
+  ])("R2-F1: discovers a pilot-named export alias and reads its literal value: %s", async (source, value) => {
+    const parity = await parityWithSources({ "lib/reviewLocal.ts": source });
+    expect(parity.switchModules().declaring.get("REVIEW_PILOT_DISABLED")).toBe("lib/reviewLocal");
+    expect(parity.shippedValue("REVIEW_PILOT_DISABLED")).toBe(value);
+    expect(parity.pilotSwitchNames()).toContain("REVIEW_PILOT_DISABLED");
+  }, RELOAD_TIMEOUT_MS);
+
+  test.each([
     ["leading-space star", ' export * from "./pilotCapabilities";'],
     ["import alias", 'import { PAYMENT_LINKS_PILOT_DISABLED as off } from "./pilotCapabilities"; export { off };'],
     ["namespace", 'export * as ns from "./pilotCapabilities";'],
@@ -176,6 +186,29 @@ describe("the door-opening detector", () => {
   const basenames = ["gateModule"];
   const names = ["EXAMPLE_PILOT_DISABLED"];
   const opens = (src: string) => opensAPilotDoor(src, basenames, names);
+
+  test.each([
+    ['import { vi as toolsVi } from "vitest";', "toolsVi.doMock"],
+    ['import { vitest as toolsVi } from "vitest";', "toolsVi.doMock"],
+    ['import * as V from "vitest";', "V.vi.mock"],
+    ["", 'vi["mock"]'],
+    ["const { doMock } = vi;", "doMock"],
+    ['import { vi as toolsVi } from "vitest"; const { doMock: replace } = toolsVi;', "replace"],
+    ['import * as V from "vitest";', 'V["vitest"]["doMock"]'],
+  ])("R2-F2: detects Vitest bindings and access forms: %s %s", (binding, callee) => {
+    const source = `${binding}\n${callee}("@/convex/utils/fixedAssetLifecycleContainment", () => ({ assertFixedAssetLifecycleAllowed: () => undefined }));`;
+    expect(opensAPilotDoor(source, pilotModuleBasenames(), pilotSwitchNames())).toBe(true);
+  });
+
+  test.each([
+    'import { vi as toolsVi } from "other"; toolsVi.doMock("./gateModule", () => ({}));',
+    'import * as V from "other"; V.vi.mock("./gateModule", () => ({}));',
+    'import { vi as toolsVi } from "vitest"; function f(toolsVi) { toolsVi.doMock("./gateModule", () => ({})); }',
+    'function f(vi) { vi["mock"]("./gateModule", () => ({})); }',
+    'const { doMock } = unrelated; doMock("./gateModule", () => ({}));',
+  ])("R2-F2: leaves unrelated or shadowed bindings alone: %s", (source) => {
+    expect(opens(source)).toBe(false);
+  });
 
   test.each([
     `${DO_MOCK} /* comment */ ("@/convex/utils/fixedAssetLifecycleContainment", () => ({ assertFixedAssetLifecycleAllowed: () => undefined }));`,

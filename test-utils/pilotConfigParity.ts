@@ -21,7 +21,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { discoverPilotSources, unwrap, type PilotSourceDiscovery } from "./pilotSourceDiscovery";
+import { discoverPilotSources, sourceProgram, unwrap, type PilotSourceDiscovery } from "./pilotSourceDiscovery";
 import { PILOT_CAPABILITIES, PILOT_SERVER_BINDINGS, PILOT_SERVER_GUARDS, PILOT_SWITCHES, type PilotSwitchKey } from "../lib/pilotCapabilityManifest";
 
 const ROOT = path.resolve(__dirname, "..");
@@ -185,15 +185,51 @@ function moduleArgument(expr: ts.Expression | undefined): string | undefined {
   return stringArgument(argument);
 }
 
-function vitestMethod(call: ts.CallExpression): string | undefined {
-  const callee = unwrap(call.expression);
-  if (!callee || !ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
-  if (!["vi", "vitest"].includes(callee.expression.text)) return undefined;
-  return callee.name.text;
+function memberAccess(expr: ts.Expression): { object: ts.Expression; name: string | undefined } | undefined {
+  if (ts.isPropertyAccessExpression(expr)) return { object: expr.expression, name: expr.name.text };
+  if (ts.isElementAccessExpression(expr)) return { object: expr.expression, name: stringArgument(expr.argumentExpression) };
+  return undefined;
 }
 
-function changesPilotCall(call: ts.CallExpression, basenames: readonly string[], names: ReadonlySet<string>): boolean {
-  const method = vitestMethod(call);
+function vitestImport(decl: ts.Declaration | undefined): boolean {
+  if (!decl) return false;
+  const clause = ts.isImportSpecifier(decl) ? decl.parent.parent : decl.parent;
+  if (!ts.isImportClause(clause) || clause.isTypeOnly) return false;
+  const statement = clause.parent;
+  return ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === "vitest";
+}
+
+function isVitestObject(expr: ts.Expression, checker: ts.TypeChecker): boolean {
+  const object = unwrap(expr);
+  if (!object) return false;
+  if (ts.isIdentifier(object)) {
+    const symbol = checker.getSymbolAtLocation(object);
+    if (!symbol) return ["vi", "vitest"].includes(object.text);
+    return (symbol.declarations ?? []).some((decl) => ts.isImportSpecifier(decl) && !decl.isTypeOnly &&
+      ["vi", "vitest"].includes((decl.propertyName ?? decl.name).text) && vitestImport(decl));
+  }
+  const member = memberAccess(object);
+  if (!member?.name || !["vi", "vitest"].includes(member.name) || !ts.isIdentifier(member.object)) return false;
+  return (checker.getSymbolAtLocation(member.object)?.declarations ?? [])
+    .some((decl) => ts.isNamespaceImport(decl) && vitestImport(decl));
+}
+
+function vitestMethod(call: ts.CallExpression, checker: ts.TypeChecker): string | undefined {
+  const callee = unwrap(call.expression);
+  if (!callee) return undefined;
+  const member = memberAccess(callee);
+  if (member && isVitestObject(member.object, checker)) return member.name;
+  if (!ts.isIdentifier(callee)) return undefined;
+  const decl = checker.getSymbolAtLocation(callee)?.valueDeclaration;
+  if (!decl || !ts.isBindingElement(decl) || decl.dotDotDotToken || !ts.isObjectBindingPattern(decl.parent)) return undefined;
+  const variable = decl.parent.parent;
+  if (!ts.isVariableDeclaration(variable) || !variable.initializer || !isVitestObject(variable.initializer, checker)) return undefined;
+  const name = decl.propertyName ?? decl.name;
+  return ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
+}
+
+function changesPilotCall(call: ts.CallExpression, basenames: readonly string[], names: ReadonlySet<string>, checker: ts.TypeChecker): boolean {
+  const method = vitestMethod(call, checker);
   if (method === "mock" || method === "doMock") {
     const specifier = moduleArgument(call.arguments[0]);
     return specifier === undefined || basenames.includes(basename(specifier));
@@ -208,10 +244,12 @@ function changesPilotCall(call: ts.CallExpression, basenames: readonly string[],
 
 /** Inspect invocations, not comments, strings or formatting. Unreadable mock targets refuse certification. */
 export function opensAPilotDoor(src: string, basenames: readonly string[], names: readonly string[]): boolean {
-  const source = ts.createSourceFile("test.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const program = sourceProgram(new Map([["test.tsx", src]]));
+  const source = program.getSourceFile("test.tsx")!;
+  const checker = program.getTypeChecker();
   const spiedNames = new Set([...names, ...pilotGuardNames()]);
   function visit(node: ts.Node): boolean {
-    if (ts.isCallExpression(node) && changesPilotCall(node, basenames, spiedNames)) return true;
+    if (ts.isCallExpression(node) && changesPilotCall(node, basenames, spiedNames, checker)) return true;
     if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
       if (DOOR_HELPERS.includes(basename(stringArgument(node.arguments[0]) ?? ""))) return true;
     }

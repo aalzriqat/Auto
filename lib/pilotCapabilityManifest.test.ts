@@ -7,7 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
-import { discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
+import { discoverGuardedPilotMutations, discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
   PILOT_SERVER_BINDINGS,
@@ -30,6 +30,26 @@ function walk(dir: string, accept: (rel: string) => boolean, out: string[] = [])
 }
 
 const isSource = (rel: string) => /\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel) && !rel.endsWith(".d.ts");
+
+// Test-only exception: scripts/supplierSettlementCensus.test.ts forbids naming this
+// door in shipped lib/ code. The receipt reversal remains a conditional refusal.
+const GUARDED_DOOR_EXCLUSIONS: Readonly<Record<string, string>> = {
+  "supplierCostRecoveries.reverseReceipt": "Conditional supplier receipt reversal; the supplier census forbids this name in shipped lib/ source.",
+  "sourcingPayables.markPaid": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
+  "sourcingPayables.recordPartialPayment": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
+  "supplierReceivables.recordReceipt": "Method restriction only: CASH and BANK_TRANSFER remain enabled; no switch-controlled door.",
+};
+
+function guardedPublicMutations(): ReadonlyMap<string, readonly string[]> {
+  const topLevel = readdirSync(path.join(ROOT, "convex"))
+    .filter((name) => /\.ts$/.test(name) && !/\.(?:test|spec)\.ts$/.test(name))
+    .map((name) => `convex/${name}`);
+  const containment = readdirSync(path.join(ROOT, "convex/utils"))
+    .filter((name) => name.endsWith("Containment.ts"))
+    .map((name) => `convex/utils/${name}`);
+  const files = [...topLevel, ...containment, "convex/_generated/server.d.ts"];
+  return discoverGuardedPilotMutations(new Map(files.map((file) => [file, read(file)])));
+}
 
 const SOURCE_ROOTS = readdirSync(ROOT).filter(
   (name) =>
@@ -183,6 +203,22 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
           door.guards.some((g) => src.includes(g)),
           `${door.name} no longer calls any of: ${door.guards.join(", ")}`
         ).toBe(true);
+      }
+    }
+  });
+
+  test("R2-F3: every public mutation calling a pilot guard is registered or has a reasoned exclusion", () => {
+    const guarded = guardedPublicMutations();
+    expect(guarded.size, "containment guard discovery must not be empty").toBeGreaterThan(0);
+    const registered = new Set(PILOT_CAPABILITIES.flatMap((cap) => cap.doors.map((door) => door.name)));
+    const missing = [...guarded.keys()].filter((door) => !registered.has(door) && !GUARDED_DOOR_EXCLUSIONS[door]?.trim());
+    expect(missing, "register whole or conditional doors, or document a test-only exclusion").toEqual([]);
+    for (const [door, reason] of Object.entries(GUARDED_DOOR_EXCLUSIONS)) {
+      expect(guarded.has(door), `${door} is a stale exclusion`).toBe(true);
+      expect(registered.has(door), `${door} is already registered`).toBe(false);
+      expect(reason.trim(), `${door} needs a reason`).not.toBe("");
+      if (door !== "supplierCostRecoveries.reverseReceipt") {
+        expect(guarded.get(door), `${door} acquired a switch-controlled guard`).toEqual(["assertSupplierSettlementMethodAllowed"]);
       }
     }
   });

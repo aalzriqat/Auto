@@ -70,3 +70,75 @@ flipping a constant in source also changes what the manifest reads, so the parit
 `EXPECTED_SHIPPED` in `lib/pilotCapabilityManifest.test.ts` pins the shipped value of every switch, so a flip fails that test until
 the same change edits the table, and the parity check fails when a test mock, a re-export binding (`PILOT_SERVER_BINDINGS`) or a
 server guard (`PILOT_SERVER_GUARDS`, which the check calls and expects to throw) disagrees with the shipped value.
+
+## Review remediation from 62b34bf2
+
+Switch discovery keeps the exported pilot name as well as the resolved declaration. It reads the declaration's initializer,
+accepts literal booleans, and records nonliteral values as unavailable. Distinct pilot aliases of one declaration remain
+distinct switches. The TypeScript checker supplies binding identity and resolves import and export aliases with
+[`getAliasedSymbol`](https://github.com/microsoft/TypeScript/blob/v5.9.3/src/compiler/types.ts#L5208).
+`getImmediateAliasedSymbol` follows one alias; this check needs the final declaration and separately retains the exported name.
+The snapshot compiler host reads only the supplied sources, including the generated server declaration for builder identity.
+
+The mock census resolves local import bindings from `vitest`, including renamed `vi` and `vitest` imports and namespace
+imports. It recognizes property access, literal element access, and destructured methods, including renamed destructuring.
+Shadowed parameters and imports from other packages do not count as Vitest bindings. This follows the
+[Vitest API](https://vitest.dev/api/vi.html#vi-domock): `doMock` executes without hoisting and affects subsequent imports.
+The census conservatively detects these access forms for both `mock` and `doMock`; it does not infer that hoisting succeeds.
+
+The reverse census discovers `assert*Allowed` and `assert*Enabled` exports from `convex/utils/*Containment.ts`, independently
+of the manifest. It scans exported public mutation handlers in top-level non-test `convex/*.ts`, resolving builder and guard
+imports through the checker. It examines direct guard invocations, including those nested in conditional branches and callbacks.
+Public builders are the aggregate-aware builders in `convex/functions.ts` and the generated public mutation builder.
+It does not trace arbitrary helper call graphs or prove which branch executes.
+
+`requestRetainedCreditRefund` is a whole door with its existing `DealInvoiceReceiptsPanel.tsx` caller and `payoutAvailable`
+gate. `respondToRetainedCreditRefund` is conditional on APPROVED, custody reconciliation on write-off, and `finalizeDeal` and
+`completeDraft` on the refused OTHER deposit treatment. The supplier receipt reversal remains a test-only named exclusion
+because the supplier census forbids its name in shipped `lib/` code. Three supplier payment or receipt operations have
+reasoned exclusions for their method restrictions. The check asserts that those exclusions still call only the method guard.
+Stale exclusions and empty discovery fail.
+
+The `correct` skill's recurring binding-identity class applies here: the previous review controls cover aliased switch
+imports, while this review reproduced missed pilot-named exports and renamed Vitest imports. The prevention stays in the
+compiler-based discovery and executable negative controls. No financial authority or switch value changes.
+
+Failing-first evidence:
+
+- `pnpm exec vitest run test-utils/pilotConfigParity.test.ts --maxWorkers=1 -t 'R2-F[12]'`: before the fix,
+  9 failed and 5 passed. Both export-alias controls and seven mock-access controls failed. After the fix, 14 passed.
+- `pnpm exec vitest run lib/pilotCapabilityManifest.test.ts --maxWorkers=1 -t 'R2-F3'`: the initial reverse check failed on
+  six unregistered operations. After registration and reasoned exclusions, it passed. Removing just the new refund-request
+  whole-door registration then failed with exactly `retainedCreditRefunds.requestRetainedCreditRefund` missing. The registration
+  was restored for final validation.
+
+These are local source and test results. They do not certify a real Convex backend, pilot readiness, a deployment, or independent
+review. No client component changed, so this remediation does not relocate contract-skew baseline entries.
+
+Final focused command:
+
+```powershell
+pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts test-utils/pilotConfigParity.test.ts lib/pilotCapabilityManifest.test.ts components/accounting/FixedAssetsTab.pilotOff.test.tsx components/accounting/ManualJournalTab.pilotOff.test.tsx scripts/legacyCollectionRefundOptOutCensus.test.ts scripts/supplierSettlementCensus.test.ts convex/scrum802OptOutCensus.test.ts --maxWorkers=1
+```
+
+Result: 80 passed and six pre-existing Windows-path failures in `convex/scrum802OptOutCensus.test.ts`.
+Both `pnpm typecheck` and `pnpm typecheck:convex` passed. The root configuration excludes `convex`, `test-utils`, `apps`,
+`packages`, `dealer-worker`, and `node_modules` as input roots. The Convex configuration includes `convex` and `test-utils`,
+excludes `_generated` as an input root, and does not check the frontend, mobile, shared, or worker projects as separate projects.
+Imports may still bring excluded files into either compiler graph.
+
+```powershell
+pnpm exec eslint lib/pilotCapabilityManifest.ts lib/pilotCapabilityManifest.test.ts test-utils/pilotConfigParity.ts test-utils/pilotConfigParity.test.ts test-utils/pilotSourceDiscovery.ts test-utils/pilotSourceDiscovery.test.ts --max-warnings=0
+```
+
+Changed-file lint passed. A separate local ESLint run with SonarJS 4.2.2's recommended rules and cognitive complexity limited
+to 14 reported zero errors and warnings. Remote Sonar analysis and fresh review seats remain coordinator work after the push.
+
+```powershell
+pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts test-utils/pilotConfigParity.test.ts lib/pilotCapabilityManifest.test.ts --maxWorkers=1 --coverage --coverage.include=test-utils/pilotSourceDiscovery.ts --coverage.include=test-utils/pilotConfigParity.ts --coverage.include=lib/pilotCapabilityManifest.ts --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=json
+```
+
+Coverage validation passed all 54 tests and the unchanged configured thresholds. Across these three implementation modules,
+line coverage was 99.63% and branch coverage was 93.11%. Comparing added lines from `git diff --unified=0 HEAD` with the V8
+statement start-line counts measured 74 added executable lines, all covered. The protected customer-credit containment file's
+Git blob remained `af09f908267944be4189ec7720301c775b50c848`, matching the starting HEAD. `git diff HEAD -- convex` was empty.

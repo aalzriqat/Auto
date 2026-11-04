@@ -236,11 +236,19 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
     switches: ["CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED"],
     refusalKeys: ["ServerError_CUSTOMER_CREDIT_PAYOUT_DISABLED"],
     doors: [
+      whole("retainedCreditRefunds.requestRetainedCreditRefund", ...PAYOUT_GUARDS),
       whole("retainedCreditRefunds.executeRetainedCreditRefund", ...PAYOUT_GUARDS),
+      // Rejection remains available; only APPROVED authorizes a payout.
+      conditional("retainedCreditRefunds.respondToRetainedCreditRefund", ...PAYOUT_GUARDS),
       conditional("dealUnwind.finishDealUnwind", ...PAYOUT_GUARDS),
       conditional("sales.update", ...PAYOUT_GUARDS),
     ],
     uiCallers: [
+      {
+        file: "components/applications/cockpit/DealInvoiceReceiptsPanel.tsx",
+        doors: ["retainedCreditRefunds.requestRetainedCreditRefund"],
+        gate: "payoutAvailable",
+      },
       {
         file: "components/accounting/RetainedCreditRefundsSection.tsx",
         doors: ["retainedCreditRefunds.executeRetainedCreditRefund"],
@@ -278,6 +286,9 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       conditional("deposits.resolveReleasedAllocation", "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"),
       conditional("sales.create", "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"),
       conditional("sales.completeFromQuote", "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"),
+      // OTHER is refused; other supported deposit treatments remain available.
+      conditional("applications.finalizeDeal", "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"),
+      conditional("sales.completeDraft", "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED"),
     ],
   },
   {
@@ -347,6 +358,8 @@ export const PILOT_CAPABILITIES: readonly PilotCapability[] = [
       whole("financingEconomics.recordManualFinanceApproval", ...RT11_GUARDS),
       whole("applications.amendSupplierDisbursementAdvice", ...RT11_GUARDS),
       conditional("financeDealCosts.recordCustodyMovement", ...RT11_GUARDS),
+      // Only the write-off branch is refused, not ordinary reconciliation.
+      conditional("financeDealCosts.reconcileDealCustody", ...RT11_GUARDS),
       conditional("applications.correctExpectedPayment", ...RT11_GUARDS),
       conditional("sales.markCommissionPaid", ...RT11_GUARDS),
       conditional("vehicles.update", ...RT11_GUARDS),

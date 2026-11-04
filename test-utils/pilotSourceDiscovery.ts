@@ -57,7 +57,7 @@ function variableSwitches(decl: ts.VariableDeclaration): SwitchDeclaration[] {
 }
 
 /** Resolve only within the supplied source snapshot. No node_modules or compiler library reads. */
-function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program {
+export function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program {
   const options: ts.CompilerOptions = { noLib: true, types: [], target: ts.ScriptTarget.Latest, module: ts.ModuleKind.ESNext };
   const host = ts.createCompilerHost(options);
   host.getCurrentDirectory = () => "/";
@@ -73,7 +73,7 @@ function sourceProgram(sources: ReadonlyMap<string, string>): ts.Program {
     else if (specifier.startsWith(".")) target = path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier)).replace(/^\//, "");
     else return undefined;
     const base = target.replace(/\.[cm]?[jt]sx?$/, "");
-    const resolvedFileName = [target, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`].find((file) => sources.has(file));
+    const resolvedFileName = [target, `${base}.ts`, `${base}.tsx`, `${base}.d.ts`, `${base}/index.ts`].find((file) => sources.has(file));
     return resolvedFileName ? { resolvedFileName } : undefined;
   });
   return ts.createProgram([...sources.keys()], options, host);
@@ -86,17 +86,21 @@ function originalSymbol(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Symbol {
 /** Follow compiler-resolved import/export aliases, namespaces, and exported const aliases. */
 function switchesBehind(symbol: ts.Symbol, checker: ts.TypeChecker, visited = new Set<ts.Symbol>()): SwitchDeclaration[] {
   const original = originalSymbol(symbol, checker);
-  if (visited.has(original)) return [];
-  visited.add(original);
+  if (visited.has(symbol)) return [];
+  visited.add(symbol);
   if (original.flags & ts.SymbolFlags.Module) {
     return checker.getExportsOfModule(original).flatMap((entry) => switchesBehind(entry, checker, visited));
   }
   const declaration = original.valueDeclaration;
   if (!declaration || !ts.isVariableDeclaration(declaration)) return [];
+  const exportedAlias = SWITCH_NAME.test(symbol.name) && symbol.name !== original.name
+    ? [{ name: symbol.name, kind: "constant" as const, module: moduleName(declaration.getSourceFile().fileName),
+      value: literalBoolean(declaration.initializer), sourceId: `${declaration.getSourceFile().fileName}:${declaration.pos}:${symbol.name}` }]
+    : [];
   const initializer = unwrap(declaration.initializer);
   const target = initializer && checker.getSymbolAtLocation(initializer);
   const referenced = target ? switchesBehind(target, checker, visited) : [];
-  return referenced.length > 0 ? referenced : variableSwitches(declaration);
+  return [...exportedAlias, ...referenced, ...variableSwitches(declaration)];
 }
 
 /** Every source is parsed. Export structure and compiler symbols, never text, decide inclusion. */
@@ -121,4 +125,64 @@ export function discoverPilotSources(sources: ReadonlyMap<string, string>, guard
     }
   }
   return { declarations: [...declarations.values()], exportedBy, guardModules: [...guardModules] };
+}
+
+function moduleExports(file: ts.SourceFile, checker: ts.TypeChecker): ts.Symbol[] {
+  const symbol = checker.getSymbolAtLocation(file);
+  return symbol ? checker.getExportsOfModule(symbol) : [];
+}
+
+function resolvedSymbol(node: ts.Node, checker: ts.TypeChecker): ts.Symbol | undefined {
+  const symbol = checker.getSymbolAtLocation(node);
+  return symbol && originalSymbol(symbol, checker);
+}
+
+function publicMutationHandler(symbol: ts.Symbol, checker: ts.TypeChecker): ts.Node | undefined {
+  const decl = originalSymbol(symbol, checker).valueDeclaration;
+  if (!decl || !ts.isVariableDeclaration(decl)) return undefined;
+  const call = unwrap(decl.initializer);
+  if (!call || !ts.isCallExpression(call)) return undefined;
+  const builder = resolvedSymbol(call.expression, checker);
+  const file = builder?.valueDeclaration?.getSourceFile().fileName;
+  const publicBuilder = (file === "convex/functions.ts" && ["mutation", "socialBulkMutation"].includes(builder?.name ?? "")) ||
+    (file === "convex/_generated/server.d.ts" && builder?.name === "mutation");
+  if (!publicBuilder) return undefined;
+  const config = unwrap(call.arguments[0]);
+  if (!config || !ts.isObjectLiteralExpression(config)) return undefined;
+  return config.properties.find((prop) => prop.name && prop.name.getText() === "handler");
+}
+
+function calledGuards(handler: ts.Node, checker: ts.TypeChecker, guards: ReadonlySet<ts.Symbol>): string[] {
+  const found = new Set<string>();
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      const symbol = resolvedSymbol(node.expression, checker);
+      if (symbol && guards.has(symbol)) found.add(symbol.name);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(handler);
+  return [...found].sort();
+}
+
+/** Direct guard invocations inside exported public mutation handlers, including nested branches.
+ * Guard exports come from containment modules, independently of the capability manifest.
+ */
+export function discoverGuardedPilotMutations(sources: ReadonlyMap<string, string>): ReadonlyMap<string, readonly string[]> {
+  const program = sourceProgram(sources);
+  const checker = program.getTypeChecker();
+  const files = program.getSourceFiles();
+  const guards = new Set(files.filter((file) => /^convex\/utils\/[^/]*Containment\.ts$/.test(file.fileName))
+    .flatMap((file) => moduleExports(file, checker))
+    .filter((symbol) => /^assert\w*(?:Allowed|Enabled)$/.test(symbol.name))
+    .map((symbol) => originalSymbol(symbol, checker)));
+  const doors = new Map<string, readonly string[]>();
+  for (const file of files.filter((source) => /^convex\/[^/]+\.ts$/.test(source.fileName) && !/\.(?:test|spec)\.ts$/.test(source.fileName))) {
+    for (const symbol of moduleExports(file, checker)) {
+      const handler = publicMutationHandler(symbol, checker);
+      const calls = handler ? calledGuards(handler, checker, guards) : [];
+      if (calls.length > 0) doors.set(`${path.posix.basename(file.fileName, ".ts")}.${symbol.name}`, calls);
+    }
+  }
+  return doors;
 }
