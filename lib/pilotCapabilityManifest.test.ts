@@ -42,7 +42,9 @@ const SOURCE_ROOTS = readdirSync(ROOT).filter(
  * exported variables with a switch name (typed or not, one line or many) plus the keys of
  * exported door maps.
  */
+let declaredCache: string[] | null = null;
 function declaredSwitches(): string[] {
+  if (declaredCache) return declaredCache;
   const names = new Set<string>();
   for (const root of SOURCE_ROOTS) {
     for (const rel of walk(root, isSource)) {
@@ -51,7 +53,8 @@ function declaredSwitches(): string[] {
       for (const d of pilotSwitchDeclarations(text, rel)) names.add(d.name);
     }
   }
-  return [...names].sort();
+  declaredCache = [...names].sort();
+  return declaredCache;
 }
 
 /** The value each switch ships with. Flipping one in source must change this table in the same change. */

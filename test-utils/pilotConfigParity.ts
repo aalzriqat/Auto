@@ -89,6 +89,7 @@ function walkSources(dir: string, out: string[] = []): string[] {
 }
 
 const stripExt = (rel: string): string => rel.replace(/\.tsx?$/, "");
+const WHOLE_MODULE_REEXPORT = /^export\s+\*\s+from\s/m;
 
 interface ParsedSource {
   readonly module: string;
@@ -108,8 +109,11 @@ function resolveSpecifier(fromModule: string, specifier: string): string | null 
 
 let parsed: ParsedSource[] | null = null;
 function parsedSources(): ParsedSource[] {
-  parsed ??= SOURCE_DIRS.flatMap((dir) => walkSources(dir)).map((rel) => {
+  parsed ??= SOURCE_DIRS.flatMap((dir) => walkSources(dir)).flatMap((rel) => {
     const text = readFileSync(path.join(ROOT, rel), "utf8");
+    // Only a file that names a switch, or re-exports a whole module, can declare or re-export one.
+    // Parsing every file is what made this slow under coverage.
+    if (!text.includes("_PILOT_") && !WHOLE_MODULE_REEXPORT.test(text)) return [];
     const moduleId = stripExt(rel);
     const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true);
     const namedExports: string[] = [];
@@ -123,7 +127,7 @@ function parsedSources(): ParsedSource[] {
         if (target) starFrom.push(target);
       }
     }
-    return { module: moduleId, text, declarations: pilotSwitchDeclarations(text, rel), namedExports, starFrom };
+    return [{ module: moduleId, text, declarations: pilotSwitchDeclarations(text, rel), namedExports, starFrom }];
   });
   return parsed;
 }
@@ -184,7 +188,9 @@ export function pilotSwitchNames(): string[] {
 export function shippedValue(key: string): boolean | null {
   const own = new RegExp(`^export const ${key}(?:\\s*:\\s*[^=]+?)?\\s*=\\s*(true|false)\\b`, "m");
   const entry = new RegExp(`^\\s*${key}:\\s*(true|false)\\b`, "m");
+  // Only files that declare a switch can hold its value, and that is a handful, not the whole tree.
   for (const f of parsedSources()) {
+    if (f.declarations.length === 0 || !f.text.includes(key)) continue;
     const hit = own.exec(f.text) ?? entry.exec(f.text);
     if (hit) return hit[1] === "true";
   }
@@ -217,9 +223,12 @@ export function readingsFor(key: PilotSwitchKey): SwitchReading[] {
 }
 
 /** `readings` is injectable so a test can simulate a re-export or a guard that has been replaced. */
-export function pilotConfigMismatches(readings: (key: PilotSwitchKey) => SwitchReading[] = readingsFor): PilotConfigMismatch[] {
+export function pilotConfigMismatches(
+  readings: (key: PilotSwitchKey) => SwitchReading[] = readingsFor,
+  keys: readonly PilotSwitchKey[] = Object.keys(PILOT_SWITCHES) as PilotSwitchKey[]
+): PilotConfigMismatch[] {
   const out: PilotConfigMismatch[] = [];
-  for (const key of Object.keys(PILOT_SWITCHES) as PilotSwitchKey[]) {
+  for (const key of keys) {
     const shipped = shippedValue(key);
     for (const { via, effective } of readings(key)) {
       if (shipped === null || shipped !== effective) out.push({ switch: key, shipped, effective, via });
@@ -228,8 +237,12 @@ export function pilotConfigMismatches(readings: (key: PilotSwitchKey) => SwitchR
   return out;
 }
 
-export function assertPilotCertifyingConfig(): void {
-  const mismatches = pilotConfigMismatches();
+/**
+ * A suite that exercises one capability checks only that capability's switches. The census of
+ * every switch lives in `pilotConfigParity.test.ts`, so a UI suite stays cheap.
+ */
+export function assertPilotCertifyingConfig(only?: readonly PilotSwitchKey[]): void {
+  const mismatches = pilotConfigMismatches(readingsFor, only);
   if (mismatches.length === 0) return;
   const detail = mismatches
     .map((m) => `${m.switch} (shipped ${m.shipped === null ? "not found in source" : m.shipped}, effective ${m.effective}, via ${m.via})`)

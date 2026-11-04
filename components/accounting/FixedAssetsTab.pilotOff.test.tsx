@@ -44,7 +44,7 @@ const asset = {
   status: "ACTIVE",
 };
 
-beforeAll(() => assertPilotCertifyingConfig());
+beforeAll(() => assertPilotCertifyingConfig(["FIXED_ASSET_LIFECYCLE_PILOT_DISABLED"]));
 afterEach(() => {
   cleanup();
   stubs.assets = [];
