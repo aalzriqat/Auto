@@ -1,6 +1,6 @@
 # Supplier and sourcing readers need view:cost_price
 
-Status: accepted for the rows marked GATED; open owner questions are listed at the end. ADR required before a permission PR by SCRUM-760 c24361. Jira: SCRUM-902 (canonical; SCRUM-903 is a duplicate), follow-up to SCRUM-901 / PR #765. Related: SCRUM-886, SCRUM-869, SCRUM-879 c24467 and c24470.
+Status: accepted for the rows marked GATED, including Q1-Q4 (owner: "Yes, gate all"); a short list of same-class readers is still unruled (see Consequences). ADR required before a permission PR by SCRUM-760 c24361. Jira: SCRUM-902 (canonical; SCRUM-903 is a duplicate), follow-up to SCRUM-901 / PR #765. Related: SCRUM-886, SCRUM-869, SCRUM-879 c24467 and c24470.
 
 ## Context
 
@@ -40,11 +40,11 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
 | `sales.consignedSalePreview` | supplier entitlement and margin for one SOURCED car | any of view:expenses / reports / finance (else null) | that any-of AND view:cost_price (else null) | GATED (fail-soft null) |
 | `supplierStatement.outstanding`, `supplierDueAging.list`, due-alert `amount` | supplier A/P, A/R, recoveries | both (#763, #765) | unchanged | already gated |
 | `vehicles.*` readers, `vehicleCostVisibility.ts`, landed-cost section | vehicle cost | view:cost_price (SCRUM-886) | unchanged | already gated |
-| `dashboard.stats` | profit and cost metrics | view:expenses / reports / finance (cost block) | unchanged | OWNER QUESTION Q4 |
-| `supplierCostRecoveries.list`, `listReceipts` | supplier-borne expense owed back | view:finance | unchanged | OWNER QUESTION Q1 |
-| `reports.getSalesAndProfitReport`, `getInventoryReport` | per-sale cost and profit, per-vehicle `purchasePrice` / `sourceCost` / `totalInvestment` for the whole lot | view:reports | unchanged | OWNER QUESTION Q2 |
-| `accountingReports.supplierPayablesReconciliation`, `supplierReceivablesReconciliation`, `vehicleInventoryReconciliation` | per-currency supplier and inventory totals (one SOURCED car makes the total that car's cost) | view:finance | unchanged | OWNER QUESTION Q3 |
-| `accountingLedger.listJournalEntries`, `getJournalEntry` | inventory and payable journal lines | view:finance | unchanged | OWNER QUESTION Q3 |
+| `dashboard.stats` | profit and cost metrics | view:expenses / reports / finance (cost block) | that any-of AND view:cost_price (else gross basis, no margin) | GATED (Q4, "Yes, gate all"; fail-soft) |
+| `supplierCostRecoveries.list`, `listReceipts` | supplier-borne expense owed back | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (Q1) |
+| `reports.getSalesAndProfitReport`, `getInventoryReport` | per-sale cost and profit, per-vehicle `purchasePrice` / `sourceCost` / `totalInvestment` for the whole lot | view:reports | view:reports AND view:cost_price (else `null`) | GATED (Q2; fail-soft null) |
+| `accountingReports.supplierPayablesReconciliation`, `supplierReceivablesReconciliation`, `vehicleInventoryReconciliation` | per-currency supplier and inventory totals (one SOURCED car makes the total that car's cost) | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (Q3; refuses) |
+| `accountingLedger.listJournalEntries`, `getJournalEntry` | inventory and payable journal lines | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (Q3; refuses) |
 
 ## Consequences
 
@@ -55,10 +55,18 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   role without cost access no longer reaches them through the sourcing screen. That is the intended effect; the mutations keep their own gates.
 - Screens: the web sourcing page and the mobile sourcing module ask for the same pair before they query, skip the queries otherwise,
   and show a truthful note in English and Arabic ("you need cost-price access to view supplier payables") instead of an error or an
-  empty list. The recoveries section is not changed (Q1).
+  empty list. The recoveries section (inside the sourcing page) now needs the same pair and renders nothing without it.
+- Follow-up (owner ruling "Yes, gate all", Q1-Q4): the sales and inventory reports return `null` without `view:cost_price`; the web
+  reports page and the mobile reports module skip those two queries and show an English and Arabic note (mobile tiles show a dash,
+  not a zero). The web General Ledger tab shows a note instead of the journal, since its readers now refuse. The reconciliations have
+  no screen. `dashboard.stats` already degrades to the gross basis, so the dashboard screen is unchanged.
+- Trade-off of Q2: a report-only role loses revenue figures with the cost, because the report is one payload. The alternative is to
+  withhold only cost columns; that is a separate change if the owner wants revenue kept.
+- Not gated, same class, awaiting a ruling: `reports.getSalespersonPerformance`, `getExpensesReport`, `accountingLedger.getAccountActivity`,
+  trial balance, balance sheet, `accountingReports.subledgerReconciliation`.
 - Evidence boundary: `convex-test` role fixtures and rendered screens at desktop and mobile widths. No production run.
 
-## Owner questions (not decided here; no code changed for them)
+## Owner questions (decided "Yes, gate all", recorded in SCRUM-902; the text below is the question as asked)
 
 - Q1. Do `supplierCostRecoveries.list` / `listReceipts` (supplier-borne expenses owed back) count as acquisition cost? Consistency
   argues yes: `supplierDueAging.list` already gates the RECOVERY family on the pair, and `outstandingSummary` (gated here) includes recovery totals.

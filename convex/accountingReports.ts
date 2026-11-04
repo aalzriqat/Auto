@@ -17,6 +17,8 @@ import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
+// SCRUM-902: supplier and inventory totals are acquisition cost; they need the supplier statement's pair.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
@@ -859,7 +861,7 @@ export async function computeVehicleInventoryReconciliation(
 export const vehicleInventoryReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeVehicleInventoryReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1352,7 +1354,7 @@ export async function computeSupplierPayablesReconciliation(
 export const supplierPayablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeSupplierPayablesReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1910,7 +1912,7 @@ export const supplierReceivablesReconciliation = query({
   }),
   handler: async (ctx, args) => {
     try {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
       await requireFeature(ctx, args.orgId, "accounting");
       return await computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
     } catch (error) {

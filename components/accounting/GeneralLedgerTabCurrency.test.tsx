@@ -39,6 +39,15 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   }),
 }));
 
+let mockHeldPermissions: string[] = ["view:finance", "view:cost_price"];
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({
+    isLoading: false,
+    isOwner: false,
+    hasAllPermissions: (perms: string[]) => perms.every((p) => mockHeldPermissions.includes(p)),
+  }),
+}));
+
 vi.mock("@/hooks/useOrgSettings", () => ({
   useOrgSettings: () => ({
     currencySymbol: mockOrgCurrency,
@@ -92,6 +101,7 @@ import { fireEvent, waitFor } from "@testing-library/react";
 describe("GeneralLedgerTab - Currency and Scale Invariants", () => {
   afterEach(() => {
     cleanup();
+    mockHeldPermissions = ["view:finance", "view:cost_price"];
     mockOrgCurrency = "JOD";
     mockEntryDetails = null;
     mockJournalPage = {
@@ -112,6 +122,15 @@ describe("GeneralLedgerTab - Currency and Scale Invariants", () => {
     mockPeriods = [
       { _id: "period_1", fiscalYear: 2026, periodNumber: 9, startDate: 1725148800000, endDate: 1727740799999 },
     ];
+  });
+
+  test("General ledger view: a role with view:finance but without view:cost_price sees the access note, not the journal (SCRUM-902)", () => {
+    mockHeldPermissions = ["view:finance"];
+
+    render(<GeneralLedgerTab />);
+
+    expect(screen.getByRole("status").textContent).toBe("LedgerCostAccessRequired");
+    expect(screen.queryByText("JE-001")).toBeNull();
   });
 
   test("renders JOD 3-decimal debit and credit with account code and name", async () => {

@@ -1,0 +1,39 @@
+{
+  "id": "reconciliations-and-journal-readers-still-serve-finance-and-cost-price",
+  "fingerprint": "becaabed8189444d1f7c698689b8354cdc7090a15a341f4016f7377453f1889a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-and-cost",
+        "org": "A"
+      },
+      "action": "accountingLedger.listJournalEntries",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "rows"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902.test.ts",
+    "testName": "reconciliations and journal readers: a role holding both view:finance and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

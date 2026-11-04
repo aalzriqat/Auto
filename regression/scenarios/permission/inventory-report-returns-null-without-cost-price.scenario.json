@@ -1,0 +1,43 @@
+{
+  "id": "inventory-report-returns-null-without-cost-price",
+  "fingerprint": "8262060e3e891b98ffe7b7f09947b4052fffbca853b79f343e8cdd6e60849155",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-only",
+        "org": "A"
+      },
+      "action": "reports.getInventoryReport",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902.test.ts",
+    "testName": "reports.getInventoryReport: a role with view:reports but without view:cost_price gets null, not purchase price and investment (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "ef03e298f866a1cf1bebc71d66fa6941bce36aa5"
+  }
+}

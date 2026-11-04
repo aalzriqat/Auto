@@ -6,6 +6,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { scaleForCurrency, supportedCurrencyScale } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -125,6 +127,10 @@ export function GeneralLedgerTab() {
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const formatInCurrency = useCurrencyFormatterInCurrency();
+  // SCRUM-902: journal entries carry acquisition cost, so the readers need view:cost_price as well as view:finance.
+  const { hasAllPermissions, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const canReadJournal = isOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+  const journalEnabled = canReadJournal && !permissionsLoading;
 
   const [activeLedgerView, setActiveLedgerView] = useState<"gl" | "register">("gl");
   const [selectedEntryId, setSelectedEntryId] = useState<Id<"journalEntries"> | null>(null);
@@ -166,7 +172,7 @@ export function GeneralLedgerTab() {
     loadMore: loadMoreJournalEntries,
   } = usePaginatedQuery(
     api.accountingLedger.listJournalEntries,
-    activeOrgId && activeLedgerView === "gl"
+    activeOrgId && activeLedgerView === "gl" && journalEnabled
       ? {
           orgId: activeOrgId,
           ...(glPeriodId !== "ALL" ? { periodId: glPeriodId } : {}),
@@ -178,7 +184,7 @@ export function GeneralLedgerTab() {
 
   const entryDetails = useQuery(
     api.accountingLedger.getJournalEntry,
-    activeOrgId && selectedEntryId ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
+    activeOrgId && selectedEntryId && journalEnabled ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
   );
 
   const { results: transactions, status, loadMore } = usePaginatedQuery(
@@ -242,7 +248,11 @@ export function GeneralLedgerTab() {
         </div>
       </div>
 
-      {activeLedgerView === "gl" ? (
+      {activeLedgerView === "gl" && !permissionsLoading && !canReadJournal ? (
+        <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+          {t("LedgerCostAccessRequired" as any)}
+        </div>
+      ) : activeLedgerView === "gl" ? (
         <>
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">

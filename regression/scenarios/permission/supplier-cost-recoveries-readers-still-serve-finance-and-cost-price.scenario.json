@@ -1,0 +1,39 @@
+{
+  "id": "supplier-cost-recoveries-readers-still-serve-finance-and-cost-price",
+  "fingerprint": "55432a9acef9c363f98028787decafbd4f591f049116a423b957a0575168207a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-and-cost",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "rows"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902.test.ts",
+    "testName": "supplierCostRecoveries readers: a role holding both view:finance and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

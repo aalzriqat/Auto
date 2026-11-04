@@ -106,6 +106,9 @@ export const getSalesAndProfitReport = query({
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // SCRUM-902: per-sale cost and profit are acquisition-cost figures. Withheld as a whole (null), never zeroed, and
+    // never thrown: the reports screen subscribes to this query while it loads.
+    if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
     // Employees' pay is not part of view:reports.
     const canSeeCommissions =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
@@ -340,7 +343,9 @@ export const getInventoryReport = query({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // SCRUM-902: purchase price, sourceCost and total investment per vehicle are acquisition cost. See the sales report.
+    if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
 
     const rateStatus = await rateLimiter.check(ctx, "heavyRead");
     if (!rateStatus.ok) {

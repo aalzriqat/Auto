@@ -39,7 +39,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
-const PERMS = ["manage:finance", "view:finance"];
+const PERMS = ["manage:finance", "view:finance", "view:cost_price"];
 const AMOUNT_MINOR = 123_400;
 
 // chartOfAccounts.initialize and accountingPeriods.create queue scheduler work; fake timers are installed

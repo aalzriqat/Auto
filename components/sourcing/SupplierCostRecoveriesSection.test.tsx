@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 
 const stubs = vi.hoisted(() => ({
   calls: [] as Array<{ name: string; args: Record<string, unknown> }>,
+  denied: [] as string[],
 }));
 
 vi.mock("@/components/providers/OrgProvider", () => ({
@@ -18,7 +19,7 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({ t: (key: string) => key, isRtl: false, locale: "en" }),
 }));
 vi.mock("@/hooks/use-permissions", () => ({
-  usePermissions: () => ({ isLoading: false, hasPermission: () => true }),
+  usePermissions: () => ({ isLoading: false, hasPermission: (p: string) => !stubs.denied.includes(p) }),
 }));
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/payments/PaymentMethodSelect", () => ({
@@ -75,8 +76,15 @@ import { SupplierCostRecoveriesSection } from "./SupplierCostRecoveriesSection";
 
 beforeEach(() => {
   stubs.calls.length = 0;
+  stubs.denied = [];
 });
 afterEach(cleanup);
+
+test("supplier cost recoveries section: a role with view:finance but without view:cost_price sees nothing (SCRUM-902)", () => {
+  stubs.denied = ["view:cost_price"];
+  const { container } = render(<SupplierCostRecoveriesSection />);
+  expect(container.textContent).toBe("");
+});
 
 function openDialog() {
   render(<SupplierCostRecoveriesSection />);

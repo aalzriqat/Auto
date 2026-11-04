@@ -1,0 +1,39 @@
+{
+  "id": "reports-still-serve-reports-and-cost-price",
+  "fingerprint": "292670570cd20b2e4cd8e7abcc74e714617e1c7808945b53e78b9d22219407b1",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-and-cost",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "report"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902.test.ts",
+    "testName": "reports: a role holding both view:reports and view:cost_price still gets both reports (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

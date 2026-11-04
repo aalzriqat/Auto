@@ -20,6 +20,8 @@ import {
 import { auditLog } from "./financialAudit";
 import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+// SCRUM-902: a supplier-borne cost is part of the acquisition cost, so its readers share the supplier statement's pair.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 
 /**
  * SCRUM-389 — recovering supplier-borne vehicle costs.
@@ -202,7 +204,7 @@ export const list = query({
     complete: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     const LIMIT = 200;
     const rows = args.status
       ? await ctx.db
@@ -265,7 +267,7 @@ export const listReceipts = query({
     })
   ),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.");
     const receipts = await ctx.db
       .query("supplierCostRecoveryReceipts")

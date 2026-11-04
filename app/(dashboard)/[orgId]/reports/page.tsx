@@ -56,6 +56,8 @@ import {
   unknownMarginCountOf,
 } from "@/lib/saleReporting";
 import { RoleGuard } from "@/components/auth/RoleGuard";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { paginationOptsValidator } from "convex/server";
 import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 
@@ -189,8 +191,23 @@ export default function ReportsPage() {
   return <RoleGuard permissions={["view:reports"]}><ReportsContent /></RoleGuard>;
 }
 
+/**
+ * SCRUM-902: the sales and inventory reports carry acquisition cost and profit, so the server returns null to a role
+ * without view:cost_price. This note replaces them; the other tabs are unaffected.
+ */
+function CostAccessNote({ t }: Readonly<{ t: (k: string) => string }>) {
+  return (
+    <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
+      {t("ReportsCostAccessRequired")}
+    </div>
+  );
+}
+
 function ReportsContent() {
   const { activeOrgId } = useOrg();
+  const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const canSeeCost = isOwner || hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  const costQueriesEnabled = canSeeCost && !permissionsLoading;
   const { t } = useLanguage();
   const { format, formatCompact } = useCurrency();
 
@@ -204,8 +221,8 @@ function ReportsContent() {
   const startDate = dateInputToUtcMs(startDateStr);
   const endDate = dateInputEndToUtcMs(endDateStr);
 
-  const salesReport = useQuery(api.reports.getSalesAndProfitReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
-  const inventoryReport = useQuery(api.reports.getInventoryReport, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const salesReport = useQuery(api.reports.getSalesAndProfitReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const inventoryReport = useQuery(api.reports.getInventoryReport, activeOrgId && costQueriesEnabled ? { orgId: activeOrgId } : "skip");
   const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const performanceReport = useQuery(api.reports.getSalespersonPerformance, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
@@ -282,6 +299,7 @@ function ReportsContent() {
 
           {/* SALES REPORT */}
           <TabsContent value="sales" className="space-y-4 m-0">
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -414,10 +432,12 @@ function ReportsContent() {
                 </TableBody>
               </Table>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* INVENTORY REPORT */}
           <TabsContent value="inventory" className="space-y-4 m-0">
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("InventoryValuation")}</h3>
@@ -542,6 +562,7 @@ function ReportsContent() {
                 </TableBody>
               </Table>
             </Card>
+            </>)}
           </TabsContent>
 
           {/* EXPENSES REPORT */}
