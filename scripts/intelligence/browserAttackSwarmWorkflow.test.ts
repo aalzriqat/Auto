@@ -9,7 +9,7 @@ import {
   OFFLINE_SWARM_CLERK_PLACEHOLDER_SECRET,
 } from "../../lib/offlineSwarmClerk";
 import { EGRESS_EVIDENCE_PATH } from "./browserEgressProofVerify.mjs";
-import { ENV_ALLOWLIST, buildDockerRunArgs, waitForBackend } from "../localConvexBackend.mjs";
+import { ENV_ALLOWLIST, buildDockerRunArgs, buildEnvPlan, waitForBackend } from "../localConvexBackend.mjs";
 
 type WorkflowStep = {
   id?: string;
@@ -273,26 +273,26 @@ describe("SCRUM-350 trusted browser swarm workflow authority", () => {
     );
   });
 
-  it("sets backend variables on the main E2E preview only after its cleanup pin is recorded", () => {
+  it("SCRUM-892: gives the main E2E backend its public-form variables from the local env step, before the deploy, with no remote env setter", () => {
     const steps = trustedMainE2EWorkflow.jobs?.playwright?.steps ?? [];
-    const setter = steps.find((entry) => String(entry.run ?? "").includes("convex env set"));
-    expect(setter, "a step that sets the preview's backend variables").toBeDefined();
-    // The pin step only warns on failure, so a failed pin must stop the setter
-    // here: otherwise the preview is changed while the always() delete step,
-    // which needs CONVEX_PREVIEW_CREATED_AT, would skip its cleanup.
-    expect(setter?.env).toHaveProperty("CONVEX_PREVIEW_CREATED_AT");
-    const run = String(setter?.run ?? "");
-    const guard = run.indexOf('if [ -z "${CONVEX_PREVIEW_CREATED_AT:-}" ]');
-    expect(guard, "a CONVEX_PREVIEW_CREATED_AT guard in the setter").toBeGreaterThanOrEqual(0);
-    // The guard comes before the admin-key claim too, so a failed pin touches the control plane not at all.
-    const claim = run.indexOf("resolveConvexPreviewCredentials");
-    expect(claim).toBeGreaterThanOrEqual(0);
-    expect(guard).toBeLessThan(claim);
-    expect(guard).toBeLessThan(run.indexOf("convex env set"));
-    expect(run.slice(guard, run.indexOf("convex env set"))).toContain("exit 1");
-    const pinIndex = steps.findIndex((entry) => String(entry.run ?? "").includes("previewDeploymentLifecycle.mjs pin"));
-    expect(pinIndex).toBeGreaterThanOrEqual(0);
-    expect(steps.indexOf(setter!)).toBeGreaterThan(pinIndex);
+    // The disposable cloud preview and its cleanup pin are gone; the dealer-site
+    // spec's variables (TURNSTILE_SECRET_KEY, NEXT_PUBLIC_APP_URL) are set by the
+    // trusted `env` subcommand on this job's own local backend.
+    expect(steps.some((entry) => String(entry.run ?? "").includes("convex env set"))).toBe(false);
+    const names = buildEnvPlan({
+      publishableKey: `pk_test_${Buffer.from("unit-test-instance.clerk.accounts.dev$").toString("base64url")}`,
+      appUrl: "http://127.0.0.1:3000",
+    }).map(([name]) => name);
+    expect(names).toContain("TURNSTILE_SECRET_KEY");
+    expect(names).toContain("NEXT_PUBLIC_APP_URL");
+    const setter = steps.findIndex((entry) => entry.run?.trim() === "node scripts/localConvexBackend.mjs env");
+    const start = steps.findIndex((entry) => entry.run?.trim() === "node scripts/localConvexBackend.mjs start");
+    const deploy = steps.findIndex((entry) => String(entry.run ?? "").includes("convex deploy"));
+    expect(setter).toBeGreaterThan(start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    // convex/auth.config.ts is evaluated at deploy time, so the variables precede it.
+    expect(deploy).toBeGreaterThan(setter);
+    expect(steps[setter]?.env?.NEXT_PUBLIC_APP_URL).toBe("http://127.0.0.1:3000");
   });
 
   it("runs only as a successful Playwright workflow_run follow-up", () => {

@@ -9,7 +9,11 @@ export type { OrgBranding };
 interface QuotePrintTemplateProps {
   paymentType: "CASH" | "INSTALLMENT";
   wizardData: WizardData;
-  selectedVehicle?: Doc<"vehicles">;
+  /**
+   * The single-vehicle spec table reads only these display fields, so the prop is narrowed to them: the customer
+   * screen passes the server's permission-aware projection (no cost fields), the wizard passes the full document.
+   */
+  selectedVehicle?: Pick<Doc<"vehicles">, "make" | "model" | "year" | "trim" | "vin" | "mileage" | "fuelType" | "notes">;
   /** 2+ vehicles on a CASH quote — when present, renders a per-vehicle table instead of the single-vehicle spec table. */
   selectedVehicles?: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
   selectedCompany?: Doc<"financeCompanies">;

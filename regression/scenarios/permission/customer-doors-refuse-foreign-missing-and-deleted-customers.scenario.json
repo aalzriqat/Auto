@@ -1,0 +1,63 @@
+{
+  "id": "customer-doors-refuse-foreign-missing-and-deleted-customers",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "customers.update",
+      "input": {
+        "customerId": "OTHER_ORG_CUSTOMER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "customers.softDelete",
+      "input": {
+        "customerId": "DELETED_CUSTOMER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "allDoors.refusedForeignMissingDeleted",
+      "value": true
+    },
+    {
+      "observable": "refusal.codeMatchesDoor",
+      "value": true
+    },
+    {
+      "observable": "writes.rowCount",
+      "value": 0
+    },
+    {
+      "observable": "positiveControl.sameOrgAccepted",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-customer-reference-ownership",
+  "impl": {
+    "file": "convex/customersReferenceOwnership.test.ts",
+    "testName": "every customer door refuses a foreign, missing and soft-deleted customer and writes nothing"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-10-31"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "dfaff7d97504ee740854eb9e4e56e45cf54678ddf52c9c8a0fd539f1ec09fad4"
+}
