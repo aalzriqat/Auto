@@ -31,6 +31,8 @@ const FULL_PERMS = [
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "view:customers", "create:customers",
   "manage:finance", "view:finance", "view:reports",
+  // SCRUM-902: the profit headline needs view:cost_price as well as view:finance.
+  "view:cost_price",
 ];
 
 /** Everything except `view:finance` — the salesperson who may not see margins. */
