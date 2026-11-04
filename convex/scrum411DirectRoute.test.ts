@@ -235,6 +235,7 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
     expect(ledgerNet).toBe(2_125_000);
 
     const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!report) throw new Error("report withheld");
     const performance = await s.owner.as.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...WINDOW() });
     const dashboard = await s.owner.as.query(api.dashboard.stats, { orgId: s.orgId, timeRange: "ALL_TIME" });
     expect(report.sales[0].isAgentSale).toBe(true);
@@ -252,6 +253,7 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
     const s = await seed("r2");
     await closeDirect(s, { gapMinor: R });
     const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].recognizedRevenue).toBe(2_625);
     expect(report.totalProfit).toBe(2_625);
   });
@@ -262,10 +264,12 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
 
     await s.t.run((ctx) => ctx.db.patch(saleId, { consignedMarginMinor: undefined }));
     const survived = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!survived) throw new Error("report withheld");
     expect(survived.totalProfit).toBe(2_125);
 
     await s.t.run((ctx) => ctx.db.patch(saleId, { financedNetRevenue: undefined }));
     const withheld = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!withheld) throw new Error("report withheld");
     expect(withheld.sales[0].recognizedRevenue).toBeNull();
     expect(withheld.totalProfit).toBe(0);
   });
@@ -276,11 +280,13 @@ describe("SCRUM-411 - direct route: every report reads the ledger's net commissi
 
     await s.t.run((ctx) => ctx.db.patch(saleId, { financedNetRevenue: { minor: 2_125_000.5, currency: "JOD" } }));
     const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].recognizedRevenue).toBeNull();
     expect(report.totalProfit).toBe(0);
 
     await s.t.run((ctx) => ctx.db.patch(saleId, { financedNetRevenue: { minor: 2_125_000, currency: "USD" } }));
     const wrongCurrency = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!wrongCurrency) throw new Error("report withheld");
     expect(wrongCurrency.sales[0].recognizedRevenue).toBeNull();
   });
 });

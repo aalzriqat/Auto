@@ -19,7 +19,7 @@ async function setup() {
     ctx.db.insert("users", { clerkId: "user_r1", email: "r@test.com", name: "Reports User" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:reports"] })
+    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:reports", "view:cost_price"] })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const asUser = t.withIdentity({ subject: "user_r1" });
@@ -161,6 +161,7 @@ describe("getInventoryReport — investment valuation", () => {
     );
 
     const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+    if (!report) throw new Error("report withheld");
 
     // 20,000 purchase + 500 landed. Reading landedCostTotal as a fallback for
     // purchasePrice reported 500 and silently dropped the whole 20,000.
@@ -201,6 +202,7 @@ describe("getInventoryReport — investment valuation", () => {
     );
 
     const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+    if (!report) throw new Error("report withheld");
 
     expect(report.vehicles[0].totalExpenses).toBe(0);
     expect(report.totalValue).toBe(10_000);
@@ -247,6 +249,7 @@ describe("reports range guard", () => {
       startDate,
       endDate,
     });
+    if (!report) throw new Error("report withheld");
     expect(report).toBeTruthy();
   });
 });

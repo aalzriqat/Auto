@@ -27,7 +27,7 @@ async function seedPhase2Dealer() {
     ctx.db.insert("roles", {
       orgId,
       name: "Finance",
-      permissions: ["view:sales", "manage:finance", "view:finance"],
+      permissions: ["view:sales", "manage:finance", "view:finance", "view:cost_price"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));

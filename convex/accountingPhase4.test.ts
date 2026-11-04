@@ -35,7 +35,7 @@ async function seedPhase4Dealer() {
       orgId,
       name: "Owner",
       permissions: [
-        "view:sales", "manage:finance", "view:finance", "manage:vehicles",
+        "view:sales", "manage:finance", "view:finance", "view:cost_price", "manage:vehicles",
         "create:expenses", "view:expenses", "approve:requests",
       ],
     })

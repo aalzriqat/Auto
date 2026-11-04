@@ -2388,6 +2388,7 @@ describe("Review issue #4 — a post-sale repair can never retroactively join th
     const report = await asOwner.query(api.reports.getSalesAndProfitReport, {
       orgId, startDate: Date.UTC(2025, 0, 1), endDate: Date.UTC(2025, 11, 31),
     });
+    if (!report) throw new Error("report withheld");
     const saleRow = report.sales.find((s) => s.vehicleId === vehicleId);
     expect(saleRow?.totalCost).toBe(10000);
   });

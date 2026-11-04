@@ -1,6 +1,6 @@
 {
   "id": "dashboard-stats-withholds-profit-without-cost-price",
-  "fingerprint": "728b5722c19f159c14244c3b52dcee2cdb73edf419570c83220de60f5ead34de",
+  "fingerprint": "271623104ac9daf964a02c98dc34be299bb48824b443dbd60683ec4fd0dc293a",
   "domain": "permission",
   "level": "backend",
   "status": "active",
@@ -30,7 +30,7 @@
     },
     {
       "observable": "costLoop",
-      "value": "not run"
+      "value": "skipped"
     }
   ],
   "rulings": [

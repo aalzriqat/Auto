@@ -453,6 +453,7 @@ describe("reports show the margin after commissions (display only)", () => {
     await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25 });
 
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     const row = report.sales[0];
     expect(row.netProfit).toBe(5000);
     expect(row.commissionsTotal).toBe(125);
@@ -470,6 +471,7 @@ describe("reports show the margin after commissions (display only)", () => {
   test("an undecided salesperson commission gives no net figure and is counted, not zeroed", async () => {
     const { s } = await costedSale("rep2", [...ADMIN, "view:reports", "view:cost_price"]);
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].commissionPending).toBe(true);
     expect(report.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report.totalNetProfitAfterCommissions).toBe(0);
@@ -479,6 +481,7 @@ describe("reports show the margin after commissions (display only)", () => {
   test("a caller without view:commissions gets no commission figures", async () => {
     const { s } = await costedSale("rep3", ["view:reports", "view:cost_price", "create:sales", "view:sales", "view:vehicles"]);
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].commissionsTotal).toBeNull();
     expect(report.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report.totalCommissions).toBeNull();

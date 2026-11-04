@@ -26,10 +26,13 @@ async function completePostedReportingFixture(ctx: MutationCtx, journalEntryId: 
   const journal = await ctx.db.get(journalEntryId);
   if (!journal || journal.status !== "POSTED") throw new Error("Posted report fixture required");
   if (journal.periodId) throw new Error("Report fixture already completed");
-  const period = await ctx.db.query("accountingPeriods")
+  // Same selection as the former index-plus-range read, done in memory: the fixture org has a handful of periods.
+  const orgPeriods = await ctx.db.query("accountingPeriods")
     .withIndex("by_org", q => q.eq("orgId", journal.orgId))
-    .filter(q => q.and(q.lte(q.field("startDate"), journal.accountingDate), q.gte(q.field("endDate"), journal.accountingDate)))
-    .unique();
+    .take(100);
+  const covering = orgPeriods.filter((p) => p.startDate <= journal.accountingDate && p.endDate >= journal.accountingDate);
+  if (covering.length > 1) throw new Error("Report fixture period must be unique");
+  const period = covering[0] ?? null;
   if (!period) throw new Error("Report fixture period required");
   const lines = await ctx.db.query("journalLines")
     .withIndex("by_journal_entry", q => q.eq("journalEntryId", journalEntryId)).collect();
@@ -66,7 +69,7 @@ async function seedReportingDealer() {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId, name: "Owner",
-      permissions: ["view:sales", "manage:finance", "view:finance", "create:expenses", "view:expenses", "create:customers"],
+      permissions: ["view:sales", "manage:finance", "view:finance", "view:cost_price", "create:expenses", "view:expenses", "create:customers"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
