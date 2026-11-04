@@ -1010,6 +1010,7 @@ are serial harness evidence, not platform, browser or production certification.
 | SCRUM907-repair | Bounded cursor page repairs mismatch; rerun changes zero; STOCK/deleted untouched | repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched |
 | SCRUM907-repair-lock | Posted acquisition counted locked and untouched | repair reports posted-cost locks and does not change them |
 | SCRUM907-repair-history | Sold/opening locks and missing cost counted; none patched | repair reports sold, opening-locked and unreadable supplier costs without changing them |
+| SCRUM907-echo | A changed request records its mirror; an unchanged source-cost echo still refuses with No changes detected | `vehicleCostDisclosureWrites.scrum886.test.ts`: control: a requester who may read cost can still request a cost change |
 
 Deploy rollout phase 2f uses a tested `releaseGuard.ts` helper, pages of at most
 25 vehicles, the shared deadline and a 10,000-page cap. Outstanding locked/invalid

@@ -294,7 +294,7 @@ export const requestUpdate = mutation({
     }
     const payload = normalizeVehicleEditPayload(args.payload);
     assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
-    Object.assign(payload, sourcedCostMirrorPatch(vehicle, payload));
+    const costMirror = sourcedCostMirrorPatch(vehicle, payload);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,
@@ -404,6 +404,7 @@ export const requestUpdate = mutation({
     if (Object.keys(filteredPayload).length === 0) {
       throw new ConvexError("No changes detected.");
     }
+    Object.assign(filteredPayload, costMirror);
 
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
