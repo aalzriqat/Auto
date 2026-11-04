@@ -1,0 +1,111 @@
+{
+  "id": "supplier-history-byte-budget-is-shared-across-families",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review-r2",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertPayables",
+      "input": {
+        "count": 20,
+        "paidJod": 9500,
+        "status": "PAID",
+        "paymentNotesChars": 900000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openSupplierReceivable",
+      "input": {
+        "marginJod": 3000,
+        "depositAppliedJod": 0,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amountJod": 500,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.complete",
+      "value": false
+    },
+    {
+      "observable": "payable.incompleteReason",
+      "value": "READ_BUDGET"
+    },
+    {
+      "observable": "payable.totals",
+      "value": "withheld"
+    },
+    {
+      "observable": "receivable.complete",
+      "value": false
+    },
+    {
+      "observable": "receivable.incompleteReason",
+      "value": "READ_BUDGET"
+    },
+    {
+      "observable": "receivable.totals",
+      "value": "withheld"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "the budget is shared across families: heavy payables use it up, and the receivable side is withheld rather than thrown"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c94a39db33cc550c7b4d3c848716d90088cf9d64"
+  },
+  "fingerprint": "75258c02ff1e97eeb966786fd048e05e90a3ca329529fdbf8243a52c9b9f6037"
+}

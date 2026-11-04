@@ -1,0 +1,79 @@
+{
+  "id": "supplier-outstanding-heavy-linked-sales-are-incomplete-not-a-read-error",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-round5",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertPayablesWithLinkedSales",
+      "input": {
+        "status": "DUE_ON_SALE",
+        "count": 20,
+        "saleIdempotencyKeyChars": 900000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "query.limitError",
+      "value": false
+    },
+    {
+      "observable": "payable.complete",
+      "value": false
+    },
+    {
+      "observable": "payable.incompleteReason",
+      "value": "READ_BUDGET"
+    },
+    {
+      "observable": "payable.totals",
+      "value": "withheld"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStatement.scrum869.test.ts",
+    "testName": "20 payables whose linked sales are ~0.9 MB each: the section is incomplete (READ_BUDGET), never a thrown read error"
+  },
+  "matrixRow": "SCRUM869-supplier-read-limits",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6"
+  },
+  "fingerprint": "b6989546bc1f2c4405e8b48061193547ca1f5e71e3ae660aae1c6e55a2423b4c"
+}
