@@ -29,9 +29,9 @@ const LABEL_AR = "فرق أرصدة افتتاحية غير مفسر قيد ال
 
 // Synthetic balances. Debits 170_000 = advance 100_000 + recoverable 50_000 + custom recoverable 20_000;
 // credits 170_000 = capital 80_000 + custom payable 30_000 + retained-earnings offset 60_000.
-async function fixture(openingDate?: number, unallocatedLiability = false) {
+async function fixture(openingDate?: number, unallocatedLiability = false, limited = false) {
   await import("./accountingOutbox");
-  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"), limited ? { transactionLimits: true } : {});
   registerRateLimiter(t);
   const ids = await t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "QA TEST closure readers", createdAt: Date.now() });
@@ -845,6 +845,16 @@ test("an organization with no opening history gets no opening warning from a que
 }));
 
 
+type SeededFamily = {
+  sourceType: string;
+  eventType: "EMPLOYEE_ADVANCE_PAID" | "SUPPLIER_COST_RECOVERY_RECEIVED";
+  advanceRow: boolean;
+};
+const ADVANCE_FAMILY: SeededFamily = { sourceType: "employeeAdvances", eventType: "EMPLOYEE_ADVANCE_PAID", advanceRow: true };
+const RECOVERY_FAMILY: SeededFamily = {
+  sourceType: "supplierCostRecoveryReceipts", eventType: "SUPPLIER_COST_RECOVERY_RECEIVED", advanceRow: false,
+};
+
 /** Seeds pairs native advances, each issued once and reversed once, so 2 * pairs journals sit on the advances account. */
 async function seedReversedAdvancePairs(
   t: Seed["t"],
@@ -854,28 +864,34 @@ async function seedReversedAdvancePairs(
   actorId: Id<"users">,
   pairs: number,
   tag: string,
+  family: SeededFamily = ADVANCE_FAMILY,
+  balancingAccountId?: Id<"chartOfAccounts">,
 ) {
+  // Seed in chunks: under `transactionLimits` each insert's triggers also count against one function's read ceilings.
+  for (let from = 0; from < pairs; from += SEED_CHUNK) {
   await t.run(async (ctx) => {
     const now = Date.now();
-    for (let i = 0; i < pairs; i++) {
-      const advId = await ctx.db.insert("employeeAdvances", {
-        orgId,
-        userId: employeeId,
-        amountMinor: 1000,
-        recoveredMinor: 1000,
-        currency: "JOD",
-        date: now,
-        status: "RECOVERED",
-        isDeleted: true,
-        createdAt: now,
-        updatedAt: now,
-      });
+    for (let i = from; i < Math.min(pairs, from + SEED_CHUNK); i++) {
+      const advId = family.advanceRow
+        ? String(await ctx.db.insert("employeeAdvances", {
+            orgId,
+            userId: employeeId,
+            amountMinor: 1000,
+            recoveredMinor: 1000,
+            currency: "JOD",
+            date: now,
+            status: "RECOVERED",
+            isDeleted: true,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        : `${tag}-src-${i}`;
 
       const forwardEventId = await ctx.db.insert("accountingEvents", {
         orgId,
-        eventType: "EMPLOYEE_ADVANCE_PAID",
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
+        eventType: family.eventType,
+        sourceType: family.sourceType,
+        sourceId: advId,
         eventVersion: 1,
         idempotencyKey: `${tag}-fwd-event-${i}`,
         occurredAt: now,
@@ -892,8 +908,8 @@ async function seedReversedAdvancePairs(
         accountingEventId: forwardEventId,
         journalNumber: `JE-${tag}-F${i}`,
         accountingDate: now,
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
+        sourceType: family.sourceType,
+        sourceId: advId,
         category: "SYSTEM",
         memo: `Pilot advance ${i}`,
         status: "REVERSED",
@@ -916,13 +932,17 @@ async function seedReversedAdvancePairs(
         scale: 2,
         accountingDate: now,
       });
+      if (balancingAccountId) {
+        await ctx.db.insert("journalLines", { orgId, journalEntryId: forwardJournalId, lineNumber: 2, accountId: balancingAccountId,
+          debitMinor: 0, creditMinor: 1000, currency: "JOD", scale: 2, accountingDate: now });
+      }
 
       // Reversal
       const revEventId = await ctx.db.insert("accountingEvents", {
         orgId,
-        eventType: "EMPLOYEE_ADVANCE_PAID",
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
+        eventType: family.eventType,
+        sourceType: family.sourceType,
+        sourceId: advId,
         eventVersion: 1,
         idempotencyKey: `${tag}-rev-event-${i}`,
         occurredAt: now,
@@ -940,8 +960,8 @@ async function seedReversedAdvancePairs(
         accountingEventId: revEventId,
         journalNumber: `JE-${tag}-R${i}`,
         accountingDate: now,
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
+        sourceType: family.sourceType,
+        sourceId: advId,
         category: "REVERSAL",
         memo: `Pilot reversal ${i}`,
         status: "POSTED",
@@ -965,9 +985,15 @@ async function seedReversedAdvancePairs(
         scale: 2,
         accountingDate: now,
       });
+      if (balancingAccountId) {
+        await ctx.db.insert("journalLines", { orgId, journalEntryId: revJournalId, lineNumber: 2, accountId: balancingAccountId,
+          debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: now });
+      }
     }
   });
+  }
 }
+const SEED_CHUNK = 32;
 
 /** Seeds count journals of one source type that touch no account at all: organization-wide history of another family. */
 async function seedUnrelatedJournals(t: Seed["t"], orgId: Seed["orgId"], actorId: Id<"users">, sourceType: string, count: number) {
@@ -1085,7 +1111,7 @@ const countTableQueries = (table: string) => {
   return { counter, wrap };
 };
 
-test("the close checklist reads the whole ledger once for the three opening-family readers, and stays inside the document limit", () => withFrozenScheduler(async () => {
+test("the close checklist reads the whole ledger once for the three opening-family readers",() => withFrozenScheduler(async () => {
   const seed = await fixture();
   const { t, owner, orgId, employeeId, periodId } = seed;
   const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
@@ -1108,6 +1134,36 @@ test("the close checklist reads the whole ledger once for the three opening-fami
   expect(documents.reads.ranges).toBeLessThan(4_096);
 }), 120_000);
 const EXPECTED_PERIOD_READS = 5;
+
+// SCRUM-858 R11 (both seats, MEDIUM): sharing the whole-ledger read saved only 16 documents. With 1,024 reversed pairs
+// on EACH of the advances and supplier-recoverables controls, each journal balanced against cash, the checklist read
+// 38,045 documents in one function against Convex's 32,000 (https://docs.convex.dev/production/state/limits).
+// `transactionLimits: true` makes convex-test enforce those ceilings, so this fixture throws without the headroom guard
+// and must instead finish, with each opening reader truthfully AVAILABLE or UNAVAILABLE/OVER_LIMIT, never a platform throw.
+test("two-control history inside one checklist transaction never exceeds the Convex read limits", () => withFrozenScheduler(async () => {
+  const seed = await fixture(undefined, false, true);
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find((a) => a.systemKey === "EMPLOYEE_ADVANCES");
+  const receivable = accounts.find((a) => a.systemKey === "RECEIVABLE_FROM_SUPPLIERS");
+  const cash = accounts.find((a) => a.systemKey === "CASH_ON_HAND");
+  if (!advances || !receivable || !cash) throw new Error("Missing system accounts");
+  const actor = await t.run(async (ctx) => ctx.db.query("users").first());
+  if (!actor) throw new Error("Missing actor");
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 1024, "two-adv", ADVANCE_FAMILY, cash._id);
+  await seedReversedAdvancePairs(t, orgId, employeeId, receivable._id, actor._id, 1024, "two-rec", RECOVERY_FAMILY, cash._id);
+  const period = await t.run((ctx) => ctx.db.get(periodId));
+  const documents = makeObserver();
+  const checklist = await t.run((ctx) =>
+    computeCloseChecklist({ ...ctx, db: documents.observed(ctx.db) }, orgId, period!)
+  );
+  for (const reader of [checklist.employeeAdvancesReconciliation, checklist.supplierRecoverablesReconciliation]) {
+    if (reader.status === "UNAVAILABLE") expect(reader.unavailableReason).toBe("OVER_LIMIT");
+    else expect(reader.isReconciled).toBe(true);
+  }
+  expect(documents.reads.documents).toBeLessThan(32_000);
+  expect(documents.reads.ranges).toBeLessThan(4_096);
+}), 300_000);
 
 // SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide
 // history of other families must never make a small control history unavailable, and the scan must stay inside

@@ -143,7 +143,45 @@ test("draft path: a total above the safe-integer range is refused with a coded e
   expect(await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").first())).toBeNull();
 }));
 
-test("the largest exactly representable gap still balances to the unit", () => withFrozenScheduler(async () => {
+// R11 Seat 2: a draft prepared by the earlier float arithmetic is already stored. Approval re-runs a shared
+// preflight, which compared doubles, so this one-unit-out set (debit SAFE_MAX + 2, credit SAFE_MAX + suspense 1)
+// posted. The exact check must refuse it before any write and must not rewrite the reviewed lines.
+test("approving a stored draft that is a minor unit out is refused before any write and the draft is left as reviewed", () => withFrozenScheduler(async () => {
+  const seed = await setup();
+  await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, {
+    orgId: seed.orgId, expectedCurrency: "JOD", asOfDate: seed.asOfDate,
+    lines: [
+      { accountId: seed.cash._id, debitMinor: 100_000, creditMinor: 0 },
+      { accountId: seed.retained._id, debitMinor: 0, creditMinor: 60_000 },
+    ],
+  });
+  const stored = await seed.t.run(async (ctx) => {
+    const draft = await ctx.db.query("openingBalanceDrafts").first();
+    const suspense = (await ctx.db.query("chartOfAccounts").collect()).find((a) => a.systemKey === "OPENING_SUSPENSE");
+    const preparer = await ctx.db.insert("users", { clerkId: "suspense-preparer", email: "preparer@example.test" });
+    if (!draft || !suspense) throw new Error("Missing draft or suspense account");
+    const lines = [
+      { accountId: seed.cash._id, debitMinor: SAFE_MAX, creditMinor: 0 },
+      { accountId: seed.cash._id, debitMinor: 2, creditMinor: 0 },
+      { accountId: seed.retained._id, debitMinor: 0, creditMinor: SAFE_MAX },
+      { accountId: suspense._id, debitMinor: 0, creditMinor: 1 },
+    ];
+    await ctx.db.patch(draft._id, { lines, createdBy: preparer });
+    return { draftId: draft._id, lines };
+  });
+  await expect(seed.owner.mutation(api.accountingCutover.approveOpeningBalance, {
+    orgId: seed.orgId, draftId: stored.draftId,
+  })).rejects.toThrow(/OPENING_TOTAL_TOO_LARGE/);
+  const after = await seed.t.run(async (ctx) => ({
+    draft: await ctx.db.get(stored.draftId),
+    journals: (await ctx.db.query("journalEntries").collect()).filter((j) => j.category === "OPENING_BALANCE"),
+  }));
+  expect(after.journals).toHaveLength(0);
+  expect(after.draft?.status).toBe("PENDING_APPROVAL");
+  expect(after.draft?.lines).toEqual(stored.lines);
+}));
+
+test("the largest exactly representable gap still balances to the unit",() => withFrozenScheduler(async () => {
   const seed = await setup();
   await post(seed, SAFE_MAX, SAFE_MAX - 2);
   const lines = await openingLines(seed);

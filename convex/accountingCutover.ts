@@ -296,6 +296,25 @@ function exactOpeningTotals(lines: readonly OpeningEntryLine[]): { debit: bigint
  * and a double cannot hold an integer above Number.MAX_SAFE_INTEGER exactly, so a total above it could round to
  * "balanced" while the journal is a minor unit out. Such a set is refused (OPENING_TOTAL_TOO_LARGE) on every door.
  */
+/**
+ * The exact aggregate and balance check, repeated in the shared posting preflight so a stored draft is refused
+ * before any write however it was prepared (SCRUM-858 R11 Seat 2: a draft written by the earlier float
+ * arithmetic carried debit 9,007,199,254,740,991 + 2 against credit 9,007,199,254,740,991 + suspense 1, one
+ * minor unit out, and approval accepted it because the validator compares doubles). Reviewed lines are never
+ * rewritten here; an unsafe draft is refused and must be re-entered.
+ */
+function assertExactOpeningBalance(lines: readonly OpeningEntryLine[]): void {
+  const totals = exactOpeningTotals(lines);
+  if (!totals) return; // a non-safe-integer amount is refused by line in validateManualJournalLines
+  const largest = totals.debit > totals.credit ? totals.debit : totals.credit;
+  if (largest > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
+  }
+  if (totals.debit !== totals.credit) {
+    throw new ConvexError(`Manual journal is unbalanced: debits=${totals.debit} credits=${totals.credit}.`);
+  }
+}
+
 async function withSuspenseBalancing(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -509,7 +528,10 @@ async function inspectOpeningPreflight(ctx: QueryCtx | MutationCtx, args: {
   await preflightStep("LEDGER_ACTIVITY", async () => {
     if (await hasPostedLedgerActivity(ctx, orgId)) refuseOpeningAfterLedgerActivity();
   });
-  const totalDebits = await preflightStep("LINES", () => validateManualJournalLines(draft.lines as ManualJournalLine[]));
+  const totalDebits = await preflightStep("LINES", () => {
+    assertExactOpeningBalance(draft.lines);
+    return validateManualJournalLines(draft.lines as ManualJournalLine[]);
+  });
   await preflightStep("ACCOUNT", async () => {
     for (const line of draft.lines) {
       const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");

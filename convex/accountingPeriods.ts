@@ -538,7 +538,7 @@ export async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence, employeeAdvancesRecon, supplierRecoverablesRecon, partnerCapitalRecon] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
@@ -552,10 +552,14 @@ export async function computeCloseChecklist(
         pendingEvents: [...allPendingOutbox, ...allFailedOutbox],
         sales: allSales,
       }),
-      computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate, sharedGl),
-      computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate, sharedGl),
-      computePartnerCapitalReconciliation(ctx, orgId, period.endDate, sharedGl),
     ]);
+  // The three opening-family readers run AFTER the readers above, one at a time. Each admits its own reads against the
+  // transaction's remaining read headroom (admissibleReadDocuments), and that headroom is only true once the earlier
+  // readers have finished reading: run beside them, every reader would be admitted against the same untouched budget
+  // and together overrun it (SCRUM-858 PR #710 R11: the readers above already take ~24.6k of the 32,000 documents).
+  const employeeAdvancesRecon = await computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate, sharedGl);
+  const supplierRecoverablesRecon = await computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate, sharedGl);
+  const partnerCapitalRecon = await computePartnerCapitalReconciliation(ctx, orgId, period.endDate, sharedGl);
 
   const blockers: string[] = [];
   const warnings: string[] = [];
