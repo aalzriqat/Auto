@@ -81,19 +81,28 @@ export function selectForPr(records, changedFiles = null) {
   return selection;
 }
 
-/** Files changed between `base` and HEAD (three-dot: since the merge base). Throws when Git cannot say. */
+/**
+ * Files changed since the merge base with HEAD. Explicit bases must be full commit SHAs reachable from refs or HEAD.
+ * An omitted base uses the fixed origin/main ref. Throws when Git cannot say.
+ * @param {string} root
+ * @param {string} [base]
+ */
 export function changedFilesSince(root, base) {
-  if (typeof base !== "string" || /[^A-Za-z0-9_./-]/.test(base) || base.includes("..") ||
-      base.split("/").some(part => !/^[A-Za-z0-9_]/.test(part) || part.endsWith(".") || part.endsWith(".lock"))) {
-    throw new Error("Invalid base: expected a full 40-character commit SHA or a safe Git ref name");
+  if (base !== undefined && (typeof base !== "string" || base.length !== 40 || !/^[0-9a-f]{40}$/i.test(base))) {
+    throw new Error("Invalid base: expected a full 40-character commit SHA");
   }
   const git = resolveTrustedGitExecutable();
   let sha;
   try {
-    sha = execFileSync(git, ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    // Keep CLI data out of process arguments, even after validation. Select the value emitted by Git itself.
+    const commits = execFileSync(git, base === undefined
+      ? ["rev-parse", "--verify", "--end-of-options", "origin/main^{commit}"]
+      : ["rev-list", "--all", "HEAD"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+    sha = commits.trim().split(/\r?\n/).find(commit => base === undefined || commit === base.toLowerCase());
   } catch {
     throw new Error("Invalid base: must resolve to an existing Git commit");
   }
+  if (sha === undefined) throw new Error("Invalid base: must resolve to an existing Git commit");
   if (!/^[0-9a-f]{40}$/i.test(sha)) throw new Error("Invalid base: Git did not resolve a full 40-character commit SHA");
   const out = execFileSync(git, ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", "--end-of-options", `${sha}...HEAD`, "--"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   return out.split("\0").filter(Boolean).map(normalise);
@@ -281,7 +290,7 @@ export function readPlaywrightReports(paths) {
 
 export function main(argv = process.argv.slice(2)) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
-    options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string", default: "origin/main" },
+    options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string" },
       tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true } } });
   if (values.tier !== "pr" && values.tier !== "full") {
     process.stderr.write("--tier must be pr or full\n");

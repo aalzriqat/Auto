@@ -44,6 +44,8 @@ const config = (root: string) => path.join(root, "vitest.config.mjs");
 describe("PR diff base", () => {
   let root: string;
   let baseSha: string;
+  let baseSideSha: string;
+  let blobSha: string;
   const git = (args: string[]) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
 
   beforeAll(() => {
@@ -56,26 +58,40 @@ describe("PR diff base", () => {
     writeFileSync(path.join(root, "changed.txt"), "head change\n");
     git(["add", "--", "changed.txt"]);
     git(["-c", "user.name=Runner Test", "-c", "user.email=runner@example.invalid", "commit", "-m", "head"]);
-    git(["tag", "blob-base", git(["hash-object", "-w", "changed.txt"])]);
+    blobSha = git(["hash-object", "-w", "changed.txt"]);
+    git(["tag", "blob-base", blobSha]);
     git(["checkout", "-b", "base-side", baseSha]);
     writeFileSync(path.join(root, "base-only.txt"), "base branch change\n");
     git(["add", "--", "base-only.txt"]);
     git(["-c", "user.name=Runner Test", "-c", "user.email=runner@example.invalid", "commit", "-m", "base side"]);
+    baseSideSha = git(["rev-parse", "HEAD"]);
     git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(["checkout", "main"]);
   });
 
   it.each(["--output=probe", "-c core.pager=sh", "../../etc", "origin/main\n", "origin/main\u0000", "HEAD~1"])("refuses a hostile base before git: %j", base => {
-    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: expected a full 40-character commit SHA or a safe Git ref name");
+    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: expected a full 40-character commit SHA");
   });
 
-  it("accepts the workflow's full SHA and the CLI's default remote ref, preserving merge-base selection", () => {
+  it.each(["origin/main", "HEAD", "base-side", "missing-base", "blob-base"])("refuses explicit ref names: %s", base => {
+    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: expected a full 40-character commit SHA");
+  });
+
+  it.each(["a".repeat(39), "a".repeat(41), "g".repeat(40), `${"a".repeat(40)}\n`])("refuses a malformed SHA: %j", base => {
+    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: expected a full 40-character commit SHA");
+  });
+
+  it("accepts full SHAs and the omitted default, preserving merge-base selection", () => {
     expect(changedFilesSince(root, baseSha)).toEqual(["changed.txt"]);
-    expect(changedFilesSince(root, "origin/main")).toEqual(["changed.txt"]);
+    expect(changedFilesSince(root, baseSideSha)).toEqual(["changed.txt"]);
+    expect(changedFilesSince(root, baseSha.toUpperCase())).toEqual(["changed.txt"]);
+    expect(changedFilesSince(root)).toEqual(["changed.txt"]);
   });
 
-  it.each(["missing-base", "blob-base"])("refuses a base that does not resolve to a commit: %s", base => {
-    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: must resolve to an existing Git commit");
+  it("refuses unknown and non-commit object SHAs", () => {
+    for (const base of ["0".repeat(40), blobSha]) {
+      expect(() => changedFilesSince(root, base)).toThrow("Invalid base: must resolve to an existing Git commit");
+    }
   });
 });
 

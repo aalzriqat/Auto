@@ -7,7 +7,7 @@ Never put ruling text or customer data here. Format, validators and rules live i
 
 ## PR-time runner (SCRUM-761 R3)
 
-`node scripts/regression/prRunner.mjs [--base <ref>]` (`pnpm test:regression-pr`) runs every active backend record at its bound test and fails on any record that cannot be shown to have run and passed. It also fails when the PR touches the screen of an active browser record (`sourceGlobs`), because that replay cannot be executed there. Design, failure codes and limits: `docs/adr/2026-11-03-pr-time-scenario-runner.md`.
+`node scripts/regression/prRunner.mjs [--base <40-hex-commit-sha>]` runs every active backend record at its bound test and fails on any record that cannot be shown to have run and passed. An explicit base must be reachable from a local Git ref or HEAD; omitting it uses `origin/main`. It also fails when the PR touches the screen of an active browser record (`sourceGlobs`), because that replay cannot be executed there. Design, failure codes and limits: `docs/adr/2026-11-03-pr-time-scenario-runner.md`.
 
 ### Nightly and release (full tier)
 
