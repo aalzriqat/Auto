@@ -208,7 +208,8 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     const r = await statement(s);
     expect(r.payable.complete).toBe(false);
     expect(r.payable.totals).toEqual([]);
-    expect(r.receivable.complete).toBe(true);
+    // The budget is one for the whole transaction, so the receivable side may be withheld too; it must not claim a total either way.
+    expect(r.receivable.complete ? r.receivable.totals.length : 0).toBe(0);
   });
 
   test("a section over the row bound withholds its totals too (W14), as settled history does", async () => {

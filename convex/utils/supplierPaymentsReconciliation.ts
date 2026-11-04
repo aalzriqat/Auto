@@ -5,6 +5,7 @@ import { SYSTEM_KEYS } from "./defaultChart";
 import { toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import { STATEMENT_FAMILY_LIMIT } from "./supplierObligationDue";
+import { readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
 
 /**
  * SCRUM-869 per-supplier payments reconciliation (ADR docs/adr/2026-11-04-supplier-payments-gl-reconciliation.md).
@@ -70,24 +71,31 @@ const unavailable = (unavailableReason: PaymentsReconciliationUnavailableReason)
   creditSide: "NOT_ATTRIBUTABLE",
 });
 
-/** The caller must already have proved the supplier belongs to `orgId`. */
+/**
+ * The caller must already have proved the supplier belongs to `orgId`.
+ *
+ * Every read below goes through `readBoundedStream`: a row cap bounds documents, not bytes, and one function may read 16 MiB
+ * (https://docs.convex.dev/production/state/limits). A read the transaction has no room for answers UNAVAILABLE / OVER_LIMIT with
+ * no totals, the same refusal as a row cap, instead of throwing "Read too much data" (#764 round 4).
+ */
 export async function readSupplierPaymentsReconciliation(
-  ctx: Pick<QueryCtx, "db">,
+  ctx: Pick<QueryCtx, "db"> & HeadroomCtx,
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
 ): Promise<PaymentsReconciliation> {
   const { orgId, supplierId } = args;
 
   // 1. Postings still in flight: the GL is about to move, so a comparison now is not the truth.
-  const [queued, failed] = await Promise.all(
-    (["PENDING", "FAILED"] as const).map((status) =>
-      ctx.db
-        .query("pendingAccountingEvents")
-        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-        .take(OUTBOX_READ_LIMIT + 1),
-    ),
-  );
-  if (queued.length > OUTBOX_READ_LIMIT || failed.length > OUTBOX_READ_LIMIT) return unavailable("OVER_LIMIT");
-  const inFlight = [...queued, ...failed];
+  // In turn, not together: each document's headroom check must see what the reads before it spent.
+  const inFlight: Doc<"pendingAccountingEvents">[] = [];
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const read = await readBoundedStream(
+      ctx,
+      ctx.db.query("pendingAccountingEvents").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)),
+      OUTBOX_READ_LIMIT,
+    );
+    if (read.outOfHeadroom || read.docs.length > OUTBOX_READ_LIMIT) return unavailable("OVER_LIMIT");
+    inFlight.push(...read.docs);
+  }
   // A queued reversal of a supplier payment is typed JOURNAL_REVERSAL, which the AP classification marks false:
   // unknown must not read as safe, so any queued reversal makes this unavailable.
   if (
@@ -98,19 +106,21 @@ export async function readSupplierPaymentsReconciliation(
   }
 
   // 2. Every payable of the supplier under one bound; past it nothing is summed (W14).
-  const payables = (
-    await Promise.all(
-      PAYABLE_STATUSES.map((status) =>
-        ctx.db
-          .query("vehicleSupplierPayables")
-          .withIndex("by_org_and_supplierId_and_status", (q) =>
-            q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
-          )
-          .take(STATEMENT_FAMILY_LIMIT + 1),
-      ),
-    )
-  ).flat();
-  if (payables.length > STATEMENT_FAMILY_LIMIT) return unavailable("OVER_LIMIT");
+  const payables: Doc<"vehicleSupplierPayables">[] = [];
+  for (const status of PAYABLE_STATUSES) {
+    const read = await readBoundedStream(
+      ctx,
+      ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_org_and_supplierId_and_status", (q) =>
+          q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
+        ),
+      STATEMENT_FAMILY_LIMIT,
+    );
+    if (read.outOfHeadroom) return unavailable("OVER_LIMIT");
+    payables.push(...read.docs);
+    if (payables.length > STATEMENT_FAMILY_LIMIT) return unavailable("OVER_LIMIT");
+  }
 
   // Opening-basis payables settle against opening accounts, not 2400: out of both sides, and counted.
   const native = payables.filter((p) => p.origin !== "OPENING");
@@ -129,21 +139,27 @@ export async function readSupplierPaymentsReconciliation(
     let glPaidMinor = 0;
     if (controlAccount) {
       const budget = ENTRY_BUDGET - entriesRead;
-      const entries = await ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierPayables").eq("sourceId", payable._id),
-        )
-        .take(budget + 1);
-      if (entries.length > budget) return unavailable("OVER_LIMIT");
+      const entryRead = await readBoundedStream(
+        ctx,
+        ctx.db
+          .query("journalEntries")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierPayables").eq("sourceId", payable._id),
+          ),
+        Math.max(budget, 0),
+      );
+      const entries = entryRead.docs;
+      if (entryRead.outOfHeadroom || entries.length > budget) return unavailable("OVER_LIMIT");
       entriesRead += entries.length;
       for (const entry of entries) {
         if (entry.status !== "POSTED" && entry.status !== "REVERSED") continue;
-        const lines = await ctx.db
-          .query("journalLines")
-          .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-          .take(LINES_PER_ENTRY_LIMIT + 1);
-        if (lines.length > LINES_PER_ENTRY_LIMIT) return unavailable("OVER_LIMIT");
+        const lineRead = await readBoundedStream(
+          ctx,
+          ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)),
+          LINES_PER_ENTRY_LIMIT,
+        );
+        const lines = lineRead.docs;
+        if (lineRead.outOfHeadroom || lines.length > LINES_PER_ENTRY_LIMIT) return unavailable("OVER_LIMIT");
         for (const line of lines) {
           if (line.orgId !== orgId) return unavailable("INCONSISTENT_REFERENCE");
           if (line.accountId !== controlAccount._id) continue;

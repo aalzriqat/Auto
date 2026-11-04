@@ -338,7 +338,8 @@ function statementSection(rows: ObligationRow[], complete: boolean): StatementSe
     if (row.daysOverdue !== null && row.daysOverdue > 0) total.overdueMinor += row.outstandingMinor;
     byCurrency.set(row.currency, total);
   }
-  return { rows, totals: [...byCurrency.values()], complete };
+  // W14: a partial list never presents a partial sum as a total (the settled section does the same).
+  return { rows, totals: complete ? [...byCurrency.values()] : [], complete };
 }
 
 // Exhaustive on purpose: a status added to the schema fails typecheck until it is classified here,
@@ -353,10 +354,6 @@ const statusesWhere = <S extends string>(map: Record<S, boolean>): S[] => (Objec
 const OPEN_PAYABLE_STATUSES = statusesWhere(PAYABLE_STATEMENT_OPEN);
 const OPEN_RECEIVABLE_STATUSES = statusesWhere(RECEIVABLE_STATEMENT_OPEN);
 
-/** One bounded read per open status, run together and concatenated; callers compare the length with the limit. */
-async function readByStatuses<S extends string, D>(statuses: readonly S[], read: (status: S) => Promise<D[]>): Promise<D[]> {
-  return (await Promise.all(statuses.map(read))).flat();
-}
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding obligations as two sections that are never
  * combined: `payable` (A/P, what the dealership owes) and `receivable` (A/R, what the supplier
@@ -365,31 +362,34 @@ async function readByStatuses<S extends string, D>(statuses: readonly S[], read:
  * must already have proved the supplier belongs to `orgId`.
  */
 export async function readSupplierOutstanding(
-  ctx: Reader,
+  ctx: Reader & HeadroomCtx,
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; nowMs: number }
 ): Promise<{ payable: StatementSection; receivable: StatementSection }> {
   const { orgId, supplierId, nowMs } = args;
   // Settled families are left out by index, not read and discarded, so a supplier with a long
   // paid history cannot push open rows past the bound. A row whose stored status says settled
   // while its amounts say otherwise is a data defect for the reconciliation slice, not this read.
-  const payableDocs = await readByStatuses(OPEN_PAYABLE_STATUSES, (status) =>
+  // Read in turn through the transaction's own headroom (transactionReadHeadroom.ts): a row cap bounds documents, not bytes, and
+  // one function may read 16 MiB (https://docs.convex.dev/production/state/limits). A family cut short by the budget is
+  // incomplete with its totals withheld, never a thrown read error (#764 round 4).
+  const payables = await readSettledFamily(ctx, OPEN_PAYABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierPayables")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
-      .take(STATEMENT_FAMILY_LIMIT + 1)
   );
-  const receivableDocs = await readByStatuses(OPEN_RECEIVABLE_STATUSES, (status) =>
+  const claims = await readSettledFamily(ctx, OPEN_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
-      .take(STATEMENT_FAMILY_LIMIT + 1)
   );
-  const recoveryDocs = await readByStatuses(OPEN_RECOVERY_STATUSES, (status) =>
+  const recoveries = await readSettledFamily(ctx, OPEN_RECOVERY_STATUSES, (status) =>
     ctx.db
       .query("supplierCostRecoveries")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
-      .take(STATEMENT_FAMILY_LIMIT + 1)
   );
+  const payableDocs = payables.docs;
+  const receivableDocs = claims.docs;
+  const recoveryDocs = recoveries.docs;
   const payableRows: ObligationRow[] = [];
   for (const row of payableDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
     const read = await readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), undefined);
@@ -406,10 +406,10 @@ export async function readSupplierOutstanding(
   }
 
   return {
-    payable: statementSection(payableRows, payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    payable: statementSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT),
     receivable: statementSection(
       receivableRows,
-      receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT
+      !claims.cut && !recoveries.cut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT
     ),
   };
 }
@@ -694,14 +694,17 @@ export async function readSupplierSettled(
   for (const claim of claims) {
     // Nothing was ever applied to the claim: nothing to attribute, and no ledger read.
     if (toMinorUnits(claim.amountReceived ?? 0, claim.currency) <= 0) continue;
+    // A claim with no recorded receipt holds only the customer deposit seed: there is no supplier receipt to confirm, so when the
+    // budget is gone it is skipped, not counted unverified (#764 round 4, LOW-2). While budget remains it is still read, as before.
+    const mayHoldReceipt = (claim.receiptSeq ?? 0) > 0;
     if (budgetSpent) {
-      unverifiedCount += 1;
+      if (mayHoldReceipt) unverifiedCount += 1;
       continue;
     }
     const receipts = await supplierReceiptsMinor(ctx, { orgId, claim, controlAccountId, entriesLeft });
     if (receipts.outcome === "OUT_OF_BUDGET") {
       budgetSpent = true;
-      unverifiedCount += 1;
+      if (mayHoldReceipt) unverifiedCount += 1;
       continue;
     }
     // Entries read for a claim are spent from the shared budget whether or not its cash could be established.
