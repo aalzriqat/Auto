@@ -300,6 +300,7 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtHistorySettled: ["Settled in full", "مُسوّى بالكامل"],
   SuppliersStmtHistoryPartly: ["Partly settled", "مُسوّى جزئياً"],
   SuppliersStmtHistoryLastChange: ["Last change", "آخر تحديث"],
+  SuppliersStmtHistoryClaimTotal: ["Claim total", "إجمالي المطالبة"],
   SuppliersStmtReconTitle: ["Payments check against the ledger", "مطابقة الدفعات مع دفتر الأستاذ"],
   SuppliersStmtReconOk: [
     "Payments recorded for this supplier match the ledger (account 2400).",

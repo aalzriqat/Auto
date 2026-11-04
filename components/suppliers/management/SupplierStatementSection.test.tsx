@@ -327,12 +327,16 @@ describe("supplier statement section", () => {
       settledMinor: 9_500_000,
       lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
       basis: "RECORDED",
+      settlement: "COMPLETE",
       ...over,
     });
     world.settled = {
       supplierId: "sup_1",
       payable: {
-        rows: [settledRow({}), settledRow({ id: "s2", status: "PARTIALLY_PAID", settledMinor: 4_000_000 })],
+        rows: [
+          settledRow({}),
+          settledRow({ id: "s2", status: "PARTIALLY_PAID", settledMinor: 4_000_000, settlement: "PARTIAL" }),
+        ],
         totals: [{ currency: "JOD", settledMinor: 13_500_000 }],
         complete: true,
         unverifiedCount: 0,
@@ -363,6 +367,73 @@ describe("supplier statement section", () => {
     }
   });
 
+  test("settled history: completion comes from the server, not from comparing supplier cash with the claim (Finding 1), in EN and AR", () => {
+    // 3,000 JOD claim, 1,000 JOD covered by the customer deposit, 2,000 JOD received from the supplier: status PAID.
+    const receivableRow = (over: Record<string, unknown>) => ({
+      kind: "RECEIVABLE",
+      id: "claim",
+      currency: "JOD",
+      status: "PAID",
+      dueMinor: 3_000_000,
+      settledMinor: 2_000_000,
+      lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
+      basis: "RECORDED",
+      settlement: "COMPLETE",
+      ...over,
+    });
+    const rows = {
+      depositAssistedFull: receivableRow({ id: "full" }),
+      depositAssistedPartial: receivableRow({ id: "partial", status: "PARTIALLY_PAID", settledMinor: 500_000, settlement: "PARTIAL" }),
+      receiptOnlyFull: receivableRow({ id: "ctl-full", settledMinor: 3_000_000 }),
+      receiptOnlyPartial: receivableRow({ id: "ctl-part", status: "PARTIALLY_PAID", settledMinor: 750_000, settlement: "PARTIAL" }),
+    };
+    const labelsFor = (row: Record<string, unknown>, locale: "en" | "ar") => {
+      world.locale = locale;
+      world.settled = {
+        supplierId: "sup_1",
+        payable: { rows: [], totals: [], complete: true, unverifiedCount: 0 },
+        receivable: { rows: [row], totals: [{ currency: "JOD", settledMinor: row.settledMinor }], complete: true, unverifiedCount: 0 },
+      };
+      const { unmount } = renderIt();
+      const dict = locale === "en" ? en : ar;
+      const region = screen.getByRole("region", { name: dict.SuppliersStmtHistoryReceivedTitle });
+      const result = {
+        settled: within(region).queryByText(dict.SuppliersStmtHistorySettled) !== null,
+        partly: within(region).queryByText(dict.SuppliersStmtHistoryPartly) !== null,
+        claimTotal: (region.textContent ?? "").includes(dict.SuppliersStmtHistoryClaimTotal),
+        of: within(region).queryByText(dict.SuppliersStmtHistoryOf) !== null,
+        text: region.textContent ?? "",
+      };
+      unmount();
+      return result;
+    };
+    for (const locale of ["en", "ar"] as const) {
+      expect((locale === "en" ? en : ar).SuppliersStmtHistoryClaimTotal, `${locale} string exists`).toBeTruthy();
+      // Full deposit-assisted: settled in full although the supplier's cash (2,000) is below the claim (3,000). The cash is
+      // still the 2,000, and the claim total is shown, neither as "partly" nor as a "2,000 of 3,000" fraction.
+      const full = labelsFor(rows.depositAssistedFull, locale);
+      expect(full.settled, `${locale} deposit-assisted full is settled`).toBe(true);
+      expect(full.partly, `${locale} deposit-assisted full is not partly`).toBe(false);
+      expect(full.of).toBe(false);
+      expect(full.claimTotal).toBe(true);
+      expect(full.text).toMatch(/2,000/);
+      expect(full.text).toMatch(/3,000/);
+      // Partial deposit-assisted: stays partly, with its fraction.
+      const partial = labelsFor(rows.depositAssistedPartial, locale);
+      expect(partial.partly).toBe(true);
+      expect(partial.settled).toBe(false);
+      expect(partial.of).toBe(true);
+      // Receipt-only controls.
+      const ctlFull = labelsFor(rows.receiptOnlyFull, locale);
+      expect(ctlFull.settled).toBe(true);
+      expect(ctlFull.partly).toBe(false);
+      expect(ctlFull.claimTotal).toBe(false);
+      const ctlPart = labelsFor(rows.receiptOnlyPartial, locale);
+      expect(ctlPart.partly).toBe(true);
+      expect(ctlPart.settled).toBe(false);
+    }
+  });
+
   test("settled history: an inferred legacy payment, an unconfirmed receipt and the deposit scope note are told in EN and AR", () => {
     const row = {
       kind: "PAYABLE",
@@ -373,6 +444,7 @@ describe("supplier statement section", () => {
       settledMinor: 9_500_000,
       lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
       basis: "INFERRED_FROM_PAID_STATUS",
+      settlement: "COMPLETE",
     };
     world.settled = {
       supplierId: "sup_1",

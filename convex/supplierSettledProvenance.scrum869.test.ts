@@ -34,8 +34,8 @@ const MARGIN = 3_000;
 const DEPOSIT = 1_000;
 const RECEIPT = 500;
 
-async function seed(tag: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+async function seed(tag: string, options: { transactionLimits?: boolean } = {}) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB, options);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `SP ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() }),
@@ -258,5 +258,223 @@ describe("SCRUM-869 settled history: the receivable section is merged newest-fir
     await receive(s, newer, 250, "order-2");
     const r = await settled(s);
     expect(r.receivable.rows.map((x: { id: string }) => x.id)).toEqual([newer, recoveryId, older]);
+  });
+});
+
+/**
+ * Reverses the `index`-th receipt posting of a claim the way accounting/reversals.ts leaves it: the original is patched
+ * REVERSED and an inverted POSTED REVERSAL entry with the same source is added. The claim row itself is not touched, which
+ * is what the real reversal does too.
+ */
+async function reverseReceiptPosting(s: Seed, claimId: Id<"vehicleSupplierReceivables">, index: number) {
+  await s.t.run(async (ctx) => {
+    const entries = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId).eq("sourceType", "vehicleSupplierReceivables").eq("sourceId", claimId))
+      .take(10);
+    const original = entries[index]!;
+    const lines = await ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", original._id)).take(10);
+    const { _id, _creationTime, ...rest } = original;
+    void _id; void _creationTime;
+    const reversalId = await ctx.db.insert("journalEntries", {
+      ...rest, journalNumber: `JE-REV-${index}`, category: "REVERSAL", status: "POSTED", reversalOfJournalEntryId: original._id,
+    });
+    for (const l of lines) {
+      const { _id: lid, _creationTime: lct, ...lr } = l;
+      void lid; void lct;
+      await ctx.db.insert("journalLines", { ...lr, journalEntryId: reversalId, debitMinor: l.creditMinor, creditMinor: l.debitMinor });
+    }
+    await ctx.db.patch(original._id, { status: "REVERSED", reversedByJournalEntryId: reversalId });
+  });
+}
+
+/**
+ * Finding 1 (MEDIUM, money label): "settled in full" is a fact about the obligation, "cash received from the supplier" is a
+ * different fact. The statement compared the second with the first, so a 3,000 JOD claim closed by a 1,000 JOD customer deposit
+ * plus a 2,000 JOD supplier receipt (status PAID, cash 2,000) was labelled "Partly settled". The server now returns the
+ * completion separately (`settlement`); the cash figure stays the supplier's own money. Hand-computed from the fixtures:
+ * 3,000 JOD = 3_000_000 minor; deposit 1_000_000; receipts as stated per test.
+ */
+describe("SCRUM-869 settled history: completion is returned separately from supplier cash (Finding 1)", () => {
+  test("full deposit-assisted settlement: 1,000 deposit + 2,000 supplier receipt closes the 3,000 claim (COMPLETE), and the cash stays 2,000", async () => {
+    const s = await seed("f1full");
+    const claimId = await openClaim(s, DEPOSIT);
+    await receive(s, claimId, 2_000, "f1full-1");
+    expect(await s.t.run((ctx) => ctx.db.get(claimId))).toMatchObject({ status: "PAID", amountReceived: MARGIN });
+    const r = await settled(s);
+    expect(r.receivable.rows).toHaveLength(1);
+    expect(r.receivable.rows[0]).toMatchObject({
+      id: claimId, status: "PAID", dueMinor: 3_000_000, settledMinor: 2_000_000, settlement: "COMPLETE",
+    });
+    // The deposit is still not a supplier receipt: the total is the supplier's 2,000, never 3,000.
+    expect(r.receivable.totals).toEqual([{ currency: "JOD", settledMinor: 2_000_000 }]);
+  });
+
+  test("partial deposit-assisted settlement: 1,000 deposit + 500 receipt leaves the claim PARTIAL, with cash 500", async () => {
+    const s = await seed("f1part");
+    const claimId = await openClaim(s, DEPOSIT);
+    await receive(s, claimId, RECEIPT, "f1part-1");
+    const r = await settled(s);
+    expect(r.receivable.rows[0]).toMatchObject({ id: claimId, status: "PARTIALLY_PAID", settledMinor: 500_000, settlement: "PARTIAL" });
+  });
+
+  test("receipt-only controls: 750 of 3,000 is PARTIAL; the same claim paid to 3,000 in two receipts is COMPLETE with cash 3,000", async () => {
+    const s = await seed("f1ctl");
+    const partial = await openClaim(s, 0);
+    await receive(s, partial, 750, "f1ctl-1");
+    const full = await openClaim(s, 0);
+    await receive(s, full, 1_800, "f1ctl-2");
+    await receive(s, full, 1_200, "f1ctl-3");
+    const r = await settled(s);
+    const byId = Object.fromEntries(r.receivable.rows.map((x: { id: string }) => [x.id, x]));
+    expect(byId[partial]).toMatchObject({ settledMinor: 750_000, settlement: "PARTIAL" });
+    expect(byId[full]).toMatchObject({ settledMinor: 3_000_000, settlement: "COMPLETE" });
+  });
+
+  test("a reversed receipt: fully reversed cash leaves no row; a partly reversed claim is no longer shown as COMPLETE", async () => {
+    const s = await seed("f1rev");
+    // Fully reversed: deposit 1,000 + one 2,000 receipt that is then reversed => no supplier cash, no row.
+    const gone = await openClaim(s, DEPOSIT);
+    await receive(s, gone, 2_000, "f1rev-1");
+    await reverseReceiptPosting(s, gone, 0);
+    // Partly reversed: deposit 1,000 + 1,500 + 500, the 500 reversed => cash 1,500. The claim row still says PAID (the real
+    // reversal does not touch it), but its cash is short, so it must not be labelled settled in full.
+    const partly = await openClaim(s, DEPOSIT);
+    await receive(s, partly, 1_500, "f1rev-2");
+    await receive(s, partly, 500, "f1rev-3");
+    expect(await s.t.run((ctx) => ctx.db.get(partly))).toMatchObject({ status: "PAID" });
+    await reverseReceiptPosting(s, partly, 1);
+    const r = await settled(s);
+    expect(r.receivable.rows.map((x: { id: string }) => x.id)).toEqual([partly]);
+    expect(r.receivable.rows[0]).toMatchObject({ settledMinor: 1_500_000, settlement: "PARTIAL" });
+    expect(r.receivable.unverifiedCount).toBe(0);
+  });
+
+  test("payables and cost recoveries: completion follows their own paid / recovered amounts", async () => {
+    const s = await seed("f1other");
+    const fullPayable = await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const partPayable = await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 4_000 });
+    const mkRecovery = (key: string, recovered: number, status: string) =>
+      s.t.run(async (ctx) => {
+        const expenseId = await ctx.db.insert("expenses", {
+          orgId: s.orgId, vehicleId: s.vehicleId, title: key, amount: 200, date: Date.now(), category: "TRANSPORT", status: "PAID",
+        } as never);
+        return await ctx.db.insert("supplierCostRecoveries", {
+          orgId: s.orgId, vehicleId: s.vehicleId, expenseId, supplierId: s.supplierId, sourceEventKey: key,
+          sourcedFromName: "Amman Importer Co", amountDueMinor: 200_000, amountRecoveredMinor: recovered, currency: "JOD",
+          receiptSeq: 1, status, createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        } as never);
+      });
+    const fullRecovery = await mkRecovery("ev_full", 200_000, "RECOVERED");
+    const partRecovery = await mkRecovery("ev_part", 50_000, "PARTIALLY_RECOVERED");
+    const r = await settled(s);
+    const settlementOf = (rows: { id: string; settlement: string }[]) => Object.fromEntries(rows.map((x) => [x.id, x.settlement]));
+    expect(settlementOf(r.payable.rows)).toEqual({ [fullPayable]: "COMPLETE", [partPayable]: "PARTIAL" });
+    expect(settlementOf(r.receivable.rows)).toEqual({ [fullRecovery]: "COMPLETE", [partRecovery]: "PARTIAL" });
+  });
+});
+
+/**
+ * L1 (Seat 1, LOW): after the first claim whose receipts cannot be read back, `entriesLeft` was set to 0, so every older claim
+ * with any posting at all was counted unverified too. Only the claim that really cannot be established counts.
+ */
+describe("SCRUM-869 settled history: an unverifiable claim does not make older, fully posted claims unverified (L1)", () => {
+  test("newer claim with receiptSeq 2 and one posting is the only unverified claim; the older, fully posted claim is still shown", async () => {
+    const s = await seed("l1");
+    const older = await openClaim(s, 0);
+    await receive(s, older, RECEIPT, "l1-1");
+    const newer = await openClaim(s, 0);
+    await receive(s, newer, 250, "l1-2");
+    // Two receipts recorded, only one posted: the second is missing from the ledger.
+    await s.t.run((ctx) => ctx.db.patch(newer, { amountReceived: 750, receiptSeq: 2 }));
+    const r = await settled(s);
+    expect(r.receivable.unverifiedCount).toBe(1);
+    expect(r.receivable.rows.map((x: { id: string }) => x.id)).toEqual([older]);
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.totals).toEqual([]);
+  });
+});
+
+/**
+ * Finding 2 (MEDIUM, Convex limit): a row cap bounds documents, not bytes. A single transaction may read 16 MiB
+ * (https://docs.convex.dev/production/state/limits) and `receiptNotes` is an unbounded string up to the 1 MiB document limit,
+ * so 20 claims of ~0.9 MB each read about 18 MB while staying far under the 100-row cap, and the query threw. These tests run
+ * with convex-test's `transactionLimits: true`, which enforces the 16 MiB ceiling in the test database. Evidence boundary: that is
+ * convex-test's emulation, not the Convex backend; the budget arithmetic itself is pinned in utils/transactionReadHeadroom.test.ts.
+ */
+describe("SCRUM-869 settled history: the read stays inside the transaction's byte limit (Finding 2)", () => {
+  const HEAVY_CHARS = 900_000;
+  const CLAIMS = 20;
+
+  async function claimsWithNotes(s: Seed, count: number, chars: number, prefix: string) {
+    const ids: Id<"vehicleSupplierReceivables">[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const claimId = await openClaim(s, 0);
+      await s.asUser.mutation(api.supplierReceivables.recordReceipt, {
+        orgId: s.orgId, receivableId: claimId, amount: 100, receiptMethod: "CASH", receiptNotes: "n".repeat(chars), idempotencyKey: `${prefix}-${i}`,
+      });
+      ids.push(claimId);
+    }
+    return ids;
+  }
+
+  test("the fixture is a real counterexample: an unbounded read of these 20 claims exceeds the transaction limit", async () => {
+    const s = await seed("f2fixture", { transactionLimits: true });
+    await claimsWithNotes(s, CLAIMS, HEAVY_CHARS, "f2fixture");
+    await expect(
+      s.t.run((ctx) =>
+        ctx.db
+          .query("vehicleSupplierReceivables")
+          .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", s.orgId).eq("supplierId", s.supplierId).eq("status", "PARTIALLY_PAID"))
+          .take(101),
+      ),
+    ).rejects.toThrow(/too much data|exceed|limit/i);
+  });
+
+  test("CONTROL: 20 small-note claims are read in full with the limits enforced: every row, the total, complete", async () => {
+    const s = await seed("f2small", { transactionLimits: true });
+    await claimsWithNotes(s, CLAIMS, 100, "f2small");
+    const r = await settled(s);
+    expect(r.receivable.complete).toBe(true);
+    expect(r.receivable.unverifiedCount).toBe(0);
+    expect(r.receivable.rows).toHaveLength(CLAIMS);
+    expect(r.receivable.totals).toEqual([{ currency: "JOD", settledMinor: CLAIMS * 100_000 }]);
+  });
+
+  test("20 claims of ~0.9 MB each: the query answers instead of throwing, lists only what it read, and withholds the total", async () => {
+    const s = await seed("f2heavy", { transactionLimits: true });
+    await claimsWithNotes(s, CLAIMS, HEAVY_CHARS, "f2heavy");
+    const r = await settled(s);
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.totals).toEqual([]);
+    expect(r.receivable.rows.length).toBeLessThan(CLAIMS);
+    // Not a row-count or ledger problem, so it is reported as an incomplete list, not as unconfirmed receipts.
+    expect(r.receivable.unverifiedCount).toBe(0);
+  });
+
+  test("mixed families: small payables stay complete with their total while the heavy claims family is withheld", async () => {
+    const s = await seed("f2mixed", { transactionLimits: true });
+    await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 4_000 });
+    await claimsWithNotes(s, CLAIMS, HEAVY_CHARS, "f2mixed");
+    const r = await settled(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.totals).toEqual([{ currency: "JOD", settledMinor: 13_500_000 }]);
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.totals).toEqual([]);
+  });
+
+  test("the budget is shared across families: heavy payables use it up, and the receivable side is withheld rather than thrown", async () => {
+    const s = await seed("f2shared", { transactionLimits: true });
+    for (let i = 0; i < CLAIMS; i += 1) {
+      await addPayable(s, { status: "PAID", amountPaid: 9_500, paymentNotes: "n".repeat(HEAVY_CHARS) });
+    }
+    const light = await openClaim(s, 0);
+    await receive(s, light, RECEIPT, "f2shared-1");
+    const r = await settled(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.totals).toEqual([]);
   });
 });
