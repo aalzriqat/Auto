@@ -401,6 +401,20 @@ describe("SCRUM-901 - recipients per c23883; the amount only with the statement 
     }
   });
 
+  // manage:finance makes this role a recipient, and nothing makes manage:finance imply view:finance, so only the
+  // view:finance half of the amount gate keeps the cost-derived amount out of its alert.
+  test("a manage:finance + view:cost_price recipient without view:finance gets no amount key", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "p6");
+    const manageAndCost = await addMember(t, s.orgId, "p6", "managecost", ["manage:finance", "view:cost_price"]);
+    await addPayable(t, s, { paymentDueDate: NOW, amountDue: AMOUNT_DUE });
+    await sweep(t);
+    const mine = rowsOf(await alerts(t), manageAndCost);
+    expect(mine).toHaveLength(1);
+    expect(mine[0].data).toEqual(WITHOUT_AMOUNT);
+    expect(Object.keys(mine[0].data ?? {})).not.toContain("amount");
+  });
+
   test("a recipient who holds the cost permission but neither finance permission is still not a recipient", async () => {
     const t = newHarness();
     const s = await seedOrg(t, "p4");

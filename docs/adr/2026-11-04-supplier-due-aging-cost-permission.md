@@ -38,7 +38,7 @@ obligations exist, and a zero would read as "nothing owed". Absent beats zeroed,
   (OWASP A01:2021, authorization must hold on every path to the data). The English and Arabic alert sentences have a
   `_MessageNoAmount` variant that reads correctly without the amount. Idempotency keys name the obligation, step, occurrence and
   recipient and carry no amount, so redaction cannot change a key or let one alert be sent twice. Not done: notifications
-  already written before this change keep the `amount` they were stored with.
+  already written before this change keep the `amount` they were stored with. The same holds for an alert written after this change: the amount is decided when the alert is sent, so a recipient who later loses `view:cost_price` keeps the amount on alerts already delivered (owner ruling SCRUM-901 c24466: stored amounts stay).
 - Stored ACCOUNTANT roles seeded before the template change lack `view:cost_price`, so those members are refused by the query and
   receive the alert without the amount until the Deploy production step 2e backfill (SCRUM-886) repairs the role. No screen
   shows this, because no screen calls the query.
