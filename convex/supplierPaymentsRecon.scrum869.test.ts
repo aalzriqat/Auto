@@ -134,6 +134,39 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     expect(r.differences).toEqual([]);
   });
 
+  test("a payment line that carries another organization's id makes the answer unavailable (INCONSISTENT_REFERENCE)", async () => {
+    const s = await seed("foreignline");
+    await pay(s, 4_000);
+    await s.t.run(async (ctx) => {
+      const entry = (await ctx.db.query("journalEntries").collect()).find(
+        (e) => e.sourceType === "vehicleSupplierPayables" && e.sourceId === s.payable._id
+      )!;
+      const line = (await ctx.db.query("journalLines").collect()).find((l) => l.journalEntryId === entry._id)!;
+      const otherOrg = await ctx.db.insert("organizations", { name: "Other org", createdAt: Date.now() });
+      await ctx.db.patch(line._id, { orgId: otherOrg });
+    });
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("INCONSISTENT_REFERENCE");
+    expect(r.isReconciled).toBe(false);
+    expect(r.currencies).toEqual([]);
+  });
+
+  test("a payment line in another currency than its payable makes the answer unavailable, never blended", async () => {
+    const s = await seed("wrongccy");
+    await pay(s, 4_000);
+    await s.t.run(async (ctx) => {
+      const entry = (await ctx.db.query("journalEntries").collect()).find(
+        (e) => e.sourceType === "vehicleSupplierPayables" && e.sourceId === s.payable._id
+      )!;
+      const lines = (await ctx.db.query("journalLines").collect()).filter((l) => l.journalEntryId === entry._id);
+      for (const l of lines) await ctx.db.patch(l._id, { currency: "USD" });
+    });
+    const r = await recon(s);
+    expect(r.status).toBe("UNAVAILABLE");
+    expect(r.unavailableReason).toBe("INCONSISTENT_REFERENCE");
+  });
+
   test("no payment yet: nothing to compare, reconciled, no currencies", async () => {
     const s = await seed("none");
     const r = await recon(s);
