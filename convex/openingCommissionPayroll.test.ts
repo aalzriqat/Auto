@@ -93,9 +93,21 @@ async function assertBeneficiaryRefused(stage: "DRAFT" | "APPROVE") {
     .rejects.toThrow("An independent actor must prepare or approve your opening commission.");
   expect(await financialState(seed)).toEqual(before);
   if (draft) {
+    // SCRUM-902: finance/payroll authority alone cannot read a cost-bearing draft.
+    expect(await seed.employee.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId })).toEqual([]);
+    await seed.t.run(async ctx => {
+      const membership = await ctx.db.get(seed.membershipId);
+      if (!membership) throw new Error("Missing synthetic employee membership");
+      const role = await ctx.db.get(membership.roleId);
+      if (!role) throw new Error("Missing synthetic employee role");
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "view:cost_price"] });
+    });
     const pending = await seed.employee.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
     expect(pending).toHaveLength(1);
     expect(pending[0].readiness).toMatchObject({ canApprove: false, blockerCodes: expect.arrayContaining(["ALLOCATIONS"]) });
+    await expect(seed.employee.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id }))
+      .rejects.toThrow("An independent actor must prepare or approve your opening commission.");
+    expect(await financialState(seed)).toEqual(before);
   }
 }
 
