@@ -1,0 +1,66 @@
+{
+  "id": "cost-disclosure-902f-basis",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.supplierConcessionBasis",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "basis"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.supplierConcessionBasis",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "basis"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "code": "FORBIDDEN",
+        "permission": "view:cost_price"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "entitlementMinor": 9000000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F1 supplierConcessionBasis refuses finance without cost and preserves granted access"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "0aa75a93a0204bf54acf009bee26825c3b146ef91ee624e26b406e8b62c5564d"
+}

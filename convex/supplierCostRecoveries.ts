@@ -1,3 +1,4 @@
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
@@ -335,12 +336,12 @@ export const recordReceipt = mutation({
   },
   returns: v.object({
     receiptId: v.id("supplierCostRecoveryReceipts"),
-    amountRecoveredMinor: v.number(),
-    remainingMinor: v.number(),
+    amountRecoveredMinor: v.optional(v.number()),
+    remainingMinor: v.optional(v.number()),
     status: recoveryStatusValidator,
   }),
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",args.recoveryId,"Supplier cost recovery not found."));
     await requireResolvedSupplierId(
@@ -348,7 +349,7 @@ export const recordReceipt = mutation({
       args.orgId,
       await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.")
     );
-    return await runWithIdempotency(
+    const result = await runWithIdempotency(
       ctx,
       {
         orgId: args.orgId,
@@ -483,6 +484,8 @@ export const recordReceipt = mutation({
         };
       }
     );
+    // Apply current authority to fresh results and cached replays alike.
+    return canReadVehicleCost(role) ? result : { receiptId: result.receiptId, status: result.status };
   },
 });
 

@@ -55,17 +55,35 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
 | `transactions.list` | `VEHICLE_PURCHASE` rows: `amount` is the purchase price, with the vehicle label | view:finance | view:finance; rows with category `VEHICLE_PURCHASE` are withheld unless the caller holds view:cost_price | GATED (round 3 H1; rows absent, not zeroed). Other categories are not cost. The GL register view shows an English and Arabic note and its totals leave the rows out |
 | `reports.getProfitAndLoss` | `costOfGoodsSold`, `grossProfit` | view:reports | view:reports AND view:cost_price (else `null`) | GATED (round 3 H2; fail-soft null) |
 | `accountingLedger.listAccountingEvents` | raw event payloads with `costMinor`, `cogsMinor` | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (round 3 H3; refuses). The release rehearsal reads it as the owner, who passes |
-| `expenses.list` | `capitalizedAmount` per row; with a `vehicleId` the rows are the car's landed cost | view:expenses | view:expenses. `capitalizedAmount` is removed from every row for a caller without view:cost_price. A `vehicleId` query needs both | GATED (round 3 H4; field absent, rows kept) |
+| `expenses.list` | vehicle-linked amounts and tax reconstruct capitalized cost, even when `capitalizedAmount` is removed | view:expenses | A `vehicleId` query needs cost access. Without it the unfiltered page omits every vehicle-linked row before hydration; non-vehicle rows remain, without `capitalizedAmount` | GATED (round 5 F5; cursor metadata preserved). Removing just one field was insufficient |
 | `expenses.totalByVehicle` | per-car landed expense total | view:expenses | view:expenses AND view:cost_price | GATED (round 3 H4; refuses). The sale dialog's cost bar skips the query and renders nothing without both |
 | `sales.dealCockpit` | `money.profit` lines including `VEHICLE_COST` | view:sales + view:finance | same; `profit` is `{ available: false, reason: "CostAccessRequired" }` without view:cost_price | GATED (round 3 H5; the rest of the cockpit stays) |
 | `applications.dealCockpit` (financed) | `money.profit`, `money.managementProfit` | view:finance | same; both are `{ available: false, reason: "CostAccessRequired" }` without view:cost_price | GATED (round 3 H5 sibling) |
 | `dealOverview.financedDealOverview` | financed `profit` with the vehicle cost line | view:finance | same; `profit` withheld as `CostAccessRequired` without view:cost_price | GATED (round 3 H5 sibling) |
 | `sales.dealCockpit`, `applications.dealCockpit`, deal overview financial summary (`parties` block) | supplier party outstanding `amountMinor` (SOURCED: supplier entitlement is cost, margin is price minus entitlement) | view:sales + view:finance | same; the SUPPLIER row keeps its position and loses `amountMinor` (`null`) without view:cost_price | GATED (cost-derived). The cockpit shows the row without a figure and does not mount the supplier settlement dialog |
-| `accountingCutover.postedOpeningAllocationReadback`, `financingEconomics.getEconomics` | `landed` / `costMinor` tokens | their own gates | unchanged | Already gated or not a cost surface: the readback holds `landed` only in a status word, and `getEconomics` is gated on cost access (SCRUM-886) |
+| `accountingCutover.postedOpeningAllocationReadback` | `VEHICLE_INVENTORY` row `amountMinor` and vehicle `partyId` | view:finance | view:finance; returns `null` without cost access | GATED (round 5 F2). Previous classification was wrong: inspect returned allocations, not matching words |
+| `financingEconomics.getEconomics` | acquisition cost fields in projected application | view:finance_applications | existing role projection (SCRUM-886) | Already gated |
 | `accountingCutover.listOpeningStockChoices` | per-car opening cost `amountMinor` for imported stock | manage:finance | manage:finance + view:cost_price, refused otherwise | GATED (owner c24475 "gate all"). After the SCRUM-886 backfill the finance roles that run cutover (accountant, senior accountant, manager, owner) hold view:cost_price. `openingBalanceStatus` returns `canReadOpeningStockCost`; the allocation editor skips the query without it and shows an EN/AR note instead of an empty picker |
 | `approvals.checkPendingApproval`, `listPendingApprovals`, `listMyPendingApprovals`, `profitApprovalStatus` | deal margin against the minimum profit | view:vehicles / approval permissions | unchanged | DEFERRED to SCRUM-879 (held under SCRUM-886 c24247). Not widened here by instruction |
 | `vehicles.getAcquisitionCostCorrectionContext`, `listAcquisitionCorrectionBankOptions` | purchase price and bank options for a cost correction | `COST_CORRECTION_PERMISSIONS` | unchanged | Already gated (the sweep marks them ungated because the gate is a constant it does not match) |
 | `supplierReceivables.listReceiptBankOptions`, `changelog.getLatestPublishedAt` | none ("margin" and "landed" match unrelated words) | n/a | unchanged | NOT cost-bearing |
+
+### Remaining readers and mutation responses
+
+| Reader | Cost surface | Previous authority | Authority / projection now | Disposition |
+| --- | --- | --- | --- | --- |
+| `financingEconomics.supplierConcessionBasis` | `entitlementMinor` equals the sourced vehicle cost | finance applications + finance | same AND view:cost_price | GATED (F1); cockpit skips without the grant |
+| `financingEconomics.resolveAppraisalGap` | equality oracle in observed entitlement and concession bounds | approve finance application + finance | cost grant required before reading the application when a concession or observed entitlement is supplied | GATED (F1); ordinary resolutions retain their authority |
+| `accountingCutover.listPendingOpeningBalanceDrafts` | raw allocations, enriched allocations, and balancing inventory lines reconstruct per-car cost | manage:finance | same; returns `[]` without cost grant | GATED (F2); the Setup screen shows an EN/AR note. The whole draft is withheld because line subtraction bypasses per-row hiding |
+| `accountingOutbox.listPending` | raw event payload with vehicle id, `cogsMinor`, `costMinor` | view:finance | finance AND cost | GATED (F3), with and without status filter. No direct screen consumer found among the indexed callers |
+| `sourcingPayables.recordPartialPayment` | refusal `due`/message; success or replay `amountPaid` and `remainingAmount` | manage:finance | writes retain their authority; no-cost overpayment gets only generic coded EN/AR text; successful response is `{}` without cost | GATED (F4). Response projection runs after idempotency replay, so revoking a grant cannot expose cached figures |
+| `sourcingPayables.markPaid` | caller-supplied `expectedSettlementAmountMinor` equality check | manage:finance | cost required if observed amount is supplied | GATED (sibling oracle). Calls without an observation keep their authority and return no figure |
+| `sourcingPayables.setDisputed`, `listPaymentBankOptions` | status/id or eligible bank list | existing gates | unchanged | No cost amount returned; payment/refusal sibling inspection |
+| `supplierReceivables.recordReceipt` | over-receipt text names claim total; successful/replayed remaining margin reconstructs cost from sale price | manage:finance | no-cost refusal is generic EN/AR; response retains status and omits amount fields after replay | GATED (sweep); authorized figures unchanged |
+| `supplierCostRecoveries.recordReceipt` | remaining cost and accumulated recovery per car, including replay | manage:finance | response keeps receipt id/status; amount fields absent without cost, projected after replay | GATED (sweep); writes and durable result unchanged |
+| `supplierCostRecoveries.reverseReceipt` | remaining vehicle cost if activated | manage:finance | existing server-side pilot refusal before reads, writes or replay | BLOCKED, not certified for activation. Cost projection must be added before reopening this door; no switch changed |
+| `applications.setSupplierSettlementRoute`, `financingEconomics.approveDealerPurchaseAmount` | shared below-entitlement refusal named cost and difference | existing gates | amount-free coded EN/AR refusal for every caller | REDACTED (sweep) at `directSettlementBelowEntitlementRefusal`; comparison and financial effect unchanged |
+| `accountingMigration.backfillVehicleInventoryOpeningBalances` | per-car `amountMinor` in dry-run and write results; failure reason may contain amounts | manage:finance | result omits amount and reason without cost grant | REDACTED (sweep); migration work and counts unchanged |
 
 ## Consequences
 
@@ -87,7 +105,7 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   table above. Five are gated; `subledgerReconciliation` is not cost-bearing. `incomeStatement` was not on that list but carries COGS, so
   it is gated with them. The web Financial Reports tab and the web and mobile reports screens skip the gated queries and show an English
   and Arabic note; the VAT return tab is unchanged. `getAccountActivity` has no screen.
-- Round 3 (both seats, CHANGES_REQUESTED): the class was closed by sweeping every `query(` in `convex/` for `purchasePrice`, `costMinor`,
+- Round 3 (both seats, CHANGES_REQUESTED): the round used a lexical sweep of `query(` in `convex/` for `purchasePrice`, `costMinor`,
   `cogsMinor`, `capitalizedAmount`, `capitalizedCost`, `sourceCost`, `VEHICLE_COST`, `costOfGoodsSold`, `grossProfit`, `margin`,
   `landed`, `totalInvestment`, `minimumProfit`, `recognizedCost`, `supplierEntitlement` and `amountDue` (33 readers hit, 24 already
   gated, the 9 others classified in the table). The mechanism is one of three shared checks: `STATEMENT_PERMISSIONS` for refusing
@@ -98,7 +116,7 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   lists simply omit the withheld rows, and mobile totals are not separately recomputed.
 - Still ungated by design: the AR aging and VAT readers (no cost figures). Any reader added later that returns inventory, COGS, supplier
   or per-car cost needs a row in this table.
-- Evidence boundary: `convex-test` role fixtures and rendered screens at desktop and mobile widths. No production run.
+- Evidence boundary in this lane: `convex-test` role fixtures and jsdom components. No rendered desktop/mobile browser or production run.
 
 ## Owner questions (decided "Yes, gate all", recorded in SCRUM-902; the text below is the question as asked)
 
@@ -110,3 +128,58 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   close workflow? Gating them could break that workflow, so they stay as they are until the owner rules.
 - Q4. `dashboard.stats` already withholds cost metrics from roles without expenses, reports or finance. Should cost-bearing tiles also
   need `view:cost_price`?
+
+## Round 5 sweep and evidence boundary (SCRUM-902 c24475)
+
+The implementer scanned 764 exported registrations spelled `query`, `mutation`, or `action` in non-test TypeScript under `convex/`, excluding `_generated`.
+A TypeScript AST scan found 45 lexical candidates for purchase price, source cost, COGS, entitlement, capitalized cost, and remaining-amount fields.
+A second pass inspected query names and bodies for vehicle, profit, supplier, cost, expense, inventory and landed references and inspected the known raw-allocation/outbox readers.
+This is a source scan, not a proof that aliases, dynamically constructed responses, arbitrary free text or helper-returned fields are absent.
+The original five findings themselves show why token matching alone cannot certify a reader.
+
+| Additional inspected surface | Classification / disposition |
+| --- | --- |
+| `accountingMigration.backfillFixedAssetMinorUnits`; `fixedAssets.capitalize`, `remove`, `impair`, `dispose` | Fixed-asset cost, not vehicle acquisition cost. Mutation outputs are migration counts/ids; no vehicle cost figure identified |
+| `customerFinanceCompanyPayments.confirmPayment`; `openingCommissionLiabilities.list`; `prepaidExpenses.listSchedules` | Customer finance, payroll commission or non-vehicle prepaid balances; `remainingMinor` is not vehicle acquisition cost |
+| `sales.update`; `vehicleEdits.requestCreate`, `resolve`; `vehicles.create`, `createSourced` | Cost tokens occur in input validation/writes; responses are ids or status. Existing cost-field write authorization remains outside this read-only change |
+| `vehicleEdits.requestUpdate`; `vehicles.update`, `upsertLandedCosts`, `correctAcquisitionCost`, `importBulk` | Existing cost guards/projections; mutation costs are inputs or guarded correction context. Not newly certified here |
+| `vehicles.exportData`, `getAcquisitionCostCorrectionContext`, `listAcquisitionCorrectionBankOptions`; `sales.getBillOfSaleEconomics`; `dealWorkspace.financedDealCockpit` | Existing server projections/gates, or delegation to the already projected cockpit; no replacement reader introduced |
+| `vehicles.getPricingHistory`, `getReservationHistory`, `selectorOptions`, `getAgingBuckets`, `getPurchaseCostLockState`; `vehicleRequests.listPending` | Asking/list price, reservation/status/identity or cost-lock boolean; no purchase-cost figure identified in these response allowlists |
+| `accountingCutover.listOpeningAccountPolicies`; supplier/payment bank-option readers; supplier registry list/search/get/candidates | Policy, bank or supplier identity; no per-car cost amount identified |
+| `adminData.adminGetRecord`, `adminOrgs.getOrgDetail` | Administrative surfaces, outside tenant-reader certification in this PR; no claim that tenant `view:cost_price` gates arbitrary admin reads |
+| `approvals.checkPendingApproval`, `listPendingApprovals`, `listMyPendingApprovals`, `profitApprovalStatus`, `requestProfitApproval` | Existing explicit SCRUM-879 / SCRUM-886 c24247 deferral; not changed |
+| `workOrders.list` | OUTSIDE this PR's existing file scope: returns vehicle-linked raw tasks with parts/labor cost to `view:vehicles`. Source-inspected disclosure; no runtime reproduction or fix in this lane |
+| `financeDealCosts.listDealCosts` | OUTSIDE this PR's existing file scope: returns fee/actual/custody costs linked to an application to application viewers (only the plan has extra authority). Source-inspected; whether every fee is acquisition cost is not established. Needs a cost-permission follow-up |
+| `openingManagementSettlement.report` | OUTSIDE this PR's existing file scope: `view:finance` reads official net income and management profit from the income statement. Can reconstruct COGS with revenue in a one-car period. Source-inspected; no runtime reproduction or fix in this lane |
+
+Repeated failure evidence: c24487 (event payload/capitalization readers missed) and c24507 (outbox/raw allocation/refusal/unfiltered readers missed).
+The `correct` skill prevention here is behavioral tests at public functions, including grant revocation between a payment and its replay.
+A central schema/lint authorization redesign is a separate reviewed change; this lane does not infer policy from field spelling.
+No whole-repository closure, production authorization, concurrency, rendered browser or cloud-runtime verification is claimed.
+
+
+### Round 5 validation commands
+
+All Vitest invocations used named files and `--maxWorkers=1`; no watcher or dev server ran.
+
+| Command / named files | Observed result |
+| --- | --- |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts --maxWorkers=1` against unchanged production source at `86abd74b` | 11 failed; all five findings reproduced. Positive controls preceding each negative assertion saw the figure |
+| Same command after the first five fixes | 11 passed |
+| Same command with first sweep tests, before receipt fixes | 2 failed, 12 passed |
+| Same command with second sweep tests, before direct-refusal/backfill fixes | 3 failed, 14 passed |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts --maxWorkers=1 -t 'sweep markPaid'` with only `convex/sourcingPayables.ts` restored to `86abd74b`, then restored in `finally` | 1 selected test failed as expected; 12 unselected tests. No assertion or production file was left reverted |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts convex/costReaders.scrum902d.test.ts convex/supplierSourcingCostGate.scrum902.test.ts convex/supplierRefusalTexts.scrum869.test.ts convex/sourcingPayables.test.ts convex/supplierReceivables.test.ts convex/supplierCostRecoveries.test.ts --maxWorkers=1` | 7 files, 116 passed |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts components/applications/cockpit/DealCockpitSupplierAuthority.test.tsx components/applications/cockpit/ResolveGapDialog.test.tsx components/accounting/AccountingSetupTab.test.tsx components/accounting/setup/OpeningBalanceApprovalContainer.test.tsx components/accounting/setup/OpeningAllocationEditor.test.tsx --maxWorkers=1` | 6 files, 129 passed |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts convex/financedConsignedSettlement.test.ts convex/supplierConcession.scrum766c.test.ts convex/openingBalanceIndexReads.test.ts convex/accountingPhase9.test.ts convex/referenceReadOwnership.test.ts convex/expensesReferenceOwnership.test.ts convex/costReaders.scrum902d.test.ts convex/supplierSettlement.test.ts scripts/regression/scenarioRecord.test.ts --maxWorkers=1` | 442 passed, 2 failed in referenceReadOwnership. The old fixtures expected vehicle expense rows without cost access. Ownership assertions were preserved; the join fixture gained cost access and the no-cost test now asserts the row is absent with an authorized summary control |
+| `pnpm exec vitest run convex/referenceReadOwnership.test.ts scripts/regression/scenarioRecord.test.ts convex/supplierRefusalTexts.scrum869.test.ts --maxWorkers=1` after those fixture corrections | 3 files, 72 passed |
+| `pnpm exec vitest run convex/costDisclosure.scrum902f.test.ts convex/referenceReadOwnership.test.ts convex/supplierRefusalTexts.scrum869.test.ts scripts/regression/scenarioRecord.test.ts --maxWorkers=1` (final, including EN/AR refusal checks) | 4 files, 86 passed |
+| `pnpm typecheck` | Final exit 0. Root config excludes `convex`, `apps`, `packages`, `dealer-worker`, `test-utils`, and `node_modules` as roots; imported dependencies may still be checked |
+| `pnpm typecheck:convex` | Final exit 0. Covers `convex/**/*` and `test-utils/**/*`; excludes `convex/_generated` as roots. It does not check the web/mobile applications |
+| Targeted `pnpm exec eslint` on the changed backend functions and three cockpit/setup components | Exit 0; 0 errors, 11 warnings at untouched lines. Sonar was not run |
+| `git diff --check` | Passed |
+| Contract baseline source checks | 84 affected entries renewed in 11 shards; 49 relocated only after full call-text equality. Current client/backend git blobs and canonical shard loading passed. Expiries, fingerprints, findings and UNKNOWN status were preserved |
+
+The full default `relocateBaseline.mjs --base 86abd74b` compiler scan was stopped after it consumed substantial memory without producing a result. Its result is UNAVAILABLE, not passing. The replacement proof above reuses `callExpressionAt` and the canonical shard loader/writer for the affected entries; it is not a full monitor or live-spec run. Neither `scripts/contractSkew/README.md` nor `scripts/intelligence/README.md` exists at this revision; the baseline procedure was read in `scripts/contractSkew/BASELINE-IDENTITY.md` and the CLI source.
+Initial typecheck runs found an introduced JSX syntax error and optional-result inference errors. Both were corrected before the final successful typechecks; assertions were not weakened.
+Production, real Convex runtime, mobile typecheck, rendered EN/AR desktop/mobile screens, scripted E2E, screen audit, explorer swarm, Sonar and independent review seats remain unverified in this implementation lane.

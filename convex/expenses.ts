@@ -363,7 +363,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     // SCRUM-902: one car's expenses sum to its landed cost, so that view needs view:cost_price. The shop-wide list does
-    // not, but its capitalized amounts (what each row added to a car's cost) are withheld below without it.
+    // not, but vehicle-linked rows and capitalized amounts are withheld below without cost access.
     const { role } = await requireTenantAuth(
       ctx,
       args.orgId,
@@ -391,7 +391,7 @@ export const list = query({
     // joined document must be proven to belong to this org before any field of it is returned.
     const readOrgUser = createOrgUserReader(ctx, args.orgId);
     const page = await Promise.all(
-      pageResult.page.map(async (exp) => {
+      pageResult.page.filter(exp => mayReadCost || !exp.vehicleId).map(async (exp) => {
         let vehicle = null;
         if (exp.vehicleId) {
           vehicle = sameOrgOrNull(await ctx.db.get(exp.vehicleId), args.orgId);

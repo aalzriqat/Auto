@@ -1,4 +1,5 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
 import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
@@ -871,6 +872,8 @@ export const listPendingOpeningBalanceDrafts = query({
   handler: async (ctx, args) => {
     const openingReader=createOpeningSettlementReader(ctx,args.orgId);
     const { role, user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Raw allocations and balancing lines can reconstruct a single car's cost.
+    if (!canReadVehicleCost(role)) return [];
     const drafts = await ctx.db
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
@@ -1452,6 +1455,7 @@ export const postedOpeningAllocationReadback = query({
   handler: async (ctx, args) => {
     const openingReader=createOpeningSettlementReader(ctx,args.orgId);
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    if (!canReadVehicleCost(role)) return null;
     const draft=await selectOpeningReadbackDraft(ctx,args.orgId);
     if(!draft)return null;
     const journal = draft.journalEntryId ? await ctx.db.get(draft.journalEntryId) : null;

@@ -1,0 +1,74 @@
+{
+  "id": "cost-disclosure-902f-claim-receipt",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "claim-receipt",
+        "amount": 100,
+        "claim": 3500,
+        "revokeBeforeReplay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "claim-receipt",
+        "amount": 100,
+        "claim": 3500,
+        "revokeBeforeReplay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "status": "PARTIALLY_PAID",
+        "amountReceived": "absent",
+        "remainingAmount": "absent"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "amountReceived": 100,
+        "remainingAmount": 3400
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "sweep supplier receipt refusal and replay do not disclose the margin claim"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "9a8f18e7f4c68341fc0b95769e2ca84d89aeca5aed7c2b14320c09cd143aa388"
+}

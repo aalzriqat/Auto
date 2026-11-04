@@ -919,6 +919,7 @@ export function DealCockpit({
     canViewApplications &&
       !permissionsLoading &&
       hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+      hasPermission(PERMISSIONS.VIEW_COST_PRICE) &&
       deal &&
       typeof deal.money?.shortfall?.totalMinor === "number"
       ? { orgId, applicationId }

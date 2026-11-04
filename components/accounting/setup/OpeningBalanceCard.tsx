@@ -188,7 +188,7 @@ export function OpeningBalanceCard() {
   );
   const postedReadback = useQuery(
     api.accountingCutover.postedOpeningAllocationReadback,
-    activeOrgId && status?.posted ? { orgId: activeOrgId } : "skip"
+    activeOrgId && status?.posted && status.canReadOpeningStockCost ? { orgId: activeOrgId } : "skip"
   );
   const accounts = useQuery(
     api.chartOfAccounts.list,
@@ -388,6 +388,9 @@ export function OpeningBalanceCard() {
             )}
             {status.posted && postedReadback && (
               <PostedOpeningAllocations readback={postedReadback} currency={status.currency} />
+            )}
+            {alreadyResolved && !status.canReadOpeningStockCost && (
+              <p className="mt-2 text-sm text-muted-foreground">{t("OpeningReadbackCostAccessNeeded")}</p>
             )}
             {!status.posted && status.pendingExists && (
               <p className="mt-2 flex items-center gap-1.5 text-sm text-amber-700 dark:text-amber-300">

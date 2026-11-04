@@ -151,6 +151,8 @@ export const AppErrorCode = {
   // payload carries `projected` and `due` (major units) for the `{placeholders}`; translated under ServerError_<code>.
   // The only action it offers is the one available: reduce the amount (payable correction is pilot-disabled).
   SUPPLIER_PAYMENT_EXCEEDS_BALANCE: "SUPPLIER_PAYMENT_EXCEEDS_BALANCE",
+  SUPPLIER_PAYMENT_REFUSED: "SUPPLIER_PAYMENT_REFUSED",
+  SUPPLIER_RECEIPT_REFUSED: "SUPPLIER_RECEIPT_REFUSED",
   // SCRUM-542. `fixedAssets.impair` / `fixedAssets.dispose` accounting-date guards, each raised
   // before the first write and translated under ServerError_<code>.
   ASSET_EVENT_DATE_INVALID: "ASSET_EVENT_DATE_INVALID",

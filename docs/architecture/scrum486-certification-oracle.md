@@ -1011,3 +1011,26 @@ Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level a
 Class-sweep failing-first: the six class-sweep reader cases failed at `2852274243f2f95a4df4c3d3a7d9b2ce9ca81900` against the ungated readers while every control passed. The web Financial Reports tab (trial balance, income statement, balance sheet; the VAT return tab is unchanged) and the expenses and performance tabs of the web reports page skip their queries without the grant and show an English and Arabic note; the mobile reports module shows dashes and skips the same two queries.
 
 Failing-first: nine reader cases and the dashboard case failed at `ef03e298f` against the unchanged readers while every control passed. Screens: the web reports page, the web General Ledger tab, the recoveries section and the mobile reports module skip their queries without the grant and show an English and Arabic note; covered by `components/accounting/GeneralLedgerTabCurrency.test.tsx`, `components/sourcing/SupplierCostRecoveriesSection.test.tsx` and `apps/mobile/src/features/workspace/modules/reports.costGate.test.tsx` (jsdom and React Native test renderers, not a browser; the web reports page has no render test). Evidence boundary: `convex-test` only, no production run. Deploy dependency: the SCRUM-886 ACCOUNTANT backfill (Deploy production step 2e) must ship in the same deploy, or an ACCOUNTANT role seeded earlier is refused by these readers.
+
+
+## SCRUM-902-REMAINING-COST-DISCLOSURES
+
+Owner ruling: SCRUM-902 c24475. Synthetic fixtures only. The implementation keeps posting, settlement amounts, durable idempotency results and pilot switches unchanged; response projections use current authority after replay.
+
+| Cell | Expected | Bound test in `convex/costDisclosure.scrum902f.test.ts` |
+| --- | --- | --- |
+| F1 basis | finance without cost is refused; cost grant, ALL_PERMISSIONS and system owner read entitlement | F1 supplierConcessionBasis refuses finance without cost and preserves granted access |
+| F1 comparison | incorrect, correct and adjacent entitlement guesses refuse before comparison; authorized concession still records | F1 resolveAppraisalGap cannot compare guessed entitlement without cost access |
+| F2 posted | null without cost; authorized read retains car id and amount | F2 postedOpeningAllocationReadback withholds per-car opening amounts |
+| F2 pending | no raw draft, allocations, enriched allocations or balancing lines without cost | F2 pending drafts withhold raw allocations, enriched allocations and balancing cost lines |
+| F3 outbox | cost permission required for unfiltered, PENDING, POSTED and FAILED branches | F3 listPending gates cost payloads in every status branch |
+| F4 refusal | no due/projected/entitlement or amount in no-cost EN/AR error; authorized detail retained | F4 partial payment refusal has no cost amount or due field without grant |
+| F4 success/replay | current authority removes amounts after grant revocation; payment recorded once | F4 partial payment success and replay redact accumulated paid and entitlement balance |
+| F5 unfiltered | vehicle-linked capitalized row and its tax operands absent; ordinary office expense remains | F5 unfiltered expenses exclude vehicle cost rows including tax and capitalization operands |
+| Settlement oracle | observed settlement amounts require cost grant; authorized markPaid still settles | sweep markPaid cannot compare a guessed settlement balance without cost access |
+| Margin receipt | generic no-cost refusal and response projection after replay; receipts persist once | sweep supplier receipt refusal and replay do not disclose the margin claim |
+| Recovery receipt | id/status retained; remaining cost removed after replay | sweep cost recovery receipt and replay withhold remaining vehicle cost |
+| Direct route/approval | shared refusal contains no supplier entitlement or difference, in EN/AR | sweep direct supplier route and approval refusals contain no entitlement |
+| Inventory migration | no-cost dry run retains action/counts but no per-car amount; grant retains amount | sweep inventory backfill response withholds vehicle cost but keeps migration results |
+
+Failing-first: the original five findings produced 11 failures against production source at 86abd74bb38d3361684fbaecf6631a90c1e17928. The first sweep added two failing receipt cases; the second added three failing direct-route/backfill cases. Later consolidating status and route variants into named scenario tests preserves their assertions and allows regression-library binding. These are harness results, not Convex platform, concurrency, production, browser E2E or release certification.

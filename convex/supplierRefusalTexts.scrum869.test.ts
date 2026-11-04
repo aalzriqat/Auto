@@ -38,6 +38,18 @@ const PROMISES_AN_UNAVAILABLE_DOOR = [
 ];
 const ARABIC_UNAVAILABLE_DOOR = [/تصحيح محاسبي يدوي/, /قيد يدوي/, /قيود يدوية/, /عدّل ذمة المورد/, /عدّل ذمة المورّد/];
 
+test("SCRUM-902 cost-free supplier refusals localize to EN/AR without amount placeholders", () => {
+  for (const code of ["SUPPLIER_PAYMENT_REFUSED", "SUPPLIER_RECEIPT_REFUSED", "SUPPLIER_DIRECT_SETTLEMENT_REFUSED"]) {
+    const error = new ConvexError({ code, message: "fallback" });
+    const en = getLocalizedErrorMessage(error, translate(english));
+    const ar = getLocalizedErrorMessage(error, translate(arabic));
+    expect(en).toBe(english[`ServerError_${code}`]);
+    expect(ar).toBe(arabic[`ServerError_${code}`]);
+    expect(ar).toMatch(/[؀-ۿ]/);
+    expect(en + ar).not.toMatch(/\{\w+\}|\d/);
+  }
+});
+
 function expectNoUnavailableDoor(text: string | undefined, patterns: RegExp[], what: string) {
   expect(text, `${what} is missing`).toBeTruthy();
   for (const pattern of patterns) expect(text, `${what} must not promise ${pattern}`).not.toMatch(pattern);

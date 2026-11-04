@@ -1,3 +1,4 @@
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
@@ -332,8 +333,8 @@ export const recordReceipt = mutation({
     receivedAt: v.optional(v.number()),
     idempotencyKey: v.string(),
   },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+  handler: async (ctx, args): Promise<{ amountReceived?: number; remainingAmount?: number; status: "PAID" | "PARTIALLY_PAID" }> => {
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const receiptMethod = normalizePaymentMethod(args.receiptMethod);
     // SCRUM-869 F1: CASH and BANK_TRANSFER only. A cheque would post to cheques-in-hand with no
     // `postDatedCheques` custody row, so it could never be deposited or reverse on a bounce.
@@ -345,7 +346,7 @@ export const recordReceipt = mutation({
       await requireOwnedRow(ctx, args.orgId, "vehicleSupplierReceivables", args.receivableId, "Supplier receivable not found.")
     );
 
-    return await runWithIdempotency(
+    const result = await runWithIdempotency(
       ctx,
       {
         orgId: args.orgId,
@@ -439,6 +440,10 @@ export const recordReceipt = mutation({
         // behind it, and absorbing it into the claim hides which deal it
         // happened on. Same refusal as the payable side.
         if (projectedMinor > dueMinor) {
+          if (!canReadVehicleCost(role)) {
+            throwAppError(AppErrorCode.SUPPLIER_RECEIPT_REFUSED,
+              "This supplier receipt cannot be recorded. Check the receipt details and try again.");
+          }
           throw new ConvexError(
             `That would record ${fromMinorUnits(projectedMinor, row.currency)} against ${fromMinorUnits(dueMinor, row.currency)} owed. Reduce the amount to the balance still owed.`
           );
@@ -494,6 +499,8 @@ export const recordReceipt = mutation({
         };
       }
     );
+    // Apply current authority to fresh results and cached replays alike.
+    return canReadVehicleCost(role) ? result : { status: result.status };
   },
 });
 

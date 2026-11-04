@@ -160,6 +160,7 @@ function ExpensesContent() {
 
   return (
       <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">{t("VehicleExpensesCostAccessNote")}</p>
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("RecordExpense" as any)}

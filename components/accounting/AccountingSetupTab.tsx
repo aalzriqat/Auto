@@ -219,7 +219,11 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
           organization's opening balance forward. It renders nothing when
           nothing is pending. */}
       {showSettings && (
-        <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
+        hasPermission(PERMISSIONS.VIEW_COST_PRICE) ? (
+          <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
+        ) : (
+          <p className="text-sm text-muted-foreground">{t("OpeningReadbackCostAccessNeeded")}</p>
+        )
       )}
 
       {!canManageFinance && (

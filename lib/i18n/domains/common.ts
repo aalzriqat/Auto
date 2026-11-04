@@ -416,6 +416,26 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "That would pay {projected} against {due} owed. Reduce the amount to the balance still owed.",
     "سيؤدي هذا إلى دفع {projected} مقابل {due} مستحق. خفّض المبلغ إلى الرصيد المتبقي المستحق.",
   ],
+  ServerError_SUPPLIER_PAYMENT_REFUSED: [
+    "This supplier payment cannot be recorded. Check the payment details and try again.",
+    "لا يمكن تسجيل دفعة المورد هذه. تحقق من تفاصيل الدفعة وحاول مرة أخرى.",
+  ],
+  ServerError_SUPPLIER_RECEIPT_REFUSED: [
+    "This supplier receipt cannot be recorded. Check the receipt details and try again.",
+    "لا يمكن تسجيل إيصال المورد هذا. تحقق من تفاصيل الإيصال وحاول مرة أخرى.",
+  ],
+  ServerError_SUPPLIER_DIRECT_SETTLEMENT_REFUSED: [
+    "The supplier cannot receive less than he is owed. Review the agreement or settle through the dealership.",
+    "التمويل المعتمد لا يغطي اتفاق المورد. راجع الاتفاق أو سوِّ الصفقة من خلال المعرض.",
+  ],
+  OpeningReadbackCostAccessNeeded: [
+    "Opening balances include vehicle costs. Your role needs cost-price access to view them.",
+    "تتضمن الأرصدة الافتتاحية تكاليف السيارات. يحتاج دورك إلى صلاحية عرض سعر التكلفة لعرضها.",
+  ],
+  VehicleExpensesCostAccessNote: [
+    "Vehicle-linked expenses are omitted when your role lacks cost-price access.",
+    "تُحجب مصاريف السيارات إذا لم يتضمن دورك صلاحية عرض سعر التكلفة.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",

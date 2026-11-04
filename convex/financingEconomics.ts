@@ -3124,6 +3124,11 @@ export const resolveAppraisalGap = mutation({
       PERMISSIONS.APPROVE_FINANCE_APPLICATION,
       PERMISSIONS.VIEW_FINANCE,
     ]);
+    // A supplier concession compares caller-observed cost to stored cost. Authorize
+    // before the comparison so a guessed entitlement cannot become an equality oracle.
+    if ((args.supplierGapShareMinor ?? 0) !== 0 || args.observedSupplierEntitlementMinor !== undefined) {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COST_PRICE]);
+    }
     const app = await requireOwnedRow(
       ctx,
       args.orgId,
@@ -3387,7 +3392,7 @@ export const resolveAppraisalGap = mutation({
  * SCRUM-766 PR-C: the supplier terms an operator reviews before agreeing a supplier
  * concession, and the same terms `resolveAppraisalGap` demands back as the OBSERVED basis.
  * Finance-tier (the entitlement is what the supplier is owed): `view:finance` AND
- * `view:finance_applications`, the same pair the cockpit's money rail needs. `eligible` is
+ * `view:finance_applications`, plus `view:cost_price` because the entitlement is cost. `eligible` is
  * false (never an error) for a stock car, a multi-vehicle application or a vehicle with no
  * recorded entitlement, so the dialog can simply not offer the field.
  */
@@ -3400,6 +3405,7 @@ export const supplierConcessionBasis = query({
     await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.VIEW_FINANCE,
+      PERMISSIONS.VIEW_COST_PRICE,
     ]);
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
     if (applicationVehicleIds(app).length !== 1) return { eligible: false as const };

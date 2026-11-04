@@ -1193,9 +1193,8 @@ export function retroactiveOwnershipChangeRefusal(args: {
  * It refuses rather than clamping the resulting claim to zero. A shortfall means
  * somebody has to fund the difference; treating it as "the dealership simply has
  * no claim" silently elects the supplier to absorb it, and AutoFlow does not
- * model who tops it up. Returned as a message rather than thrown so each caller
- * can raise it as its own error type — a `ConvexError`, so the operator is told
- * which number to fix instead of meeting a redacted "unexpected error".
+ * model who tops it up. Both callers expose this refusal to roles without cost
+ * access, so its localized payload must not contain either amount or the difference.
  *
  * Both amounts are integer minor units in the same currency. A caller that
  * cannot establish the entitlement must not call this and read `null` as
@@ -1205,9 +1204,10 @@ export function directSettlementBelowEntitlementRefusal(args: {
   approvedAmountMinor: number;
   supplierEntitlementMinor: number;
   supplierName?: string;
-}): string | null {
+}): { code: string; message: string } | null {
   if (args.approvedAmountMinor >= args.supplierEntitlementMinor) return null;
-  const shortfall = args.supplierEntitlementMinor - args.approvedAmountMinor;
-  const supplier = args.supplierName ?? "the supplier";
-  return `On this deal the finance company pays ${supplier} directly, so the approved amount is what he actually receives — and ${args.approvedAmountMinor} minor units is ${shortfall} below the ${args.supplierEntitlementMinor} he is owed for the car. Somebody has to cover that difference, and who does is not something the deal can decide for itself. Agree a lower supplier amount, record the shortfall against the supplier agreement, or settle this deal through the dealership instead.`;
+  return {
+    code: "SUPPLIER_DIRECT_SETTLEMENT_REFUSED",
+    message: "The supplier cannot receive less than he is owed. Review the agreement or settle through the dealership.",
+  };
 }

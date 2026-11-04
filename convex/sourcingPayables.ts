@@ -5,6 +5,7 @@ import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 // SCRUM-902: a SOURCED car's supplier amount is its acquisition cost, so these readers need the same pair as the statement.
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { runWithIdempotency } from "./utils/idempotency";
@@ -381,6 +382,10 @@ export const markPaid = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Comparing a caller's guessed outstanding amount is a cost equality oracle.
+    if (args.expectedSettlementAmountMinor !== undefined) {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COST_PRICE]);
+    }
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
     // SCRUM-869: cash or bank transfer only, refused before the idempotency claim or any read-for-write.
     assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
@@ -550,8 +555,8 @@ export const recordPartialPayment = mutation({
     paymentNotes: v.optional(v.string()),
     idempotencyKey: v.string(),
   },
-  handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+  handler: async (ctx, args): Promise<{ amountPaid?: number; remainingAmount?: number }> => {
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const paymentMethod = normalizePaymentMethod(args.paymentMethod);
     // SCRUM-869: same shared check as markPaid, before the idempotency claim or any read-for-write.
     assertSupplierSettlementMethodAllowed(paymentMethod, "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED");
@@ -562,7 +567,7 @@ export const recordPartialPayment = mutation({
       args.orgId,
       await requireOwnedRow(ctx, args.orgId, "vehicleSupplierPayables", args.payableId, "Supplier payable not found.")
     );
-    return await runWithIdempotency(
+    const result = await runWithIdempotency(
       ctx,
       {
         orgId: args.orgId,
@@ -613,6 +618,10 @@ export const recordPartialPayment = mutation({
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
         if (projectedMinor > dueMinor) {
+          if (!canReadVehicleCost(role)) {
+            throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED,
+              "This supplier payment cannot be recorded. Check the payment details and try again.");
+          }
           // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
           // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
           const projectedMajor = fromMinorUnits(projectedMinor, payable.currency);
@@ -695,6 +704,9 @@ export const recordPartialPayment = mutation({
         };
       }
     );
+    // Project AFTER idempotency replay: a grant revoked since the first payment
+    // must not expose the cached entitlement on a retry. Stored results stay intact.
+    return canReadVehicleCost(role) ? result : {};
   },
 });
 

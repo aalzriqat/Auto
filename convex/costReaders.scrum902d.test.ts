@@ -100,12 +100,10 @@ describe("SCRUM-902 expense readers", () => {
   }
   const page = { numItems: 10, cursor: null };
 
-  test("expenses.list: a role with view:expenses but without view:cost_price gets the expense rows without the capitalized amount (SCRUM-902)", async () => {
+  test("expenses.list: a role with view:expenses but without view:cost_price cannot reconstruct vehicle cost from expense rows (SCRUM-902)", async () => {
     const s = await withExpense("exl", ["view:expenses"]);
     const result = await s.as.query(api.expenses.list, { orgId: s.orgId, paginationOpts: page });
-    expect(result.page).toHaveLength(1);
-    expect(result.page[0]).toMatchObject({ title: "Brake job", amount: 116 });
-    expect("capitalizedAmount" in result.page[0]).toBe(false);
+    expect(result.page).toEqual([]);
   });
   test("expenses.list: a role holding both view:expenses and view:cost_price still gets the capitalized amount (SCRUM-902 positive control)", async () => {
     const s = await withExpense("exlboth", ["view:expenses", "view:cost_price"]);

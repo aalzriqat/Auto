@@ -1,0 +1,70 @@
+{
+  "id": "cost-disclosure-902f-payment-replay",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "payment-replay",
+        "amount": 50,
+        "alreadyPaid": 100,
+        "revokeBeforeReplay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "sourcingPayables.recordPartialPayment",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "payment-replay",
+        "amount": 50,
+        "alreadyPaid": 100,
+        "revokeBeforeReplay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {}
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "amountPaid": 150,
+        "remainingAmount": 8850
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F4 partial payment success and replay redact accumulated paid and entitlement balance"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "96ec1876eff11d090eb51e32a8e0240af1c14c08f7f12da1171ec12f17c79ee9"
+}
