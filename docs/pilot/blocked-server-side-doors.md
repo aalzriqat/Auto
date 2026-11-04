@@ -7,28 +7,60 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Evidence boundary
 
-- **What this is.** A static map of `origin/main` at 30a6429e3 (2026-11-04) from `convex/**/*.ts`: every
-  `export const … = mutation(` (404 found), narrowed by hand to the doors that move money or financial state, then
-  joined to the guard call sites and to the test files that call the public door and name the refusal code.
-- **What ran.** Only `convex/pilotBlockedDoors.scrum795.test.ts` (new, this change) and the suites listed under
-  "Executed" below were run here, serially (`--maxWorkers=1`), on `convex-test`. Every other test is cited, not
-  re-run here.
+- **What this is.** A static map of the code at `origin/main` 440bd99b6 (2026-11-04), the merge base of this branch.
+  The inventory lists all 404 `export const … = mutation(` in `convex/**/*.ts`
+  ([`blocked-server-side-doors.inventory.json`](blocked-server-side-doors.inventory.json)). Each door has exactly one
+  class, and `scripts/regression/pilotDoorInventory.test.ts` fails when a public mutation is missing, listed twice
+  or no longer exists. Regenerate the list with that test's scan, not by hand.
+- **What the inventory test proves.** The list is complete, each cited guard symbol exists in its file, each cited
+  test file calls the door through `api.<module>.<function>` and contains the refusal code, each certified door is
+  called in its certification test, and no door classed non-financial touches a ledger, cash or subledger table.
+  It does not prove that a guard runs before a read, or that a refusal test fails without its guard.
+- **What ran.** `convex/pilotBlockedDoors.scrum795.test.ts` (new), `scripts/regression/pilotDoorInventory.test.ts`
+  (new), `scripts/regression/scenarioRecord.test.ts` and the suites under "Executed", serially
+  (`--maxWorkers=1`), on `convex-test`. Every other test is cited, not re-run here.
 - **What it is not.** Not browser, cloud or production evidence. The production read-back of each refusal is
   owed under SCRUM-760 task A3 / SCRUM-762 and is **not** claimed. Switches stay as shipped; nothing is enabled.
-- The map is not a proof that no other door exists. The unclassified doors at the end are the ones this sweep
-  could not place under any ruling.
+- **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
+  needs an owner ruling, whatever it looks like.
+
+## Inventory: 404 public mutations
+
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 38 · UNCLASSIFIED 140 · NON_FINANCIAL 196.
+
+| Class | Meaning | Evidence per door |
+| --- | --- | --- |
+| EXCLUDED_GUARDED | A pilot containment refuses it, or the part of it that moves excluded money | Guard symbol and file, refusal code, the test that calls the door |
+| ENABLED_CERTIFIED | In pilot scope and a cell of the SCRUM-486 oracle covers it | The certification test and the row title or oracle section |
+| UNCLASSIFIED | Moves or can move money, and no ruling places it | One line on what it does to money, `ruling: "owner ruling needed"` |
+| NON_FINANCIAL | Writes no ledger, cash or subledger table and calls no posting helper | A reason; the inventory test checks the door body |
+
+A door with a partial block (for example `sales.update`, `vehicles.update`, `collections.recordPayment`) has a
+`blocks` entry whatever its class. For `recordPayment` the class is UNCLASSIFIED because only the sale-invoice
+branch is blocked. Read the per-door entries in the inventory file; the tables below are the summary of the
+excluded families.
 
 ## How a block is built
 
-A pilot block is a compile-time constant (never an env var, org setting or database flag) read by a guard that runs
-after tenant authentication and **before any read or write** (and before `runWithIdempotency`, so a stored replay is
-refused too). Refusals are `AppErrorCode`s with static text ending "Nothing has been changed." and an Arabic
-`ServerError_<code>` entry in `lib/i18n/domains/common.ts`.
+A pilot block is a compile-time constant (never an env var, org setting or database flag) read by a guard call
+inside the mutation handler, after tenant authentication. Refusals are `AppErrorCode`s with static text ending
+"Nothing has been changed." and an Arabic `ServerError_<code>` entry in `lib/i18n/domains/common.ts`.
+
+Where the guard sits is read from the cited lines, not proven by the tests:
+
+- The three payout doors and the three sale-invoice receipt doors call the guard as the first statement after
+  `requireTenantAuth`, before any `db` read and before `runWithIdempotency`.
+- `collections.recordPayment` validates the payment date and runs `assertOpeningReceivableDate` (a read of the
+  receivable) first. Its sale-invoice branch is refused at `collections.ts:1664`, before `runWithIdempotency`
+  and before any write.
+- `dealUnwind.finishDealUnwind` loads the unwind and runs `assertFinishable` (reads) first. The payout guard at
+  `dealUnwind.ts:656` runs before the first write of the handler body.
 
 ## Class table: excluded doors
 
-`T` = test calls the public mutation and asserts the code. `0W` = same test compares full table content (and where
-stated the scheduler) before and after, so a refusal that patched a row would fail.
+`T` = the test calls the public mutation and asserts the coded refusal. `0W` = the same test compares full table
+content (and where stated the scheduler) before and after, so a refusal that committed a row would fail. `0W`
+proves that nothing was committed. It does not prove at which point the refusal was thrown.
 
 ### 1. Customer-credit payout (`CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED = true`, `customerCreditPayoutContainment.ts`)
 
@@ -112,45 +144,81 @@ allowed control for the neighbouring path (T+0W).
 | Salesperson cash receipts (SCRUM-795 item 3) | `deposits.create`, `depositRequests.confirm`, `deposits.allocateToVehicles`, `releaseVehicleAllocation`, `resolveReleasedAllocation` | permission removed from the default SALES template | `depositRequests.test.ts`; records `sales-member-*` (`vehicles.createReservation` SALES half is still an open gap, see `regression/PILOT-PATH.md`) |
 | Deal commission lines | `dealCommissions.addLine/removeLine` | `DEAL_COMMISSION_LINES_PILOT_DISABLED = false` (**enabled**, not a block) | `dealCommissionsPilot.test.ts` |
 
-## Doors that stay enabled for CASH / configured FINANCED / SOURCED through delivery
+## The deal unwind: enabled, with the payout branch blocked (finding B)
 
-Not blocks, listed so the table is not read as the whole money surface: `quotes.saveQuote`,
-`applications.createFromQuote/updateStatus/registerExpectedPayment/finalizeDeal/confirmDisbursement/
-registerVehicleHandover/cancelApplication`, `sales.create/createDraft/completeFromQuote/update`, `deposits.create/
-allocateToVehicles/release`, `financeCompanyForward.*`, `financingEconomics.approveDealerPurchaseAmount/…`,
-`sourcingPayables.markPaid/recordPartialPayment` and `supplierReceivables.recordReceipt` (CASH, BANK_TRANSFER only),
-`vehicles.create/update/upsertLandedCosts` (additions), `expenses.create`, `financeDealCosts` fee and custody
-recording before finalization. Commission payout is through payroll (the direct payout door is blocked above; the
-payroll doors themselves are listed as unclassified below). Certification of these is the SCRUM-486 oracle
-(`docs/architecture/scrum486-certification-oracle.md`), not this file.
+Owner decision B ("narrow pilot gate", SCRUM-760, 2026-10-19) puts the unwind of a financed deal in the pilot
+scope. The oracle (`docs/architecture/scrum486-certification-oracle.md`, line 256) states the enabled scope:
+the unwind (`startDealUnwind`, `recordDealUnwindForwardReturn`, `finishDealUnwind`, `abandonDealUnwind`) of a
+financed deal finished with zero-credit dispositions, and "Unwind and cost correction are enabled, not deferred".
+The oracle's own wording holds the precise text; this file does not restate it as a ruling.
 
-## Unclassified money-moving doors (no ruling places them; owner decision, not guarded here)
+So the classes are:
 
-No switch, and no ruling in the pilot scope excludes or certifies these. They are outside the CASH / FINANCED /
-SOURCED deal path but reachable by a role with the permission. They are listed rather than guarded, because
-adding a guard would switch off a function (and, per SCRUM-810, would need a matching UI capability flag).
+- `startDealUnwind`, `recordDealUnwindForwardReturn`, `abandonDealUnwind` and `finishDealUnwind`: ENABLED_CERTIFIED,
+  with oracle rows U-RET, U-ABANDON and U-SOURCED (and CC-CASH, CC-AP, CC-RESTATE, CC-SOURCED for cost correction).
+  The financier unwind legs are enabled and are not blocked here.
+- The customer-credit payout branch of `finishDealUnwind` is blocked (section 1) and is oracle row U-REFUND, an
+  expected-refusal cell. The `finishDealUnwind` entry carries both the certification and that block.
+- `customerPaymentDisposition: "REFUND"` with zero active customer credit is permitted: the guard at
+  `dealUnwind.ts:656` is reached only when a payout field is given or the invoice plan's `totalMinor` is above zero.
 
-- `dealUnwind.startDealUnwind`, `dealUnwind.recordDealUnwindForwardReturn`, and the financier-remittance leg of
-  `dealUnwind.finishDealUnwind`. Only the customer-payout half is switched off; the unwind itself is wired in
-  `DealCockpit`. Decision B lists "refund or unwind" as deferred, so whether the financier legs are in or out
-  needs a ruling.
-- `payroll.setCompensation/recordAdvance/recoverAdvance/createRun/cancelRun/approveRun/payRun`.
-- `bankReconciliation.uploadStatementLines/confirmMatch/ignoreLine`, `bankAccounts.create/update/deactivate`,
-  `cashDrawer.recordMovement`, `collections.createInstallmentPlan`, `collections.returnCheque` (uncleared),
-  `collections.reviewCashierReconciliation`.
-- `partnerEquity.add/remove`, `prepaidExpenses.*`, `accountingPeriods.reopen`, `openingManagementSettlement.approve/reject`,
-  `sales.markCommissionUnpaid` (refuses when paid; clears nothing else).
+## Doors that stay enabled
+
+The doors the pilot keeps on are the ENABLED_CERTIFIED entries of the inventory, each with the certification
+test that calls it. This file lists no door by wildcard. Two entries carry a limit that is easy to miss:
+`collections.registerCheque` and `collections.clearCheque` are certified only as the financier cheque receipt. A
+customer cheque is not a certification row, so the plain customer cheque path is not claimed as certified. The
+direct commission payout door is blocked (section 4); commission payout runs through payroll, and the payroll
+doors are UNCLASSIFIED.
+
+## Unclassified money-moving doors (owner ruling needed, nothing guarded here)
+
+The inventory lists 140 UNCLASSIFIED doors, each with a one-line effect on money. No switch and no ruling places
+them. They are listed, not guarded, because guarding one would switch off a function and, per SCRUM-810, would
+need a matching UI capability flag. These are the ones that look like a deferred correction or refund, or that a
+review named:
+
+| Door | What it does to money |
+| --- | --- |
+| `deposits.voidDeposit` | Voids a held customer deposit and reverses the receipt, so the money leaves the customer's balance. |
+| `financeCompanyForward.reverseFinanceCompanyForward` | Takes back a forward payment recorded to the finance company before the transfer is confirmed. |
+| `financeCompanyForward.reportFinanceCompanyForwardReturned` | Reverses a forward on the books after the finance company returned the money. |
+| `partnerEquity.recordEquityMovement` | Records a partner CONTRIBUTION or DRAW (money in or out of the business). PROFIT_DISTRIBUTION is refused (section 6). |
+| `cashDrawer.approveVariance` | Approves a drawer variance and writes the cash movement that deposits the counted cash to the bank. |
+| `cashDrawer.close` | Submits the physical count and computes the variance. |
+| `collections.depositCheque` | Marks a post-dated cheque deposited at the bank. |
+| `collections.submitCashierReconciliation` | Submits a cashier's daily reconciliation. Ruling SCRUM-795#c22479 Q2 makes SCRUM-396 a prerequisite before relying on it. |
+| `collections.recordPayment` | Records a customer payment on a receivable and enqueues its receipt posting. Only the `invoiceSaleId` branch is blocked (section 2). |
+| `accountingOutbox.redrive`, `accountingOutbox.retryFailed` | Re-drive or re-queue posting events so that held or failed journals post. |
+| `accountingMigration.backfillVehicleInventoryOpeningBalances` | Posts opening vehicle-inventory journals for cars that have none. |
+| `sales.recalculateCommission` | Recomputes a sale's commission from the frozen basis. |
+| `sales.completeDraft` | Completes a draft sale and posts revenue and receivable. Its deposit-OTHER branch is blocked (section 6). |
+| `sales.softDelete` | Soft-deletes a sale. |
+
+`applications.returnFinanceDisbursementCheque` is not in this list. The coordinator's note suggested it as a
+deferred correction. The oracle section "SCRUM-760 finance-company cheque return cells" records that the owner
+declined the block on 2026-10-19 and keeps the door on, so it is ENABLED_CERTIFIED with four cells.
+
+The five retired `claims` writers (`CLAIMS_RETIRED`, `claimsRetirement.test.ts`) and
+`accountingMigration.migrateUnpostedTransactions` are EXCLUDED_GUARDED: each throws unconditionally. The migration
+door uses plain retired-text `ConvexError` with no `AppErrorCode`; the inventory records that in the `code` field
+instead of inventing a code.
+
+Limit of the unwind certification citations: for `startDealUnwind`, `recordDealUnwindForwardReturn` and
+`finishDealUnwind` the inventory names the first test that calls the door in `scrum486Certification.test.ts`,
+because those calls sit in a shared helper. The rows that exercise them are U-RET, U-ABANDON and U-SOURCED in the
+oracle; the inventory test confirms the door is called in that file, not which row asserts what.
 
 ## Executed in this change
 
-Run on `claude/scrum795-server-blocks-evidence` (base `origin/main` 30a6429e3), serial, 2026-11-04:
+Run on `claude/scrum795-server-blocks-evidence` (merge base `origin/main` 440bd99b6), serial, 2026-11-04:
 
 - `npx vitest run convex/pilotBlockedDoors.scrum795.test.ts --maxWorkers=1`: 8 of 8 pass.
 - Guard-removal mutants, one per door: with the guard call commented out, exactly the matching test fails
   and the other seven pass (`retainedCreditRefunds.ts` request, approve and execute; `collections.ts`
   `registerSaleInvoiceCheque`, `reserveSaleInvoiceReceipt`, `activateSaleInvoiceReceipt` and the
-  `recordPayment` `invoiceSaleId` branch). 7 of 7 killed. Each file was restored with `git checkout --` and
-  the tree showed only the new files afterwards.
+  `recordPayment` `invoiceSaleId` branch). 7 of 7 killed. These were the round 1 runs, restored with
+  `git checkout --`. The round 2 runs below restore by file copy.
 - The existing refusal suites cited above (`rt11DoorContainment`, `supplierSettlementContainment`,
   `fixedAssetLifecycleContainment.scrum560`, `legacyCollectionRefundContainment`,
   `postDeliveryDoorContainment`, `manualJournalsPilotOff.scrum795`, `manualJournalsPilotOffControl.scrum795`,
