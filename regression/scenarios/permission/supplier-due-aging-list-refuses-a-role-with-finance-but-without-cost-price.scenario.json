@@ -1,0 +1,45 @@
+{
+  "id": "supplier-due-aging-list-refuses-a-role-with-finance-but-without-cost-price",
+  "fingerprint": "e41eae822d254b89165eb34bf708e1f2826d393cae5ee29ee6811b7d4dbb4cf9",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum901-seat1-763",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "supplierDueAging.list",
+      "input": {
+        "kind": "PAYABLE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAging.scrum869.test.ts",
+    "testName": "PAYABLE: a role with view:finance but without view:cost_price is refused (SCRUM-901)"
+  },
+  "matrixRow": "SCRUM-869-DUE-AGING",
+  "bugRef": {
+    "key": "SCRUM-901",
+    "failingFirst": "3b7de4a2432e0611ef85f1597548b2546fe67fc3"
+  }
+}

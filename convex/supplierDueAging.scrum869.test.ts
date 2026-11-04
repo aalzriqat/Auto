@@ -34,7 +34,9 @@ function freezeNow(at: number = NOW) {
   vi.setSystemTime(at);
 }
 
-async function seed(tag: string, permissions: string[] = ["view:finance", "manage:finance"]) {
+// SCRUM-901 / SCRUM-886: the list returns supplier amounts that are cost-derived for SOURCED cars, so the
+// default role holds view:cost_price as well as view:finance (STATEMENT_PERMISSIONS).
+async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price", "manage:finance"]) {
   const t = convexTestWithComponents(schema, MODULES);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `S3 ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
@@ -398,6 +400,34 @@ describe("SCRUM-869 S3a - bounded reads, tenancy, permission", () => {
     freezeNow();
     const s = await seed("perm", ["view:sales"]);
     await expect(list(s, "PAYABLE")).rejects.toThrow();
+  });
+
+  // SCRUM-901 (SCRUM-886 / ACC-10 class). A SOURCED car's supplier entitlement equals its acquisition
+  // cost, so every family on this list is cost-derived. view:finance alone must not reveal it.
+  // Literal test names: the regression library binds a scenario to one named test (R4).
+  const refusedWithoutCost = async (kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY") => {
+    freezeNow();
+    const s = await seed(`nocost${kind}`, ["view:finance", "manage:finance"]);
+    await addPayable(s, { paymentDueDate: NOW - DAY });
+    await expect(list(s, kind)).rejects.toThrow(/view:cost_price/);
+  };
+  test("PAYABLE: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("PAYABLE"));
+  test("RECEIVABLE: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("RECEIVABLE"));
+  test("RECOVERY: a role with view:finance but without view:cost_price is refused (SCRUM-901)", () => refusedWithoutCost("RECOVERY"));
+
+  test("a role holding both view:finance and view:cost_price still reads the list (SCRUM-901 positive control)", async () => {
+    freezeNow();
+    const s = await seed("bothgrants", ["view:finance", "view:cost_price"]);
+    await addPayable(s, { paymentDueDate: NOW - DAY });
+    const r = await list(s, "PAYABLE");
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]).toMatchObject({ outstandingMinor: 9_500_000 });
+  });
+
+  test("view:cost_price without view:finance is still refused (SCRUM-901 negative control)", async () => {
+    freezeNow();
+    const s = await seed("costonly", ["view:cost_price"]);
+    await expect(list(s, "PAYABLE")).rejects.toThrow(/view:finance/);
   });
 });
 
