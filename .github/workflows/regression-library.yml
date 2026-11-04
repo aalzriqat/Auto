@@ -125,7 +125,7 @@ jobs:
       # walks, terminal opening witnesses). Same commands as trusted-main-e2e.yml, deal-scenarios-e2e.yml
       # and the opening proof; a red config does not stop the others, and the step still fails.
       # Role-fixture specs (audit-role-access) run only in pilot-role-audit.yml: records bound to them
-      # have no report here and fail BROWSER_REPLAY_NOT_EXECUTED until that evidence is joined.
+      # have no report here and fail ROLE_AUDIT_EVIDENCE_NOT_JOINED until that evidence is joined.
       - name: Run the backend-backed browser projects
         id: browser
         run: |

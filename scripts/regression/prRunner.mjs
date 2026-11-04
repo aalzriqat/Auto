@@ -95,6 +95,11 @@ export function selectFull(records) {
   return selection;
 }
 
+// The role matrix runs only in pilot-role-audit.yml, which needs one fixture per role and ships its results as
+// encrypted evidence. Records bound to it have no report in the full-tier job, so they fail under their own code
+// (a recorded reason, never a skip) until that evidence is joined (SCRUM-761 follow-up).
+const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
+
 /**
  * One verdict per active browser record from Playwright JSON reports (https://playwright.dev/docs/test-reporters#json-reporter).
  * Every execution of the bound title (one per project that collects the file) must have run as expected; a skipped,
@@ -109,7 +114,9 @@ export function evaluatePlaywright(records, reports, root) {
   const executions = new Map();
   const add = (file, title, status) => {
     const key = `${normalise(path.relative(root, file))}\0${title}`;
-    executions.set(key, [...(executions.get(key) ?? []), status]);
+    const statuses = executions.get(key);
+    if (statuses) statuses.push(status);
+    else executions.set(key, [status]);
   };
   const walk = (suite, report) => {
     for (const spec of suite.specs ?? []) {
@@ -128,7 +135,9 @@ export function evaluatePlaywright(records, reports, root) {
     if (typeof file !== "string" || typeof name !== "string" || !file || !name) return { id: record.id, code: "BINDING_MISSING" };
     if (!existsSync(path.join(root, file))) return { id: record.id, code: "BINDING_FILE_MISSING" };
     const found = executions.get(`${normalise(file)}\0${name}`) ?? [];
-    if (found.length === 0) return { id: record.id, code: "BROWSER_REPLAY_NOT_EXECUTED" };
+    if (found.length === 0) {
+      return { id: record.id, code: normalise(file) === ROLE_AUDIT_SPEC ? "ROLE_AUDIT_EVIDENCE_NOT_JOINED" : "BROWSER_REPLAY_NOT_EXECUTED" };
+    }
     if (found.includes("skipped")) return { id: record.id, code: "TEST_SKIPPED" };
     if (found.includes("flaky")) return { id: record.id, code: "TEST_FLAKY" };
     if (found.some(status => status !== "expected")) return { id: record.id, code: "TEST_FAILED" };
@@ -163,7 +172,14 @@ export function evaluate(selected, report, root) {
   });
 }
 
-/** Counts only. Failing ids are listed because the records are already public in the repository. */
+/**
+ * Counts only. Failing ids are listed because the records are already public in the repository.
+ * @param {any} selection
+ * @param {{ id: string, code: string }[]} verdicts
+ * @param {string[]} extraIssues
+ * @param {{ id: string, code: string }[] | null} [browserVerdicts] full tier only; the PR tier derives them from the selection
+ * @param {string} [tier]
+ */
 export function summarise(selection, verdicts, extraIssues, browserVerdicts = null, tier = "pr") {
   const counts = {};
   // A browser record this PR requires cannot be executed here, so it is a failed verdict, not a skip.

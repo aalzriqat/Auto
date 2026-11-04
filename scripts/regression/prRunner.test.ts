@@ -259,6 +259,13 @@ describe("full tier", () => {
     expect(evaluatePlaywright([{ id: "r", status: "active", level: "browser" }] as never, [], dir)[0].code).toBe("BINDING_MISSING");
   });
 
+  it("a record bound to the role matrix fails under its own code, not as a generic miss, and passes if a report ran it", () => {
+    const dir = withFiles("playwright/tests/audit-role-access.spec.ts");
+    const record = browserRecord("role", "playwright/tests/audit-role-access.spec.ts");
+    expect(evaluatePlaywright([record] as never, [], dir)[0].code).toBe("ROLE_AUDIT_EVIDENCE_NOT_JOINED");
+    expect(evaluatePlaywright([record] as never, [reportFor(dir, [{ title: "the replay", status: "expected", file: "audit-role-access.spec.ts" }])], dir)[0].code).toBe("PASS");
+  });
+
   it("one failing execution among several projects fails the record", () => {
     const dir = withFiles("playwright/tests/a.spec.ts");
     const both = reportFor(dir, [{ title: "the replay", status: "expected" }, { title: "the replay", status: "unexpected", project: "chromium" }]);
