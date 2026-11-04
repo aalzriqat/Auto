@@ -791,12 +791,18 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // that pages through ALL roles with a cursor and takes no orgId, like the other migrateRoles backfills: +1 total, +1 skippedNoOrgId,
   // other counts unchanged. Re-measured FROM THE ANALYSER (567/383/15/169 -> 568/383/15/170). It writes only the `permissions` of a
   // role row it has just read in the same page, and only for a non-deleted role whose normalized name is ACCOUNTANT.
+  // SCRUM-808: +dealNumberBackfill:runPage, one internal mutation (called page by page by the Deploy production rollout, phase 2f)
+  // that walks the unnumbered rows of sales and financeApplications and takes no orgId: +1 total, +1 skippedNoOrgId, other counts
+  // unchanged. Re-measured FROM THE ANALYSER (568/383/15/170 -> 569/383/15/171). It takes no caller-supplied org or row id: it patches
+  // only the deal rows it has just read in the same page, and the organization of each counter it advances is that stored row's orgId.
+  // The public doors that now allocate a number (insertSaleRecord's callers and applications.createFromQuote) already derive the
+  // org through requireTenantAuth and are counted as analysed already.
   test("the analysed surface matches the pinned counts", () => {
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 568,
+      totalMutations: 569,
       analysed: 383,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 170,
+      skippedNoOrgId: 171,
     });
   });
 });
