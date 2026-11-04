@@ -319,11 +319,13 @@ import type * as utils_supplierIdentityRepair from "../utils/supplierIdentityRep
 import type * as utils_supplierNames from "../utils/supplierNames.js";
 import type * as utils_supplierObligationDue from "../utils/supplierObligationDue.js";
 import type * as utils_supplierPaymentAmounts from "../utils/supplierPaymentAmounts.js";
+import type * as utils_supplierPaymentsReconciliation from "../utils/supplierPaymentsReconciliation.js";
 import type * as utils_supplierRegistry from "../utils/supplierRegistry.js";
 import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_supplierSettlementContainment from "../utils/supplierSettlementContainment.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_trafficSource from "../utils/trafficSource.js";
+import type * as utils_transactionReadHeadroom from "../utils/transactionReadHeadroom.js";
 import type * as utils_userAgent from "../utils/userAgent.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleCost from "../utils/vehicleCost.js";
@@ -673,11 +675,13 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierNames": typeof utils_supplierNames;
   "utils/supplierObligationDue": typeof utils_supplierObligationDue;
   "utils/supplierPaymentAmounts": typeof utils_supplierPaymentAmounts;
+  "utils/supplierPaymentsReconciliation": typeof utils_supplierPaymentsReconciliation;
   "utils/supplierRegistry": typeof utils_supplierRegistry;
   "utils/supplierSettlement": typeof utils_supplierSettlement;
   "utils/supplierSettlementContainment": typeof utils_supplierSettlementContainment;
   "utils/tenancy": typeof utils_tenancy;
   "utils/trafficSource": typeof utils_trafficSource;
+  "utils/transactionReadHeadroom": typeof utils_transactionReadHeadroom;
   "utils/userAgent": typeof utils_userAgent;
   "utils/validation": typeof utils_validation;
   "utils/vehicleCost": typeof utils_vehicleCost;

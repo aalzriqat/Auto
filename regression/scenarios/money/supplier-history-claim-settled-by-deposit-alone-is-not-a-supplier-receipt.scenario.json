@@ -1,0 +1,57 @@
+{
+  "id": "supplier-history-claim-settled-by-deposit-alone-is-not-a-supplier-receipt",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openSupplierReceivable",
+      "input": {
+        "marginJod": 3000,
+        "depositAppliedJod": 3000,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.rows",
+      "value": "none"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "a claim settled in full by the deposit alone is not a supplier receipt"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "cf449671f0e0b95c8b854930e2b6d64971e39874"
+  },
+  "fingerprint": "3a6b556506ec17c3118e80712245f48d90009d4ec188be8b991a473ab3448fe7"
+}
