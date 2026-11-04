@@ -1,0 +1,49 @@
+{
+  "id": "shipped-invoice-activate-door-refuses-sale-invoice-receipt-with-nothing-changed",
+  "fingerprint": "17ca6e65ec064a0232d25c97b42ae3859c1b4ecc6fa38955d5aea70a876d4ac5",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-blocked-server-side-doors",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "collections.activateSaleInvoiceReceipt",
+      "input": {
+        "amountMinor": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusalCode",
+      "value": "SALE_INVOICE_RECEIPT_DOORS_DISABLED"
+    },
+    {
+      "observable": "step1.writes.rowCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-795#c22485",
+      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+    }
+  ],
+  "impl": {
+    "file": "convex/pilotBlockedDoors.scrum795.test.ts",
+    "testName": "activateSaleInvoiceReceipt refuses the sale-invoice receipt without writes"
+  },
+  "matrixRow": "SCRUM-760-DECISION-B-BLOCKED-DOORS"
+}
