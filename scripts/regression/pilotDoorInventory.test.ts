@@ -108,7 +108,26 @@ function classEvidenceProblems(entry: Entry): string[] {
   }
 }
 
+function blockEvidenceProblems(door: string, block: Block): string[] {
+  const problems: string[] = [];
+  if (!exists(block.guardFile)) problems.push(`${door}: missing guard file ${block.guardFile}`);
+  else if (!read(block.guardFile).includes(block.guard)) problems.push(`${door}: ${block.guard} not in ${block.guardFile}`);
+  if (!exists(block.test)) return [...problems, `${door}: missing test ${block.test}`];
+  const testSrc = read(block.test);
+  if (!callsDoor(testSrc, door)) problems.push(`${door}: not called in ${block.test}`);
+  if (/^[A-Z][A-Z0-9_]{5,}$/.test(block.code) && !testSrc.includes(block.code)) problems.push(`${door}: ${block.code} not in ${block.test}`);
+  return problems;
+}
+
 describe("SCRUM-795 per-door inventory", () => {
+  test.each([
+    ["collections.registerCheque", "UNCLASSIFIED"],
+    ["collections.clearCheque", "UNCLASSIFIED"],
+    ["bankAccounts.setReconciliationTarget", "NON_FINANCIAL"],
+  ])("fixture-only citation for %s cannot certify the door", (door, expectedClass) => {
+    expect(entries.find((entry) => entry.door === door)).toMatchObject({ class: expectedClass });
+  });
+
   test("F1 negative control: acquisition posting cannot be NON_FINANCIAL", () => {
     expect(isFinancial("export const resolve = mutation({ handler: async (ctx) => { await postVehicleAcquisitionIfOwned(ctx, {}); } });")).toBe(true);
   });
@@ -139,21 +158,8 @@ describe("SCRUM-795 per-door inventory", () => {
   });
 
   test("every block cites a guard that exists and a test that names the door, the code and the guard file", () => {
-    const problems: string[] = [];
-    for (const e of entries) {
-      for (const b of e.blocks ?? []) {
-        if (!exists(b.guardFile)) problems.push(`${e.door}: missing guard file ${b.guardFile}`);
-        else if (!read(b.guardFile).includes(b.guard)) problems.push(`${e.door}: ${b.guard} not in ${b.guardFile}`);
-        if (!exists(b.test)) {
-          problems.push(`${e.door}: missing test ${b.test}`);
-          continue;
-        }
-        const testSrc = read(b.test);
-        if (!callsDoor(testSrc, e.door)) problems.push(`${e.door}: not called in ${b.test}`);
-        if (/^[A-Z][A-Z0-9_]{5,}$/.test(b.code) && !testSrc.includes(b.code)) problems.push(`${e.door}: ${b.code} not in ${b.test}`);
-      }
-    }
-    expect(problems).toEqual([]);
+    expect(entries.flatMap((entry) => (entry.blocks ?? []).flatMap((block) => blockEvidenceProblems(entry.door, block))))
+      .toEqual([]);
   });
 
   test("every certified door is called in its certification test and its row exists", () => {

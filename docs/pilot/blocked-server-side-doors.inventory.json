@@ -420,11 +420,8 @@
  },
  {
   "door": "bankAccounts.setReconciliationTarget",
-  "class": "ENABLED_CERTIFIED",
-  "certification": {
-   "test": "convex/scrum486Certification.test.ts",
-   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
-  }
+  "class": "NON_FINANCIAL",
+  "reason": "sets the reconciliation-target configuration flag on bank accounts; writes no amounts, ledger, cash or subledger rows and calls no posting helper"
  },
  {
   "door": "bankAccounts.update",
@@ -645,12 +642,10 @@
  },
  {
   "door": "collections.clearCheque",
-  "class": "ENABLED_CERTIFIED",
-  "certification": {
-   "test": "convex/scrum486Certification.test.ts",
-   "row": "U-REFUND: unwind REFUND of positive customer credit is refused CUSTOMER_CREDIT_PAYOUT_DISABLED with nothing changed"
-  },
-  "note": "Called by addActiveCustomerCredit in the U-REFUND fixture, which asserts the receipt amount/status before testing the unwind payout refusal. This citation does not certify the general cheque lifecycle or a financier cheque receipt."
+  "class": "UNCLASSIFIED",
+  "effect": "clears a customer cheque, records a collection payment and receipt movement, and enqueues the receipt posting against the bank",
+  "ruling": "owner ruling needed",
+  "note": "The U-REFUND addActiveCustomerCredit helper uses this door only for setup. No oracle cell certifies its cheque-clearing contract."
  },
  {
   "door": "collections.createInstallmentPlan",
@@ -694,12 +689,10 @@
  },
  {
   "door": "collections.registerCheque",
-  "class": "ENABLED_CERTIFIED",
-  "certification": {
-   "test": "convex/scrum486Certification.test.ts",
-   "row": "U-REFUND: unwind REFUND of positive customer credit is refused CUSTOMER_CREDIT_PAYOUT_DISABLED with nothing changed"
-  },
-  "note": "Called by addActiveCustomerCredit in the U-REFUND fixture, which asserts the receipt amount/status before testing the unwind payout refusal. This citation does not certify the general cheque lifecycle or a financier cheque receipt."
+  "class": "UNCLASSIFIED",
+  "effect": "registers a customer cheque amount in post-dated cheque custody for later receipt and clearing",
+  "ruling": "owner ruling needed",
+  "note": "The U-REFUND addActiveCustomerCredit helper uses this door only for setup. No oracle cell certifies its cheque-registration contract."
  },
  {
   "door": "collections.registerSaleInvoiceCheque",
@@ -1308,8 +1301,10 @@
  },
  {
   "door": "financialAudit.rejectManualJournal",
-  "class": "NON_FINANCIAL",
-  "reason": "rejects a pending manual draft and posts nothing (kept as an exit by owner ruling SCRUM-795#c22479)"
+  "class": "UNCLASSIFIED",
+  "effect": "rejects a pending manual journal draft by patching its status and reviewer metadata; its typed manualJournalDrafts id matches the conservative journal-table check, although rejection itself posts nothing",
+  "ruling": "owner ruling needed",
+  "note": "Kept as an exit by owner ruling SCRUM-795#c22479. Reclassification records unavailable NON_FINANCIAL evidence under the broader table check, not a newly disabled door or a claim that rejection posts money."
  },
  {
   "door": "financingEconomics.applyQuoteFirstPayment",

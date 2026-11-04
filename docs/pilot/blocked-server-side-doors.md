@@ -7,7 +7,7 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Evidence boundary
 
-- **What this is.** A map of the code at baseline `7fb3c52112f35cb8ceaa8908690ecb5ebe52dde2`, with the inventory corrections below (2026-11-04).
+- **What this is.** A map of the code at baseline `66888d0a2f87753ba3a20b3677485ec2aea39793`, with the inventory corrections below (2026-11-04).
   The inventory lists all 405 registered public mutations exported by `convex/**/*.ts`
   ([`blocked-server-side-doors.inventory.json`](blocked-server-side-doors.inventory.json)). Each door has exactly one
   class, and `scripts/regression/pilotDoorInventory.test.ts` fails when a public mutation is missing, listed twice
@@ -26,7 +26,7 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Inventory: 405 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 38 · UNCLASSIFIED 167 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 35 · UNCLASSIFIED 170 · NON_FINANCIAL 170.
 
 | Class | Meaning | Evidence per door |
 | --- | --- | --- |
@@ -164,16 +164,17 @@ So the classes are:
 
 ## Doors that stay enabled
 
-The doors the pilot keeps on are the ENABLED_CERTIFIED entries of the inventory, each with the certification
-test row that reaches it. This file lists no door by wildcard. `collections.registerCheque` and
-`collections.clearCheque` are reached by `addActiveCustomerCredit` in U-REFUND. That helper asserts the receipt
-amount and status to prepare customer credit for the unwind payout-refusal test. This citation does not certify
-the general cheque lifecycle or a financier cheque receipt. The direct commission payout door is blocked
+The 35 ENABLED_CERTIFIED entries each cite a certification test row. This file lists no door by wildcard.
+`collections.registerCheque` and `collections.clearCheque` are UNCLASSIFIED. Their calls in U-REFUND's
+`addActiveCustomerCredit` helper only prepare customer credit for the unwind payout-refusal test. The oracle
+does not certify their registration or clearing contracts. `bankAccounts.setReconciliationTarget` is
+NON_FINANCIAL: it changes configuration flags, and passes the financial-effect scan. Its U-RET setup call
+is not a certification cell. The direct commission payout door is blocked
 (section 4); commission payout runs through payroll, and the payroll doors are UNCLASSIFIED.
 
 ## Unclassified money-moving doors (owner ruling needed, nothing guarded here)
 
-The inventory lists 167 UNCLASSIFIED doors, each with a one-line effect on money. No switch and no ruling places
+The inventory lists 170 UNCLASSIFIED doors, each with a one-line effect or a reason the static check refuses NON_FINANCIAL evidence. No switch and no ruling places
 them. They are listed, not guarded, because guarding one would switch off a function and, per SCRUM-810, would
 need a matching UI capability flag. These are the ones that look like a deferred correction or refund, or that a
 review named:
@@ -187,6 +188,7 @@ review named:
 | `cashDrawer.approveVariance` | Approves a drawer variance and writes the cash movement that deposits the counted cash to the bank. |
 | `cashDrawer.close` | Submits the physical count and computes the variance. |
 | `collections.depositCheque` | Marks a post-dated cheque deposited at the bank. |
+| `collections.registerCheque`, `collections.clearCheque` | Register cheque custody and clear a customer cheque into a collection payment and receipt posting. Their U-REFUND setup calls do not certify these contracts. |
 | `collections.submitCashierReconciliation` | Submits a cashier's daily reconciliation. Ruling SCRUM-795#c22479 Q2 makes SCRUM-396 a prerequisite before relying on it. |
 | `collections.recordPayment` | Records a customer payment on a receivable and enqueues its receipt posting. Only the `invoiceSaleId` branch is blocked (section 2). |
 | `accountingOutbox.redrive`, `accountingOutbox.retryFailed` | Re-drive or re-queue posting events so that held or failed journals post. |
@@ -303,13 +305,15 @@ not claims that each operation moves money:
 No certification row in this inventory covers these doors. The two vehicle-edit request doors now say that
 applying their pending request requires `vehicleEdits.resolve`; they no longer claim delegation to `vehicles.update`.
 
-The row-specific scan corrected 13 citations, retaining 38 ENABLED_CERTIFIED entries:
+The earlier row-specific scan corrected 13 citations. The round-4 correction below removes three fixture-only
+certification claims, leaving 35 ENABLED_CERTIFIED entries:
 
 - `startDealUnwind`, `recordDealUnwindForwardReturn`, `finishDealUnwind`, `vehicles.create`, `vehicles.update`,
-  `sales.setCommissionAmount` and `bankAccounts.setReconciliationTarget` now cite U-RET, including its helpers.
+  and `sales.setCommissionAmount` cite U-RET, including its helpers. `bankAccounts.setReconciliationTarget`
+  now has a NON_FINANCIAL reason instead of a U-RET citation.
 - `applications.setSupplierSettlementRoute` cites the SOURCED configured-financier opening row.
 - `sales.create` cites the owned CASH full-deposit completion row.
-- `collections.registerCheque` and `collections.clearCheque` cite U-REFUND with the fixture-only scope above.
+- `collections.registerCheque` and `collections.clearCheque` are now UNCLASSIFIED with `owner ruling needed`.
 - `sourcingPayables.markPaid` now names its payable-settlement test in addition to the oracle section.
 - `supplierCostRecoveries.recordReceipt` now names its allowed-receipt test in addition to the oracle section.
 
@@ -331,3 +335,67 @@ assumption, and opaque patches. Those failures were corrected; none was skipped 
 F4 and F5 remain outside this round. No fresh CI, SonarCloud, independent review-seat, browser or real-backend
 result is claimed for these local corrections. No server guards, shipped switch values, release waivers or
 review-evidence files changed.
+
+## Round-4 corrections at baseline 66888d0a (2026-11-04)
+
+Finding A is reproduced by four compiler fixtures with typed ids: a three-argument money patch, a
+three-argument money replacement, an id-addressed journal patch and an id-addressed journal deletion.
+Against the starting analyzer, all four fail with `expected false to be true`. They pass after normalization.
+The first fixture draft used an unresolved id, whose `any` type made the old analyzer refuse for the wrong
+reason. The recorded four-failure run uses branded ids and isolates the actual overload defect.
+
+The analyzer normalizes `insert(table, value)`, both forms of `patch` and `replace`, and both forms of
+`delete`. A literal money-table target or an id whose compiler-resolved `__tableName` brand matches the
+existing money-table pattern refuses NON_FINANCIAL evidence even for metadata-only payloads or deletions.
+The same pattern is reused for both forms. Numeric money fields, opaque payloads and posting helpers retain
+their checks. The monetary vocabulary now uses a set instead of the regex Sonar reported as too complex.
+
+The stronger scan of the 170 previous NON_FINANCIAL entries flags one additional door:
+`financialAudit.rejectManualJournal` patches a `manualJournalDrafts` id. It moves to UNCLASSIFIED because
+the existing journal-family pattern conservatively includes that table. The entry explicitly records that
+rejection changes status and reviewer metadata, posts nothing, and remains an exit under SCRUM-795 c22479.
+This is an evidence refusal, not a change to that ruling, a new server block or a claim of a money posting.
+
+The seat's exact mutant, `await ctx.db.patch("financeCompanies", id, { adminFees: 100 });` in
+`finance.deleteCompany`, fails `-t 'a door classed non-financial'`: one failed test reports
+`finance.deleteCompany: finance.ts:455 patch`. The source is restored from its original bytes, with no diff.
+
+Finding B has three data-driven inventory controls. Restoring the starting inventory makes all three fail:
+each receives ENABLED_CERTIFIED instead of its required class. With the corrected inventory, the cheque
+doors are UNCLASSIFIED with truthful effects and `ruling: "owner ruling needed"`, and
+`bankAccounts.setReconciliationTarget` is NON_FINANCIAL. The full financial-effect scan checks the latter.
+
+The generic citation test still measures row-specific call reachability, not whether an assertion certifies
+the called door's contract. The three regression controls prevent these known setup-only claims from
+returning. General assertion provenance through arbitrary setup helpers and a binding to each oracle cell
+would require a larger data-flow and oracle-citation change, which is not implemented in this correction.
+
+The registered public-mutation census is rerun after the merge of main 644d785d, including PR #764.
+It finds 405 doors with no missing or stale inventory entries. Final classes are EXCLUDED_GUARDED 30,
+ENABLED_CERTIFIED 35, UNCLASSIFIED 170 and NON_FINANCIAL 170. The seven PR scenario records describe the
+shipped refusal doors and zero committed writes. They cite neither class counts nor the four reclassified
+doors, so their assertions and fingerprints do not change.
+
+Material design sources: [Convex database writer overloads](https://docs.convex.dev/api/interfaces/server.GenericDatabaseWriter#patch),
+the installed Convex `Id` definition in `convex/values`, and the
+[TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API).
+Argument counts distinguish the documented overload shapes. Compiler types and properties resolve branded
+ids, aliases and unions without parsing human-readable type strings.
+
+### Round-4 validation
+
+- `pnpm exec vitest run scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts scripts/regression/scenarioRecord.test.ts convex/pilotBlockedDoors.scrum795.test.ts --maxWorkers=1`: **122 passed**, four files, no skips. The census and the seven PR scenario records are included.
+- `pnpm exec vitest run scripts/regression/pilotDoorAnalysis.test.ts --maxWorkers=1 --coverage --coverage.include=scripts/regression/pilotDoorAnalysis.ts --coverage.reportsDirectory=C:/Users/123/AppData/Local/Temp/scrum795-r4-coverage`: **39 passed**, with the existing coverage thresholds unchanged. Analyzer coverage is 97.70% lines, 94.88% statements, 92.13% branches and 97.56% functions. Matching LCOV to `git diff --unified=0` from baseline 66888d0a measures 27/27 added executable lines and 41/41 added branches covered. This is local correction coverage, not a fresh SonarCloud PR verdict.
+- `pnpm typecheck`: **passed**. The root config excludes `node_modules`, `apps`, `packages`, `convex`, `dealer-worker` and `test-utils` as roots; imports may still be followed.
+- `pnpm typecheck:convex`: **passed**. Includes `convex/**/*` and `test-utils/**/*`, excludes `_generated` as roots, and does not replace frontend, mobile, shared-package or worker checks.
+- `pnpm exec eslint scripts/regression/pilotDoorAnalysis.ts scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts --max-warnings 0 --rule 'complexity: [error, 14]' --rule 'no-nested-ternary: error'`: **passed**. Local SonarJS 4.2.2 recommended rules also report zero issues on these three files, with cognitive complexity capped at 14. The existing block-evidence loop is extracted without dropping assertions to remove its complexity of 17.
+
+Two attempts to combine all four files with V8 coverage failed the inventory's unchanged 60-second setup
+timeout: 108 tests passed and 13 inventory tests did not execute in each attempt. One attempt also ran
+alongside the root typecheck; the second was serial. Neither is counted as a passing run. The first isolated
+analyzer coverage run passed 38 tests but failed the unchanged 90% statement and line thresholds. The final
+39-test analyzer run also exercises evidence locations and re-export resolution and passes those thresholds.
+The census is then measured by the passing four-file run without coverage instrumentation.
+
+No production Convex source, guard, shipped switch, waiver or review-evidence file changes. Fresh independent
+seats, CI/SonarCloud, real-backend, browser and production verification are not claimed for this local commit.

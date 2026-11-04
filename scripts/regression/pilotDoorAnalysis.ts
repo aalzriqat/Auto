@@ -2,12 +2,14 @@
 import ts from "typescript";
 import path from "node:path";
 
-const MONEY_FIELD = /\b(amount|price|cost|balance|commission|salary|wage|credit|debit|principal|interest|discount|refund|revenue|profit|payment|fee|tax|budget|paid|due|net|gross)(s)?\b/i;
+const MONEY_FIELDS = new Set("amount price cost balance commission salary wage credit debit principal interest discount refund revenue profit payment fee tax budget paid due net gross".split(" "));
+const MONEY_TABLE = /journal|collectionPayment|cashMovement|bankTransaction|deposit|payrollRun|expense|transaction|receivable|payable/i;
 const POSTING_CALL = /^post\w*$/;
 
 function moneyName(name: string): boolean {
   if (/(At|Date|Timestamp|Revision|Count|Version|Day|Days|Month|Months|Year|Years)$/.test(name)) return false;
-  return MONEY_FIELD.test(name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replaceAll("_", " "));
+  const words = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/\W+|_/);
+  return words.some((word) => MONEY_FIELDS.has(word) || word.endsWith("s") && MONEY_FIELDS.has(word.slice(0, -1)));
 }
 
 function numericOrUnknown(type: ts.Type): boolean {
@@ -82,12 +84,39 @@ function callName(call: ts.CallExpression): string {
   return "";
 }
 
-function writesMoney(call: ts.CallExpression, checker?: ts.TypeChecker): boolean {
-  if (!["insert", "patch", "replace"].includes(callName(call))) return false;
-  // Only database writers, not unrelated libraries with a similarly named method.
-  if (!ts.isPropertyAccessExpression(call.expression) || !/\bdb\b/.test(call.expression.expression.getText())) return false;
-  const payload = call.arguments[1];
-  if (!payload) return false;
+function moneyTableType(type: ts.Type): boolean {
+  if (type.isUnion()) return type.types.some(moneyTableType);
+  return type.isStringLiteral() && MONEY_TABLE.test(type.value);
+}
+
+function moneyTableId(id: ts.Expression | undefined, checker?: ts.TypeChecker): boolean {
+  if (!id || !checker) return false;
+  const type = checker.getTypeAtLocation(id);
+  const variants = type.isUnion() ? type.types : [type];
+  return variants.some((variant) => {
+    // Convex Id<TableName> is a branded string with a literal __tableName property.
+    const table = variant.getProperty("__tableName");
+    return !!table && moneyTableType(checker.getTypeOfSymbolAtLocation(table, id));
+  });
+}
+
+/** Normalize the documented table-addressed and backwards-compatible id-addressed overloads. */
+function writeArguments(call: ts.CallExpression): { table?: ts.Expression; id?: ts.Expression; payload?: ts.Expression } | undefined {
+  const args = call.arguments;
+  switch (callName(call)) {
+    case "insert": return { table: args[0], payload: args[1] };
+    case "patch":
+    case "replace":
+      if (args.length === 3) return { table: args[0], id: args[1], payload: args[2] };
+      return { id: args[0], payload: args[1] };
+    case "delete":
+      if (args.length === 2) return { table: args[0], id: args[1] };
+      return { id: args[0] };
+    default: return undefined;
+  }
+}
+
+function moneyPayload(payload: ts.Expression, checker?: ts.TypeChecker): boolean {
   if (!checker) return ts.isObjectLiteralExpression(payload) &&
     payload.properties.some((p) => p.name && moneyName(p.name.getText()));
   if (ts.isObjectLiteralExpression(payload) && payload.properties.some((p) =>
@@ -100,13 +129,18 @@ function writesMoney(call: ts.CallExpression, checker?: ts.TypeChecker): boolean
     moneyName(p.name) && numericOrUnknown(checker.getTypeOfSymbolAtLocation(p, payload)));
 }
 
+function writesMoney(call: ts.CallExpression, checker?: ts.TypeChecker): boolean {
+  const write = writeArguments(call);
+  if (!write) return false;
+  if (write.table && ts.isStringLiteral(write.table) && MONEY_TABLE.test(write.table.text)) return true;
+  // Restrict payload/id inspection to database writers; retain the existing literal-table refusal.
+  if (!ts.isPropertyAccessExpression(call.expression) || !/\bdb\b/.test(call.expression.expression.getText())) return false;
+  if (moneyTableId(write.id, checker)) return true;
+  return !!write.payload && moneyPayload(write.payload, checker);
+}
+
 function financialCall(call: ts.CallExpression, checker?: ts.TypeChecker): boolean {
-  if (POSTING_CALL.test(callName(call))) return true;
-  if (writesMoney(call, checker)) return true;
-  // Ledger/subledger writes are financial even if their payload uses an opaque object or zero amounts.
-  const table = call.arguments[0];
-  return ["insert", "delete", "patch", "replace"].includes(callName(call)) &&
-    !!table && ts.isStringLiteral(table) && /journal|collectionPayment|cashMovement|bankTransaction|deposit|payrollRun|expense|transaction|receivable|payable/i.test(table.text);
+  return POSTING_CALL.test(callName(call)) || writesMoney(call, checker);
 }
 
 /** Locate only executable handler bodies, not validators or comments. Missing bodies refuse evidence. */

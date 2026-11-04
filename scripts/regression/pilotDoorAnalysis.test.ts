@@ -2,7 +2,7 @@
 import { expect, test } from "vitest";
 import ts from "typescript";
 import { internalMutationGeneric, queryGeneric } from "convex/server";
-import { hasFinancialEffect, mutationBody, publicMutationNames, rowCallsDoor } from "./pilotDoorAnalysis";
+import { exportedDeclaration, financialEvidence, hasFinancialEffect, mutationBody, parseSource, publicMutationNames, rowCallsDoor } from "./pilotDoorAnalysis";
 import { socialBulkMutation } from "../../convex/functions";
 
 /** Real compiler with a small in-memory source tree, including cross-module symbol resolution. */
@@ -27,15 +27,42 @@ test.each([
   ["acquisition posting", "await postVehicleAcquisitionIfOwned(ctx, {});", true],
   ["journal insert", 'await ctx.db.insert("journalLines", row);', true],
   ["money patch", "await ctx.db.patch(id, { amountMinor: 100 });", true],
+  ["three-argument money patch", 'const id = "fc" as Id<"financeCompanies">; await ctx.db.patch("financeCompanies", id, { adminFees: 100 });', true],
+  ["three-argument money replace", 'const id = "fc" as Id<"financeCompanies">; await ctx.db.replace("financeCompanies", id, { adminFees: 100 });', true],
+  ["id-addressed ledger patch", 'const id = "entry" as Id<"journalEntries">; await ctx.db.patch(id, { status: "POSTED" });', true],
+  ["id-addressed ledger delete", 'const id = "entry" as Id<"journalEntries">; await ctx.db.delete(id);', true],
+  ["id-addressed money replace", 'const id = "fc" as Id<"financeCompanies">; await ctx.db.replace(id, { adminFees: 100 });', true],
+  ["typed money insert", 'const row = { adminFees: 100 }; await ctx.db.insert("financeCompanies", row);', true],
+  ["table-addressed ledger patch", 'await ctx.db.patch("journalEntries", id, { status: "POSTED" });', true],
+  ["table-addressed ledger replace", 'await ctx.db.replace("journalEntries", id, { status: "POSTED" });', true],
+  ["table-addressed ledger delete", 'await ctx.db.delete("journalEntries", id);', true],
+  ["aliased union ledger id", 'type EntryId = Id<"journalEntries"> | Id<"users">; const id = "entry" as EntryId; await ctx.db.delete(id);', true],
+  ["union table brand", 'const id = "entry" as Id<"journalEntries" | "users">; await ctx.db.delete(id);', true],
+  ["non-ledger id delete", 'const id = "fc" as Id<"financeCompanies">; await ctx.db.delete(id);', false],
+  ["non-ledger table delete", 'await ctx.db.delete("financeCompanies", id);', false],
+  ["three-argument configuration patch", 'const id = "fc" as Id<"financeCompanies">; await ctx.db.patch("financeCompanies", id, { isActive: false });', false],
+  ["unrelated library method", 'library.patch("financeCompanies", id, { amount: 100 });', false],
+  ["read-only database call", 'await ctx.db.get("journalEntries", id);', false],
   ["opaque patch", "const patch: Record<string, unknown> = {}; await ctx.db.patch(id, patch);", true],
   ["timestamp and payment type", 'await ctx.db.patch(id, { dueAt: 100, paymentType: "CASH" });', false],
   ["comment and quoted call", '/* postVehicleAcquisitionIfOwned(ctx, {}) */ const label = "postFake()";', false],
   ["uncalled closure", "const unused = () => postVehicleAcquisitionIfOwned(ctx, {});", false],
 ])("financial analysis: %s", (_label, body, expected) => {
   const { source, checker } = fixture({
-    "/fixture/entry.ts": `export const door = mutation({ handler: async (ctx) => { ${body} } });`,
+    "/fixture/entry.ts": `type Id<T extends string> = string & { __tableName: T };
+      export const door = mutation({ handler: async (ctx) => { ${body} } });`,
   });
   expect(hasFinancialEffect(mutationBody(source), checker)).toBe(expected);
+  expect(financialEvidence(mutationBody(source), checker) !== undefined).toBe(expected);
+});
+
+test.each([
+  ['await ctx.db.patch("financeCompanies", id, { adminFees: 100 });', true],
+  ['await ctx.db.patch(id, { isActive: false });', false],
+  ['await ctx.db.delete("journalEntries", id);', true],
+])("syntax-only money analysis: %s", (body, expected) => {
+  const source = parseSource(`export const door = mutation({ handler: async (ctx) => { ${body} } });`);
+  expect(hasFinancialEffect(mutationBody(source))).toBe(expected);
 });
 
 test.each(["collectionPayments", "cashMovements", "bankTransactions", "deposits", "payrollRuns", "expenses", "transactions", "receivables"])(
@@ -58,6 +85,18 @@ test("financial helper discovery follows imported aliases, local aliases and cyc
       function recur(ctx) { writeAcquisition(ctx); ctx.db.patch(id, { purchasePrice: 100 }); }`,
   });
   expect(hasFinancialEffect(mutationBody(source), checker)).toBe(true);
+});
+
+test("census resolves a re-exported handler and reports its money-write location", () => {
+  const { source, checker } = fixture({
+    "/fixture/entry.ts": 'export { original as door } from "./helper";',
+    "/fixture/helper.ts": `export const original = mutation({ handler: async (ctx) => {
+      await ctx.db.patch("financeCompanies", "fc", { adminFees: 100 });
+    } });`,
+  });
+  const declaration = exportedDeclaration(source, "door", checker);
+  expect(financialEvidence(mutationBody(declaration), checker)).toBe("helper.ts:2 patch");
+  expect(() => exportedDeclaration(source, "missing", checker)).toThrow("Cannot resolve registered export entry.ts.missing");
 });
 
 test("registered census accepts the real wrapper builder and rejects queries and internal mutations", () => {
