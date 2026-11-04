@@ -38,6 +38,7 @@ import {
   type SupplierCreateOptions,
 } from "../useSupplierCreateFlow";
 import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
+import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
 import {
   DuplicateCandidatesPanel,
@@ -403,6 +404,7 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
         </h2>
         {canManage ? <SupplierEditForm orgId={orgId} supplier={record} /> : <SupplierSummary supplier={record} />}
       </section>
+      <SupplierStatementSection orgId={orgId} supplierId={supplierId} />
       <SupplierAliasesSection orgId={orgId} supplierId={supplierId} aliases={record.aliases ?? []} canManage={canManage} />
       {canManage && statusMode && (
         <SupplierStatusDialog

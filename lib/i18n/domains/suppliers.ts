@@ -231,12 +231,62 @@ const suppliersMessages = defineBilingualMessages({
     "هذا السجل غير مرتبط بمورّد بعد. اربطه بمورّد أولاً.",
   ],
   ServerError_SUPPLIER_NO_CHANGE: ["There is nothing to change.", "لا يوجد ما يُغيَّر."],
-  ServerError_SUPPLIER_ALIAS_EXISTS: ["This supplier already has that alias.", "لدى هذا المورّد هذا الاسم المستعار بالفعل."],
+  ServerError_SUPPLIER_ALIAS_EXISTS: [
+    "This supplier already has that alias.",
+    "لدى هذا المورّد هذا الاسم المستعار بالفعل.",
+  ],
   ServerError_SUPPLIER_ALIAS_LIMIT: [
     "This supplier has reached the maximum number of aliases.",
     "بلغ هذا المورّد الحد الأقصى لعدد الأسماء المستعارة.",
   ],
   ServerError_SUPPLIER_ALIAS_ALREADY_RETIRED: ["This alias is already retired.", "هذا الاسم المستعار موقوف بالفعل."],
+
+  // Supplier statement (SCRUM-869 slice 2). A/P and A/R are separate regions; nothing is netted.
+  SuppliersStmtTitle: ["Statement", "كشف الحساب"],
+  SuppliersStmtNoNetNote: [
+    "Amounts we owe this supplier and amounts this supplier owes us are shown separately. They are never offset against each other, and each currency is totalled on its own.",
+    "المبالغ المستحقة للمورّد والمبالغ المستحقة منه تُعرض منفصلة. لا تُقاصّ إحداهما بالأخرى أبداً، وتُجمع كل عملة على حدة.",
+  ],
+  SuppliersStmtPayableTitle: ["We owe this supplier (A/P)", "مستحق للمورّد علينا (ذمم دائنة)"],
+  SuppliersStmtReceivableTitle: ["This supplier owes us (A/R)", "مستحق لنا على المورّد (ذمم مدينة)"],
+  SuppliersStmtPayableEmpty: [
+    "No outstanding payable lines are linked to this supplier.",
+    "لا توجد بنود مستحقة للمورّد مرتبطة به.",
+  ],
+  SuppliersStmtReceivableEmpty: [
+    "No outstanding receivable lines are linked to this supplier.",
+    "لا توجد بنود مستحقة على المورّد مرتبطة به.",
+  ],
+  SuppliersStmtScopeNote: [
+    "This lists only lines linked to this supplier. Opening lines carried over from before the system and lines not yet linked to a supplier are not included, so it may not show everything owed.",
+    "تعرض هذه القائمة البنود المرتبطة بهذا المورّد فقط. البنود الافتتاحية المرحّلة من قبل النظام والبنود غير المرتبطة بمورّد بعد غير مشمولة، لذا قد لا تعرض كل المبالغ المستحقة.",
+  ],
+  SuppliersStmtPlanGate: [
+    "The supplier statement is not included in your current plan.",
+    "كشف حساب المورّد غير مشمول في خطتك الحالية.",
+  ],
+  SuppliersStmtLoading: ["Loading the statement…", "جارٍ تحميل كشف الحساب…"],
+  SuppliersStmtLoadError: [
+    "The statement could not be loaded. Reload the page and try again.",
+    "تعذّر تحميل كشف الحساب. أعد تحميل الصفحة وحاول مرة أخرى.",
+  ],
+  SuppliersStmtIncomplete: [
+    "More lines exist than can be shown here. The lines above are partial, so no total is shown.",
+    "توجد بنود أكثر من المعروض هنا. البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
+  ],
+  SuppliersStmtKindPayable: ["Supplier payable", "مستحق للمورّد"],
+  SuppliersStmtKindReceivable: ["Margin receivable", "هامش مستحق على المورّد"],
+  SuppliersStmtKindRecovery: ["Cost recovery", "استرداد تكلفة"],
+  SuppliersStmtDue: ["Due", "الاستحقاق"],
+  SuppliersStmtNoDueDate: ["No due date", "بلا تاريخ استحقاق"],
+  SuppliersStmtDaysOverdue: ["{days} days overdue", "متأخر {days} يوماً"],
+  SuppliersStmtDisputed: ["Disputed", "متنازع عليه"],
+  SuppliersStmtOverdue: ["Overdue", "متأخر"],
+  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],
+  SuppliersStmtTotalUnavailable: [
+    "Total unavailable: this list is incomplete",
+    "الإجمالي غير متاح: القائمة غير مكتملة",
+  ],
 });
 
 export const suppliersEn = suppliersMessages.en;
