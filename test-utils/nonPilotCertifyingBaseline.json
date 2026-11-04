@@ -1,5 +1,5 @@
 {
-  "note": "SCRUM-810: legacy suites that open a pilot door through a mock. They are NON-PILOT-CERTIFYING and cannot satisfy SCRUM-760 G2/G3/G7. This list may only shrink: add the header NON-PILOT-CERTIFYING to a suite you touch, or make it pilot certifying, and remove it here.",
+  "note": "SCRUM-810: legacy suites that open a pilot door through a mock. They are NON-PILOT-CERTIFYING and cannot satisfy SCRUM-760 G2/G3/G7. Round 2 widened the detector (import() form, .ts/.js suffix, backticks, computed specifiers, mocks of any module that declares or re-exports a switch) and added convex/dealCommissionsPilot.test.ts, the one suite it newly found. After that one-time widening this list may only shrink: add the header NON-PILOT-CERTIFYING to a suite you touch, or make it pilot certifying, and remove it here.",
   "files": [
     "components/accounting/CollectionsTabFcCheque.test.tsx",
     "components/accounting/CollectionsTabLegacyRefund.test.tsx",
@@ -40,6 +40,7 @@
     "convex/consignedReporting.test.ts",
     "convex/consignedSettlementRoute.test.ts",
     "convex/consignmentEconomics.test.ts",
+    "convex/dealCommissionsPilot.test.ts",
     "convex/dealCustodyAccounting.test.ts",
     "convex/dealUnwind.test.ts",
     "convex/depositCancellationPending.test.ts",

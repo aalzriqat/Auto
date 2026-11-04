@@ -16,23 +16,32 @@
  */
 import { PAYMENT_LINKS_PILOT_DISABLED } from "./pilotCapabilities";
 import { MANUAL_JOURNALS_PILOT_DISABLED } from "../convex/utils/pilotSwitches";
-import { isFixedAssetLifecycleDisabled } from "../convex/utils/fixedAssetLifecycleContainment";
+import {
+  assertFixedAssetLifecycleAllowed,
+  isFixedAssetLifecycleDisabled,
+} from "../convex/utils/fixedAssetLifecycleContainment";
 import {
   PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED,
   PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE,
 } from "../convex/utils/partnerDistributionContainment";
 import {
   areSaleInvoiceReceiptDoorsDisabled,
+  assertCustomerCreditPayoutAllowed,
+  assertSaleInvoiceReceiptDoorsAllowed,
   isCustomerCreditPayoutDisabled,
 } from "../convex/utils/customerCreditPayoutContainment";
 import { DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED } from "../convex/utils/depositOtherContainment";
-import { isLegacyCollectionRefundDisabled } from "../convex/utils/legacyCollectionRefundContainment";
-import { isClearedChequeReturnDisabled } from "../convex/utils/postDeliveryDoorContainment";
-import { isSupplierSettlementDoorDisabled } from "../convex/utils/supplierSettlementContainment";
-import { isRt11DoorDisabled } from "../convex/utils/rt11DoorContainment";
+import {
+  assertLegacyCollectionRefundAllowed,
+  isLegacyCollectionRefundDisabled,
+} from "../convex/utils/legacyCollectionRefundContainment";
+import { assertClearedChequeReturnAllowed, isClearedChequeReturnDisabled } from "../convex/utils/postDeliveryDoorContainment";
+import { assertSupplierSettlementDoorAllowed, isSupplierSettlementDoorDisabled } from "../convex/utils/supplierSettlementContainment";
+import { assertRt11DoorAllowed, isRt11DoorDisabled } from "../convex/utils/rt11DoorContainment";
 import {
   CASH_SALE_EXTRAS_PILOT_REFUSED,
   CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED,
+  PAYMENT_LINKS_PILOT_DISABLED as PAYMENT_LINKS_VIA_SALE_DEBT,
 } from "../convex/utils/saleDebtContainment";
 import { DEAL_COMMISSION_LINES_PILOT_DISABLED } from "../convex/utils/dealCommissionLines";
 
@@ -70,6 +79,47 @@ export const PILOT_SWITCHES = {
 } as const satisfies Record<string, () => boolean>;
 
 export type PilotSwitchKey = keyof typeof PILOT_SWITCHES;
+
+/**
+ * Other modules the SERVER imports a switch through. `convex/paymentIntents.ts` takes the
+ * payment-link switch from `saleDebtContainment`, which re-exports it, so a mock of that module
+ * changes what the mutation does while the reader above stays on the declaring module.
+ * `test-utils/pilotConfigParity.ts` compares every binding with the shipped value, and
+ * `lib/pilotCapabilityManifest.test.ts` fails if a module re-exports a switch without being listed.
+ */
+export const PILOT_SERVER_BINDINGS: Readonly<
+  Partial<Record<PilotSwitchKey, readonly { readonly module: string; readonly read: () => boolean }[]>>
+> = {
+  PAYMENT_LINKS_PILOT_DISABLED: [
+    { module: "convex/utils/saleDebtContainment", read: () => PAYMENT_LINKS_VIA_SALE_DEBT as boolean },
+  ],
+};
+
+/**
+ * The guard each mutation actually calls, for every switch that has one. It throws while the
+ * switch is on. The parity check calls it, so a mock that replaces only the guard is caught even
+ * when the constant is untouched.
+ */
+export const PILOT_SERVER_GUARDS: Readonly<Partial<Record<PilotSwitchKey, () => void>>> = {
+  FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: () => assertFixedAssetLifecycleAllowed(),
+  CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED: () => assertCustomerCreditPayoutAllowed(),
+  SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED: () => assertSaleInvoiceReceiptDoorsAllowed(),
+  LEGACY_COLLECTION_REFUND_PILOT_DISABLED: () => assertLegacyCollectionRefundAllowed(),
+  CLEARED_CHEQUE_RETURN_PILOT_DISABLED: () => assertClearedChequeReturnAllowed(),
+  SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: () => assertSupplierSettlementDoorAllowed("SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED"),
+  SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: () => assertSupplierSettlementDoorAllowed("SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED"),
+  SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: () => assertSupplierSettlementDoorAllowed("SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED"),
+  CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED: () => assertRt11DoorAllowed("CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED"),
+  CUSTODY_WRITEOFF_PILOT_DISABLED: () => assertRt11DoorAllowed("CUSTODY_WRITEOFF_PILOT_DISABLED"),
+  CUSTODY_MIGRATION_PILOT_DISABLED: () => assertRt11DoorAllowed("CUSTODY_MIGRATION_PILOT_DISABLED"),
+  CUSTODY_REOPEN_PILOT_DISABLED: () => assertRt11DoorAllowed("CUSTODY_REOPEN_PILOT_DISABLED"),
+  MANUAL_FINANCE_APPROVAL_PILOT_DISABLED: () => assertRt11DoorAllowed("MANUAL_FINANCE_APPROVAL_PILOT_DISABLED"),
+  EXPECTED_PAYMENT_PAID_PILOT_DISABLED: () => assertRt11DoorAllowed("EXPECTED_PAYMENT_PAID_PILOT_DISABLED"),
+  SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED: () => assertRt11DoorAllowed("SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED"),
+  DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED: () => assertRt11DoorAllowed("DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED"),
+  VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED: () => assertRt11DoorAllowed("VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED"),
+  PAID_LANDED_COST_CHANGE_PILOT_DISABLED: () => assertRt11DoorAllowed("PAID_LANDED_COST_CHANGE_PILOT_DISABLED"),
+};
 
 /**
  * The one call a screen makes to decide whether to offer an action behind a switch.

@@ -66,4 +66,7 @@ must carry the header `NON-PILOT-CERTIFYING` or be in the baseline file
 
 Adding a pilot switch now needs: a manifest entry, refusal copy in both languages, a server guard in each named door, and either a
 UI gate or a recorded reason there is no UI. Re-enabling a capability is still a reviewed code change plus its own certification;
-flipping a constant makes the parity check and the expected-refusal tests fail until the change updates them together.
+flipping a constant in source also changes what the manifest reads, so the parity check alone cannot see it. Two things catch it:
+`EXPECTED_SHIPPED` in `lib/pilotCapabilityManifest.test.ts` pins the shipped value of every switch, so a flip fails that test until
+the same change edits the table, and the parity check fails when a test mock, a re-export binding (`PILOT_SERVER_BINDINGS`) or a
+server guard (`PILOT_SERVER_GUARDS`, which the check calls and expects to throw) disagrees with the shipped value.

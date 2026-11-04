@@ -6,7 +6,14 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
-import { PILOT_CAPABILITIES, PILOT_SWITCHES } from "./pilotCapabilityManifest";
+import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
+import {
+  PILOT_CAPABILITIES,
+  PILOT_SERVER_BINDINGS,
+  PILOT_SERVER_GUARDS,
+  PILOT_SWITCHES,
+  type PilotSwitchKey,
+} from "./pilotCapabilityManifest";
 
 const ROOT = path.resolve(__dirname, "..");
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
@@ -23,20 +30,59 @@ function walk(dir: string, accept: (rel: string) => boolean, out: string[] = [])
 
 const isSource = (rel: string) => /\.tsx?$/.test(rel) && !/\.test\.tsx?$/.test(rel) && !rel.endsWith(".d.ts");
 
-/** Every switch the repository declares: boolean constants plus the keys of the two door maps. */
+const SOURCE_ROOTS = readdirSync(ROOT).filter(
+  (name) =>
+    !name.startsWith(".") &&
+    !["node_modules", "_generated", "coverage", "playwright-report", "test-results"].includes(name) &&
+    statSync(path.join(ROOT, name)).isDirectory()
+);
+
+/**
+ * Every switch the repository declares anywhere outside tests, found by parsing the source:
+ * exported variables with a switch name (typed or not, one line or many) plus the keys of
+ * exported door maps.
+ */
 function declaredSwitches(): string[] {
   const names = new Set<string>();
-  for (const rel of [...walk("convex", isSource), ...walk("lib", isSource)]) {
-    const text = read(rel);
-    for (const m of text.matchAll(/^export const (\w+_PILOT_(?:DISABLED|REQUIRED|REFUSED))\s*=\s*(true|false)\b/gm)) {
-      names.add(m[1]!);
-    }
-    for (const m of text.matchAll(/^export const \w+_PILOT_DISABLED\s*=\s*\{([\s\S]*?)\n\}\s*as const/gm)) {
-      for (const k of m[1]!.matchAll(/^\s*(\w+_PILOT_DISABLED):\s*(?:true|false)/gm)) names.add(k[1]!);
+  for (const root of SOURCE_ROOTS) {
+    for (const rel of walk(root, isSource)) {
+      const text = read(rel);
+      if (!text.includes("_PILOT_")) continue;
+      for (const d of pilotSwitchDeclarations(text, rel)) names.add(d.name);
     }
   }
   return [...names].sort();
 }
+
+/** The value each switch ships with. Flipping one in source must change this table in the same change. */
+const EXPECTED_SHIPPED: Record<PilotSwitchKey, boolean> = {
+  PAYMENT_LINKS_PILOT_DISABLED: true,
+  FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: true,
+  MANUAL_JOURNALS_PILOT_DISABLED: true,
+  PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED: true,
+  CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED: true,
+  SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED: true,
+  DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED: true,
+  LEGACY_COLLECTION_REFUND_PILOT_DISABLED: true,
+  CLEARED_CHEQUE_RETURN_PILOT_DISABLED: true,
+  SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED: true,
+  SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED: true,
+  SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED: true,
+  CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED: true,
+  CUSTODY_WRITEOFF_PILOT_DISABLED: true,
+  CUSTODY_MIGRATION_PILOT_DISABLED: true,
+  CUSTODY_REOPEN_PILOT_DISABLED: true,
+  MANUAL_FINANCE_APPROVAL_PILOT_DISABLED: true,
+  EXPECTED_PAYMENT_PAID_PILOT_DISABLED: true,
+  SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED: true,
+  DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED: true,
+  VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED: true,
+  PAID_LANDED_COST_CHANGE_PILOT_DISABLED: true,
+  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: true,
+  CASH_SALE_EXTRAS_PILOT_REFUSED: true,
+  // The commission-lines door is open in the pilot: this is the one switch that ships false.
+  DEAL_COMMISSION_LINES_PILOT_DISABLED: false,
+};
 
 /** The body of `export const <fn> = mutation(...)` up to the next top-level export. */
 function doorSource(moduleName: string, fn: string): string {
@@ -53,6 +99,46 @@ describe("pilot capability manifest", () => {
     const registered = new Set(Object.keys(PILOT_SWITCHES));
     const missing = declaredSwitches().filter((name) => !registered.has(name));
     expect(missing, `register these in lib/pilotCapabilityManifest.ts: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  test("discovery: finds typed, multi-line and door-map declarations (negative controls)", () => {
+    const names = (src: string) => pilotSwitchDeclarations(src).map((d) => `${d.kind}:${d.name}`);
+    expect(names("export const A_PILOT_DISABLED: boolean = true;")).toEqual(["constant:A_PILOT_DISABLED"]);
+    expect(names("export const B_PILOT_REQUIRED =\n  true as const;")).toEqual(["constant:B_PILOT_REQUIRED"]);
+    expect(names("export const C_PILOT_REFUSED = (false) satisfies boolean;")).toEqual(["constant:C_PILOT_REFUSED"]);
+    expect(names("export const MAP = {\n  D_PILOT_DISABLED: true,\n  E_PILOT_DISABLED: false,\n} as const;")).toEqual([
+      "doorMap:D_PILOT_DISABLED",
+      "doorMap:E_PILOT_DISABLED",
+    ]);
+    expect(names("const NOT_EXPORTED_PILOT_DISABLED = true; export const OTHER = 1;")).toEqual([]);
+  });
+
+  test("shipped values: the source, the manifest reader and the pinned table agree for every switch", () => {
+    expect(Object.keys(EXPECTED_SHIPPED).sort()).toEqual(Object.keys(PILOT_SWITCHES).sort());
+    for (const key of Object.keys(PILOT_SWITCHES) as PilotSwitchKey[]) {
+      expect(shippedValue(key), `${key} in source`).toBe(EXPECTED_SHIPPED[key]);
+      expect(PILOT_SWITCHES[key](), `${key} through the manifest`).toBe(EXPECTED_SHIPPED[key]);
+    }
+  });
+
+  test("server: every module that re-exports a switch constant is a listed binding, and no stale binding remains", () => {
+    const { reexporting } = switchModules();
+    const actual = [...reexporting]
+      .filter(([key]) => key in PILOT_SWITCHES)
+      .flatMap(([key, mods]) => mods.map((m) => `${key} @ ${m}`))
+      .sort();
+    const listed = Object.entries(PILOT_SERVER_BINDINGS)
+      .flatMap(([key, list]) => (list ?? []).map((b) => `${key} @ ${b.module}`))
+      .sort();
+    expect(listed, "list the module in PILOT_SERVER_BINDINGS so parity measures it").toEqual(actual);
+  });
+
+  test("server: every switch with a refusing door has a guard the parity check calls", () => {
+    const guarded = Object.keys(PILOT_SERVER_GUARDS).sort();
+    const expected = (Object.keys(PILOT_SWITCHES) as PilotSwitchKey[])
+      .filter((key) => /^(FIXED_ASSET|CUSTOMER_CREDIT|SALE_INVOICE|LEGACY_COLLECTION|CLEARED_CHEQUE|SUPPLIER_|CUSTODY_|MANUAL_FINANCE|EXPECTED_PAYMENT|DIRECT_COMMISSION|VEHICLE_OWNERSHIP|PAID_LANDED)/.test(key))
+      .sort();
+    expect(guarded).toEqual(expected);
   });
 
   test("discovery: every registered switch exists in the source and belongs to exactly one capability", () => {
