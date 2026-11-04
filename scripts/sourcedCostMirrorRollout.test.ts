@@ -53,33 +53,37 @@ describe("SCRUM-907 sourced cost mirror rollout", () => {
     }, { now: () => now })).toMatchObject({ ok: false, reason: expect.stringContaining("deadline") });
   });
 
-  test.each(["skippedLocked", "skippedInvalid"])("refuses outstanding %s rows with counts only", key => {
+  test.each(["skippedLocked", "skippedInvalid"])("reports outstanding %s rows as counted anomalies", key => {
     const result = run(() => ({ ok: true, value: { ...page(), [key]: 1, raw: secret } }));
-    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("INCOMPLETE") });
+    expect(result).toMatchObject({ ok: true, [key]: 1 });
   });
 
   test("phase constructs the internal command, shares the deadline and renders a counts-only summary", () => {
     const calls: string[][] = [];
     const summary = runSourcedCostMirrorPhase({
       convex: args => { calls.push(args); return { ok: true, value: page(1) }; },
-      now: () => 0, startedAt: 0, timeoutMs: 1000, fail: reason => { throw new Error(reason); },
+      now: () => 0, startedAt: 0, timeoutMs: 1000,
     });
     expect(calls).toEqual([["run", "vehicles:backfillSourcedCostMirror", JSON.stringify({ cursor: null, numItems: 25 })]]);
-    expect(summary).toBe("Checked 2 vehicles in 1 page call(s); repaired 1 SOURCED cost mirrors; locked 0; invalid 0.");
+    expect(summary).toEqual({ ok: true, summary: "Checked 2 vehicles in 1 page call(s); repaired 1 SOURCED cost mirrors; locked 0; invalid 0." });
   });
 
-  test("phase forwards a safe refusal to fail", () => {
-    expect(() => runSourcedCostMirrorPhase({
+  test("phase returns a safe refusal so inbox verification can run before failing", () => {
+    const phase = runSourcedCostMirrorPhase({
       convex: () => ({ ok: false, reason: secret }), now: () => 0, startedAt: 0, timeoutMs: 1000,
-      fail: reason => { expect(reason).not.toContain(secret); throw new Error(reason); },
-    })).toThrow(/call failed/);
+    });
+    expect(phase).toMatchObject({ ok: false, reason: expect.stringContaining("call failed") });
+    expect(JSON.stringify(phase)).not.toContain(secret);
   });
 
   test("rollout invokes the tested phase after accountant repair and before inbox verification", () => {
     const source = readFileSync(path.join(__dirname, "rolloutRelease.mjs"), "utf8");
-    const invocation = source.indexOf("sourcedCostMirrorSummary = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });");
+    const invocation = source.indexOf("const sourcedCostMirror = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS });");
     expect(invocation).toBeGreaterThan(source.indexOf("accountantCostPriceSummary = runAccountantCostPricePhase("));
     expect(invocation).toBeLessThan(source.indexOf("console.log(`Verifying the rollout"));
     expect(source).toContain("### SOURCED cost mirrors");
+    const refusal = source.indexOf("if (!sourcedCostMirror.ok)");
+    expect(refusal).toBeGreaterThan(source.indexOf('while (lastOutcome === "continue")'));
+    expect(refusal).toBeLessThan(source.indexOf("process.exit(0)"));
   });
 });

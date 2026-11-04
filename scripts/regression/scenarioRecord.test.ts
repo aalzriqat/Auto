@@ -628,3 +628,15 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
     expect(scenarioFingerprint({ domain: s.domain, steps: s.steps, expected: s.expected })).toBe(s.fingerprint);
   });
 });
+
+// SCRUM-907 Seat 2: preventive controls and new repair coverage are not reproduced bugs.
+test.each([
+  "sourced-posted-cost-still-refuses-update",
+  "sourced-cost-conflict-refuses-without-writes",
+  "sourced-mirror-repair-idempotent-stock-deleted-untouched",
+  "sourced-mirror-repair-refuses-sold-opening-missing-cost",
+  "sourced-mirror-repair-reports-posted-cost-lock",
+])("SCRUM-907 protective scenario %s claims no failing-first bug", id => {
+  const record = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "regression/scenarios/money", `${id}.scenario.json`), "utf8")) as ScenarioRecord;
+  expect(record.bugRef).toBeUndefined();
+});

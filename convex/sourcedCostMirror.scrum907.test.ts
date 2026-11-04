@@ -59,12 +59,50 @@ describe("SCRUM-907 sourced cost mirror", () => {
     })).rejects.toThrow(/VEHICLE_SOURCED_COST_CONFLICT/);
   });
 
-  test("matching submitted costs and a supplier-cost echo repair the mirror", async () => {
+  test("matching submitted costs on a real live cost change still mirror", async () => {
     const { t, orgId, vehicleId, asUser } = await setup();
     await asUser.mutation(api.vehicles.update, { orgId, vehicleId, purchasePrice: 9900, sourceCost: 9900 });
-    await t.run(ctx => ctx.db.patch(vehicleId, { purchasePrice: 10250 }));
-    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 9900 });
     expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ sourceCost: 9900, purchasePrice: 9900 });
+  });
+
+  test("M1 older mobile can edit a stale SOLD row with its unchanged purchasePrice", async () => {
+    const { t, orgId, vehicleId, asUser } = await setup();
+    await t.run(ctx => ctx.db.patch(vehicleId, { status: "SOLD", sourceCost: 9900 }));
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, color: "Blue", purchasePrice: 10250 });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ color: "Blue", sourceCost: 9900, purchasePrice: 10250 });
+    const edits = await t.run(ctx => ctx.db.query("vehicleEdits").collect());
+    expect(edits.find(edit => edit.type === "UPDATE")?.payload).toEqual({ color: "Blue" });
+    await expect(asUser.mutation(api.vehicles.update, { orgId, vehicleId, purchasePrice: 9800 })).rejects.toThrow(/VEHICLE_SOURCED_COST_CONFLICT/);
+  });
+
+  test.each(["SOLD", "opening", "posted"] as const)("M2 unchanged sourceCost echo preserves %s history through every update door", async lock => {
+    const fixture = await setup();
+    const { t, orgId, vehicleId, userId, asUser } = fixture;
+    await t.run(async ctx => {
+      await ctx.db.patch(vehicleId, { sourceCost: 9900, ...(lock === "SOLD" ? { status: "SOLD" as const } : {}) });
+      if (lock === "opening") await ctx.db.patch(vehicleId, { openingBalanceDraftId: await ctx.db.insert("openingBalanceDrafts", {
+        orgId, status: "PENDING_APPROVAL", lines: [], asOfDate: Date.now(), createdBy: userId, createdAt: Date.now(),
+      }) });
+    });
+    if (lock === "posted") await seedAcquisition(fixture);
+    const before = await t.run(ctx => ctx.db.get(vehicleId));
+    const editsBefore = await t.run(ctx => ctx.db.query("vehicleEdits").collect());
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 9900 });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toEqual(before);
+    expect(await t.run(ctx => ctx.db.query("vehicleEdits").collect())).toEqual(editsBefore);
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sourceCost: 9900, notes: "direct note" });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ sourceCost: 9900, purchasePrice: 10250, notes: "direct note" });
+    await expect(asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceCost: 9900 } })).rejects.toThrow(/No changes detected/);
+    const requestId = await asUser.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { sourceCost: 9900, notes: "requested note" } });
+    expect((await t.run(ctx => ctx.db.get(requestId)))?.payload).toEqual({ notes: "requested note" });
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+    const oldRequestId = await t.run(ctx => ctx.db.insert("vehicleEdits", {
+      orgId, vehicleId, requestedBy: userId, type: "UPDATE", payload: { sourceCost: 9900, purchasePrice: 10250, notes: "legacy note" }, status: "PENDING", createdAt: Date.now(),
+    }));
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId: oldRequestId, status: "APPROVED" });
+    expect(await t.run(ctx => ctx.db.get(vehicleId))).toMatchObject({ sourceCost: 9900, purchasePrice: 10250, notes: "legacy note" });
+    const edits = await t.run(ctx => ctx.db.query("vehicleEdits").collect());
+    expect(edits.filter(edit => edit.type === "UPDATE").every(edit => !("purchasePrice" in edit.payload))).toBe(true);
   });
 
   test("STOCK-to-SOURCED normalization derives the mirror without opening the pilot gate", () => {
