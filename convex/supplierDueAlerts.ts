@@ -7,12 +7,11 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { internalMutation } from "./functions";
 import { supplierDueAlertJobName } from "./constants";
 import { hasPlanFeature } from "./subscriptions";
-import { isSystemOwnerRole } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { NOTIFICATION_TYPES } from "../lib/notifications/types";
 import { fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { alertStepFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
-import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type ObligationRow } from "./utils/supplierObligationDue";
 
 /**
@@ -75,34 +74,32 @@ const kindValidator = v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.l
 const ALERT_OPERATION = "supplier-due-alert";
 
 /**
- * The members of one membership page who are alerted: the system owner and every role that holds ALL of
- * `STATEMENT_PERMISSIONS` (view:finance and view:cost_price), and only active ones. The alert carries the
- * cost-derived outstanding amount, so a recipient needs the same authority as `supplierDueAging.list` and
- * the supplier statement, which use the same constant (SCRUM-901; OWASP A01:2021 Broken Access Control:
- * authorization must hold on every path to the data, a notification included). `manage:finance` alone, or
- * `view:finance` without `view:cost_price`, is not enough. An offboarding member, a super admin's temporary
- * impersonation membership (it copies the target's role) and a disabled user are not recipients, the same
- * predicates `requireTenantAuth` and `countOwners` apply.
+ * The members of one membership page who are alerted: Owner, Finance Manager (manage:finance) and
+ * authorised accounting staff (view:finance), and only active ones. An offboarding member, a super
+ * admin's temporary impersonation membership (it copies the target's role) and a disabled user are
+ * not recipients, the same predicates `requireTenantAuth` and `countOwners` apply.
  */
 async function eligibleRecipients(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   memberships: Doc<"memberships">[]
 ): Promise<Id<"users">[]> {
-  const rolesMayReadAmounts = new Map<Id<"roles">, boolean>();
+  const rolesHoldingFinance = new Map<Id<"roles">, boolean>();
   const recipients = new Set<Id<"users">>();
   for (const membership of memberships) {
     if (membership.offboardingStatus || membership.impersonationGrantId) continue;
-    let mayReadAmounts = rolesMayReadAmounts.get(membership.roleId);
-    if (mayReadAmounts === undefined) {
+    let holdsFinance = rolesHoldingFinance.get(membership.roleId);
+    if (holdsFinance === undefined) {
       const role = await ctx.db.get(membership.roleId);
-      mayReadAmounts =
+      holdsFinance =
         !!role &&
         role.orgId === orgId &&
-        (isSystemOwnerRole(role) || STATEMENT_PERMISSIONS.every((permission) => role.permissions.includes(permission)));
-      rolesMayReadAmounts.set(membership.roleId, mayReadAmounts);
+        (isSystemOwnerRole(role) ||
+          role.permissions.includes(PERMISSIONS.MANAGE_FINANCE) ||
+          role.permissions.includes(PERMISSIONS.VIEW_FINANCE));
+      rolesHoldingFinance.set(membership.roleId, holdsFinance);
     }
-    if (!mayReadAmounts) continue;
+    if (!holdsFinance) continue;
     const user = await ctx.db.get(membership.userId);
     if (!user || user.disabled) continue;
     recipients.add(membership.userId);
