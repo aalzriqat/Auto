@@ -164,7 +164,9 @@ describe("the committed library", () => {
     expect(validateLibrary([missingName], { rulings, repoRoot: REPO_ROOT }).map(problem => problem.rule)).toContain("skip");
   });
 
-  test("loads the committed library and it has no problems", () => {
+  // Reads and validates every committed scenario and the source of every bound test. Under
+  // coverage instrumentation that walk passes 5 s, so the budget is sized for the CI coverage run.
+  test("loads the committed library and it has no problems", { timeout: 60_000 }, () => {
     const { records, rulings, problems } = loadLibrary(REPO_ROOT);
     expect([...problems, ...validateLibrary(records, { rulings, repoRoot: REPO_ROOT })]).toEqual([]);
   });
