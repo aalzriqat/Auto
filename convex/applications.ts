@@ -23,7 +23,7 @@ import {
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
-import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
+import { canReadVehicleCost, projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
@@ -146,7 +146,6 @@ import {
 import { disbursementVersionOf, financeDisbursementKeys } from "./utils/financeDisbursementKeys";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { summarizeFees } from "./financeDealCosts";
-import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { effectiveSupplierEntitlementMinor, storedConcessionMinor } from "./utils/supplierConcession";
 import {
   consignedSettlementRoute,
