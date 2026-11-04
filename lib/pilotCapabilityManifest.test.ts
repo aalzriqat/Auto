@@ -92,7 +92,10 @@ function doorSource(moduleName: string, fn: string): string {
   return next < 0 ? rest : rest.slice(0, next);
 }
 
-describe("pilot capability manifest", () => {
+// The discovery and shipped-value checks read and parse every source module through the compiler
+// symbols. Under coverage instrumentation in a contended CI slice that walk passed the 5 s default
+// (PR #769, run 41832856111, slice 8/8), so this suite carries its own limit; the global timeout is unchanged.
+describe("pilot capability manifest", { timeout: 60_000 }, () => {
   test("discovery: every declared pilot switch is registered", () => {
     const registered = new Set(Object.keys(PILOT_SWITCHES));
     const missing = declaredSwitches().filter((name) => !registered.has(name));
