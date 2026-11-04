@@ -6,7 +6,7 @@
 // a skip: a missing binding, a missing file, a test that is not found, found twice, skipped or failing all fail.
 // The output is counts and scenario ids only; the repository and its Actions logs are public.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, appendFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, appendFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -288,25 +288,56 @@ export function readPlaywrightReports(paths) {
   return { reports, problems };
 }
 
-export function main(argv = process.argv.slice(2)) {
+function requireInsideRoot(root, file) {
+  const relative = path.relative(root, file);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("CLI_PATH_OUTSIDE_ROOT");
+  }
+  return file;
+}
+
+/** Resolve read-only CLI inputs under the host root, including existing symlink targets. */
+function resolveRepoInput(root, value) {
+  if (!value.trim() || value.includes("\0")) throw new Error("CLI_PATH_INVALID");
+  const file = requireInsideRoot(root, path.resolve(root, value));
+  return existsSync(file) ? requireInsideRoot(root, realpathSync(file)) : file;
+}
+
+function prepareInvocation(argv, host) {
   const { values } = parseArgs({ args: argv, strict: true, allowPositionals: false,
     options: { root: { type: "string" }, config: { type: "string" }, base: { type: "string" },
       tier: { type: "string", default: "pr" }, "playwright-report": { type: "string", multiple: true } } });
-  if (values.tier !== "pr" && values.tier !== "full") {
-    process.stderr.write("--tier must be pr or full\n");
+  if (values.tier !== "pr" && values.tier !== "full") throw new Error("CLI_TIER_INVALID");
+  const root = realpathSync(host.root);
+  // --root only confirms the host-selected root. CLI text never supplies a filesystem path here.
+  if (values.root !== undefined && values.root !== root && values.root !== path.resolve(host.root)) {
+    throw new Error("ROOT_CONTEXT_MISMATCH");
+  }
+  return { root, base: values.base, tier: values.tier,
+    config: values.config === undefined ? undefined : resolveRepoInput(root, values.config),
+    reportPaths: (values["playwright-report"] ?? []).map(file => resolveRepoInput(root, file)) };
+}
+
+/** The embedding host may supply a fixture root; the standalone CLI uses this module's checkout. */
+export function main(argv = process.argv.slice(2), host = { root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") }) {
+  let invocation;
+  try {
+    invocation = prepareInvocation(argv, host);
+  } catch {
+    process.stderr.write("Invalid CLI arguments: --root must match the host-selected root; --config and --playwright-report must stay inside that root; --tier must be pr or full.\n");
     return 2;
   }
-  const root = path.resolve(values.root ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."));
+  const { root, config, base, tier, reportPaths } = invocation;
   let changedFiles = null;
-  if (values.tier === "pr") {
+  if (tier === "pr") {
     try {
-      changedFiles = changedFilesSince(root, values.base);
+      changedFiles = changedFilesSince(root, base);
     } catch {
       // Left null: the PR diff is unknown, so every active browser record counts as selected and the run fails.
     }
   }
-  const { reports, problems } = readPlaywrightReports(values["playwright-report"] ?? []);
-  const summary = runPrScenarios({ root, config: values.config, changedFiles, tier: values.tier, playwrightReports: reports, reportProblems: problems });
+  const { reports, problems } = readPlaywrightReports(reportPaths);
+  const summary = runPrScenarios({ root, config, changedFiles, tier, playwrightReports: reports, reportProblems: problems });
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) {

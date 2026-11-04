@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { changedFilesSince, evaluate, evaluatePlaywright, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { changedFilesSince, evaluate, evaluatePlaywright, main, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // The runner is exercised against a throwaway project and the real Vitest: the verdicts below come from
@@ -40,6 +40,101 @@ function makeProject(files: Record<string, string>, records: FixtureRecord[]): s
 }
 
 const config = (root: string) => path.join(root, "vitest.config.mjs");
+
+/** The embedding host selects the fixture root; argv cannot select another checkout. */
+function invokeMain(root: string, argv: string[]) {
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const previousSummary = process.env.GITHUB_STEP_SUMMARY;
+  delete process.env.GITHUB_STEP_SUMMARY;
+  try {
+    const status = main(argv, { root });
+    return { status, stdout: stdout.mock.calls.map(([text]) => String(text)).join(""), stderr: stderr.mock.calls.map(([text]) => String(text)).join("") };
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+    if (previousSummary === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = previousSummary;
+  }
+}
+
+it("a different --root cannot redirect the host-selected root", () => {
+  const root = makeProject({}, []);
+  const redirect = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "redirected", file: "ok.fixture.js", testName: "fine" }]);
+  const result = invokeMain(root, ["--root", redirect]);
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain("--root must match the host-selected root");
+  expect(result.stdout).toBe("");
+});
+
+describe("CLI path boundary", () => {
+  it("a matching --root confirms the host root and preserves the summary file", () => {
+    const root = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "host", file: "ok.fixture.js", testName: "fine" }]);
+    const summaryFile = path.join(root, "step-summary.md");
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.stubEnv("GITHUB_STEP_SUMMARY", summaryFile);
+    try {
+      expect(main(["--root", root, "--config", config(root)], { root })).toBe(0);
+      const summary = JSON.parse(stdout.mock.calls.map(([text]) => String(text)).join(""));
+      expect(summary).toMatchObject({ verdict: "PASS", selected: 1, passed: 1, failed: 0 });
+      expect(readFileSync(summaryFile, "utf8")).toContain(JSON.stringify(summary, null, 2));
+    } finally {
+      stdout.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(["--config", "--playwright-report"])("refuses escaping %s paths before execution", option => {
+    const root = makeProject({}, []);
+    const outside = makeProject({}, []);
+    const file = path.join(outside, "vitest.config.mjs");
+    for (const input of [file, path.relative(root, file), `${root}-sibling/report.json`, "", "bad\0path"]) {
+      const result = invokeMain(root, [option, input]);
+      expect(result.status, input).toBe(2);
+      expect(result.stderr).toContain("--config and --playwright-report must stay inside that root");
+      expect(result.stdout).toBe("");
+    }
+  });
+
+  it.each(["--config", "--playwright-report"])("refuses %s through a symlink outside the host root", option => {
+    const root = makeProject({}, []);
+    const outside = makeProject({}, []);
+    const link = path.join(root, "linked");
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const result = invokeMain(root, [option, "linked/vitest.config.mjs"]);
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+    } finally {
+      unlinkSync(link);
+    }
+  });
+
+  it("resolves relative reports under the host root and keeps missing reports as failures", () => {
+    const root = makeProject({ "replay.fixture.js": "" }, [{ id: "replay", level: "browser", file: "replay.fixture.js", testName: "the replay" }]);
+    writeFileSync(path.join(root, "report.json"), JSON.stringify({ config: { rootDir: root }, suites: [{
+      specs: [{ title: "the replay", file: "replay.fixture.js", tests: [{ status: "expected" }] }],
+    }] }));
+    const good = invokeMain(root, ["--tier", "full", "--playwright-report", "report.json"]);
+    expect(good.status).toBe(0);
+    expect(JSON.parse(good.stdout)).toMatchObject({ verdict: "PASS", selected: 1, passed: 1, issues: [] });
+    const missing = invokeMain(root, ["--tier", "full", "--playwright-report", "missing.json"]);
+    expect(missing.status).toBe(1);
+    expect(JSON.parse(missing.stdout)).toMatchObject({ verdict: "FAIL", issues: ["PLAYWRIGHT_REPORT_UNREADABLE"] });
+  });
+
+  it("the standalone CLI selects its module checkout independently of cwd", () => {
+    const root = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "other", file: "ok.fixture.js", testName: "fine" }]);
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
+    for (const args of [["--root", root], ["--config", config(root)]]) {
+      const result = spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: "utf8", timeout: 10000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("host-selected root");
+    }
+  });
+});
 
 describe("PR diff base", () => {
   let root: string;
@@ -86,6 +181,18 @@ describe("PR diff base", () => {
     expect(changedFilesSince(root, baseSideSha)).toEqual(["changed.txt"]);
     expect(changedFilesSince(root, baseSha.toUpperCase())).toEqual(["changed.txt"]);
     expect(changedFilesSince(root)).toEqual(["changed.txt"]);
+  });
+
+  it("the CLI uses the host repository's diff to select an affected browser replay", () => {
+    mkdirSync(path.join(root, "regression", "scenarios"), { recursive: true });
+    writeFileSync(path.join(root, "regression", "scenarios", "browser.scenario.json"), JSON.stringify({
+      id: "affected", status: "active", level: "browser", sourceGlobs: ["changed.txt"], impl: { file: "replay.spec.ts" },
+    }));
+    const result = invokeMain(root, ["--base", baseSha]);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ verdict: "FAIL", selected: 1,
+      failedIds: ["affected BROWSER_REPLAY_NOT_EXECUTED"], browser: { selected: 1 },
+      issues: ["SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:1"] });
   });
 
   it("refuses unknown and non-commit object SHAs", () => {
@@ -156,8 +263,7 @@ describe("PR scenario runner", () => {
         { id: "healthy", file: "ok.fixture.js", testName: "fine" },
       ],
     );
-    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
-    const child = spawnSync(process.execPath, [cli, "--root", root, "--config", config(root)], { encoding: "utf8" });
+    const child = invokeMain(root, ["--config", "vitest.config.mjs"]);
     expect(child.status).toBe(1);
     const summary = JSON.parse(child.stdout.slice(child.stdout.indexOf("{")));
     expect(summary).toMatchObject({ verdict: "FAIL", selected: 2, passed: 1, failed: 1 });
@@ -168,8 +274,7 @@ describe("PR scenario runner", () => {
 
   it("a green project exits zero from the CLI", () => {
     const root = makeProject({ "ok.fixture.js": 'test("fine", () => {});\n' }, [{ id: "healthy", file: "ok.fixture.js", testName: "fine" }]);
-    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
-    expect(spawnSync(process.execPath, [cli, "--root", root, "--config", config(root)], { encoding: "utf8" }).status).toBe(0);
+    expect(invokeMain(root, ["--config", "vitest.config.mjs"]).status).toBe(0);
   });
   it("emits counts and ids only: no test name, file path or error text", () => {
     const root = makeProject(
@@ -360,12 +465,11 @@ describe("full tier", () => {
 
   it("the CLI full tier exits non-zero without reports and rejects an unknown tier", () => {
     const dir = withFiles();
-    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), "prRunner.mjs");
     mkdirSync(path.join(dir, "regression", "scenarios"), { recursive: true });
     writeFileSync(path.join(dir, "regression", "scenarios", "x.scenario.json"), JSON.stringify(browserRecord("replay")));
-    const full = spawnSync(process.execPath, [cli, "--root", dir, "--tier", "full"], { encoding: "utf8" });
+    const full = invokeMain(dir, ["--tier", "full"]);
     expect(full.status).toBe(1);
     expect(JSON.parse(full.stdout.slice(full.stdout.indexOf("{")))).toMatchObject({ tier: "full", verdict: "FAIL", failedIds: ["replay BINDING_FILE_MISSING"] });
-    expect(spawnSync(process.execPath, [cli, "--root", dir, "--tier", "nightly"], { encoding: "utf8" }).status).toBe(2);
+    expect(invokeMain(dir, ["--tier", "nightly"]).status).toBe(2);
   });
 });
