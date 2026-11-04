@@ -1,6 +1,6 @@
 {
   "id": "supplier-alert-due-in-3-days-reaches-authorised-recipients-in-app",
-  "fingerprint": "49ce013c471194a5a3ba187ad07e98e5d98c6835c6939c40fff9afa7584472a1",
+  "fingerprint": "de11ad6736b271c1f50256cf1c1644e8924cfca655774cfa191d9f8a7f888160",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -36,7 +36,7 @@
       "value": "IN_APP"
     },
     {
-      "observable": "amount",
+      "observable": "ownerAmount",
       "value": "9500.000"
     }
   ],

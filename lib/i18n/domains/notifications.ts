@@ -111,6 +111,9 @@ export const notificationsEn = {
   Notif_AccountingSupplierObligationDue_Message: "A supplier obligation of {amount} {currency} is due on {dueDate}.",
   Notif_AccountingSupplierObligationOverdue_Title: "Supplier Obligation Overdue",
   Notif_AccountingSupplierObligationOverdue_Message: "A supplier obligation of {amount} {currency} was due on {dueDate} and is {daysOverdue} days overdue.",
+  // Used by renderNotification when the alert carries no `amount` key (a recipient without view:finance + view:cost_price, SCRUM-901).
+  Notif_AccountingSupplierObligationDue_MessageNoAmount: "A supplier obligation is due on {dueDate}.",
+  Notif_AccountingSupplierObligationOverdue_MessageNoAmount: "A supplier obligation was due on {dueDate} and is {daysOverdue} days overdue.",
   Notif_PartnerEquityChanged_Title: "Partner Equity Updated",
   Notif_PartnerEquityChanged_Message: "{actorName} updated a partner equity record.",
   Notif_ApprovalRequested_Title: "Approval Needed",
@@ -343,6 +346,8 @@ export const notificationsAr = {
   Notif_AccountingSupplierObligationDue_Message: "التزام مورّد بقيمة {amount} {currency} يستحق بتاريخ {dueDate}.",
   Notif_AccountingSupplierObligationOverdue_Title: "التزام مورّد متأخر",
   Notif_AccountingSupplierObligationOverdue_Message: "التزام مورّد بقيمة {amount} {currency} كان مستحقاً بتاريخ {dueDate} وتأخر {daysOverdue} يوماً.",
+  Notif_AccountingSupplierObligationDue_MessageNoAmount: "التزام مورّد يستحق بتاريخ {dueDate}.",
+  Notif_AccountingSupplierObligationOverdue_MessageNoAmount: "التزام مورّد كان مستحقاً بتاريخ {dueDate} وتأخر {daysOverdue} يوماً.",
   Notif_PartnerEquityChanged_Title: "تم تحديث حقوق الشريك",
   Notif_PartnerEquityChanged_Message: "قام {actorName} بتحديث سجل حقوق شريك.",
   Notif_ApprovalRequested_Title: "مطلوب موافقة",
