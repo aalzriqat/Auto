@@ -119,7 +119,7 @@ async function seedDeal(
     ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ALL_PERMISSIONS, isSystemOwnerRole: true })
   );
   const viewerRole = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS] })
+    ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: [PERMISSIONS.VIEW_FINANCE_APPLICATIONS, PERMISSIONS.VIEW_COST_PRICE] })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId: ownerRole }));
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: employeeId, roleId: ownerRole }));

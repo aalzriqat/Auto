@@ -1034,3 +1034,16 @@ Owner ruling: SCRUM-902 c24475. Synthetic fixtures only. The implementation keep
 | Inventory migration | no-cost dry run retains action/counts but no per-car amount; grant retains amount | sweep inventory backfill response withholds vehicle cost but keeps migration results |
 
 Failing-first: the original five findings produced 11 failures against production source at 86abd74bb38d3361684fbaecf6631a90c1e17928. The first sweep added two failing receipt cases; the second added three failing direct-route/backfill cases. Later consolidating status and route variants into named scenario tests preserves their assertions and allows regression-library binding. These are harness results, not Convex platform, concurrency, production, browser E2E or release certification.
+
+## SCRUM-902-SWEEP-CLOSURE
+
+Owner ruling: SCRUM-902 c24475. Each reader refuses before returning any cost-bearing response to a custom role without `view:cost_price`. Non-owner roles with the grant retain the figures. Accounting writes and approval readers are unchanged.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Work order, unfiltered | no-cost vehicle viewer refused; granted viewer reads parts 100, labor 50 and total 150 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=false require cost access` |
+| Work order, vehicle-filtered | same boundary for the vehicle index branch | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=true require cost access` |
+| Bundled finance costs | no-cost application viewer refused; granted viewer reads acquisition amount 9000000 and ordinary fee 20000, total 9020000 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 bundled deal cost reader protects acquisition lines and their totals` |
+| Management report | non-owner cost role reads report; revoked grant refuses before response or missing-basis refusal | `convex/openingManagementSettlement.test.ts`: `SCRUM-902 management profit report requires cost access before basis refusals` |
+
+All four negative assertions failed against unchanged production source at 24869050a64b075faed726db606999d770694c7b before the guards were added. These are `convex-test` results, not real-backend or release certification.

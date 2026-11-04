@@ -137,7 +137,7 @@ export const list = query({
 export const report = query({
   args: { orgId: v.id("organizations"), planId: v.id("openingManagementSettlementPlans"), throughDate: v.number() },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
     await requireFeature(ctx, args.orgId, "accounting");
     if (!Number.isSafeInteger(args.throughDate) || args.throughDate < 0 || args.throughDate > Date.now()) {
       throw new ConvexError("Choose a valid management report date no later than today.");

@@ -2469,9 +2469,20 @@ describe("handover costs — financeDealCosts.{recordDealFee, recordActualFeeAmo
   };
   function readableDeal() {
     permissions.add(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+    permissions.add(PERMISSIONS.VIEW_COST_PRICE);
     queryResults.set(COCKPIT_QUERY, cockpit({ status: "APPROVED" }));
     queryResults.set(GET_QUERY, application({ status: "APPROVED" }));
   }
+
+  test("SCRUM-902 without cost access the handover section shows its access note instead of loading or totals", () => {
+    readableDeal();
+    permissions.delete(PERMISSIONS.VIEW_COST_PRICE);
+    renderCockpit();
+    const section = screen.getByTestId("deal-handover-costs");
+    expect(section.textContent).toContain("HandoverCostsUnavailable");
+    expect(section.textContent).not.toContain("HandoverCostsLoading");
+    expect(screen.queryByTestId("deal-handover-costs-totals")).toBeNull();
+  });
 
   test("ADD sends the handover line as the employee's (paid from custody) with an explicit treatment and a RETAINED identity that survives an unknown result", async () => {
     readableDeal();

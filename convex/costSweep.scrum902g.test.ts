@@ -12,7 +12,7 @@ async function fixture(tag: string) {
   });
 }
 
-test.each([false, true])("SCRUM-902 work orders with vehicle filter=%s require cost access", async filtered => {
+async function assertWorkOrderCostAccess(filtered: boolean) {
   const s = await fixture(`work-${filtered}`);
   await s.t.run(ctx => ctx.db.insert("workOrders", {
     orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic repair", status: "OPEN", totalCost: 150,
@@ -23,6 +23,14 @@ test.each([false, true])("SCRUM-902 work orders with vehicle filter=%s require c
     { totalCost: 150, tasks: [{ partsCost: 100, laborCost: 50 }] },
   ]);
   await expect(s.actors.NoCost.as.query(api.workOrders.list, args)).rejects.toThrow(/view:cost_price/);
+}
+
+// The permanent scenario library requires a static registration for each branch.
+test("SCRUM-902 work orders with vehicle filter=false require cost access", async () => {
+  await assertWorkOrderCostAccess(false);
+});
+test("SCRUM-902 work orders with vehicle filter=true require cost access", async () => {
+  await assertWorkOrderCostAccess(true);
 });
 
 test("SCRUM-902 bundled deal cost reader protects acquisition lines and their totals", async () => {

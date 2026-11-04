@@ -84,6 +84,15 @@ vi.mock("next/navigation", () => ({
 
 import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
 
+test.each([false, true])("SCRUM-902 financed cost query requires cost grant=%s", granted => {
+  stubs.membership = { roleName: "Custom", permissions: ["view:sales", "view:finance_applications", "view:finance",
+    ...(granted ? ["view:cost_price"] : [])] };
+  stubs.queryResults.set("dealWorkspace:financedDealCockpit", financedDirectDeal());
+  render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  expect(stubs.queryArgs.get("financeDealCosts:listDealCosts"))
+    .toEqual(granted ? { orgId: ORG, applicationId: APP } : "skip");
+});
+
 type FinancedDealCockpitData = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
 type CashDealCockpitData = NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
 
