@@ -35,7 +35,7 @@
       "action": "roles.create",
       "input": {
         "name": "ACCOUNTANT",
-        "permissions": "LEGACY_PLUS_COST_WITHOUT_COMMISSIONS"
+        "permissions": "CUSTOM_EXTRA_PERMISSION"
       }
     },
     {
@@ -75,7 +75,7 @@
       "action": "roles.update",
       "input": {
         "role": "ACCOUNTANT",
-        "permissions": "OWNER_RESTRICTED_COST_WITHOUT_COMMISSIONS"
+        "permissions": "OWNER_RESTRICTED_CUSTOM_EXTRA"
       }
     },
     {
@@ -103,5 +103,5 @@
     "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
     "testName": "SCRUM-908: commission backfill respects an owner's public rename, recreation and later restriction"
   },
-  "fingerprint": "762885655e7f6c3cbf5e68dd97249501f8309e456ab3795bdc9d2662688e1be2"
+  "fingerprint": "16b38673c408f910b681f379a45cfc8d833e84a9d92b0043eda9096ebe1bfd85"
 }

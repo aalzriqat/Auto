@@ -19,6 +19,7 @@ test("SCRUM-908: exact production-shaped ACCOUNTANT receives commissions and a m
   const before = legacyPermissions();
   expect(before).toHaveLength(19);
   const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: before }));
+  expect((await t.mutation(internal.migrateRoles.backfillAccountantCostPriceAccess, {})).updatedCount).toBe(0);
   const first = await t.mutation(backfill, {});
   expect(first).toEqual({ updatedCount: 1, updates: [expect.any(String)], isDone: true, continueCursor: expect.any(String) });
   const once = await t.run((ctx) => ctx.db.get(roleId));
@@ -51,6 +52,7 @@ test("SCRUM-908: exact-template backfill leaves extra, missing, duplicate, renam
       { name: "ACCOUNTANT", permissions: legacyPermissions(), isDeleted: true },
       { name: "ACCOUNTANT", permissions: [...legacyPermissions(), "manage:commissions"] },
       { name: "ACCOUNTANT", permissions: legacyPermissions().filter((p) => p !== "view:payroll") },
+      { name: "ACCOUNTANT", permissions: legacyPermissions().map((p) => p === "view:payroll" ? "manage:commissions" : p) },
       { name: "ACCOUNTANT", permissions: [...legacyPermissions(), "view:users"] },
       { name: "ACCOUNTANT", permissions: legacyPermissions().filter((p) => p !== "view:cost_price") },
       { name: "ACCOUNTANT", permissions: legacyPermissions(), isSystemOwnerRole: true },

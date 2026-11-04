@@ -324,6 +324,17 @@ export function assertRoleMayBeStored(permissions: readonly string[]): void {
   }
 }
 
+/** SCRUM-908: frozen ACCOUNTANT template at 644d785d, before commission visibility. */
+export const ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS: readonly string[] = Object.freeze([
+  "view:org", "view:users", "view:vehicles", "view:vehicle_info", "view:vehicle_expenses",
+  "view:customers", "view:sales", "view:expenses", "create:expenses", "edit:expenses",
+  "view:reports", "view:finance", "manage:finance", "view:finance_applications",
+  "confirm:finance_disbursement", "manage:supplier_settlement", "view:cost_price",
+  "view:payroll", "manage:payroll",
+]);
+
+export const ACCOUNTANT_COMMISSIONS_MIGRATION = "accountant-commissions-2026-11-04";
+
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
   {
     name: SYSTEM_OWNER_ROLE_NAME,

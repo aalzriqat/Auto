@@ -3,6 +3,8 @@ import { MutationCtx, internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import {
+  ACCOUNTANT_COMMISSIONS_MIGRATION,
+  ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS,
   DEFAULT_ROLE_TEMPLATES,
   LEGACY_PERMISSIONS,
   PERMISSIONS,
@@ -314,9 +316,8 @@ export const backfillAccountantCostPriceAccess = internalMutation({
 });
 
 /**
- * SCRUM-908 c24538: grant commission visibility to the same legacy ACCOUNTANT cohort as the cost-price repair.
- * The rollout must call this BEFORE backfillAccountantCostPriceAccess: that repair removes the qualifying state.
- * Already-cost-repaired roles are deliberately excluded; widening this predicate would override valid owner restrictions.
+ * SCRUM-908 c24538: repair only the exact pre-change default ACCOUNTANT set, including cost access.
+ * Grant and provenance commit together. Later owner restrictions cannot be undone by a repeated rollout.
  * Same bounded cursor contract as the cost-price repair. `updates` contains tenant identifiers and must not reach public logs.
  */
 export const backfillAccountantCommissionsAccess = internalMutation({
@@ -341,8 +342,17 @@ export const backfillAccountantCommissionsAccess = internalMutation({
     for (const role of page.page) {
       if (role.isDeleted) continue;
       if (normalizeRoleName(role.name) !== accountant) continue;
-      if (!completesSalesWithoutCostAccess(role.permissions)) continue;
-      if (await patchRoleIfNeeded(ctx, role, new Set([PERMISSIONS.VIEW_COMMISSIONS]), updates)) updatedCount++;
+      if (isSystemOwnerRole(role) || role.appliedRoleMigrations?.includes(ACCOUNTANT_COMMISSIONS_MIGRATION)) continue;
+      const held = new Set(role.permissions);
+      if (role.permissions.length !== ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.length || held.size !== role.permissions.length) continue;
+      if (!ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS.every((permission) => held.has(permission))) continue;
+
+      await ctx.db.patch(role._id, {
+        permissions: [...role.permissions, PERMISSIONS.VIEW_COMMISSIONS],
+        appliedRoleMigrations: [...(role.appliedRoleMigrations ?? []), ACCOUNTANT_COMMISSIONS_MIGRATION],
+      });
+      updates.push(`${role.name} (${role.orgId}): +${PERMISSIONS.VIEW_COMMISSIONS}`);
+      updatedCount++;
     }
 
     return { updatedCount, updates, isDone: page.isDone, continueCursor: page.continueCursor };

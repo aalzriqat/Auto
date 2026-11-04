@@ -22,9 +22,9 @@ test("SCRUM-908: commission phase sends the exact cursor contract and publishes 
     return { ok: true, value: answers[calls.length - 1] };
   }, { log: (message) => logs.push(message) });
   expect(calls).toEqual([null, "c1", "c2"].map((cursor) => ["run", "migrateRoles:backfillAccountantCommissionsAccess", JSON.stringify({ cursor, numItems: 100 })]));
-  expect(summary).toBe("3 stored ACCOUNTANT roles granted view:commissions in 3 page call(s). Only the legacy ACCOUNTANT roles eligible for the cost-price repair were changed.");
+  expect(summary).toBe("3 stored ACCOUNTANT roles granted view:commissions in 3 page call(s). Only unmarked roles matching the exact pre-change ACCOUNTANT template were changed.");
   expect(summary).not.toContain(SECRET);
-  expect(logs).toEqual(["Granting view:commissions to legacy ACCOUNTANT roles…", `  ${summary}`]);
+  expect(logs).toEqual(["Granting view:commissions to unmarked default ACCOUNTANT roles…", `  ${summary}`]);
   expect(logs.join()).not.toContain(SECRET);
   expect(run(() => ({ ok: true, value: page() }))).toContain("0 stored ACCOUNTANT roles");
 });

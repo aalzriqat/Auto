@@ -23,7 +23,7 @@
       },
       "action": "migrateRoles.backfillAccountantCommissionsAccess",
       "input": {
-        "roles": "RENAMED_CUSTOM_RESTRICTED_DELETED_REPAIRED_GRANTED"
+        "roles": "EXTRA_MISSING_DUPLICATE_RENAMED_DELETED_OWNER_NO_COST"
       }
     }
   ],
@@ -39,7 +39,7 @@
   ],
   "impl": {
     "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
-    "testName": "SCRUM-908: commission backfill leaves renamed, custom, restricted, deleted, cost-repaired and already-granted roles unchanged"
+    "testName": "SCRUM-908: exact-template backfill leaves extra, missing, duplicate, renamed, deleted and system-owner roles unchanged"
   },
-  "fingerprint": "d95ab6df0989712e09004da48d13555dc0a8a0b77c16fa1a23d73687f8a23612"
+  "fingerprint": "2fe2425f9093c5f7b57593fc7bcc068e64dbaf945cc82978f08ac92e7e4acaa3"
 }

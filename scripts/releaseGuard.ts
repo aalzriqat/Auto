@@ -1505,7 +1505,7 @@ export function runAccountantCostPricePhase(input: {
 export function runAccountantCommissionsPhase(input: Parameters<typeof runAccountantCostPricePhase>[0] & {
   log: (message: string) => void;
 }): string {
-  input.log("Granting view:commissions to legacy ACCOUNTANT roles…");
+  input.log("Granting view:commissions to unmarked default ACCOUNTANT roles…");
   let pages = 0;
   let updated = 0;
   const walk = walkCursorPages(
@@ -1522,7 +1522,7 @@ export function runAccountantCommissionsPhase(input: Parameters<typeof runAccoun
     input.fail(walk.reason);
     throw new Error("The ACCOUNTANT commissions phase refused and its fail handler returned.");
   }
-  const summary = `${updated} stored ACCOUNTANT roles granted view:commissions in ${pages} page call(s). Only the legacy ACCOUNTANT roles eligible for the cost-price repair were changed.`;
+  const summary = `${updated} stored ACCOUNTANT roles granted view:commissions in ${pages} page call(s). Only unmarked roles matching the exact pre-change ACCOUNTANT template were changed.`;
   input.log(`  ${summary}`);
   return summary;
 }

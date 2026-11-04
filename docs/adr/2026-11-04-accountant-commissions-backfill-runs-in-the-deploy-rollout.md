@@ -1,110 +1,82 @@
-# ACCOUNTANT commission visibility and the deploy backfill boundary
+# ACCOUNTANT commission visibility and one-shot rollout provenance
 
 Date: 2026-11-04
 
-Status: implemented under SCRUM-908 c24538 with the task's exact cost-price targeting. Already-cost-repaired roles remain excluded.
+Status: round 2 implementation of SCRUM-908 c24538 and the coordinator-selected exact-template cohort. Local validation is recorded below; deployment and independent seats remain pending.
 
-## Requirement
+## Requirement and production observation
 
-The default ACCOUNTANT receives `view:commissions`. SCRUM-908's management net profit requires commission visibility because it subtracts commissions. SENIOR_ACCOUNTANT already has this permission. The grant does not add `manage:commissions`.
+The default ACCOUNTANT receives `view:commissions` without `manage:commissions`. Management net profit requires commission visibility because it subtracts commissions. SENIOR_ACCOUNTANT already has this permission.
 
-Invariant: grant the default template the visibility the owner approved, while preserving explicit owner restrictions and custom roles in existing organizations.
+The coordinator's read-only production observation on 2026-11-04 found exactly **one** ACCOUNTANT role. Its 19 permissions equal the pre-change default at `644d785d78361c351b6fb9f1166da18bdfd3527d`: it holds `view:cost_price`, payroll access, supplier settlement and finance disbursement, and lacks `view:commissions`. No document id, organization name or production amount is recorded here. This lane did not independently access production.
 
-## Decision for new organizations
+At starting SHA `e6762aca1c744ca1fabb2d000376d90f34dddc9b`, the backfill required missing cost access. It therefore could not reach that role. The former same-cost-predicate decision is superseded by the explicitly selected cohort below.
 
-Add the permission to `DEFAULT_ROLE_TEMPLATES`. `organizations.create` seeds these templates. Existing organizations keep their stored role permissions until an authorized migration or owner action changes them.
+Invariant: grant the authorized exact-template ACCOUNTANT cohort once, record provenance atomically with the grant, and preserve later owner restrictions on marked roles.
 
-`roles.create` and `roles.update` accept commission visibility with accounting and disbursement permissions. `assertRoleMayBeStored` enforces sale-completion plus cost visibility, not a prohibition on commission viewing. The commission section in `RolePermissionsEditor` uses `VIEW_COMMISSIONS` as its base read permission. The inspected permission registry, shared role-save assertion, public role writers, Data Browser role writers and permission-matrix scanner contain no ACCOUNTANT-specific commission refusal to relax. Commission management and payroll self-beneficiary guards retain their existing conditions.
+## Decision
 
-## Migration design conflict
+`ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS` is an `Object.freeze` constant containing the 19 literal permissions from the pre-change default. The template test asserts exact set equality with the current ACCOUNTANT default minus `view:commissions`, including count and uniqueness. The migration never derives its target from a future mutable template.
 
-The requested backfill must reuse the targeting of `backfillAccountantCostPriceAccess` from SCRUM-886 and SCRUM-896, without selecting a renamed, custom or owner-restricted role. That function requires all of:
+A role qualifies only when it is live, its name normalizes to ACCOUNTANT, it is not a system-owner role, it lacks this migration marker, and its permissions contain exactly that frozen set. Order is irrelevant; duplicates, any additional permission, any missing permission, renamed roles and other names do not qualify. A same-length substituted permission is also refused. Historical intent is not inferred: an unmarked role with the identical name and set is the coordinator-authorized target, regardless of how it was originally created.
 
-- The role is live.
-- Its name normalizes to ACCOUNTANT.
-- `completesSalesWithoutCostAccess(role.permissions)` is true.
+The optional older no-cost template is not accepted by this commission phase. The existing cost phase can make such a row match the supported set for a subsequent rollout. The phase does not promise that a row remains excluded after another authorized migration changes its permissions.
 
-The last predicate requires sale-completion authority and **missing** `view:cost_price`. Once the existing cost-price rollout repairs a role, that predicate becomes false. Literal reuse cannot repair already-cost-repaired accountants. Running commissions before cost would cover only legacy accountants still missing cost, and running it after cost would miss those too.
+The `roles` schema adds `appliedRoleMigrations: v.optional(v.array(v.string()))`. Existing documents remain valid without it. One patch appends both `view:commissions` and `accountant-commissions-2026-11-04`, preserving other migration markers. Replays skip marked rows even if an owner has removed commission visibility and restored the old permission set. An uncaught mutation failure rolls back the page; there is no catch that could commit a partial repair.
 
-Removing the missing-cost condition changes the migration's authority. An owner may legally save an ACCOUNTANT that has cost and sale-completion access but lacks commission access. `roles.create` may also create such a custom role. The `roles` schema stores no default-template provenance, customization marker or migration history. Permission-array equality cannot distinguish an untouched default from an owner who intentionally saved that array. `_creationTime` does not record later owner restrictions.
+New organizations stamp the marker in the same ACCOUNTANT insert that seeds the new default grant. This closes new organization → owner restriction → rollout regrant. It records known provenance and does not infer historical intent. The raw admin editor accepts unchanged marker round trips and ordinary permission edits, but refuses marker removal or forgery.
 
-| Candidate | Result |
-| --- | --- |
-| Reuse the exact predicate before the cost-price phase | Selected because the task explicitly requires the same predicates and prohibits a looser one. Already-cost-repaired ACCOUNTANT roles remain unchanged. |
-| Match ACCOUNTANT plus sale completion regardless of cost | Rejected under the current task. Selects valid owner-restricted and recreated custom roles. |
-| Require commission visibility in future role saves | Changes owner authority and does not establish historical provenance. Requires a separate ruling. |
-| Use an explicitly authorized existing-role cohort or a provenance design | Follow-up option for already-cost-repaired roles. Requires a separate scope decision. |
+Alternatives rejected: a sale-completing capability match would admit custom roles, while the original missing-cost match misses the observed role. A new requirement that every role save include commission visibility would remove owner authority. A separate migration component adds infrastructure without improving this existing bounded operator rollout.
 
-`backfillAccountantCommissionsAccess` reuses the exact three predicates above and `patchRoleIfNeeded`. It runs before the cost-price phase. Valid custom or recreated roles have cost access when they hold a completing permission, because current role writers enforce that condition. A renamed role does not match. An owner-restricted role without completion authority does not match either. A later owner restriction of commission visibility leaves cost access in place, so the next rollout does not undo it.
+## Writers, readers and impact boundary
 
-As in the existing cost-price backfill, a pre-rule custom role named ACCOUNTANT with the same invalid missing-cost state is indistinguishable from a legacy default and may match. This change does not broaden that existing cohort. The advisory design review confirmed these limits; it was not a formal seat. The broader objective of granting every historically seeded ACCOUNTANT remains unproven and is not claimed here.
+Inspected production role-write paths: `roles.create/update/remove`, `memberships.syncRolePermissionsToTemplate`, `migrateRoles.fixExistingRoles`, its shared `patchRoleIfNeeded` and backfills, `migrations.backfillPermissions`, organization creation, the two permission patches in `e2eBootstrap`, and the generic admin editor. Inserts create new documents; existing role saves, template sync, legacy backfills, soft deletes and restores use partial patches that omit migration history. The raw admin patch is protected explicitly. Hard deletion destroys the role itself; a subsequently created role has a new identity and no inherited history.
 
-## Rollout contract
+Role readers in `roles.list/get`, `adminUsers.listRolesForOrg` and the raw admin browser return documents without restrictive role return validators. Membership and bootstrap return validators describe explicit permission/name projections rather than raw documents. No such validator rejects the added field. Public `roles.list/get` are executed with marked documents in the regression tests. No reader API or generated module is added, so `convex/_generated/api.d.ts` needs no regeneration.
 
-The bounded `internalMutation` in `migrateRoles.ts` reads one roles page per call, with the cost-price backfill's `numItems`, optional nullable cursor, page clamp of 1 to 500 with default 100, and `{ updatedCount, updates, isDone, continueCursor }` result. It patches only the missing permission. Failures throw so the page rolls back atomically. Committed pages can be retried idempotently, passing `continueCursor` until `isDone`.
+The backfill has no caller-supplied organization or document id. It patches the role it read from its single global page. Tenant controls preserve ownership across two organizations; public commission access tests preserve foreign-organization refusal. This grants read visibility only. It creates no spend, posting, ledger calculation, monetary snapshot or reversal obligation. Reports and UI continue to consume stored role permissions through the existing gates. No UI is edited.
 
-`runAccountantCommissionsPhase` keeps the phase body, including its logging, in tested `scripts/releaseGuard.ts`. The `.mjs` script calls it with the shared CLI runner, logger and deadline after supplier identity repair and before cost-price repair. The shared cursor walker and page parser retain the 10,000-page cap, malformed-evidence refusal, stalled-cursor refusal and counts-only public logs. `updates`, which contains role and organization identifiers, is never copied into output. The page parser was renamed to describe its shared contract; its validation is unchanged.
+## Rollout
 
-The mutation has no caller-supplied organization or document id. Its global scan patches only the role document read from that page. Tenant tests preserve the distinct organizations and permission arrays of both matched roles and leave the foreign custom role unchanged. This operation does not spend, post, reverse or recalculate financial history. No new spending or reversal path is introduced.
+Keep supplier repair → commissions → cost-price → remaining verification. Commissions stays first to minimize rollout wiring changes. The supported cohort already has cost access, so cost-first also leaves it eligible; a backend control calls cost repair before and after commission repair. Correctness for this cohort no longer depends on phase order.
 
-Five predicted failures are tested: cost repair running first; broadening the eligibility predicate; writing a renamed or deleted row; adding the grant twice on replay or failing to bound pages; and leaking private update strings or accepting a page after the deadline.
+Keep one `paginate` call per mutation, default page size 100 and clamp 1–500, optional nullable cursor, and `{ updatedCount, updates, isDone, continueCursor }`. The existing `releaseGuard.ts` helper retains the 10,000-page cap, shared deadline, malformed-result and stalled-cursor refusal. Public output contains counts only. Private `updates` strings are never logged or copied into the release summary. Helper wording now names the exact unmarked template cohort.
 
-## Evidence and limits
+## Verification
 
-Failing-first at base `644d785d78361c351b6fb9f1166da18bdfd3527d`: `convex/utils/permissions.test.ts` failed 1 of 9 tests because ACCOUNTANT lacked `view:commissions`. `convex/accountantCommissionsAccess.scrum908.test.ts` failed 1 of 2 tests for the same missing grant in the role actually seeded through `organizations.create`. The role-create and role-update control accepted the proposed permission combination before the template changed.
+Risk: HIGH, because an automatic rollout grants authority and adds persisted provenance.
 
-After correcting a test fixture's missing required email, removing only the new template grant produced 2 failures and 10 passes across the two new or changed test files. Restoring it made the checks pass. The setup error was not counted as permission evidence.
+Red evidence is committed at `a59e3afdf198c00c67aa1450a84cb37552bc65d0`, on top of the requested starting SHA, before production edits. The updated backend file first produced 6 failures and 1 pass: the exact 19-permission target returned `updatedCount: 0`, custom roles were incorrectly granted, and the bounded-page target produced zero repairs. Adding provenance controls produced 11 failures and 15 passes across the backfill and admin files. The latter also includes expected schema failures for the not-yet-declared field; those are not counted as independent proof of the admin guard.
 
-Before the new migration and phase exports existed, `convex/accountantCommissionsBackfill.scrum908.test.ts` and `scripts/accountantCommissionsRollout.test.ts` failed all 23 registered cases because the exports and wiring were absent. The added mutation then made the tenant guard fail at 569 total mutations and 171 without orgId, versus 568 and 170. The pinned census was updated to those measured values; the 383 analyzed mutations and 15 without an args block are unchanged.
+After implementation, four source mutation controls independently exited 1 with assertion failures: removing the marker replay guard, removing exact membership checking, removing admin metadata protection with the optional schema present, and removing the new-organization marker stamp. Each original file was restored byte-for-byte before the next control.
 
-Commands and results on this local branch:
+Green validation:
 
 ```text
-pnpm exec vitest run convex/utils/permissions.test.ts convex/accountantCommissionsAccess.scrum908.test.ts convex/accountantCommissionsBackfill.scrum908.test.ts convex/roles.test.ts convex/migrateRoles.test.ts convex/consignedSaleCostAccessRule.scrum886.test.ts scripts/accountantCostPriceRollout.test.ts scripts/accountantCommissionsRollout.test.ts scripts/tenantWriteGuard.test.ts scripts/intelligence/permissionMatrix.test.ts scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --testTimeout=20000
-Final run: 230 passed in 11 files, no skips, exit 0. The three suites affected by moving phase logging into the TypeScript helper also passed 112/112.
+pnpm exec vitest run convex/accountantCommissionsAccess.scrum908.test.ts convex/accountantCommissionsBackfill.scrum908.test.ts convex/utils/permissions.test.ts convex/roles.test.ts convex/migrateRoles.test.ts convex/adminData.test.ts convex/consignedSaleCostAccessRule.scrum886.test.ts scripts/accountantCostPriceRollout.test.ts scripts/accountantCommissionsRollout.test.ts scripts/tenantWriteGuard.test.ts scripts/intelligence/permissionMatrix.test.ts scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --testTimeout=20000
+250 passed in 12 files, no skips, exit 0.
 
 pnpm typecheck
-passed; root Next.js config excludes convex/, test-utils/, apps/, packages/ and dealer-worker/ as entry sets
+exit 0. Root config excludes convex/, test-utils/, apps/, packages/ and dealer-worker/ as entry sets.
 
 pnpm typecheck:convex
-passed; includes convex/ and test-utils/, excludes _generated/ as an entry set and does not cover the frontend entry set
+exit 0. Includes convex/ and test-utils/; excludes _generated/ as an entry set. Does not cover the frontend entry set.
 
-pnpm exec eslint convex/utils/permissions.ts convex/utils/permissions.test.ts convex/accountantCommissionsAccess.scrum908.test.ts convex/accountantCommissionsBackfill.scrum908.test.ts convex/migrateRoles.ts scripts/releaseGuard.ts scripts/accountantCommissionsRollout.test.ts scripts/tenantWriteGuard.test.ts scripts/rolloutRelease.mjs
-passed, zero warnings
-
-node scripts/contractSkew/renewBaselineReviewed.mjs --check-evidence --reviewed HEAD --pr-base 644d785d78361c351b6fb9f1166da18bdfd3527d
-945 checked, 0 stale, 0 unrenewed, 0 malformed, 0 missing
-
-node scripts/contractSkew/checkBaselineIdentity.mjs
-945 call identities matched; backend finding identity not checked by this command
+pnpm exec eslint convex/adminData.ts convex/adminData.test.ts convex/migrateRoles.ts convex/organizations.ts convex/schema.ts convex/utils/permissions.ts convex/utils/permissions.test.ts convex/accountantCommissionsBackfill.scrum908.test.ts scripts/releaseGuard.ts scripts/accountantCommissionsRollout.test.ts
+exit 0; zero errors and 13 warnings on unchanged admin source/test lines.
 ```
 
-API declaration regeneration is unnecessary: `api.d.ts` already imports `utils/permissions` and `migrateRoles`, so the added function is inferred through the existing module declaration. Baseline checks are re-run against the committed head before handoff.
+Five predicted failure classes are exercised: wrong cohort or owner identity; duplicate grant or lost marker after owner removal; a role save/backfill/admin patch stripping provenance; failure to advance/bound pages across tenants; and leaking private results or accepting malformed/late rollout evidence. Scenario records and matrix row `SCRUM908-accountant-commission-visibility` bind the controls to c24538. Defect records name the committed red revision containing their actual tests.
 
-Source mutation controls, each restored from the original bytes before the next run:
+These are serial `convex-test`, template and rollout-helper checks. They do not establish Convex platform concurrency, a real deployed schema push, production data mutation, PR #772 management-net reader integration, authenticated browser hunters, CI, SonarCloud or release readiness. No production access, push or deployment was performed. Formal Opus/Codex review seats remain with the coordinator. Advisory design review identified the seed and raw-admin provenance gaps, now covered by tests; it is not a formal seat.
 
-| Function | Mutation | Result |
-| --- | --- | --- |
-| `backfillAccountantCommissionsAccess` handler | Replace the commission grant with an empty set | 5 failed, 2 passed |
-| Same handler | Remove the missing-cost/completion predicate | 2 failed, 5 passed |
-| Same handler | Remove normalized-name predicate | 2 failed, 5 passed |
-| Same handler | Remove deleted-row predicate | 1 failed, 6 passed |
-| `runAccountantCommissionsPhase` | Call the cost-price function instead | 1 failed, 15 passed |
+Committed-head baseline evidence is appended after the final source commit.
 
-Each control ran `pnpm exec vitest run <the corresponding new test file> --maxWorkers=1 --testTimeout=20000` and exited 1. These controls cover both new function bodies and each eligibility conjunct.
+## Official sources checked
 
-Coverage command: the same named-file invocation with only the two new backend suites, `convex/utils/permissions.test.ts` and the two accountant rollout suites, plus `--coverage --coverage.include=convex/migrateRoles.ts --coverage.include=scripts/releaseGuard.ts --coverage.include=convex/utils/permissions.ts --coverage.reporter=lcov --coverage.reporter=json-summary`. Its 69 tests passed, but the command exited 1 because that focused sample covers only 21.4% of the three large legacy files against the unchanged global 90% line threshold. No threshold was lowered. The earlier 230-test coverage sample likewise passed its tests but failed whole-file coverage at 31.95% lines.
+- [Convex schemas and optional fields](https://docs.convex.dev/database/schemas): optional fields admit old documents while schema validation stays enabled.
+- [Convex online migrations](https://stack.convex.dev/migrating-data-with-mutations): evolve schema compatibly and migrate live data in bounded transactions.
+- [Convex pagination](https://docs.convex.dev/database/pagination): continue with returned cursors until `isDone`.
+- [Convex writing data](https://docs.convex.dev/database/writing-data): patch shallow-merges fields, explicit undefined removes fields, and mutations are transactions.
 
-Nonempty LCOV intersected with `git diff --unified=0` measured 26 added executable line points, all covered: 11 in `migrateRoles.ts`, 15 in `releaseGuard.ts`. The template array element has no separate LCOV point and is asserted directly by the template and organization-seeding tests. The `.mjs` adapter adds three unexecuted code lines plus an import specifier. Counting all four as uncovered line points gives a conservative local 26/30, or 86.7%, for that measured set. This is local evidence rather than a SonarCloud verdict; SonarCloud's actual new-code denominator remains unverified. The file-wide threshold failures are not reported as passing coverage gates.
-
-Two initial scenario records used an overlong input token and a token containing spaces. The library guard refused both. Their tokens and fingerprints were corrected, retaining the guard and the scenarios; the library suite then passed 62/62. Eight new permission records cite c24538 and carry no `bugRef`.
-
-These are serial `convex-test`, pure-template and rollout-helper checks. They do not prove platform concurrency, the SCRUM-908 management-net readers on unmerged PR #772, authenticated browser behavior, broader existing-role migration coverage or production state. Formal seats, CI, SonarCloud, a build and release verification remain pending. No live backend, production credential or deployment was accessed.
-
-## Sources checked
-
-- [Convex internal functions](https://docs.convex.dev/functions/internal-functions): use an internal mutation for operator-only migration logic rather than exposing a client endpoint.
-- [Convex pagination](https://docs.convex.dev/database/pagination): pass cursor continuations and use `isDone`, including after short or empty pages.
-- [Convex online migrations](https://stack.convex.dev/migrating-data-with-mutations): process bounded batches and make retries safe. The existing native cursor rollout is sufficient here; a new migration component would not resolve the missing authorization provenance.
-
-The official sources were checked on 2026-11-04. They support the proposed mechanics, not the business decision about which historical roles may receive a grant.
+Checked on 2026-11-04. These sources support the schema, patch and pagination mechanics. They do not prove rollout execution or authorize the business cohort; c24538 and the coordinator's round-2 selection supply that scope. No required official documentation source was unavailable.

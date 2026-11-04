@@ -1344,6 +1344,7 @@ export default defineSchema({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
     name: v.string(), // "OWNER", "SALES", etc.
     permissions: v.array(v.string()),
+    appliedRoleMigrations: v.optional(v.array(v.string())),
     isSystemOwnerRole: v.optional(v.boolean()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),

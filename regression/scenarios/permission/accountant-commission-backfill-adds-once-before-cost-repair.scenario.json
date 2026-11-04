@@ -23,7 +23,7 @@
       },
       "action": "migrateRoles.backfillAccountantCommissionsAccess",
       "input": {
-        "role": "LEGACY_ACCOUNTANT_NO_COST",
+        "role": "EXACT_TEMPLATE_19_WITH_COST",
         "run": "FIRST"
       }
     },
@@ -34,7 +34,7 @@
       },
       "action": "migrateRoles.backfillAccountantCommissionsAccess",
       "input": {
-        "role": "LEGACY_ACCOUNTANT_NO_COST",
+        "role": "EXACT_TEMPLATE_19_WITH_COST",
         "run": "SECOND"
       }
     },
@@ -59,11 +59,19 @@
     {
       "observable": "role.grants",
       "value": "view:commissions+view:cost_price"
+    },
+    {
+      "observable": "role.appliedRoleMigrations",
+      "value": "accountant-commissions-2026-11-04"
     }
   ],
   "impl": {
     "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
-    "testName": "SCRUM-908: commission backfill adds only once to the legacy ACCOUNTANT before cost repair"
+    "testName": "SCRUM-908: exact production-shaped ACCOUNTANT receives commissions and a marker once"
   },
-  "fingerprint": "5d6275f60445b36f7d8c40b461c6f4be32a682cbec215e71218c2fa5429b764a"
+  "fingerprint": "d41036ee2a1665bafef808ddbc66a8ae1eb15405cda67a2b5d57b76eaeeb2777",
+  "bugRef": {
+    "key": "SCRUM-908",
+    "failingFirst": "a59e3afdf198c00c67aa1450a84cb37552bc65d0"
+  }
 }

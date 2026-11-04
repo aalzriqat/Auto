@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, cancelAuthorityFor } from "./permissions";
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS, cancelAuthorityFor } from "./permissions";
 
 describe("cancelAuthorityFor", () => {
   it("CLOSED needs CANCEL_CLOSED_DEAL (not CREATE), plus disbursement authority on v2", () => {
@@ -21,6 +21,15 @@ describe("cancelAuthorityFor", () => {
 });
 
 describe("RBAC Permissions Configuration", () => {
+  it("frozen pre-commission ACCOUNTANT set equals the current template minus commission viewing", () => {
+    const accountant = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "ACCOUNTANT");
+    expect(accountant).toBeDefined();
+    const withoutCommissions = accountant!.permissions.filter((permission) => permission !== PERMISSIONS.VIEW_COMMISSIONS);
+    expect(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS).toHaveLength(19);
+    expect(new Set(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS).size).toBe(19);
+    expect(Object.isFrozen(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS)).toBe(true);
+    expect([...ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS].sort()).toEqual([...withoutCommissions].sort());
+  });
   it.each(["ACCOUNTANT", "SENIOR_ACCOUNTANT"])("%s sees commissions under SCRUM-908 c24538", (name) => {
     const role = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === name);
     expect(role).toBeDefined();
