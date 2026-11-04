@@ -1575,19 +1575,71 @@ const SUPPORTED_SOURCE_FAMILIES: Record<
   },
 };
 
-/** Prove family coverage independently of surviving subledger rows. All cumulative lines count,
- * including REVERSED originals; a net-zero foreign family still cannot certify this subledger.
- * The shared line budget bounds this additional scan, not the full report or close checklist.
- * Batching family journals and events across indexed source types replaces one index range
- * per historical journal. */
+/** Read budget for the per-id provenance strategy: index ranges one reader may spend. Convex allows 4,096
+ * ranges per function and the close checklist runs two readers in one function, so each gets well under half.
+ * https://docs.convex.dev/production/state/limits (harness evidence only: convex-test enforces no limit). */
+export const PROVENANCE_RANGE_BUDGET = 1500;
+/** Document budget for the batch strategy (journals plus events). Convex allows 32,000 documents scanned per
+ * function; the control lines (4,000) and the subledger rows each reader already reads sit on top of this. */
+export const PROVENANCE_BATCH_DOC_BUDGET = 6000;
+
+type ProvenanceVerdict = "OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null;
+
+/** One evaluator for both read strategies, so they cannot disagree. Every distinct control journal must be a
+ * POSTED or REVERSED journal of the family (a reversal is judged by its original), apart from the organization's
+ * own OPENING_BALANCE cutover, and its original's accounting event must be a supported event of the family. */
+async function evaluateControlProvenance(
+  orgId: Id<"organizations">,
+  distinctJournalIds: ReadonlySet<Id<"journalEntries">>,
+  family: ReconciliationControlFamily,
+  getJournal: (id: Id<"journalEntries">) => Promise<Doc<"journalEntries"> | null>,
+  getEvent: (id: Id<"accountingEvents">) => Promise<Doc<"accountingEvents"> | null>,
+): Promise<ProvenanceVerdict> {
+  const config = SUPPORTED_SOURCE_FAMILIES[family];
+  const inFamily = (journal: Doc<"journalEntries"> | null): journal is Doc<"journalEntries"> =>
+    journal !== null && journal.orgId === orgId && config.journalSourceTypes.includes(journal.sourceType ?? "");
+  const neededOriginals = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
+  for (const journalId of distinctJournalIds) {
+    const journal = await getJournal(journalId);
+    if (!inFamily(journal)) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
+    const original = journal.reversalOfJournalEntryId ? await getJournal(journal.reversalOfJournalEntryId) : journal;
+    if (!inFamily(original)) return "SOURCE_FAMILY_UNSUPPORTED";
+    if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) continue;
+    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
+    neededOriginals.set(original._id, original);
+  }
+  for (const original of neededOriginals.values()) {
+    const event = original.accountingEventId ? await getEvent(original.accountingEventId) : null;
+    if (
+      !event ||
+      event.orgId !== orgId ||
+      event.journalEntryId !== original._id ||
+      event.sourceType !== original.sourceType ||
+      event.sourceId !== original.sourceId ||
+      !reconciliationEventFamilySupported(event, family)
+    ) return "SOURCE_FAMILY_UNSUPPORTED";
+  }
+  return null;
+}
+
+/** Prove family coverage independently of surviving subledger rows. All cumulative lines count, including
+ * REVERSED originals; a net-zero foreign family still cannot certify this subledger.
+ *
+ * Two strategies, one evaluator. Per-id (`db.get`) touches only the control journals and their events, so
+ * organization-wide history of other families costs nothing; each journal needs at most three ranges
+ * (journal, original, event), so it is used while 3 x distinct journals fits PROVENANCE_RANGE_BUDGET. Larger
+ * histories batch by indexed source type under one shared PROVENANCE_BATCH_DOC_BUDGET and honestly report
+ * OVER_LIMIT beyond it. Worst case per call: control lines <= SUPPLIER_PAYABLES_RECON_READ_LIMIT documents,
+ * then either <= PROVENANCE_RANGE_BUDGET ranges or <= PROVENANCE_BATCH_DOC_BUDGET documents in <= 6 ranges. */
 async function controlSourceFamilyRefusal(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   controls: ReadonlySet<Id<"chartOfAccounts">>,
   family: ReconciliationControlFamily,
-): Promise<"OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null> {
+): Promise<ProvenanceVerdict> {
   let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
-  const controlLines: Doc<"journalLines">[] = [];
+  const distinctJournalIds = new Set<Id<"journalEntries">>();
   for (const accountId of controls) {
     const lines = await ctx.db
       .query("journalLines")
@@ -1595,81 +1647,50 @@ async function controlSourceFamilyRefusal(
       .take(remaining + 1);
     if (lines.length > remaining) return "OVER_LIMIT";
     remaining -= lines.length;
-    controlLines.push(...lines);
+    for (const line of lines) distinctJournalIds.add(line.journalEntryId);
   }
-  if (controlLines.length === 0) return null;
+  if (distinctJournalIds.size === 0) return null;
 
-  const distinctJournalIds = new Set<Id<"journalEntries">>();
-  for (const line of controlLines) {
-    distinctJournalIds.add(line.journalEntryId);
+  if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
+    const journals = new Map<Id<"journalEntries">, Doc<"journalEntries"> | null>();
+    return evaluateControlProvenance(
+      orgId, distinctJournalIds, family,
+      async (id) => {
+        if (!journals.has(id)) journals.set(id, await ctx.db.get(id));
+        return journals.get(id) ?? null;
+      },
+      (id) => ctx.db.get(id),
+    );
   }
 
   const config = SUPPORTED_SOURCE_FAMILIES[family];
-
-  // Batch-load candidate journals for the family's supported sourceTypes.
-  // One index range per sourceType replaces one range per historical journal.
+  let docsLeft = PROVENANCE_BATCH_DOC_BUDGET;
   const journalsById = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
   for (const sourceType of config.journalSourceTypes) {
     const batch = await ctx.db
       .query("journalEntries")
       .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
-      .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
-    if (batch.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return "OVER_LIMIT";
-    for (const journal of batch) {
-      journalsById.set(journal._id, journal);
-    }
+      .take(docsLeft + 1);
+    if (batch.length > docsLeft) return "OVER_LIMIT";
+    docsLeft -= batch.length;
+    for (const journal of batch) journalsById.set(journal._id, journal);
   }
-
-  // Any journal on the control account not in the family's supported sourceTypes is unsupported.
-  const neededOriginals = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
-  for (const journalId of distinctJournalIds) {
-    const journal = journalsById.get(journalId);
-    if (!journal || journal.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
-    if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
-    const original = journal.reversalOfJournalEntryId
-      ? journalsById.get(journal.reversalOfJournalEntryId)
-      : journal;
-    if (!original || original.orgId !== orgId) return "SOURCE_FAMILY_UNSUPPORTED";
-    if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) {
-      continue;
-    }
-    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
-    neededOriginals.set(original._id, original);
-  }
-
-  if (neededOriginals.size === 0) return null;
-
-  // Batch-load candidate accounting events for the family's supported event sourceTypes.
   const eventsById = new Map<Id<"accountingEvents">, Doc<"accountingEvents">>();
   for (const sourceType of config.eventSourceTypes) {
     const batch = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType))
-      .take(SUPPLIER_PAYABLES_RECON_READ_LIMIT + 1);
-    if (batch.length > SUPPLIER_PAYABLES_RECON_READ_LIMIT) return "OVER_LIMIT";
-    for (const event of batch) {
-      eventsById.set(event._id, event);
-    }
+      .take(docsLeft + 1);
+    if (batch.length > docsLeft) return "OVER_LIMIT";
+    docsLeft -= batch.length;
+    for (const event of batch) eventsById.set(event._id, event);
   }
-
-  for (const original of neededOriginals.values()) {
-    if (!original.accountingEventId) return "SOURCE_FAMILY_UNSUPPORTED";
-    const event = eventsById.get(original.accountingEventId);
-    if (!event) return "SOURCE_FAMILY_UNSUPPORTED";
-    if (
-      event.orgId !== orgId ||
-      event.journalEntryId !== original._id ||
-      event.sourceType !== original.sourceType ||
-      event.sourceId !== original.sourceId ||
-      !reconciliationEventFamilySupported(event, family)
-    ) {
-      return "SOURCE_FAMILY_UNSUPPORTED";
-    }
-  }
-
-  return null;
+  return evaluateControlProvenance(
+    orgId, distinctJournalIds, family,
+    (id) => Promise.resolve(journalsById.get(id) ?? null),
+    (id) => Promise.resolve(eventsById.get(id) ?? null),
+  );
 }
-
 async function addSystemAccount(
   ctx: QueryCtx,
   orgId: Id<"organizations">,

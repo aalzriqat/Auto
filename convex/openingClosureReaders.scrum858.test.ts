@@ -10,7 +10,7 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import schema from "./schema";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
@@ -20,6 +20,8 @@ import { computeCloseChecklist } from "./accountingPeriods";
 import {
   computeEmployeeAdvancesReconciliation,
   computeSupplierRecoverablesReconciliation,
+  PROVENANCE_BATCH_DOC_BUDGET,
+  PROVENANCE_RANGE_BUDGET,
 } from "./accountingReports";
 
 const LABEL_EN = "Unexplained opening-balance reconciliation difference";
@@ -843,6 +845,167 @@ test("an organization with no opening history gets no opening warning from a que
 }));
 
 
+/** Seeds pairs native advances, each issued once and reversed once, so 2 * pairs journals sit on the advances account. */
+async function seedReversedAdvancePairs(
+  t: Seed["t"],
+  orgId: Seed["orgId"],
+  employeeId: Seed["employeeId"],
+  advancesAccountId: Id<"chartOfAccounts">,
+  actorId: Id<"users">,
+  pairs: number,
+  tag: string,
+) {
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    for (let i = 0; i < pairs; i++) {
+      const advId = await ctx.db.insert("employeeAdvances", {
+        orgId,
+        userId: employeeId,
+        amountMinor: 1000,
+        recoveredMinor: 1000,
+        currency: "JOD",
+        date: now,
+        status: "RECOVERED",
+        isDeleted: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const forwardEventId = await ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "EMPLOYEE_ADVANCE_PAID",
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        eventVersion: 1,
+        idempotencyKey: `${tag}-fwd-event-${i}`,
+        occurredAt: now,
+        accountingDate: now,
+        currency: "JOD",
+        payload: {},
+        status: "REVERSED",
+        createdBy: actorId,
+        createdAt: now,
+      });
+
+      const forwardJournalId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: forwardEventId,
+        journalNumber: `JE-${tag}-F${i}`,
+        accountingDate: now,
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        category: "SYSTEM",
+        memo: `Pilot advance ${i}`,
+        status: "REVERSED",
+        currency: "JOD",
+        postedBy: actorId,
+        postedAt: now,
+        createdAt: now,
+      });
+
+      await ctx.db.patch(forwardEventId, { journalEntryId: forwardJournalId });
+
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId: forwardJournalId,
+        lineNumber: 1,
+        accountId: advancesAccountId,
+        debitMinor: 1000,
+        creditMinor: 0,
+        currency: "JOD",
+        scale: 2,
+        accountingDate: now,
+      });
+
+      // Reversal
+      const revEventId = await ctx.db.insert("accountingEvents", {
+        orgId,
+        eventType: "EMPLOYEE_ADVANCE_PAID",
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        eventVersion: 1,
+        idempotencyKey: `${tag}-rev-event-${i}`,
+        occurredAt: now,
+        accountingDate: now,
+        currency: "JOD",
+        payload: {},
+        status: "POSTED",
+        reversalOfEventId: forwardEventId,
+        createdBy: actorId,
+        createdAt: now,
+      });
+
+      const revJournalId = await ctx.db.insert("journalEntries", {
+        orgId,
+        accountingEventId: revEventId,
+        journalNumber: `JE-${tag}-R${i}`,
+        accountingDate: now,
+        sourceType: "employeeAdvances",
+        sourceId: String(advId),
+        category: "REVERSAL",
+        memo: `Pilot reversal ${i}`,
+        status: "POSTED",
+        currency: "JOD",
+        reversalOfJournalEntryId: forwardJournalId,
+        postedBy: actorId,
+        postedAt: now,
+        createdAt: now,
+      });
+
+      await ctx.db.patch(revEventId, { journalEntryId: revJournalId });
+
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId: revJournalId,
+        lineNumber: 1,
+        accountId: advancesAccountId,
+        debitMinor: 0,
+        creditMinor: 1000,
+        currency: "JOD",
+        scale: 2,
+        accountingDate: now,
+      });
+    }
+  });
+}
+
+/** Seeds count journals of one source type that touch no account at all: organization-wide history of another family. */
+async function seedUnrelatedJournals(t: Seed["t"], orgId: Seed["orgId"], actorId: Id<"users">, sourceType: string, count: number) {
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    for (let i = 0; i < count; i++) {
+      await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: `JE-UNREL-${sourceType}-${i}`, accountingDate: now, sourceType, sourceId: `unrelated-${i}`,
+        category: "SYSTEM", memo: "Unrelated history", status: "POSTED", currency: "JOD", postedBy: actorId, postedAt: now, createdAt: now,
+      });
+    }
+  });
+}
+/** Counts the reads one Convex function makes: every take/first/unique/get/collect is one index range, and each
+ * returned document is one document scanned. Convex allows 4,096 ranges and 32,000 documents per function
+ * (https://docs.convex.dev/production/state/limits). Harness evidence only: convex-test enforces neither limit. */
+const makeObserver = () => {
+  const reads = { documents: 0, ranges: 0 };
+  const observed = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get(object, key, receiver) {
+        const member: unknown = Reflect.get(object, key, receiver);
+        if (typeof member !== "function") return member;
+        return (...args: unknown[]) => {
+          const value: unknown = Reflect.apply(member, object, args);
+          if (["take", "first", "unique", "get", "collect"].includes(String(key))) {
+            reads.ranges += 1;
+            return Promise.resolve(value).then((result) => {
+              reads.documents += Array.isArray(result) ? result.length : 1;
+              return result;
+            });
+          }
+          return value !== null && typeof value === "object" ? observed(value) : value;
+        };
+      },
+    });
+  return { reads, observed };
+};
 test("pilot-scale native advance and recovery history with reversals fits within Convex read budget", () => withFrozenScheduler(async () => {
   const seed = await fixture();
   const { t, owner, orgId, employeeId, periodId } = seed;
@@ -870,142 +1033,7 @@ test("pilot-scale native advance and recovery history with reversals fits within
   await settleScheduledOnly(t, orgId);
 
   // Seed 1,024 pairs of (native advance + reversal) = 2,048 journals on advances
-  await t.run(async (ctx) => {
-    const now = Date.now();
-    for (let i = 0; i < 1024; i++) {
-      const advId = await ctx.db.insert("employeeAdvances", {
-        orgId,
-        userId: employeeId,
-        amountMinor: 1000,
-        recoveredMinor: 1000,
-        currency: "JOD",
-        date: now,
-        status: "RECOVERED",
-        isDeleted: true,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      const forwardEventId = await ctx.db.insert("accountingEvents", {
-        orgId,
-        eventType: "EMPLOYEE_ADVANCE_PAID",
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
-        eventVersion: 1,
-        idempotencyKey: `pilot-fwd-event-${i}`,
-        occurredAt: now,
-        accountingDate: now,
-        currency: "JOD",
-        payload: {},
-        status: "REVERSED",
-        createdBy: actor._id,
-        createdAt: now,
-      });
-
-      const forwardJournalId = await ctx.db.insert("journalEntries", {
-        orgId,
-        accountingEventId: forwardEventId,
-        journalNumber: `JE-PFWD-${i}`,
-        accountingDate: now,
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
-        category: "SYSTEM",
-        memo: `Pilot advance ${i}`,
-        status: "REVERSED",
-        currency: "JOD",
-        postedBy: actor._id,
-        postedAt: now,
-        createdAt: now,
-      });
-
-      await ctx.db.patch(forwardEventId, { journalEntryId: forwardJournalId });
-
-      await ctx.db.insert("journalLines", {
-        orgId,
-        journalEntryId: forwardJournalId,
-        lineNumber: 1,
-        accountId: advances._id,
-        debitMinor: 1000,
-        creditMinor: 0,
-        currency: "JOD",
-        scale: 2,
-        accountingDate: now,
-      });
-
-      // Reversal
-      const revEventId = await ctx.db.insert("accountingEvents", {
-        orgId,
-        eventType: "EMPLOYEE_ADVANCE_PAID",
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
-        eventVersion: 1,
-        idempotencyKey: `pilot-rev-event-${i}`,
-        occurredAt: now,
-        accountingDate: now,
-        currency: "JOD",
-        payload: {},
-        status: "POSTED",
-        reversalOfEventId: forwardEventId,
-        createdBy: actor._id,
-        createdAt: now,
-      });
-
-      const revJournalId = await ctx.db.insert("journalEntries", {
-        orgId,
-        accountingEventId: revEventId,
-        journalNumber: `JE-PREV-${i}`,
-        accountingDate: now,
-        sourceType: "employeeAdvances",
-        sourceId: String(advId),
-        category: "REVERSAL",
-        memo: `Pilot reversal ${i}`,
-        status: "POSTED",
-        currency: "JOD",
-        reversalOfJournalEntryId: forwardJournalId,
-        postedBy: actor._id,
-        postedAt: now,
-        createdAt: now,
-      });
-
-      await ctx.db.patch(revEventId, { journalEntryId: revJournalId });
-
-      await ctx.db.insert("journalLines", {
-        orgId,
-        journalEntryId: revJournalId,
-        lineNumber: 1,
-        accountId: advances._id,
-        debitMinor: 0,
-        creditMinor: 1000,
-        currency: "JOD",
-        scale: 2,
-        accountingDate: now,
-      });
-    }
-  });
-
-  // Harness read counter observer
-  const makeObserver = () => {
-    const reads = { documents: 0, ranges: 0 };
-    const observed = <T extends object>(target: T): T =>
-      new Proxy(target, {
-        get(object, key, receiver) {
-          const member: unknown = Reflect.get(object, key, receiver);
-          if (typeof member !== "function") return member;
-          return (...args: unknown[]) => {
-            const value: unknown = Reflect.apply(member, object, args);
-            if (["take", "first", "unique", "get", "collect"].includes(String(key))) {
-              reads.ranges += 1;
-              return Promise.resolve(value).then((result) => {
-                reads.documents += Array.isArray(result) ? result.length : 1;
-                return result;
-              });
-            }
-            return value !== null && typeof value === "object" ? observed(value) : value;
-          };
-        },
-      });
-    return { reads, observed };
-  };
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 1024, "pilot");
 
   // 1. Employee advances reader
   const obsAdv = makeObserver();
@@ -1036,3 +1064,75 @@ test("pilot-scale native advance and recovery history with reversals fits within
   expect(obsChecklist.reads.ranges).toBeLessThan(4096);
   expect(obsChecklist.reads.documents).toBeLessThan(32000);
 }), 60_000);
+
+// SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide
+// history of other families must never make a small control history unavailable, and the scan must stay inside
+// an explicit, stated read budget whichever strategy it picks. Observed counts are harness evidence only.
+async function provenanceSeed() {
+  const seed = await fixture();
+  const accounts = await seed.owner.query(api.chartOfAccounts.list, { orgId: seed.orgId, activeOnly: true });
+  const advances = accounts.find((a) => a.systemKey === "EMPLOYEE_ADVANCES");
+  if (!advances) throw new Error("Missing system accounts");
+  const actor = await seed.t.run(async (ctx) => ctx.db.query("users").first());
+  if (!actor) throw new Error("Missing actor");
+  return { ...seed, advancesId: advances._id, actor };
+}
+
+test("unrelated organization-wide expense history never makes the supplier recoverables reader unavailable", () => withFrozenScheduler(async () => {
+  const { t, orgId, actor } = await provenanceSeed();
+  await seedUnrelatedJournals(t, orgId, actor._id, "expenses", 4001);
+  const result = await t.run((ctx) => computeSupplierRecoverablesReconciliation(ctx, orgId, undefined));
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+}), 120_000);
+
+test("unrelated organization-wide payroll history never makes the employee advances reader unavailable", () => withFrozenScheduler(async () => {
+  const { t, orgId, actor } = await provenanceSeed();
+  await seedUnrelatedJournals(t, orgId, actor._id, "payrollItems", 4001);
+  const result = await t.run((ctx) => computeEmployeeAdvancesReconciliation(ctx, orgId, undefined));
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+}), 120_000);
+
+test("the per-id provenance strategy stays inside its stated range budget", () => withFrozenScheduler(async () => {
+  const { t, orgId, employeeId, advancesId, actor } = await provenanceSeed();
+  const pairs = Math.floor(PROVENANCE_RANGE_BUDGET / 3 / 2); // 2 journals per pair, 3 ranges per journal at worst
+  await seedReversedAdvancePairs(t, orgId, employeeId, advancesId, actor._id, pairs, "perid");
+  const obs = makeObserver();
+  const result = await t.run((ctx) => computeEmployeeAdvancesReconciliation({ ...ctx, db: obs.observed(ctx.db) }, orgId, undefined));
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  // Provenance ranges <= budget; the rest of the reader (rows, accounts, queued-posting probe, balances) is a handful.
+  expect(obs.reads.ranges).toBeLessThanOrEqual(PROVENANCE_RANGE_BUDGET + 25);
+}), 120_000);
+
+test("the batch provenance strategy reads at most its stated document budget and then refuses honestly", () => withFrozenScheduler(async () => {
+  const { t, orgId, employeeId, advancesId, actor } = await provenanceSeed();
+  await seedReversedAdvancePairs(t, orgId, employeeId, advancesId, actor._id, 600, "batch"); // 1,200 control journals: batch strategy
+  await seedUnrelatedJournals(t, orgId, actor._id, "payrollItems", PROVENANCE_BATCH_DOC_BUDGET);
+  const obs = makeObserver();
+  const result = await t.run((ctx) => computeEmployeeAdvancesReconciliation({ ...ctx, db: obs.observed(ctx.db) }, orgId, undefined));
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT" });
+  // control lines (1,200) + subledger rows (600) + the batch budget plus the one probe document; never the whole table.
+  expect(obs.reads.documents).toBeLessThanOrEqual(1_200 + 600 + PROVENANCE_BATCH_DOC_BUDGET + 1 + 50);
+  expect(obs.reads.ranges).toBeLessThan(100);
+}), 120_000);
+
+test.each([
+  { strategy: "per-id", pairs: 2 },
+  { strategy: "batch", pairs: 400 },
+])("a net-zero foreign-family journal on the control account still refuses (%o)", ({ pairs }) => withFrozenScheduler(async () => {
+  const { t, orgId, employeeId, advancesId, actor } = await provenanceSeed();
+  await seedReversedAdvancePairs(t, orgId, employeeId, advancesId, actor._id, pairs, "foreign");
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    const journalEntryId = await ctx.db.insert("journalEntries", {
+      orgId, journalNumber: "JE-FOREIGN-1", accountingDate: now, sourceType: "collectionPayments", sourceId: "foreign-1",
+      category: "SYSTEM", memo: "Foreign family", status: "REVERSED", currency: "JOD", postedBy: actor._id, postedAt: now, createdAt: now,
+    });
+    for (const [lineNumber, debitMinor, creditMinor] of [[1, 500, 0], [2, 0, 500]] as const) {
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber, accountId: advancesId, debitMinor, creditMinor, currency: "JOD", scale: 2, accountingDate: now,
+      });
+    }
+  });
+  const result = await t.run((ctx) => computeEmployeeAdvancesReconciliation(ctx, orgId, undefined));
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "SOURCE_FAMILY_UNSUPPORTED" });
+}), 120_000);
