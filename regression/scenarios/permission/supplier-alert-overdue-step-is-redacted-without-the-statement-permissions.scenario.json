@@ -1,0 +1,64 @@
+{
+  "id": "supplier-alert-overdue-step-is-redacted-without-the-statement-permissions",
+  "fingerprint": "4c242fe2c1ddd5a10118a517490d850583622ead2cf58f07dae95c4bc068c949",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum901-pr765-finding",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system-cron",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "agreedDue": "-7d",
+        "amountDue": "7654",
+        "recipientRole": "MANAGE_FINANCE_ONLY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "type",
+      "value": "SUPPLIER_OBLIGATION_OVERDUE"
+    },
+    {
+      "observable": "daysOverdue",
+      "value": 7
+    },
+    {
+      "observable": "amountKey",
+      "value": "ABSENT"
+    },
+    {
+      "observable": "ownerAmount",
+      "value": "7654.000"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "the overdue step is redacted the same way and keeps its days overdue"
+  },
+  "matrixRow": "SCRUM-869-DUE-ALERTS",
+  "bugRef": {
+    "key": "SCRUM-901",
+    "failingFirst": "ecc0808d201d1b13d76f1bda5287fb70cfc18a14"
+  }
+}
