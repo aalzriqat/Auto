@@ -340,7 +340,12 @@ describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomer
   }
 
   /** Seeds a receivable with the given allocations, transfers 17_000_000 of it to financing, returns the result row. */
-  async function transferWith(tag: string, vin: string, allocations: { amountMinor: number; status: "ACTIVE" | "REVERSED" }[]) {
+  async function transferWith(
+    tag: string,
+    vin: string,
+    allocations: { amountMinor: number; status: "ACTIVE" | "REVERSED" }[],
+    financedAmountMinor = 17_000_000
+  ) {
     const seed = await seedDealer(tag);
     const { t, orgId } = seed;
     const ids = await seedReceivable(t, seed, vin);
@@ -352,7 +357,7 @@ describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomer
         orgId,
         saleId: ids.saleId,
         saleAmountMinor: 20_000_000,
-        financedAmountMinor: 17_000_000,
+        financedAmountMinor,
       })
     );
     return await t.run((ctx) => ctx.db.get(ids.receivableDocumentId));
@@ -373,5 +378,21 @@ describe("getActiveReceivableAllocations (via transferFinancedAmountFromCustomer
     const receivable = await transferWith("t5b", "IDXT5BVEH0001", [{ amountMinor: 2_000_000, status: "REVERSED" }]);
 
     expect(receivable?.status).toBe("OPEN");
+  });
+
+  test("an ACTIVE allocation equal to the non-financed balance makes the customer receivable PAID", async () => {
+    // 20,000,000 sale − 17,000,000 financed leaves 3,000,000, which the customer already paid in full.
+    const receivable = await transferWith("t5c", "IDXT5CVEH0001", [{ amountMinor: 3_000_000, status: "ACTIVE" }]);
+
+    expect(receivable?.originalAmountMinor).toBe(3_000_000);
+    expect(receivable?.status).toBe("PAID");
+  });
+
+  test("a fully financed sale leaves nothing for the customer to owe, so the customer receivable is PAID", async () => {
+    // 20,000,000 sale − 20,000,000 financed leaves 0 and no allocation exists.
+    const receivable = await transferWith("t5d", "IDXT5DVEH0001", [], 20_000_000);
+
+    expect(receivable?.originalAmountMinor).toBe(0);
+    expect(receivable?.status).toBe("PAID");
   });
 });
