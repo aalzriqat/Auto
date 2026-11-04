@@ -1,0 +1,93 @@
+{
+  "id": "customer-relations-withhold-vehicle-cost-from-roles-without-cost-permission",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOMERSONLY",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "CUSTOMER_WITH_QUOTE_ON_SOURCED_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "COSTREADER",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "CUSTOMER_WITH_QUOTE_ON_SOURCED_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "SYSOWNER",
+        "org": "A"
+      },
+      "action": "customers.getRelations",
+      "input": {
+        "customerId": "CUSTOMER_WITH_QUOTE_ON_SOURCED_VEHICLE_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "EXPENSESONLY",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {
+        "orgId": "ORG_A_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOMERSONLY",
+        "org": "A"
+      },
+      "action": "customers.list",
+      "input": {
+        "orgId": "ORG_A_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "quoteVehicle.costFieldsAbsentWithoutCostPermission",
+      "value": true
+    },
+    {
+      "observable": "quoteVehicle.displayFieldsStillServed",
+      "value": true
+    },
+    {
+      "observable": "positiveControl.costPermissionAndOwnerReceiveCost",
+      "value": true
+    },
+    {
+      "observable": "siblingReads.noVehicleCostFigure",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-relation-vehicle-cost",
+  "impl": {
+    "file": "convex/referenceReadOwnership.test.ts",
+    "testName": "a customers-only reader never receives vehicle cost or finance fields through a quote relation"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "e65f2527e54853cbe837b0abb5d836aefb74f271e77a18213f8b53dfee5f3878"
+}

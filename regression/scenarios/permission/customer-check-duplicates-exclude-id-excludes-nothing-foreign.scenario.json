@@ -1,0 +1,59 @@
+{
+  "id": "customer-check-duplicates-exclude-id-excludes-nothing-foreign",
+  "domain": "permission",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "customers.checkDuplicates",
+      "input": {
+        "excludeCustomerId": "OTHER_ORG_CUSTOMER_ID"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "customers.checkDuplicates",
+      "input": {
+        "excludeCustomerId": "DELETED_CUSTOMER_ID"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "foreignMissingDeletedId.sameOrgMatchKept",
+      "value": true
+    },
+    {
+      "observable": "foreignData.leaked",
+      "value": false
+    },
+    {
+      "observable": "positiveControl.sameOrgIdExcludesMatch",
+      "value": true
+    }
+  ],
+  "matrixRow": "SCRUM811-customer-exclude-id",
+  "impl": {
+    "file": "convex/customersReferenceOwnership.test.ts",
+    "testName": "customers.checkDuplicates excludeCustomerId: a foreign, missing or soft-deleted id excludes nothing and leaks nothing, a same-org id excludes that customer"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum-811-reference-ownership",
+    "firstSeen": "2026-11-01"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "fingerprint": "daaca8d1087f116104b9b8913e895f0066da70ca5b9a0eaae3382b998933044e"
+}
