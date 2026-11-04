@@ -49,7 +49,12 @@ export function renderNotification(
 
   const key = toPascalCase(type as NotificationType);
   const titleTemplate = (strings as Record<string, string>)[`Notif_${key}_Title`];
-  const messageTemplate = (strings as Record<string, string>)[`Notif_${key}_Message`];
+  const dictionary = strings as Record<string, string>;
+  // A notification may omit a value it must not disclose (SCRUM-901: the supplier alert's `amount` for a recipient without
+  // the statement permissions). Where the dictionary has a `_MessageNoAmount` sentence, that sentence is used when the
+  // key is absent, so no raw {amount} placeholder is ever shown.
+  const messageTemplate =
+    ("amount" in values ? undefined : dictionary[`Notif_${key}_MessageNoAmount`]) ?? dictionary[`Notif_${key}_Message`];
 
   return {
     title: titleTemplate ? fill(titleTemplate, values) : type,
