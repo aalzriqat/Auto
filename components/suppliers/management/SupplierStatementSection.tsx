@@ -145,9 +145,9 @@ export function SupplierStatementView({ statement }: Readonly<{ statement: Suppl
   const translate = useTranslate();
   if (statement === undefined) {
     return (
-      <p role="status" className="py-4 text-center text-sm text-muted-foreground">
+      <output className="block py-4 text-center text-sm text-muted-foreground">
         {translate("SuppliersStmtLoading")}
-      </p>
+      </output>
     );
   }
   return (
@@ -273,9 +273,9 @@ export function SupplierSettledView({ settled }: Readonly<{ settled: SupplierSet
   const translate = useTranslate();
   if (settled === undefined) {
     return (
-      <p role="status" className="py-4 text-center text-sm text-muted-foreground">
+      <output className="block py-4 text-center text-sm text-muted-foreground">
         {translate("SuppliersStmtLoading")}
-      </p>
+      </output>
     );
   }
   return (
@@ -330,9 +330,9 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
       <h3 id="supplier-recon-title" className="text-lg font-semibold">
         {translate("SuppliersStmtReconTitle")}
       </h3>
-      <p role="status" className="text-sm">
+      <output className="block text-sm">
         {verdict}
-      </p>
+      </output>
       {recon.status === "AVAILABLE" && (
         <dl className="space-y-1 text-sm">
           {recon.currencies.map((c) => (
