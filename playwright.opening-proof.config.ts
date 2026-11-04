@@ -25,6 +25,6 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], storageState: "playwright/.auth/user.json" } }],
   // The preview deploy key is used only by the trusted pre-batch command, never the app.
   webServer: base.webServer && !Array.isArray(base.webServer)
-    ? { ...base.webServer, env: { ...base.webServer.env, CONVEX_DEPLOY_KEY: "" } }
+    ? { ...base.webServer, env: { ...base.webServer.env, CONVEX_DEPLOY_KEY: "", CONVEX_SELF_HOSTED_ADMIN_KEY: "" } }
     : base.webServer,
 });
