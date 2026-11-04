@@ -39,4 +39,33 @@ describe("SCRUM-907 sourced cost mirror", () => {
       expect(edits.find(edit => edit.type === "UPDATE")?.payload).toMatchObject({ sourceCost: 9900, purchasePrice: 9900 });
     });
   });
+  test("an old pending supplier-cost request applies and audits the mirror at approval", async () => {
+    const { t, orgId, vehicleId, userId, asUser } = await setup();
+    const requestId = await t.run(ctx => ctx.db.insert("vehicleEdits", {
+      orgId, vehicleId, requestedBy: userId, type: "UPDATE", payload: { sourceCost: 9900 }, status: "PENDING", createdAt: Date.now(),
+    }));
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+    await t.run(async ctx => {
+      expect(await ctx.db.get(vehicleId)).toMatchObject({ sourceCost: 9900, purchasePrice: 9900 });
+      expect((await ctx.db.get(requestId))?.payload).toMatchObject({ sourceCost: 9900, purchasePrice: 9900 });
+    });
+  });
+
+  test("posted acquisition still locks supplier cost and the mirror", async () => {
+    const fixture = await setup();
+    await seedAcquisition(fixture);
+    await expect(fixture.asUser.mutation(api.vehicles.update, {
+      orgId: fixture.orgId, vehicleId: fixture.vehicleId, sourceCost: 9900,
+    })).rejects.toThrow(/VEHICLE_COST_POSTED/);
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.vehicleId))).toMatchObject({ sourceCost: 10250, purchasePrice: 10250 });
+  });
+
 });
+
+async function seedAcquisition({ t, orgId, userId, vehicleId }: Awaited<ReturnType<typeof setup>>) {
+  await t.run(ctx => ctx.db.insert("accountingEvents", {
+    orgId, eventType: "VEHICLE_ACQUIRED", sourceType: "vehicles", sourceId: vehicleId,
+    eventVersion: 1, idempotencyKey: `vehicle_acquired_${vehicleId}`, occurredAt: Date.now(), accountingDate: Date.now(),
+    currency: "JOD", payload: {}, status: "POSTED", createdBy: userId, createdAt: Date.now(),
+  }));
+}
