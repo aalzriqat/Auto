@@ -76,6 +76,7 @@ const ALLOWED_OPT_OUTS: readonly string[] = [
   "convex/supplierPayableSettlement.test.ts",
   "convex/supplierPayablesReconciliation.scrum651.test.ts",
   "convex/supplierReceivables.test.ts",
+  "convex/supplierSettlementAllocation.scrum869.test.ts",
 ];
 
 const MUST_RUN_WITH_REAL_SWITCH = [

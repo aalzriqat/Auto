@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "contact",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "displayName",
       "kind": "TYPE_UNKNOWN",
@@ -35,7 +35,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "expectedVersion",
       "kind": "TYPE_UNKNOWN",
@@ -50,7 +50,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "legalName",
       "kind": "TYPE_UNKNOWN",
@@ -65,7 +65,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -80,7 +80,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "reason",
       "kind": "TYPE_UNKNOWN",
@@ -95,7 +95,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "supplierId",
       "kind": "TYPE_UNKNOWN",
@@ -110,7 +110,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "taxId",
       "kind": "TYPE_UNKNOWN",
@@ -125,7 +125,7 @@
     {
       "surface": "web",
       "file": "components/suppliers/management/SupplierDetailScreen.tsx",
-      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:227:28",
+      "callSiteId": "components/suppliers/management/SupplierDetailScreen.tsx:228:28",
       "functionId": "suppliers:update",
       "contractPath": "taxJurisdiction",
       "kind": "TYPE_UNKNOWN",
