@@ -229,17 +229,33 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
     expect(byCurrency).toEqual({ JOD: 9_500_000, USD: 10_000 });
   });
 
-  test("the newest settlements come first", async () => {
+  test("rows come newest-created first, and a truncated family keeps the newest-created rows", async () => {
     const s = await seed("sh3");
-    await addPayable(s, { status: "PAID", amountPaid: 9_500, updatedAt: NOW - 3 * DAY });
-    await addPayable(s, { status: "PAID", amountPaid: 9_500, amountDue: 9_500, updatedAt: NOW - DAY });
-    await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 1_000, updatedAt: NOW - 2 * DAY });
+    const first = await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const second = await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 1_000 });
+    const third = await addPayable(s, { status: "PAID", amountPaid: 9_500 });
     const r = await settledOf(s);
-    expect(r.payable.rows.map((x: { lastChangedAt: number }) => x.lastChangedAt)).toEqual([
-      NOW - DAY,
-      NOW - 2 * DAY,
-      NOW - 3 * DAY,
-    ]);
+    expect(r.payable.rows.map((x: { id: string }) => x.id)).toEqual([third, second, first]);
+
+    const big = await seed("sh3b");
+    const ids: string[] = [];
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1)
+      ids.push(await addPayable(big, { status: "PAID", amountPaid: 9_500 }));
+    const truncated = await settledOf(big);
+    const kept = truncated.payable.rows.map((x: { id: string }) => x.id);
+    expect(kept).toHaveLength(STATEMENT_FAMILY_LIMIT);
+    expect(kept).not.toContain(ids[0]); // the oldest-created row is the one left out
+    expect(kept[0]).toBe(ids[ids.length - 1]);
+  });
+
+  test("a part-paid disputed payable or receivable still shows the cash already moved", async () => {
+    const s = await seed("sh3c");
+    await addPayable(s, { status: "DISPUTED", amountPaid: 2_000 });
+    await addReceivable(s, { status: "DISPUTED", amountReceived: 500 });
+    await addPayable(s, { status: "DISPUTED" }); // disputed with nothing paid: not history
+    const r = await settledOf(s);
+    expect(r.payable.rows.map((x: { settledMinor: number }) => x.settledMinor)).toEqual([2_000_000]);
+    expect(r.receivable.rows.map((x: { settledMinor: number }) => x.settledMinor)).toEqual([500_000]);
   });
 
   test("a family over the read bound reports complete=false; open rows never count against it", async () => {
@@ -249,6 +265,8 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
     const r = await settledOf(s);
     expect(r.payable.complete).toBe(false);
     expect(r.payable.rows).toHaveLength(STATEMENT_FAMILY_LIMIT);
+    // W14: the server never sends a partial sum next to the flag.
+    expect(r.payable.totals).toEqual([]);
     expect(r.receivable.complete).toBe(true);
     expect(r.receivable.rows).toEqual([]);
   });

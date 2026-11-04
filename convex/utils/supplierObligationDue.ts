@@ -440,21 +440,21 @@ export interface SettledSection {
 }
 
 // Statuses whose rows can hold settled cash. Exhaustive like the open maps above: a status added to
-// the schema fails typecheck until it is classified. CANCELLED, DISPUTED-with-nothing-paid and
-// REVERSED rows are not settlements.
+// the schema fails typecheck until it is classified. A DISPUTED row can be part-paid, so it is read
+// and skipped only when nothing was paid. CANCELLED and REVERSED rows are not settlements.
 const PAYABLE_HAS_SETTLED = {
   PENDING: false,
   NOT_YET_DUE: false,
   DUE_ON_SALE: false,
   PARTIALLY_PAID: true,
-  DISPUTED: false,
+  DISPUTED: true,
   PAID: true,
   CANCELLED: false,
 } satisfies Record<Doc<"vehicleSupplierPayables">["status"], boolean>;
 const RECEIVABLE_HAS_SETTLED = {
   OPEN: false,
   PARTIALLY_PAID: true,
-  DISPUTED: false,
+  DISPUTED: true,
   PAID: true,
   CANCELLED: false,
 } satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
@@ -468,23 +468,23 @@ const SETTLED_PAYABLE_STATUSES = statusesWhere(PAYABLE_HAS_SETTLED);
 const SETTLED_RECEIVABLE_STATUSES = statusesWhere(RECEIVABLE_HAS_SETTLED);
 const SETTLED_RECOVERY_STATUSES = statusesWhere(RECOVERY_HAS_SETTLED);
 
-/** The newest STATEMENT_FAMILY_LIMIT rows across the statuses read; callers compare the unsliced length with the limit. */
-function newest<D extends { updatedAt: number }>(docs: D[]): D[] {
-  return [...docs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, STATEMENT_FAMILY_LIMIT);
+/**
+ * The newest-created STATEMENT_FAMILY_LIMIT rows across the statuses read (the index orders by
+ * _creationTime within a status); callers compare the unsliced length with the limit.
+ */
+function newest<D extends { _creationTime: number }>(docs: D[]): D[] {
+  return [...docs].sort((a, b) => b._creationTime - a._creationTime).slice(0, STATEMENT_FAMILY_LIMIT);
 }
 
 function settledSection(rows: SettledRow[], complete: boolean): SettledSection {
+  // W14: a partial list never presents a partial sum as a total.
   const byCurrency = new Map<string, SettledTotal>();
-  for (const row of rows) {
+  for (const row of complete ? rows : []) {
     const total = byCurrency.get(row.currency) ?? { currency: row.currency, settledMinor: 0 };
     total.settledMinor += row.settledMinor;
     byCurrency.set(row.currency, total);
   }
-  return {
-    rows: [...rows].sort((a, b) => b.lastChangedAt - a.lastChangedAt),
-    totals: [...byCurrency.values()],
-    complete,
-  };
+  return { rows, totals: [...byCurrency.values()], complete };
 }
 
 /**

@@ -1,6 +1,6 @@
 # Supplier statement, slice 1: outstanding A/P and A/R per supplier
 
-Status: accepted and implemented (slices 1 to 3 on branch claude/scrum869-supplier-statement-4a5e0f; not yet merged). ADR required before a money or permission PR by SCRUM-760 c24361. Jira: SCRUM-869 feature 1 and 2.
+Status: accepted and implemented (slices 1 to 3 on branch claude/scrum869-supplier-statement-4a5e0f; slice 4 on claude/scrum869-settled-history; not yet merged). ADR required before a money or permission PR by SCRUM-760 c24361. Jira: SCRUM-869 feature 1 and 2.
 
 ## Context
 
@@ -33,10 +33,9 @@ Add one read-only query, `api.supplierStatement.outstanding`, in a new `convex/s
 
 ## Not in this slice (remaining gaps, in order)
 
-1. Settled history and receipts per supplier (PAID/CANCELLED lines, cash movements, payer/payee).
-2. The statement tab on `SupplierDetailScreen` (EN/AR, RTL) consuming this query.
-3. Settlement allocation proof for partial and full installments across several lines (feature 3), and the audit entry gap on
-   `sourcingPayables.markPaid`/`recordPartialPayment`/`setDisputed`.
+1. Settled history per supplier: done in slice 4 (amendment below). Still open: payer/payee, payment method and per-payment lines.
+2. The statement tab on `SupplierDetailScreen` (EN/AR, RTL): done in slice 1.
+3. Settlement allocation proof (done in slice 1); the audit entry gap was already closed (`markPaid`, `recordPartialPayment` and `setDisputed` call `auditLog`).
 4. Per-supplier reconciliation to GL 2400/1240 (org-wide exists, #744).
 5. Informational net position: needs an owner ruling (design packet OQ-4). Not built.
 
@@ -59,10 +58,12 @@ on branch `claude/scrum869-design` holds the full invariants W1 to W16.
 `api.supplierStatement.settled` shows the cash actually paid to the supplier (A/P) and received from it (A/R), as the same two
 sections with the same gate (VIEW_FINANCE, accounting feature, `requireOwnedRow`) and no net field. It reads only the statuses
 that can hold settled cash through `by_org_and_supplierId_and_status` (payables and receivables PAID and PARTIALLY_PAID; cost
-recoveries RECOVERED and PARTIALLY_RECOVERED), so open rows cannot use up the bound. Exhaustive `satisfies Record<status, boolean>`
+recoveries RECOVERED and PARTIALLY_RECOVERED, plus DISPUTED payables and receivables, which can be part-paid and are left out only
+when nothing was paid; CANCELLED and REVERSED rows are not settlements), so open rows cannot use up the bound. Exhaustive `satisfies Record<status, boolean>`
 maps classify every status. Each row carries `dueMinor`, `settledMinor` and `lastChangedAt` (the row's `updatedAt`, which is when
-the last payment was recorded for a settled row). Rows come back newest first, bounded to `STATEMENT_FAMILY_LIMIT` per family;
-past the bound `complete` is false and the screen shows "total unavailable" instead of a total (W14). A row whose settled status
+the last payment was recorded for a settled row). Rows come back newest-created first (the index orders by `_creationTime`, not `updatedAt`), bounded to `STATEMENT_FAMILY_LIMIT`
+per family; `lastChangedAt` is shown separately. Past the bound `complete` is false, the server returns `totals: []`, and the
+screen shows "total unavailable" instead of a total (W14). A row whose settled status
 holds no settled amount is left out (data defect, gap 4). Not here: payer or payee, payment method and per-payment lines. Those
 live in the settlement and cash-movement records and need their own slice; this query reports the running totals on the row.
 
