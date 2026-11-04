@@ -73,3 +73,56 @@ Advisory Standards and Spec reviews found no blocking code defect. Their documen
 Not run: the formal Opus and Codex seats, authenticated scripted E2E, roles × EN/AR × phone/desktop screen audit, unscripted explorer swarm, real-backend rehearsal, production contract-skew probe, CI/SonarCloud, build, deployment or production verification. Serial `convex-test` establishes harness behavior, not platform limits or concurrency. No push was made.
 
 At the final fetch, main had advanced one commit to `644d785d78361c351b6fb9f1166da18bdfd3527d` (SCRUM-869 supplier statement). The requested base is retained. SCRUM-902's unmerged cost-gate changes also overlap these readers and must be integrated by the coordinator without widening cost or commission visibility. No deferred financial capability is enabled by this change.
+
+## CI repair from 908679be (2026-11-04)
+
+The repair started at the required full SHA `908679be89563b6b67caa4adfda7e15f432744f7`, on `claude/scrum908-deal-net-profit` in `E:\tmp\auto-908`. The fetched main was zero commits ahead of that checkout. The repair changes generated declarations and fixtures, with no production calculation, permission, guard or GL posting changes. Contract-skew baseline renewal remains the coordinator's task.
+
+### Validated causes
+
+- **Generated API:** the two new helper modules were missing from the imports and `fullApi`. `npx convex codegen --typecheck disable` completed successfully. Its four new declarations were retained; unrelated Windows ordering changes were undone to match CI's Linux ordering. [Convex documents committing generated API definitions and says codegen does not change deployed code](https://docs.convex.dev/cli/reference/codegen).
+- **Cash cockpit:** the fixture supplied the accounting `profit` but omitted `managementNetProfit`, which the new headline correctly requires. This caused missing unavailable-reason labels, sale-price/cost/entitlement tiles and `null` text in the string assertions. The fixture now supplies a separate `MANAGEMENT_NET`, including both zero-valued deductions, or the scenario's original refusal reason. Sale-price, sign, cost, entitlement, no-number, unavailable-reason and no-placeholder assertions remain. Cash's new management note is required, both estimate badges remain forbidden, and the exact tile count includes the two new deductions. The no-breakdown case now explicitly empties the management net's lines. Scoped visible-tile queries are retained instead of broadening text matches, following [Testing Library's text queries](https://testing-library.com/docs/queries/bytext/) and [query scoping guidance](https://testing-library.com/docs/dom-testing-library/api-within/).
+- **Financier/customer-obligation fixtures:** both roles already had `ALL_PERMISSIONS`; commission access and expense readability were not the failure. Both directly inserted sales without `commissionAmount`, so the management net correctly refused an undecided commission. The intended readable-profit scenarios now record an explicit zero commission. This is a fixture correction, not a claim that every real sale has decided commissions: real MANUAL sales can still have an unset amount and must still refuse. The SCRUM-908 pending-commission and no-permission controls passed with the production refusal unchanged. Settlement classification assertions in both repaired suites are unchanged.
+
+The unchanged three-file reproduction ran with `--maxWorkers=1 --testTimeout=20000`: 185 tests, 172 passed and 13 failed (10 cockpit, one financier, two customer-obligation). This reproduces the reported failure classes, not CI's reported higher counts. After fixture updates, three more obsolete cash-contract expectations were exposed and corrected as described above. The final standalone cockpit-view run passed all 100 tests.
+
+### Commands and results
+
+All test commands used named files, `vitest run`, `--maxWorkers=1` and `--testTimeout=20000`. The backend enumeration scanned every top-level `convex/*.test.ts` for `dealOverview`, `sales.dealCockpit`, `dealCommissions`, or a direct `./sales` import. It selected these 21 files, all of which passed: **861 tests, zero failures or skips**.
+
+```powershell
+pnpm exec vitest run convex/cashApplicationFinancierLeg.test.ts convex/cashDealCockpit.test.ts convex/customerGapComposition.test.ts convex/dealCommissionLinesLedger.test.ts convex/dealCommissions.test.ts convex/dealCommissionsPilot.test.ts convex/dealCostsReadable.test.ts convex/dealerBorneExpected.test.ts convex/dealNetProfit.scrum908.test.ts convex/dealOverview.test.ts convex/dealReadsBoundedUnderLimits.test.ts convex/financedConsignedSettlement.test.ts convex/financierLegNotApplicable.test.ts convex/idempotencyEconomicCommands.test.ts convex/scrum486Certification.test.ts convex/scrum571s2CashSettlement.test.ts convex/scrum571s2CustomerObligation.test.ts convex/scrum761CashReceiptDoors.test.ts convex/scrum761FinancedCustomerShare.test.ts convex/scrum802CashSaleContainment.test.ts convex/unifiedDealFeeAuthority.test.ts --maxWorkers=1 --testTimeout=20000
+```
+
+The entire cockpit directory contains 60 test files, with no nested test files omitted. The normal run passed **1,681 tests**, with 36 pre-existing opt-in visual fixture generator cases skipped. The repaired view suite passed in this run as well as standalone.
+
+```powershell
+$files = Get-ChildItem components/applications/cockpit -Filter *.test.ts* -File | ForEach-Object { $_.FullName }
+pnpm exec vitest run @files --maxWorkers=1 --testTimeout=20000
+```
+
+The three opt-in generator files were then rerun with their generation flags and fresh output directories. **110 tests passed, zero skipped**, including all 36 cases skipped by the normal run and 74 repeated controls. Across the two runs, all **1,717 unique cockpit cases** executed successfully. This generates markup; it does not establish browser layout correctness.
+
+```powershell
+$env:DEAL_COCKPIT_VISUAL_FIXTURE = '1'
+$env:DEAL_COCKPIT_VISUAL_FIXTURE_DIR = 'E:/tmp/scrum908-fixtures-cockpit'
+$env:DEAL_MONEY_VISUAL_FIXTURE = '1'
+$env:DEAL_MONEY_VISUAL_FIXTURE_DIR = 'E:/tmp/scrum908-fixtures-money'
+$env:FC_CHEQUE_VISUAL_FIXTURE = '1'
+$env:FC_CHEQUE_VISUAL_FIXTURE_DIR = 'E:/tmp/scrum908-fixtures-cheque'
+pnpm exec vitest run components/applications/cockpit/DealCockpitVisualFixture.test.tsx components/applications/cockpit/DealMoneyVisualFixture.test.tsx components/applications/cockpit/FcChequeVisualFixture.test.tsx --maxWorkers=1 --testTimeout=20000
+```
+
+The PR's own suites passed **310 tests in 13 named files**, with zero skips. The scoped coverage run measured the two new production helper files with the repository's thresholds unchanged: **39/39 lines (100%), 53/54 statements (98.14%), 52/53 branches (98.11%), 7/7 functions (100%)**. This measures both complete new helper files, not SonarCloud's entire PR new-code set.
+
+```powershell
+pnpm exec vitest run convex/dealNetProfit.scrum908.test.ts convex/utils/dealManagementNet.test.ts convex/dealOverview.test.ts convex/cashDealCockpit.test.ts convex/utils/dealerPreparationExpenses.test.ts convex/utils/stockManagementProfit.test.ts convex/utils/dealCommissionLines.test.ts components/commissions/DealCommissionsRow.test.tsx components/commissions/DealCommissionLinesDialog.test.tsx components/applications/cockpit/DealCockpitCanonicalProfit.test.tsx components/applications/cockpit/DealCockpitCustomerInvoice.test.tsx components/applications/cockpit/DealCockpitSupplierAuthority.test.tsx scripts/regression/scenarioRecord.test.ts --maxWorkers=1 --testTimeout=20000 --coverage --coverage.include=convex/utils/dealManagementNet.ts --coverage.include=convex/utils/dealProfitReads.ts --coverage.reportsDirectory=E:/tmp/scrum908-ci-coverage
+pnpm typecheck
+pnpm typecheck:convex
+pnpm exec eslint components/applications/cockpit/DealCockpitView.test.tsx convex/financierLegNotApplicable.test.ts convex/scrum571s2CustomerObligation.test.ts
+git diff --check
+```
+
+Both typechecks passed. Their scope exclusions remain as documented above. Root typecheck first caught two fixture-union typing errors, both corrected before the passing run. Lint passed with zero errors and four existing unused `_correction` warnings on untouched callback lines. The generated declarations are excluded by the repository's lint configuration. `git diff --check` passed. SonarJS 4.2.2 S3776, run through the local ESLint API at threshold 14, found no violations in the two new helpers or the three repaired test files. No suppression was added. Loading the complete local SonarJS profile was unavailable because its cached package lacks an analyzer configuration dependency; this is not a no-new-smell verdict. SonarCloud's full PR gate remains unverified until the coordinator pushes and CI runs.
+
+The three bug hunters, browser rendering, a production build, real-backend rehearsal, independent money seats, push, CI, merge, deployment and production verification were not performed by this repair lane. `convex-test` results certify serial harness behavior only. No `review-evidence` file or protected containment/waiver file was edited. `.gitignore` and `.ignore` were already dirty at entry and are excluded from the commit.
