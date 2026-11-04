@@ -51,17 +51,22 @@ const settledRow = v.object({
   dueMinor: v.number(),
   settledMinor: v.number(),
   lastChangedAt: v.number(),
+  /** RECORDED payments or receipts, or a legacy PAID payable whose amount is inferred from its status. */
+  basis: v.union(v.literal("RECORDED"), v.literal("INFERRED_FROM_PAID_STATUS")),
 });
 const settledSection = v.object({
   rows: v.array(settledRow),
   totals: v.array(v.object({ currency: v.string(), settledMinor: v.number() })),
   complete: v.boolean(),
+  /** Margin claims with a recorded supplier receipt that could not be read back from the ledger; their cash is unknown. */
+  unverifiedCount: v.number(),
 });
 
 /**
  * SCRUM-869 slice 4 - what this supplier has been paid (A/P) and has paid back (A/R): settled and
- * part-settled rows with the cash actually moved, newest first. Same gate and tenancy as
- * `outstanding`; no net field, no currency blending.
+ * part-settled rows with the cash actually moved, newest first. A/R shows supplier receipts established from their
+ * postings, not `amountReceived` (which includes customer deposits applied to the settlement). Same gate and tenancy
+ * as `outstanding`; no net field, no currency blending.
  */
 export const settled = query({
   args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },

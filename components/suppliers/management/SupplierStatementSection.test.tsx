@@ -227,7 +227,7 @@ describe("supplier statement section", () => {
     expect(screen.getByText(en.SuppliersStmtScopeNote)).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/Nothing is outstanding|owes us nothing/i);
     // The settled-history empty states carry the same linked-lines-only scope (opening payments are not listed).
-    world.settled = { supplierId: "sup_1", payable: { rows: [], totals: [], complete: true }, receivable: { rows: [], totals: [], complete: true } };
+    world.settled = { supplierId: "sup_1", payable: { rows: [], totals: [], complete: true, unverifiedCount: 0 }, receivable: { rows: [], totals: [], complete: true, unverifiedCount: 0 } };
     cleanup();
     renderIt();
     expect(document.body.textContent).not.toMatch(/Nothing has been (paid|received)/i);
@@ -326,6 +326,7 @@ describe("supplier statement section", () => {
       dueMinor: 9_500_000,
       settledMinor: 9_500_000,
       lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
+      basis: "RECORDED",
       ...over,
     });
     world.settled = {
@@ -334,11 +335,13 @@ describe("supplier statement section", () => {
         rows: [settledRow({}), settledRow({ id: "s2", status: "PARTIALLY_PAID", settledMinor: 4_000_000 })],
         totals: [{ currency: "JOD", settledMinor: 13_500_000 }],
         complete: true,
+        unverifiedCount: 0,
       },
       receivable: {
         rows: [settledRow({ kind: "RECEIVABLE", id: "s3", dueMinor: 3_000_000, settledMinor: 3_000_000 })],
         totals: [{ currency: "JOD", settledMinor: 3_000_000 }],
         complete: true,
+        unverifiedCount: 0,
       },
     };
     for (const locale of ["en", "ar"] as const) {
@@ -360,11 +363,44 @@ describe("supplier statement section", () => {
     }
   });
 
+  test("settled history: an inferred legacy payment, an unconfirmed receipt and the deposit scope note are told in EN and AR", () => {
+    const row = {
+      kind: "PAYABLE",
+      id: "legacy",
+      currency: "JOD",
+      status: "PAID",
+      dueMinor: 9_500_000,
+      settledMinor: 9_500_000,
+      lastChangedAt: Date.parse("2026-06-10T09:00:00Z"),
+      basis: "INFERRED_FROM_PAID_STATUS",
+    };
+    world.settled = {
+      supplierId: "sup_1",
+      payable: { rows: [row], totals: [{ currency: "JOD", settledMinor: 9_500_000 }], complete: true, unverifiedCount: 0 },
+      receivable: { rows: [], totals: [], complete: false, unverifiedCount: 2 },
+    };
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      const { unmount } = renderIt();
+      const paid = screen.getByRole("region", { name: dict.SuppliersStmtHistoryPaidTitle });
+      const received = screen.getByRole("region", { name: dict.SuppliersStmtHistoryReceivedTitle });
+      expect(dict.SuppliersStmtHistoryInferred, `${locale} string exists`).toBeTruthy();
+      expect(within(paid).getByText(dict.SuppliersStmtHistoryInferred)).toBeTruthy();
+      expect(within(received).getByText(dict.SuppliersStmtHistoryReceivedScope)).toBeTruthy();
+      expect(within(received).getByText(dict.SuppliersStmtHistoryUnverified.replace("{count}", "2"))).toBeTruthy();
+      // Unverified receipts withhold the total and do not claim a row-count overflow.
+      expect(within(received).getByText(dict.SuppliersStmtTotalUnavailable)).toBeTruthy();
+      expect(within(received).queryByText(dict.SuppliersStmtIncomplete)).toBeNull();
+      unmount();
+    }
+  });
+
   test("settled history: an incomplete list shows no total; empty and loading states render", () => {
     world.settled = {
       supplierId: "sup_1",
-      payable: { rows: [], totals: [], complete: false },
-      receivable: { rows: [], totals: [], complete: true },
+      payable: { rows: [], totals: [], complete: false, unverifiedCount: 0 },
+      receivable: { rows: [], totals: [], complete: true, unverifiedCount: 0 },
     };
     const first = renderIt();
     const paid = screen.getByRole("region", { name: en.SuppliersStmtHistoryPaidTitle });

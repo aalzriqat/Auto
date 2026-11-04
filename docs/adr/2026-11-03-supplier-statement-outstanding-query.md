@@ -69,8 +69,15 @@ when nothing was paid; CANCELLED and REVERSED rows are not settlements), so open
 maps classify every status. Each row carries `dueMinor`, `settledMinor` and `lastChangedAt` (the row's `updatedAt`, which is when
 the last payment was recorded for a settled row). Rows come back newest-created first (the index orders by `_creationTime`, not `updatedAt`), bounded to `STATEMENT_FAMILY_LIMIT`
 per family; `lastChangedAt` is shown separately. Past the bound `complete` is false, the server returns `totals: []`, and the
-screen shows "total unavailable" instead of a total (W14). A row whose settled status
-holds no settled amount is left out (data defect, gap 4). Not here: payer or payee, payment method and per-payment lines. Those
+screen shows "total unavailable" instead of a total (W14). A payable is read through `settlementView`, the same reading the payments
+reconciliation and the sale-cancellation guard use: a PAID payable with no `amountPaid` is a fully paid legacy row, shown at its
+`amountDue` and labelled "inferred from the paid status" (`basis: INFERRED_FROM_PAID_STATUS`), never dropped. A/R shows what the
+supplier actually paid, not `amountReceived`: that field is seeded with the customer deposit applied to a DIRECT_TO_SUPPLIER
+settlement, so it mixes two parties. The query nets the claim's SUPPLIER_RECEIVABLE_COLLECTED postings on account 1240 (credits less
+debits, so reversed receipts net out) and shows that. A claim whose recorded receipts cannot be read back from the ledger, or whose
+postings are over the read budget, is not shown with a guessed figure: the section reports `unverifiedCount`, `complete` is false and
+the total is withheld. A claim whose net supplier receipts are zero (deposit only, or fully reversed) is left out. A row whose settled status
+holds no settled amount after that reading is left out. Not here: payer or payee, payment method and per-payment lines. Those
 live in the settlement and cash-movement records and need their own slice; this query reports the running totals on the row.
 
-Known limit: a row stored as PAID/RECOVERED whose amounts still show a remainder is not read here; that data defect belongs to per-supplier GL reconciliation (gap 4).
+Known limit: cost recoveries still use `amountRecoveredMinor` (no deposit is mixed into it). A legacy PAID payable carries no date of its own, so its `lastChangedAt` is the row's `updatedAt`. A row stored as RECOVERED whose amounts still show a remainder is not read here; that belongs to per-supplier GL reconciliation (gap 4).

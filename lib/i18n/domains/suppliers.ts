@@ -324,6 +324,18 @@ const suppliersMessages = defineBilingualMessages({
     "{count} opening-balance record(s) are not part of this check.",
     "{count} سجل(ات) رصيد افتتاحي ليست ضمن هذه المطابقة.",
   ],
+  SuppliersStmtHistoryInferred: [
+    "Amount taken from the paid status of an older record; no payment details were saved for it.",
+    "المبلغ مأخوذ من حالة السداد في سجل قديم؛ لم تُحفظ تفاصيل دفعة لهذا السجل.",
+  ],
+  SuppliersStmtHistoryUnverified: [
+    "{count} margin claim(s) have a receipt recorded that is not confirmed in the ledger yet, so the amount received from the supplier cannot be shown for them. The lines above may be partial, so no total is shown.",
+    "{count} مطالبة هامش لها مقبوض مسجّل لم يتأكد في دفتر الأستاذ بعد، لذلك لا يمكن عرض المبلغ المقبوض من المورّد لها. قد تكون البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
+  ],
+  SuppliersStmtHistoryReceivedScope: [
+    "Only money the supplier paid is counted here. A customer deposit applied to the settlement is not a supplier payment and is not included.",
+    "يُحتسب هنا فقط ما دفعه المورّد. عربون العميل المطبّق على التسوية ليس دفعة من المورّد ولا يُدرج.",
+  ],
   SuppliersStmtTotalUnavailable: [
     "Total unavailable: this list is incomplete",
     "الإجمالي غير متاح: القائمة غير مكتملة",

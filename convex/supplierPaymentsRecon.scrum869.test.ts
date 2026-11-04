@@ -190,7 +190,7 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     ]);
   });
 
-  test("another supplier's payable and its payments are not counted", async () => {
+  test("another supplier's payable and its payments are not counted: two suppliers that both have payments each reconcile alone", async () => {
     const s = await seed("other");
     await pay(s, 4_000);
     const otherId = await s.t.run((ctx) =>
@@ -199,8 +199,26 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
         origin: "MANUAL", createdBy: s.userId, createdAt: Date.now(), updatedBy: s.userId, updatedAt: Date.now(),
       })
     );
-    const r = await recon(s, otherId);
-    expect(r).toMatchObject({ status: "AVAILABLE", currencies: [], isReconciled: true });
+    // The other supplier has its own payable and a real payment of 1_500 JOD (posted to 2400 by the same writer).
+    const otherPayableId = await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, vehicleId: s.vehicleId, supplierId: otherId, sourcedFromName: "Other Co", amountDue: 2_000,
+        currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      } as never)
+    );
+    await s.asUser.mutation(api.sourcingPayables.recordPartialPayment, {
+      idempotencyKey: crypto.randomUUID(), orgId: s.orgId, payableId: otherPayableId, amount: 1_500, paymentMethod: "CASH",
+    });
+    const mine = await recon(s);
+    expect(mine.currencies).toEqual([
+      { currency: "JOD", subledgerPaidMinor: 4_000_000, glPaidMinor: 4_000_000, differenceMinor: 0 },
+    ]);
+    expect(mine.isReconciled).toBe(true);
+    const theirs = await recon(s, otherId);
+    expect(theirs.currencies).toEqual([
+      { currency: "JOD", subledgerPaidMinor: 1_500_000, glPaidMinor: 1_500_000, differenceMinor: 0 },
+    ]);
+    expect(theirs.isReconciled).toBe(true);
   });
 
   test("an opening-basis payable is excluded from both sides and counted", async () => {
@@ -279,9 +297,9 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     const asOther = s.t.withIdentity({ subject: "other_u", clerkId: "other_u" });
     await expect(
       asOther.query(api.supplierStatement.paymentsReconciliation, { orgId: otherOrgId, supplierId: s.supplierId })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/Supplier not found\./);
     await expect(
       asOther.query(api.supplierStatement.paymentsReconciliation, { orgId: s.orgId, supplierId: s.supplierId })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not a member of this organization/);
   });
 });

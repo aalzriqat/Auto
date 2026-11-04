@@ -968,3 +968,14 @@ refund makes the shown figure too high, so for them it is only partial (the scre
 They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
+
+
+### SCRUM-869 settled history: each figure comes from what its source records
+
+Matrix row `SCRUM869-supplier-settled-provenance` binds the nine literal tests in `convex/supplierSettledProvenance.scrum869.test.ts` (one scenario record each, `regression/scenarios/money/supplier-history-*`; seven carry a `bugRef` whose failing-first commit is `cf449671f0e0b95c8b854930e2b6d64971e39874`). Owner ruling SCRUM-869#c23881 (2026-10-29): the supplier payable payment and the consignment margin receipt are in the pilot and must be certified. Design: ADR `docs/adr/2026-11-03-supplier-statement-outstanding-query.md`, slice 4 amendment. Invariant: a subledger report shows what each source actually records, and two reports that claim to measure the same thing read it the same way.
+
+- A/P: a payable is read through `settlementView`, as the payments reconciliation and the sale-cancellation guard read it. A PAID payable with no `amountPaid` is fully paid, shown at its `amountDue` and labelled `INFERRED_FROM_PAID_STATUS`. A recorded payable is labelled `RECORDED`.
+- A/R: `vehicleSupplierReceivables.amountReceived` includes the customer deposit applied to a DIRECT_TO_SUPPLIER settlement, so it is never shown as cash from the supplier. The history nets the claim's own SUPPLIER_RECEIVABLE_COLLECTED postings on GL 1240 (credits less debits, so a reversed receipt nets out). A deposit-only or fully reversed claim is not a supplier receipt and is left out. A claim whose recorded receipts cannot be read back from the ledger (fewer posted entries than `receiptSeq`, a foreign org or currency on a line, a negative net, or the read budget) is counted in `unverifiedCount`, `complete` is false and the total is withheld, never a guessed figure.
+- Currencies stay separate in every total; there is no net field.
+
+Evidence boundary: convex-test only, with the real `openSupplierReceivable` and `recordReceipt` writers. Not certified: receipts posted outside `recordReceipt`, cost-recovery receipts (still read from `amountRecoveredMinor`, which holds no deposit), and a legacy PAID payable's date (its `lastChangedAt` is the row's `updatedAt`).

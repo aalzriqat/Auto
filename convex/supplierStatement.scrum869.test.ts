@@ -79,6 +79,41 @@ const addReceivable = async (s: Seed, fields: Record<string, unknown> = {}) => {
   );
 };
 
+/**
+ * A supplier receipt as the ledger holds it: the SUPPLIER_RECEIVABLE_COLLECTED entry (Dr cash, Cr 1240) sourced by the claim,
+ * and the recorded-receipt counter. Settled history takes supplier cash from this posting, not from `amountReceived`.
+ */
+const addReceipt = (s: Seed, receivableId: Id<"vehicleSupplierReceivables">, amountMinor: number, currency = "JOD") =>
+  s.t.run(async (ctx) => {
+    const account = async (code: string, systemKey: string, type: "ASSET", normalBalance: "DEBIT") => {
+      const found = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", systemKey))
+        .unique();
+      return (
+        found?._id ??
+        (await ctx.db.insert("chartOfAccounts", {
+          orgId: s.orgId, code, name: systemKey, type, normalBalance, isControlAccount: false, allowManualPosting: false,
+          active: true, systemKey, createdAt: NOW, updatedAt: NOW,
+        }))
+      );
+    };
+    const cash = await account("1110", "CASH", "ASSET", "DEBIT");
+    const control = await account("1240", "RECEIVABLE_FROM_SUPPLIERS", "ASSET", "DEBIT");
+    const claim = (await ctx.db.get(receivableId))!;
+    const entryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: `JE-${receivableId}-${claim.receiptSeq ?? 0}`, accountingDate: NOW, sourceType: "vehicleSupplierReceivables",
+      sourceId: receivableId, category: "SYSTEM", memo: "Supplier commission received", status: "POSTED", currency,
+      postedBy: s.userId, postedAt: NOW, createdAt: NOW,
+    });
+    const line = (lineNumber: number, accountId: Id<"chartOfAccounts">, debitMinor: number, creditMinor: number) =>
+      ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId: entryId, lineNumber, accountId, debitMinor, creditMinor, currency, scale: 1000, accountingDate: NOW,
+      });
+    await line(1, cash, amountMinor, 0);
+    await line(2, control, 0, amountMinor);
+    await ctx.db.patch(receivableId, { receiptSeq: (claim.receiptSeq ?? 0) + 1 });
+  });
 const addRecovery = (s: Seed, fields: Record<string, unknown> = {}) =>
   s.t.run(async (ctx) => {
     const expenseId = await ctx.db.insert("expenses", {
@@ -164,7 +199,7 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     await expect(
       a.asUser.query(api.supplierStatement.outstanding, { orgId: orgB, supplierId: supplierB, nowMs: NOW } as never),
       "other org"
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not a member of this organization/);
     const noFinance = await seed("tc", ["view:vehicles", "view:cost_price"]);
     await expect(statement(noFinance), "no finance").rejects.toThrow(/view:finance/);
     // SCRUM-886 / ACC-10: a SOURCED car's supplier entitlement is its acquisition cost, so finance access alone is not enough.
@@ -200,7 +235,8 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
     await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 4_000 }); // 4,000 of 9,500 paid
     await addPayable(s); // nothing paid yet: open, not history
     await addPayable(s, { status: "CANCELLED" });
-    await addReceivable(s, { status: "PAID", amountReceived: 3_000 });
+    const paidClaim = await addReceivable(s, { status: "PAID", amountReceived: 3_000 });
+    await addReceipt(s, paidClaim, 3_000_000); // the supplier paid the whole claim
     await addRecovery(s, { status: "PARTIALLY_RECOVERED", amountRecoveredMinor: 50_000 });
     await addRecovery(s); // nothing recovered yet
     const r = await settledOf(s);
@@ -258,7 +294,8 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
   test("a part-paid disputed payable or receivable still shows the cash already moved", async () => {
     const s = await seed("sh3c");
     await addPayable(s, { status: "DISPUTED", amountPaid: 2_000 });
-    await addReceivable(s, { status: "DISPUTED", amountReceived: 500 });
+    const disputedClaim = await addReceivable(s, { status: "DISPUTED", amountReceived: 500 });
+    await addReceipt(s, disputedClaim, 500_000);
     await addPayable(s, { status: "DISPUTED" }); // disputed with nothing paid: not history
     const r = await settledOf(s);
     expect(r.payable.rows.map((x: { settledMinor: number }) => x.settledMinor)).toEqual([2_000_000]);
@@ -291,13 +328,13 @@ describe("SCRUM-869 supplier statement: settled history (cash actually paid or r
       }),
     );
     const supplierB = await addSupplier(a.t, orgB, "Foreign Supplier", a.userId);
-    await expect(settledOf(a, supplierB), "foreign supplier in own org").rejects.toThrow();
+    await expect(settledOf(a, supplierB), "foreign supplier in own org").rejects.toThrow(/Supplier not found\./);
     await expect(
       a.asUser.query(api.supplierStatement.settled, { orgId: orgB, supplierId: supplierB } as never),
       "other org",
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not a member of this organization/);
     const noFinance = await seed("sh6", ["view:vehicles"]);
-    await expect(settledOf(noFinance), "no finance").rejects.toThrow();
+    await expect(settledOf(noFinance), "no finance").rejects.toThrow(/Missing required permissions: view:finance/);
     // SCRUM-886 / ACC-10: what was paid for a SOURCED car is its acquisition cost, so finance access alone is not enough.
     const financeOnly = await seed("sh7", ["view:finance"]);
     await addPayable(financeOnly, { status: "PAID", amountPaid: 9_500 });

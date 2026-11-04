@@ -193,6 +193,9 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
           </span>
         )}
       </span>
+      {row.basis === "INFERRED_FROM_PAID_STATUS" && (
+        <span className="basis-full text-xs text-muted-foreground">{translate("SuppliersStmtHistoryInferred")}</span>
+      )}
     </li>
   );
 }
@@ -202,8 +205,9 @@ function SettledRegion({
   title,
   emptyKey,
   totalKey,
+  scopeKey,
   data,
-}: Readonly<{ id: string; title: string; emptyKey: string; totalKey: string; data: SettledSectionData }>) {
+}: Readonly<{ id: string; title: string; emptyKey: string; totalKey: string; scopeKey?: string; data: SettledSectionData }>) {
   const translate = useTranslate();
   return (
     <section aria-labelledby={id} className="space-y-2 rounded-lg border p-4">
@@ -219,7 +223,13 @@ function SettledRegion({
           ))}
         </ul>
       )}
-      {!data.complete && (
+      {scopeKey !== undefined && <p className="text-xs text-muted-foreground">{translate(scopeKey)}</p>}
+      {data.unverifiedCount > 0 && (
+        <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+          {interpolate(translate("SuppliersStmtHistoryUnverified"), { count: String(data.unverifiedCount) })}
+        </p>
+      )}
+      {!data.complete && data.unverifiedCount === 0 && (
         <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
           {translate("SuppliersStmtIncomplete")}
         </p>
@@ -272,6 +282,7 @@ export function SupplierSettledView({ settled }: Readonly<{ settled: SupplierSet
           title={translate("SuppliersStmtHistoryReceivedTitle")}
           emptyKey="SuppliersStmtHistoryReceivedEmpty"
           totalKey="SuppliersStmtHistoryTotalReceived"
+          scopeKey="SuppliersStmtHistoryReceivedScope"
           data={settled.receivable}
         />
       </div>
