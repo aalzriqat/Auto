@@ -30,12 +30,17 @@ obligations exist, and a zero would read as "nothing owed". Absent beats zeroed,
   design and no EN/AR copy to add. A future screen must ask for the pair first and show the gated note, as the statement does.
 - The alert worker is live on main and runs daily (`supplier-due-alerts` cron, `convex/supplierDueAlerts.ts`). It reads the same
   rows through `readObligationPage`, not through this query, and its notifications carry the cost-derived outstanding `amount`
-  (`notifications.list` returns it to the browser). It used to notify any `manage:finance` or `view:finance` holder, so closing
-  the query alone left the amount reachable by push. It is now gated in this PR with the same `STATEMENT_PERMISSIONS`: a
-  recipient is the system owner or a role that holds both `view:finance` and `view:cost_price` (OWASP A01:2021, authorization
-  must hold on every path to the data). `manage:finance` alone, or `view:finance` without `view:cost_price`, no longer receives it.
+  (`notifications.list` returns it to the browser). Closing the query alone left the amount reachable by push for roles the
+  query refuses. Recipients stay exactly as owner ruling SCRUM-869#c23883 names them (the system owner, `manage:finance` and
+  `view:finance`); this PR does not override that ruling. The amount is gated instead, with the same `STATEMENT_PERMISSIONS`:
+  the system owner and a role that holds both `view:finance` and `view:cost_price` get the alert with `amount`; every other
+  recipient gets the same alert (kind, currency, due date, days overdue) with no `amount` key at all, not 0 and not null
+  (OWASP A01:2021, authorization must hold on every path to the data). The English and Arabic alert sentences have a
+  `_MessageNoAmount` variant that reads correctly without the amount. Idempotency keys name the obligation, step, occurrence and
+  recipient and carry no amount, so redaction cannot change a key or let one alert be sent twice. Not done: notifications
+  already written before this change keep the `amount` they were stored with.
 - Stored ACCOUNTANT roles seeded before the template change lack `view:cost_price`, so those members are refused by the query and
-  receive no alert until the Deploy production step 2e backfill (SCRUM-886) repairs the role. No screen shows this, because no
-  screen calls the query.
+  receive the alert without the amount until the Deploy production step 2e backfill (SCRUM-886) repairs the role. No screen
+  shows this, because no screen calls the query.
 - Other supplier-amount readers behind `view:finance` alone are listed in the PR body sweep table. They have screen consumers and
   are not changed here.
