@@ -660,6 +660,8 @@ describe("dashboard.stats profit uses the authoritative cost basis", () => {
     "view:users",
     "view:sales",
     "view:expenses",
+    // SCRUM-902: profit is cost-derived, so the dashboard withholds it without view:cost_price.
+    "view:cost_price",
   ];
 
   const SALE_DATE = Date.UTC(2026, 5, 29);
@@ -713,6 +715,20 @@ describe("dashboard.stats profit uses the authoritative cost basis", () => {
   function profitOf(result: any): number {
     return result.salesTrend.reduce((sum: number, point: any) => sum + point.Profit, 0);
   }
+
+  test("SCRUM-902: a role holding view:expenses but not view:cost_price gets no profit, while the sale total is unchanged", async () => {
+    const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS.filter((p) => p !== "view:cost_price"));
+    await seedSale(t, orgId, { purchasePrice: 16000 }, 19600);
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    // The margin is 19,600 minus 16,000 = 3,600; that figure must not be derivable from any trend point.
+    expect(profitOf(result)).not.toBe(3600);
+    expect(result.salesTrend.some((point: any) => point.Revenue === 3600 || point.Profit === 3600)).toBe(false);
+    // The sale total stays, on the gross basis the response names.
+    expect(result.salesVolumeBasis).toBe("GROSS_TRANSACTION_VALUE");
+    expect(result.salesVolumeThisMonth).toBe(19600);
+  });
 
   test("a soft-deleted expense stops counting against profit", async () => {
     const { t, orgId, asUser } = await setup(PROFIT_PERMISSIONS);
@@ -828,6 +844,8 @@ describe("dashboard.stats previous-period totals", () => {
     "view:users",
     "view:sales",
     "view:expenses",
+    // SCRUM-902: profit is cost-derived, so the dashboard withholds it without view:cost_price.
+    "view:cost_price",
   ];
   const SALES_ONLY_PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales"];
 

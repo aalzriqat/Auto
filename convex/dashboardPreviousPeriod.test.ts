@@ -34,6 +34,7 @@ const PERMISSIONS = [
   "view:users",
   "view:tasks",
   "view:customers",
+  "view:cost_price",
 ];
 
 const DAY = 24 * 60 * 60 * 1000;
