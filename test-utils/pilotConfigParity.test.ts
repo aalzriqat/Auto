@@ -3,7 +3,7 @@
  * configuration. A suite that opened a door through a mock is rejected, even if its own
  * assertions pass. Legacy suites that open doors must say so.
  */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
@@ -19,13 +19,88 @@ import { PILOT_SERVER_BINDINGS, type PilotSwitchKey } from "../lib/pilotCapabili
 const ROOT = path.resolve(__dirname, "..");
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), "utf8");
 
+const sourceFixtures = new Map<string, Buffer | null>();
+
 /** Each of these re-imports the manifest and every containment module with a mock in place. */
 const RELOAD_TIMEOUT_MS = 60_000;
 
 afterEach(() => {
+  for (const [file, original] of sourceFixtures) {
+    if (original === null) unlinkSync(file);
+    else writeFileSync(file, original);
+  }
+  sourceFixtures.clear();
   vi.doUnmock("@/lib/pilotCapabilities");
   vi.doUnmock("@/convex/utils/fixedAssetLifecycleContainment");
+  vi.doUnmock("@/convex/utils/manualJournalContainment");
+  vi.restoreAllMocks();
   vi.resetModules();
+});
+
+// Exercise real source I/O. Each temporary change is restored byte-for-byte in afterEach.
+async function parityWithSources(sources: Readonly<Record<string, string>>) {
+  vi.resetModules();
+  for (const [rel, source] of Object.entries(sources)) {
+    const file = path.resolve(ROOT, rel);
+    sourceFixtures.set(file, existsSync(file) ? readFileSync(file) : null);
+    writeFileSync(file, source);
+  }
+  return import("./pilotConfigParity");
+}
+
+describe("SCRUM-810 review negative controls", () => {
+  test.each([
+    ["leading-space star", ' export * from "./pilotCapabilities";'],
+    ["import alias", 'import { PAYMENT_LINKS_PILOT_DISABLED as off } from "./pilotCapabilities"; export { off };'],
+    ["namespace", 'export * as ns from "./pilotCapabilities";'],
+    ["constant alias", 'import { PAYMENT_LINKS_PILOT_DISABLED } from "./pilotCapabilities"; export const ALIAS = PAYMENT_LINKS_PILOT_DISABLED;'],
+    ["switch-named alias", 'import { PAYMENT_LINKS_PILOT_DISABLED } from "./pilotCapabilities"; export const ALIAS_PILOT_DISABLED = PAYMENT_LINKS_PILOT_DISABLED;'],
+  ])("F1: discovers %s and refuses its unmeasured server binding", async (_shape, source) => {
+    const parity = await parityWithSources({ "lib/reviewBarrel.ts": source });
+    expect(parity.switchModules().reexporting.get("PAYMENT_LINKS_PILOT_DISABLED")).toContain("lib/reviewBarrel");
+    expect(parity.pilotModuleBasenames()).toContain("reviewBarrel");
+    expect(() => parity.assertPilotCertifyingConfig(["PAYMENT_LINKS_PILOT_DISABLED"])).toThrow(/NOT PILOT CERTIFIED.*reviewBarrel/);
+  }, RELOAD_TIMEOUT_MS);
+
+  test("F1: discovers a typed local switch exported by name", async () => {
+    const parity = await parityWithSources({
+      "lib/reviewLocal.ts": "const REVIEW_PILOT_DISABLED: boolean = true; export { REVIEW_PILOT_DISABLED };",
+    });
+    expect(parity.switchModules().declaring.get("REVIEW_PILOT_DISABLED")).toBe("lib/reviewLocal");
+    expect(parity.shippedValue("REVIEW_PILOT_DISABLED")).toBe(true);
+    expect(parity.pilotSwitchNames()).toContain("REVIEW_PILOT_DISABLED");
+  }, RELOAD_TIMEOUT_MS);
+
+  test("F3: a commented-out payment-link example cannot certify a false mock", async () => {
+    vi.doMock("@/lib/pilotCapabilities", () => ({ PAYMENT_LINKS_PILOT_DISABLED: false }));
+    const parity = await parityWithSources({
+      "lib/pilotCapabilities.ts": "/* Example only:\nexport const PAYMENT_LINKS_PILOT_DISABLED = false;\n*/\n" + read("lib/pilotCapabilities.ts"),
+    });
+    expect(() => parity.assertPilotCertifyingConfig(["PAYMENT_LINKS_PILOT_DISABLED"])).toThrow(/NOT PILOT CERTIFIED/);
+    expect(parity.shippedValue("PAYMENT_LINKS_PILOT_DISABLED")).toBe(true);
+  }, RELOAD_TIMEOUT_MS);
+
+  test.each([
+    "/* Example:\n CUSTODY_REOPEN_PILOT_DISABLED: false,\n*/\n",
+    "const example = {\n CUSTODY_REOPEN_PILOT_DISABLED: false,\n};\n",
+  ])("F3: door-map values ignore unrelated examples: %s", async (example) => {
+    const file = "convex/utils/fixedAssetLifecycleContainment.ts";
+    const parity = await parityWithSources({
+      [file]: example + read(file),
+    });
+    expect(parity.shippedValue("CUSTODY_REOPEN_PILOT_DISABLED")).toBe(true);
+  }, RELOAD_TIMEOUT_MS);
+
+  test("F4: replacing only the manual-journal guard cannot certify", async () => {
+    vi.resetModules();
+    vi.doMock("@/convex/utils/manualJournalContainment", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../convex/utils/manualJournalContainment")>()),
+      assertManualJournalsEnabled: () => undefined,
+    }));
+    const parity = await import("./pilotConfigParity");
+    expect(() => parity.assertPilotCertifyingConfig(["MANUAL_JOURNALS_PILOT_DISABLED"])).toThrow(/NOT PILOT CERTIFIED.*server guard refusal/);
+    expect(parity.pilotModuleBasenames()).toContain("manualJournalContainment");
+  }, RELOAD_TIMEOUT_MS);
 });
 
 describe("pilot config parity", () => {
@@ -102,6 +177,20 @@ describe("the door-opening detector", () => {
   const names = ["EXAMPLE_PILOT_DISABLED"];
   const opens = (src: string) => opensAPilotDoor(src, basenames, names);
 
+  test.each([
+    `${DO_MOCK} /* comment */ ("@/convex/utils/fixedAssetLifecycleContainment", () => ({ assertFixedAssetLifecycleAllowed: () => undefined }));`,
+    `${SPY}(await import("@/convex/utils/fixedAssetLifecycleContainment"), "assertFixedAssetLifecycleAllowed").mockImplementation(() => undefined);`,
+  ])("F2: detects guard replacement through AST: %s", (src) => {
+    expect(opensAPilotDoor(src, pilotModuleBasenames(), pilotSwitchNames())).toBe(true);
+  });
+
+  test("F4: detects both mock and spy replacements of the manual-journal guard", () => {
+    const modules = pilotModuleBasenames();
+    const switches = pilotSwitchNames();
+    expect(opensAPilotDoor(`${DO_MOCK}("@/convex/utils/manualJournalContainment", () => ({}));`, modules, switches)).toBe(true);
+    expect(opensAPilotDoor(`${SPY}(mod, "assertManualJournalsEnabled").mockImplementation(() => undefined);`, modules, switches)).toBe(true);
+  });
+
   test("derives the pilot modules from the source, including the re-export module", () => {
     expect(pilotModuleBasenames()).toEqual(
       expect.arrayContaining([
@@ -140,6 +229,8 @@ describe("the door-opening detector", () => {
     expect(opens(`${SPY}(mod, 'isExampleDisabled');`)).toBe(true);
     expect(opens(`${SPY}(mod, "EXAMPLE_PILOT_DISABLED", "get");`)).toBe(true);
     expect(opens(`import { openThing } from "../test-utils/rt11DoorSwitches";`)).toBe(true);
+    expect(opens(`await import("../test-utils/rt11DoorSwitches");`)).toBe(true);
+    expect(opens(`${SPY}(await import("./gateModule"), "aliasedGuard").mockImplementation(() => undefined);`)).toBe(true);
   });
 
   test("a mock of the manifest itself opens a door", () => {
@@ -151,6 +242,8 @@ describe("the door-opening detector", () => {
     expect(opens(`${MOCK}("./rateLimit", () => ({}));`)).toBe(false);
     expect(opens(`import { x } from "./utils/gateModule";`)).toBe(false);
     expect(opens(`${SPY}(console, "log");`)).toBe(false);
+    expect(opens(`// ${DO_MOCK}("./gateModule", () => ({}));`)).toBe(false);
+    expect(opens(`const example = '${SPY}(mod, "assertExampleAllowed")';`)).toBe(false);
   });
 });
 

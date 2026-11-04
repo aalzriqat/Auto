@@ -1,5 +1,5 @@
 {
-  "note": "SCRUM-810: legacy suites that open a pilot door through a mock. They are NON-PILOT-CERTIFYING and cannot satisfy SCRUM-760 G2/G3/G7. Round 2 widened the detector (import() form, .ts/.js suffix, backticks, computed specifiers, mocks of any module that declares or re-exports a switch) and added convex/dealCommissionsPilot.test.ts, the one suite it newly found. After that one-time widening this list may only shrink: add the header NON-PILOT-CERTIFYING to a suite you touch, or make it pilot certifying, and remove it here.",
+  "note": "SCRUM-810: legacy suites that replace pilot configuration through a mock, opening or closing a door. They are NON-PILOT-CERTIFYING and cannot satisfy SCRUM-760 G2/G3/G7. Round 2 widened the detector (import() form, .ts/.js suffix, backticks, computed specifiers, mocks of any module that declares or re-exports a switch) and added convex/dealCommissionsPilot.test.ts, the one suite it newly found. Its mock closes the commission-lines door. After that one-time widening this list may only shrink: add the header NON-PILOT-CERTIFYING to a suite you touch, or make it pilot certifying, and remove it here.",
   "files": [
     "components/accounting/CollectionsTabFcCheque.test.tsx",
     "components/accounting/CollectionsTabLegacyRefund.test.tsx",
@@ -90,7 +90,6 @@
     "convex/scrum693VehicleNotReadyForSale.test.ts",
     "convex/scrum69FinanceDoor.test.ts",
     "convex/scrum802CashSaleExtrasSwitchAttack.test.ts",
-    "convex/scrum802OptOutCensus.test.ts",
     "convex/subledger.test.ts",
     "convex/supplierConcession.scrum766c.test.ts",
     "convex/supplierCostRecoveries.test.ts",
@@ -101,7 +100,6 @@
     "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
     "convex/vehicleOwnershipIntake.test.ts",
     "convex/vehicleSupplierIdentity.test.ts",
-    "convex/vehicles.ownershipRemediation.test.ts",
-    "scripts/legacyCollectionRefundOptOutCensus.test.ts"
+    "convex/vehicles.ownershipRemediation.test.ts"
   ]
 }

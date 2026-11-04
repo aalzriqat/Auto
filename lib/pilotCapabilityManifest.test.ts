@@ -7,6 +7,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { commonAr, commonEn } from "@/lib/i18n/domains/common";
 import { pilotSwitchDeclarations, shippedValue, switchModules } from "../test-utils/pilotConfigParity";
+import { discoverPilotSources } from "../test-utils/pilotSourceDiscovery";
 import {
   PILOT_CAPABILITIES,
   PILOT_SERVER_BINDINGS,
@@ -45,14 +46,8 @@ const SOURCE_ROOTS = readdirSync(ROOT).filter(
 let declaredCache: string[] | null = null;
 function declaredSwitches(): string[] {
   if (declaredCache) return declaredCache;
-  const names = new Set<string>();
-  for (const root of SOURCE_ROOTS) {
-    for (const rel of walk(root, isSource)) {
-      const text = read(rel);
-      if (!text.includes("_PILOT_")) continue;
-      for (const d of pilotSwitchDeclarations(text, rel)) names.add(d.name);
-    }
-  }
+  const sources = new Map(SOURCE_ROOTS.flatMap((root) => walk(root, isSource)).map((rel) => [rel, read(rel)]));
+  const names = new Set(discoverPilotSources(sources, new Set()).declarations.map((declaration) => declaration.name));
   declaredCache = [...names].sort();
   return declaredCache;
 }
@@ -138,9 +133,9 @@ describe("pilot capability manifest", () => {
 
   test("server: every switch with a refusing door has a guard the parity check calls", () => {
     const guarded = Object.keys(PILOT_SERVER_GUARDS).sort();
-    const expected = (Object.keys(PILOT_SWITCHES) as PilotSwitchKey[])
-      .filter((key) => /^(FIXED_ASSET|CUSTOMER_CREDIT|SALE_INVOICE|LEGACY_COLLECTION|CLEARED_CHEQUE|SUPPLIER_|CUSTODY_|MANUAL_FINANCE|EXPECTED_PAYMENT|DIRECT_COMMISSION|VEHICLE_OWNERSHIP|PAID_LANDED)/.test(key))
-      .sort();
+    const expected = [...new Set(PILOT_CAPABILITIES
+      .filter((cap) => cap.doors.some((door) => door.guards.some((guard) => guard.startsWith("assert"))))
+      .flatMap((cap) => cap.switches))].sort();
     expect(guarded).toEqual(expected);
   });
 

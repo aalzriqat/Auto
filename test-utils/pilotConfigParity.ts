@@ -8,74 +8,41 @@
  * 2. every module binding the server imports the switch through (`PILOT_SERVER_BINDINGS`, e.g. the
  *    payment-link switch that `paymentIntents` imports from `saleDebtContainment`, not from its
  *    declaring module);
- * 3. the server guard itself (`PILOT_SERVER_GUARDS`): the `assert...Allowed()` the mutation calls
+ * 3. the server guard itself (`PILOT_SERVER_GUARDS`): the assertion the mutation calls
  *    must throw exactly when the shipped switch is on, so a mock that replaces only the guard is
  *    caught even if every constant is intact.
  *
  * A suite that claims pilot certification calls `assertPilotCertifyingConfig()` in `beforeAll`; any
  * difference throws `NOT PILOT CERTIFIED`, even if every assertion in the suite would otherwise pass.
  *
- * A suite that must open a door (a historical lifecycle suite) cannot satisfy SCRUM-760 G2/G3/G7.
+ * A suite that replaces pilot configuration (a historical lifecycle suite) cannot satisfy SCRUM-760 G2/G3/G7.
  * It carries the header `NON-PILOT-CERTIFYING` (see `pilotConfigParity.test.ts`).
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { PILOT_SERVER_BINDINGS, PILOT_SERVER_GUARDS, PILOT_SWITCHES, type PilotSwitchKey } from "../lib/pilotCapabilityManifest";
+import { discoverPilotSources, unwrap, type PilotSourceDiscovery } from "./pilotSourceDiscovery";
+import { PILOT_CAPABILITIES, PILOT_SERVER_BINDINGS, PILOT_SERVER_GUARDS, PILOT_SWITCHES, type PilotSwitchKey } from "../lib/pilotCapabilityManifest";
 
 const ROOT = path.resolve(__dirname, "..");
 const SOURCE_DIRS = ["convex", "lib"];
-const SWITCH_NAME = /_PILOT_(?:DISABLED|REQUIRED|REFUSED)$/;
-
 export interface PilotConfigMismatch {
   readonly switch: PilotSwitchKey;
   readonly shipped: boolean | null;
-  readonly effective: boolean;
-  /** Which measurement disagreed: the manifest reader, a module binding, or the server guard. */
+  readonly effective: boolean | null;
   readonly via: string;
 }
 
-export interface SwitchDeclaration {
-  readonly name: string;
-  /** `constant`: a standalone switch. `doorMap`: a key of an exported object of switches. */
-  readonly kind: "constant" | "doorMap";
+export type { SwitchDeclaration } from "./pilotSourceDiscovery";
+
+/** Names come from the same door records that define the manifest's refusing operations. */
+export function pilotGuardNames(): string[] {
+  return [...new Set(PILOT_CAPABILITIES.flatMap((cap) => cap.doors.flatMap((door) => door.guards)))].sort();
 }
 
-const hasExport = (st: ts.Statement): boolean =>
-  ts.canHaveModifiers(st) && (ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ?? false);
-
-function unwrap(expr: ts.Expression | undefined): ts.Expression | undefined {
-  let e = expr;
-  while (e && (ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isParenthesizedExpression(e))) e = e.expression;
-  return e;
-}
-
-/**
- * Structural discovery, so a type annotation, a different initializer or a line break cannot hide
- * a switch: every exported variable whose name ends in `_PILOT_DISABLED|REQUIRED|REFUSED`, and every
- * such key of an exported object literal.
- */
-export function pilotSwitchDeclarations(text: string, fileName = "source.ts"): SwitchDeclaration[] {
-  const out: SwitchDeclaration[] = [];
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
-  for (const st of sf.statements) {
-    if (!ts.isVariableStatement(st) || !hasExport(st)) continue;
-    for (const decl of st.declarationList.declarations) {
-      if (!ts.isIdentifier(decl.name)) continue;
-      const init = unwrap(decl.initializer);
-      if (init && ts.isObjectLiteralExpression(init)) {
-        for (const prop of init.properties) {
-          const key = prop.name;
-          if (key && (ts.isIdentifier(key) || ts.isStringLiteral(key)) && SWITCH_NAME.test(key.text)) {
-            out.push({ name: key.text, kind: "doorMap" });
-          }
-        }
-      } else if (SWITCH_NAME.test(decl.name.text)) {
-        out.push({ name: decl.name.text, kind: "constant" });
-      }
-    }
-  }
-  return out;
+/** Discover local named exports as well as direct exported declarations. */
+export function pilotSwitchDeclarations(text: string, fileName = "source.ts") {
+  return discoverPilotSources(new Map([[fileName, text]]), new Set()).declarations;
 }
 
 function walkSources(dir: string, out: string[] = []): string[] {
@@ -88,113 +55,50 @@ function walkSources(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const stripExt = (rel: string): string => rel.replace(/\.tsx?$/, "");
-const WHOLE_MODULE_REEXPORT = /^export\s+\*\s+from\s/m;
-
-interface ParsedSource {
-  readonly module: string;
-  readonly text: string;
-  readonly declarations: SwitchDeclaration[];
-  /** Local names listed in `export { ... }` (with or without `from`). */
-  readonly namedExports: string[];
-  /** Modules this file re-exports wholesale with `export * from`. */
-  readonly starFrom: string[];
-}
-
-function resolveSpecifier(fromModule: string, specifier: string): string | null {
-  if (specifier.startsWith("@/")) return specifier.slice(2);
-  if (!specifier.startsWith(".")) return null;
-  return path.posix.normalize(path.posix.join(path.posix.dirname(fromModule), specifier));
-}
-
-let parsed: ParsedSource[] | null = null;
-function parsedSources(): ParsedSource[] {
-  parsed ??= SOURCE_DIRS.flatMap((dir) => walkSources(dir)).flatMap((rel) => {
-    const text = readFileSync(path.join(ROOT, rel), "utf8");
-    // Only a file that names a switch, or re-exports a whole module, can declare or re-export one.
-    // Parsing every file is what made this slow under coverage.
-    if (!text.includes("_PILOT_") && !WHOLE_MODULE_REEXPORT.test(text)) return [];
-    const moduleId = stripExt(rel);
-    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true);
-    const namedExports: string[] = [];
-    const starFrom: string[] = [];
-    for (const st of sf.statements) {
-      if (!ts.isExportDeclaration(st) || st.isTypeOnly) continue;
-      if (st.exportClause && ts.isNamedExports(st.exportClause)) {
-        for (const el of st.exportClause.elements) namedExports.push((el.propertyName ?? el.name).text);
-      } else if (!st.exportClause && st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)) {
-        const target = resolveSpecifier(moduleId, st.moduleSpecifier.text);
-        if (target) starFrom.push(target);
-      }
-    }
-    return [{ module: moduleId, text, declarations: pilotSwitchDeclarations(text, rel), namedExports, starFrom }];
-  });
-  return parsed;
+let discovered: PilotSourceDiscovery | null = null;
+function discoveredSources(): PilotSourceDiscovery {
+  discovered ??= discoverPilotSources(new Map(
+    SOURCE_DIRS.flatMap((dir) => walkSources(dir)).map((rel) => [rel, readFileSync(path.join(ROOT, rel), "utf8")])
+  ), new Set(pilotGuardNames()));
+  return discovered;
 }
 
 export interface SwitchModules {
-  /** Repository-relative module (no extension) that declares each switch. */
   readonly declaring: ReadonlyMap<string, string>;
-  /** Other modules that export the same constant, so the server can import it from there. */
   readonly reexporting: ReadonlyMap<string, readonly string[]>;
 }
 
 let modules: SwitchModules | null = null;
-/** Where each switch is declared and which other modules re-export it (named or `export *`). */
 export function switchModules(): SwitchModules {
   if (modules) return modules;
-  const files = parsedSources();
-  const declaring = new Map<string, string>();
-  for (const f of files) for (const d of f.declarations) if (d.kind === "constant") declaring.set(d.name, f.module);
-  const exportedBy = new Map<string, Set<string>>();
-  for (const [key, mod] of declaring) exportedBy.set(key, new Set([mod]));
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const f of files) {
-      for (const [key, set] of exportedBy) {
-        const viaNamed = f.namedExports.includes(key);
-        const viaStar = f.starFrom.some((target) => set.has(target));
-        if ((viaNamed || viaStar) && !set.has(f.module)) {
-          set.add(f.module);
-          changed = true;
-        }
-      }
-    }
-  }
+  const { declarations, exportedBy } = discoveredSources();
+  const declaring = new Map(declarations.filter((decl) => decl.kind === "constant").map((decl) => [decl.name, decl.module]));
   const reexporting = new Map<string, readonly string[]>();
-  for (const [key, set] of exportedBy) reexporting.set(key, [...set].filter((m) => m !== declaring.get(key)).sort());
+  for (const [key, module] of declaring) {
+    reexporting.set(key, [...(exportedBy.get(key) ?? [])].filter((other) => other !== module).sort());
+  }
   modules = { declaring, reexporting };
   return modules;
 }
 
-/** Basenames of every module that declares or re-exports a switch, plus the manifest and the gate that applies them. */
+/** Include every switch exporter and every module exporting one of the declared door guards. */
 export function pilotModuleBasenames(): string[] {
-  const { declaring, reexporting } = switchModules();
+  const { exportedBy, guardModules } = discoveredSources();
   const names = new Set<string>(["pilotCapabilityManifest", "cashSalePilotGate"]);
-  for (const mod of declaring.values()) names.add(path.posix.basename(mod));
-  for (const list of reexporting.values()) for (const mod of list) names.add(path.posix.basename(mod));
-  for (const f of parsedSources()) {
-    if (f.declarations.some((d) => d.kind === "doorMap")) names.add(path.posix.basename(f.module));
+  for (const mod of [...guardModules, ...[...exportedBy.values()].flatMap((set) => [...set])]) {
+    names.add(path.posix.basename(mod));
   }
   return [...names].sort();
 }
 
-/** The switch names a test could spy on or set (constants and door-map keys). */
 export function pilotSwitchNames(): string[] {
-  return [...new Set(parsedSources().flatMap((f) => f.declarations.map((d) => d.name)))].sort();
+  return [...new Set(discoveredSources().declarations.map((decl) => decl.name))].sort();
 }
 
-/** The value written in source: `export const KEY[: type] = true`, or `KEY: true,` inside a door map. */
+/** Only actual exported declaration initializers count. Ambiguous or nonliteral evidence is unavailable. */
 export function shippedValue(key: string): boolean | null {
-  const own = new RegExp(`^export const ${key}(?:\\s*:\\s*[^=]+?)?\\s*=\\s*(true|false)\\b`, "m");
-  const entry = new RegExp(`^\\s*${key}:\\s*(true|false)\\b`, "m");
-  // Only files that declare a switch can hold its value, and that is a handful, not the whole tree.
-  for (const f of parsedSources()) {
-    if (f.declarations.length === 0 || !f.text.includes(key)) continue;
-    const hit = own.exec(f.text) ?? entry.exec(f.text);
-    if (hit) return hit[1] === "true";
-  }
-  return null;
+  const declarations = discoveredSources().declarations.filter((decl) => decl.name === key);
+  return declarations.length === 1 ? declarations[0]!.value : null;
 }
 
 const refuses = (guard: () => void): boolean => {
@@ -230,6 +134,10 @@ export function pilotConfigMismatches(
   const out: PilotConfigMismatch[] = [];
   for (const key of keys) {
     const shipped = shippedValue(key);
+    const listed = new Set((PILOT_SERVER_BINDINGS[key] ?? []).map((binding) => binding.module));
+    for (const moduleId of switchModules().reexporting.get(key) ?? []) {
+      if (!listed.has(moduleId)) out.push({ switch: key, shipped, effective: null, via: `unmeasured binding in ${moduleId}` });
+    }
     for (const { via, effective } of readings(key)) {
       if (shipped === null || shipped !== effective) out.push({ switch: key, shipped, effective, via });
     }
@@ -260,22 +168,57 @@ const DOOR_HELPERS = [
   "pilotSwitchMock",
   "fixedAssetLifecycleSwitch",
 ];
-const MOCK_CALL = /vi\.(?:mock|doMock)\s*\(\s*(?:import\s*\(\s*)?["'`]([^"'`]+)["'`]/g;
-// vi.mock / vi.doMock whose first argument is not a string literal or import("literal"), or is a template with a substitution.
-const COMPUTED_SPECIFIER = /vi\.(?:mock|doMock)\s*\(\s*(?!["'`]|import\s*\(\s*["'`])|vi\.(?:mock|doMock)\s*\(\s*`[^`]*\$\{/;
-const HELPER_IMPORT = new RegExp(String.raw`["'\`][^"'\`]*/(?:${DOOR_HELPERS.join("|")})(?:\.[cm]?[jt]s)?["'\`]`);
+const basename = (specifier: string): string => path.posix.basename(specifier).replace(/\.[cm]?[jt]sx?$/, "");
 
-/**
- * True when a test source mocks a pilot module in any supported spelling (plain, `.ts` or `.js`
- * suffix, backtick, `import()` form), mocks with a computed specifier (which cannot be read), spies
- * on a guard or switch, or imports a door-opening helper.
- */
-export function opensAPilotDoor(src: string, basenames: readonly string[], names: readonly string[]): boolean {
-  if (COMPUTED_SPECIFIER.test(src)) return true;
-  for (const m of src.matchAll(MOCK_CALL)) {
-    const base = path.posix.basename(m[1]!).replace(/\.[cm]?[jt]sx?$/, "");
-    if (basenames.includes(base)) return true;
+function stringArgument(expr: ts.Expression | undefined): string | undefined {
+  const argument = unwrap(expr);
+  if (argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) return argument.text;
+  return undefined;
+}
+
+function moduleArgument(expr: ts.Expression | undefined): string | undefined {
+  const argument = unwrap(expr);
+  if (argument && ts.isAwaitExpression(argument)) return moduleArgument(argument.expression);
+  if (argument && ts.isCallExpression(argument) && argument.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    return stringArgument(argument.arguments[0]);
   }
-  const spied = new RegExp(String.raw`vi\.spyOn\s*\([^)]*?["'\`](?:assert\w*Allowed|is\w*Disabled|${names.join("|")})["'\`]`);
-  return spied.test(src) || HELPER_IMPORT.test(src);
+  return stringArgument(argument);
+}
+
+function vitestMethod(call: ts.CallExpression): string | undefined {
+  const callee = unwrap(call.expression);
+  if (!callee || !ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)) return undefined;
+  if (!["vi", "vitest"].includes(callee.expression.text)) return undefined;
+  return callee.name.text;
+}
+
+function changesPilotCall(call: ts.CallExpression, basenames: readonly string[], names: ReadonlySet<string>): boolean {
+  const method = vitestMethod(call);
+  if (method === "mock" || method === "doMock") {
+    const specifier = moduleArgument(call.arguments[0]);
+    return specifier === undefined || basenames.includes(basename(specifier));
+  }
+  if (method !== "spyOn") return false;
+  const target = moduleArgument(call.arguments[0]);
+  if (target !== undefined && basenames.includes(basename(target))) return true;
+  const spied = stringArgument(call.arguments[1]);
+  if (spied === undefined) return true;
+  return names.has(spied) || /^(?:assert\w*(?:Allowed|Enabled)|is\w*Disabled)$/.test(spied);
+}
+
+/** Inspect invocations, not comments, strings or formatting. Unreadable mock targets refuse certification. */
+export function opensAPilotDoor(src: string, basenames: readonly string[], names: readonly string[]): boolean {
+  const source = ts.createSourceFile("test.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const spiedNames = new Set([...names, ...pilotGuardNames()]);
+  function visit(node: ts.Node): boolean {
+    if (ts.isCallExpression(node) && changesPilotCall(node, basenames, spiedNames)) return true;
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      if (DOOR_HELPERS.includes(basename(stringArgument(node.arguments[0]) ?? ""))) return true;
+    }
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      if (DOOR_HELPERS.includes(basename(node.moduleSpecifier.text))) return true;
+    }
+    return ts.forEachChild(node, visit) ?? false;
+  }
+  return visit(source);
 }

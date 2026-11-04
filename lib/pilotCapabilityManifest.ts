@@ -16,6 +16,7 @@
  */
 import { PAYMENT_LINKS_PILOT_DISABLED } from "./pilotCapabilities";
 import { MANUAL_JOURNALS_PILOT_DISABLED } from "../convex/utils/pilotSwitches";
+import { assertManualJournalsEnabled } from "../convex/utils/manualJournalContainment";
 import {
   assertFixedAssetLifecycleAllowed,
   isFixedAssetLifecycleDisabled,
@@ -101,6 +102,7 @@ export const PILOT_SERVER_BINDINGS: Readonly<
  * when the constant is untouched.
  */
 export const PILOT_SERVER_GUARDS: Readonly<Partial<Record<PilotSwitchKey, () => void>>> = {
+  MANUAL_JOURNALS_PILOT_DISABLED: () => assertManualJournalsEnabled(),
   FIXED_ASSET_LIFECYCLE_PILOT_DISABLED: () => assertFixedAssetLifecycleAllowed(),
   CUSTOMER_CREDIT_PAYOUT_PILOT_DISABLED: () => assertCustomerCreditPayoutAllowed(),
   SALE_INVOICE_RECEIPT_DOORS_PILOT_DISABLED: () => assertSaleInvoiceReceiptDoorsAllowed(),
