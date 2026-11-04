@@ -15,7 +15,11 @@ import { globMatches } from "../intelligence/jevImpact.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 import { parseArgs } from "node:util";
 
-const codeUnitCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const codeUnitCompare = (a, b) => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
 const normalise = file => file.replaceAll("\\", "/");
 
 /** @param {string} dir @param {string[]} out */
@@ -44,6 +48,15 @@ export function loadRecords(root) {
   return { records, problems };
 }
 
+function classifyBrowserRecord(record, changedFiles) {
+  if (changedFiles === null) return "browserSelected";
+  const globs = Array.isArray(record.sourceGlobs) ? record.sourceGlobs : [];
+  const touched = changedFiles.some(file => file === record.impl?.file || globs.some(glob => globMatches(glob, file)));
+  if (touched) return "browserSelected";
+  if (globs.length === 0) return "browserUnmapped";
+  return "browserNotRequired";
+}
+
 /**
  * Active backend records run here. An active browser record is required at PR time only when the PR touches its
  * screen: a changed file matches one of its `sourceGlobs`, or its own bound spec changed. A selected browser record
@@ -60,15 +73,9 @@ export function selectForPr(records, changedFiles = null) {
     else if (record.status === "candidate") selection.candidate += 1;
     else if (record.level === "cloud") selection.cloud.push(record);
     else if (record.level !== "browser") selection.run.push(record);
-    else if (changedFiles === null) {
-      selection.changedFilesUnavailable = true;
-      selection.browserSelected.push(record);
-    } else {
-      const globs = Array.isArray(record.sourceGlobs) ? record.sourceGlobs : [];
-      const touched = changedFiles.some(file => file === record.impl?.file || globs.some(glob => globMatches(glob, file)));
-      if (touched) selection.browserSelected.push(record);
-      else if (globs.length === 0) selection.browserUnmapped.push(record);
-      else selection.browserNotRequired.push(record);
+    else {
+      if (changedFiles === null) selection.changedFilesUnavailable = true;
+      selection[classifyBrowserRecord(record, changedFiles)].push(record);
     }
   }
   return selection;
@@ -76,7 +83,19 @@ export function selectForPr(records, changedFiles = null) {
 
 /** Files changed between `base` and HEAD (three-dot: since the merge base). Throws when Git cannot say. */
 export function changedFilesSince(root, base) {
-  const out = execFileSync(resolveTrustedGitExecutable(), ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", `${base}...HEAD`], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (typeof base !== "string" || /[^A-Za-z0-9_./-]/.test(base) || base.includes("..") ||
+      base.split("/").some(part => !/^[A-Za-z0-9_]/.test(part) || part.endsWith(".") || part.endsWith(".lock"))) {
+    throw new Error("Invalid base: expected a full 40-character commit SHA or a safe Git ref name");
+  }
+  const git = resolveTrustedGitExecutable();
+  let sha;
+  try {
+    sha = execFileSync(git, ["rev-parse", "--verify", "--end-of-options", `${base}^{commit}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch {
+    throw new Error("Invalid base: must resolve to an existing Git commit");
+  }
+  if (!/^[0-9a-f]{40}$/i.test(sha)) throw new Error("Invalid base: Git did not resolve a full 40-character commit SHA");
+  const out = execFileSync(git, ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames", "--end-of-options", `${sha}...HEAD`, "--"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   return out.split("\0").filter(Boolean).map(normalise);
 }
 

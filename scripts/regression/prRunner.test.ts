@@ -1,11 +1,12 @@
 // @vitest-environment node
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
-import { evaluate, evaluatePlaywright, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { changedFilesSince, evaluate, evaluatePlaywright, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // The runner is exercised against a throwaway project and the real Vitest: the verdicts below come from
 // executed tests, not from a stubbed report. Fixture tests use Vitest globals so the project needs no node_modules.
@@ -39,6 +40,44 @@ function makeProject(files: Record<string, string>, records: FixtureRecord[]): s
 }
 
 const config = (root: string) => path.join(root, "vitest.config.mjs");
+
+describe("PR diff base", () => {
+  let root: string;
+  let baseSha: string;
+  const git = (args: string[]) => execFileSync(resolveTrustedGitExecutable(), args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
+
+  beforeAll(() => {
+    root = mkdtempSync(path.join(tmpdir(), "pr-runner-git-"));
+    roots.push(root);
+    git(["init", "--initial-branch=main"]);
+    git(["-c", "user.name=Runner Test", "-c", "user.email=runner@example.invalid", "commit", "--allow-empty", "-m", "base"]);
+    baseSha = git(["rev-parse", "HEAD"]);
+    git(["update-ref", "refs/remotes/origin/main", baseSha]);
+    writeFileSync(path.join(root, "changed.txt"), "head change\n");
+    git(["add", "--", "changed.txt"]);
+    git(["-c", "user.name=Runner Test", "-c", "user.email=runner@example.invalid", "commit", "-m", "head"]);
+    git(["tag", "blob-base", git(["hash-object", "-w", "changed.txt"])]);
+    git(["checkout", "-b", "base-side", baseSha]);
+    writeFileSync(path.join(root, "base-only.txt"), "base branch change\n");
+    git(["add", "--", "base-only.txt"]);
+    git(["-c", "user.name=Runner Test", "-c", "user.email=runner@example.invalid", "commit", "-m", "base side"]);
+    git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(["checkout", "main"]);
+  });
+
+  it.each(["--output=probe", "-c core.pager=sh", "../../etc", "origin/main\n", "origin/main\u0000", "HEAD~1"])("refuses a hostile base before git: %j", base => {
+    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: expected a full 40-character commit SHA or a safe Git ref name");
+  });
+
+  it("accepts the workflow's full SHA and the CLI's default remote ref, preserving merge-base selection", () => {
+    expect(changedFilesSince(root, baseSha)).toEqual(["changed.txt"]);
+    expect(changedFilesSince(root, "origin/main")).toEqual(["changed.txt"]);
+  });
+
+  it.each(["missing-base", "blob-base"])("refuses a base that does not resolve to a commit: %s", base => {
+    expect(() => changedFilesSince(root, base)).toThrow("Invalid base: must resolve to an existing Git commit");
+  });
+});
 
 describe("PR scenario runner", () => {
   it("green control: a record bound to a passing test passes", () => {
