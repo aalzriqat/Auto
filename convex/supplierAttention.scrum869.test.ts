@@ -24,7 +24,7 @@ const insertSupplier = (ctx: SupplierDb, orgId: Id<"organizations">, userId: Id<
     createdBy: userId, updatedBy: userId, createdAt: NOW, updatedAt: NOW,
   } as never);
 
-async function seed(tag: string, permissions: string[] = ["view:finance"]) {
+async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   const t = convexTestWithComponents(schema, MODULES);
@@ -142,5 +142,10 @@ describe("SCRUM-869 supplier attention view", () => {
     await expect(attention(s, s.supplierId, NOW + 3 * DAY)).rejects.toThrow(/nowMs/);
     const noPerm = await seed("noperm", []);
     await expect(attention(noPerm)).rejects.toThrow();
+    // SCRUM-886 / ACC-10: the held and alerting lines are a SOURCED car's cost, so finance access alone is not enough.
+    const financeOnly = await seed("fin", ["view:finance"]);
+    await expect(attention(financeOnly), "finance without cost access").rejects.toThrow(/view:cost_price/);
+    const bothGrants = await seed("both");
+    await expect(attention(bothGrants)).resolves.toBeTruthy();
   });
 });

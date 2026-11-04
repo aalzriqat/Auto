@@ -22,6 +22,13 @@ function assertNowWithinSkew(nowMs: number): void {
   }
 }
 
+/**
+ * A SOURCED (consigned) car's supplier entitlement equals its acquisition cost, so the statement's amounts are cost-derived.
+ * Finance access alone does not grant cost access (SCRUM-886 / ACC-10, OWASP API3): both are required, enforced here on the
+ * server for the rows and the totals alike. The screen asks for the same pair before it queries.
+ */
+export const STATEMENT_PERMISSIONS = [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
+
 const row = v.object({
   kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
   id: v.string(),
@@ -67,7 +74,7 @@ export const settled = query({
   args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
   returns: v.object({ supplierId: v.id("suppliers"), payable: settledSection, receivable: settledSection }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
     const { payable, receivable } = await readSupplierSettled(ctx, args);
@@ -114,7 +121,7 @@ export const paymentsReconciliation = query({
     creditSide: v.literal("NOT_ATTRIBUTABLE"),
   }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
     return { supplierId: args.supplierId, ...(await readSupplierPaymentsReconciliation(ctx, args)) };
@@ -130,7 +137,7 @@ export const outstanding = query({
   },
   returns: v.object({ supplierId: v.id("suppliers"), payable: section, receivable: section }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     assertNowWithinSkew(args.nowMs);
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
@@ -181,7 +188,7 @@ export const attention = query({
   args: { orgId: v.id("organizations"), supplierId: v.id("suppliers"), nowMs: v.number() },
   returns: v.object({ supplierId: v.id("suppliers"), payable: attentionSection, receivable: attentionSection }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     assertNowWithinSkew(args.nowMs);
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);

@@ -8,14 +8,6 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { STATEMENT_FAMILY_LIMIT } from "./utils/supplierObligationDue";
-// SCRUM-802 legacy-cash-lifecycle opt-out: the seed completes a THROUGH_DEALERSHIP sale with no customer deposit, which the
-// full-payment pilot gate refuses. The sale only seeds the supplier payable; the suite proves the payments reconciliation, not
-// cash-sale completion, which scrum486Certification and the SCRUM-802 attack suites cover with the real switch.
-vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
-  CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
-}));
-
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
     limit: vi.fn().mockResolvedValue({ ok: true }),
@@ -33,6 +25,8 @@ const PERMS = [
   "manage:finance", "view:finance",
   "view:commissions", "manage:commissions",
   "approve:requests",
+  // SCRUM-802: the pilot completes a CASH sale only once its full price is held as a deposit, which needs this authority.
+  "confirm:finance_disbursement",
 ];
 
 const SALE_PRICE = 12_500;
@@ -73,8 +67,15 @@ async function seed(tag: string) {
       sourcedFromName: "Amman Importer Co", sourceCost: ENTITLEMENT, sourcedSupplierId: supplierId,
     })
   );
+  // Pilot-legal sale: a CASH quote whose full price is held as a deposit before the sale completes (SCRUM-802 Option A).
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId, customerId, vehicleId, mode: "CASH", vehiclePrice: SALE_PRICE, downPayment: 0, termMonths: 0,
+  });
+  await asUser.mutation(api.deposits.create, {
+    orgId, quoteId, amount: SALE_PRICE, method: "CASH", idempotencyKey: `deposit-${tag}`,
+  });
   await asUser.mutation(api.sales.create, {
-    idempotencyKey: crypto.randomUUID(), orgId, vehicleId, customerId, salespersonId: userId, salePrice: SALE_PRICE,
+    idempotencyKey: crypto.randomUUID(), orgId, quoteId, vehicleId, customerId, salespersonId: userId, salePrice: SALE_PRICE,
     saleDate: Date.now(), status: "COMPLETED" as const, supplierSettlementRoute: "THROUGH_DEALERSHIP" as const,
   });
   const payable = (await t.run((ctx) => ctx.db.query("vehicleSupplierPayables").collect()))[0]!;
@@ -249,6 +250,20 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     });
     const r = await recon(s);
     expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
+  });
+
+  test("needs view:cost_price as well as view:finance (SCRUM-886): the paid amounts per payable are a SOURCED car's cost", async () => {
+    const s = await seed("nocost");
+    const roleId = await s.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: s.orgId, name: "Finance only", permissions: PERMS.filter((p) => p !== "view:cost_price") })
+    );
+    const userId = await s.t.run((ctx) => ctx.db.insert("users", { clerkId: "nocost_u2", email: "nc@e.com", name: "NC" }));
+    await s.t.run((ctx) => ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId }));
+    const asNoCost = s.t.withIdentity({ subject: "nocost_u2", clerkId: "nocost_u2" });
+    await expect(
+      asNoCost.query(api.supplierStatement.paymentsReconciliation, { orgId: s.orgId, supplierId: s.supplierId })
+    ).rejects.toThrow(/view:cost_price/);
+    await expect(recon(s)).resolves.toBeTruthy();
   });
 
   test("tenancy: another organization cannot read this supplier", async () => {

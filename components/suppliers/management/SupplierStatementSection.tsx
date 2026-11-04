@@ -152,6 +152,7 @@ export function SupplierStatementView({ statement }: Readonly<{ statement: Suppl
           {translate("SuppliersStmtTitle")}
         </h2>
         <p className="text-xs text-muted-foreground">{translate("SuppliersStmtNoNetNote")}</p>
+        <p className="text-xs text-muted-foreground">{translate("SuppliersStmtScopeNote")}</p>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <StatementRegion
@@ -389,7 +390,12 @@ export function SupplierAttentionView({ attention }: Readonly<{ attention: Suppl
 
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const { hasPermission, isLoading } = usePermissions();
-  const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
+  // The server requires the same pair (STATEMENT_PERMISSIONS): the amounts are a SOURCED car's cost (SCRUM-886 / ACC-10).
+  const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  // The supplier screen is not plan-gated but the statement is (accounting), so ask the plan first: a plan without
+  // accounting gets a truthful note instead of the query's "upgrade required" error.
+  const subscription = useQuery(api.subscriptions.getMySubscription, allowed ? { orgId } : "skip");
+  const accountingIncluded = subscription?.planDetails?.gates?.accounting === true;
   // The server checks `nowMs` against its own clock (24 h window), so a tab left open must not keep
   // the mount-time value: refresh it hourly, which re-subscribes the query with a current window.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -397,11 +403,13 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
     const timer = setInterval(() => setNowMs(Date.now()), NOW_REFRESH_MS);
     return () => clearInterval(timer);
   }, []);
-  const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
-  const attention = useQuery(api.supplierStatement.attention, allowed ? { orgId, supplierId, nowMs } : "skip");
-  const settled = useQuery(api.supplierStatement.settled, allowed ? { orgId, supplierId } : "skip");
-  const recon = useQuery(api.supplierStatement.paymentsReconciliation, allowed ? { orgId, supplierId } : "skip");
+  const visible = allowed && accountingIncluded;
+  const statement = useQuery(api.supplierStatement.outstanding, visible ? { orgId, supplierId, nowMs } : "skip");
+  const attention = useQuery(api.supplierStatement.attention, visible ? { orgId, supplierId, nowMs } : "skip");
+  const settled = useQuery(api.supplierStatement.settled, visible ? { orgId, supplierId } : "skip");
+  const recon = useQuery(api.supplierStatement.paymentsReconciliation, visible ? { orgId, supplierId } : "skip");
   if (!allowed) return null;
+  if (subscription !== undefined && !accountingIncluded) return <SupplierStatementPlanGate />;
   return (
     <div className="space-y-6">
       <SupplierStatementView statement={statement} />
@@ -409,6 +417,15 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
       {statement !== undefined && <SupplierSettledView settled={settled} />}
       {statement !== undefined && <SupplierReconView recon={recon} />}
     </div>
+  );
+}
+
+function SupplierStatementPlanGate() {
+  const translate = useTranslate();
+  return (
+    <p role="note" className="py-4 text-center text-sm text-muted-foreground">
+      {translate("SuppliersStmtPlanGate")}
+    </p>
   );
 }
 

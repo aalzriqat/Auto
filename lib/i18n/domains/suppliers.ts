@@ -249,8 +249,22 @@ const suppliersMessages = defineBilingualMessages({
   ],
   SuppliersStmtPayableTitle: ["We owe this supplier (A/P)", "مستحق للمورّد علينا (ذمم دائنة)"],
   SuppliersStmtReceivableTitle: ["This supplier owes us (A/R)", "مستحق لنا على المورّد (ذمم مدينة)"],
-  SuppliersStmtPayableEmpty: ["Nothing is outstanding to this supplier.", "لا يوجد مبلغ مستحق للمورّد."],
-  SuppliersStmtReceivableEmpty: ["This supplier owes us nothing outstanding.", "لا يوجد مبلغ مستحق لنا على المورّد."],
+  SuppliersStmtPayableEmpty: [
+    "No outstanding payable lines are linked to this supplier.",
+    "لا توجد بنود مستحقة للمورّد مرتبطة به.",
+  ],
+  SuppliersStmtReceivableEmpty: [
+    "No outstanding receivable lines are linked to this supplier.",
+    "لا توجد بنود مستحقة على المورّد مرتبطة به.",
+  ],
+  SuppliersStmtScopeNote: [
+    "This lists only lines linked to this supplier. Opening lines carried over from before the system and lines not yet linked to a supplier are not included, so it may not show everything owed.",
+    "تعرض هذه القائمة البنود المرتبطة بهذا المورّد فقط. البنود الافتتاحية المرحّلة من قبل النظام والبنود غير المرتبطة بمورّد بعد غير مشمولة، لذا قد لا تعرض كل المبالغ المستحقة.",
+  ],
+  SuppliersStmtPlanGate: [
+    "The supplier statement is not included in your current plan.",
+    "كشف حساب المورّد غير مشمول في خطتك الحالية.",
+  ],
   SuppliersStmtLoading: ["Loading the statement…", "جارٍ تحميل كشف الحساب…"],
   SuppliersStmtLoadError: [
     "The statement could not be loaded. Reload the page and try again.",
@@ -272,10 +286,13 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtHistoryTitle: ["Settled history", "سجل التسويات"],
   SuppliersStmtHistoryPaidTitle: ["Paid to this supplier (A/P)", "المدفوع للمورّد (ذمم دائنة)"],
   SuppliersStmtHistoryReceivedTitle: ["Received from this supplier (A/R)", "المقبوض من المورّد (ذمم مدينة)"],
-  SuppliersStmtHistoryPaidEmpty: ["Nothing has been paid to this supplier yet.", "لم يُدفع أي مبلغ للمورّد بعد."],
+  SuppliersStmtHistoryPaidEmpty: [
+    "No payments linked to this supplier are recorded yet.",
+    "لا توجد دفعات مرتبطة بهذا المورّد مسجّلة بعد.",
+  ],
   SuppliersStmtHistoryReceivedEmpty: [
-    "Nothing has been received from this supplier yet.",
-    "لم يُقبض أي مبلغ من المورّد بعد.",
+    "No receipts linked to this supplier are recorded yet.",
+    "لا توجد مقبوضات مرتبطة بهذا المورّد مسجّلة بعد.",
   ],
   SuppliersStmtHistoryTotalPaid: ["Total paid", "إجمالي المدفوع"],
   SuppliersStmtHistoryTotalReceived: ["Total received", "إجمالي المقبوض"],

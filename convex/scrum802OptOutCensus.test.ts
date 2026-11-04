@@ -75,7 +75,6 @@ const ALLOWED_OPT_OUTS: readonly string[] = [
   "convex/scrum69FinanceDoor.test.ts",
   "convex/supplierPayableSettlement.test.ts",
   "convex/supplierPayablesReconciliation.scrum651.test.ts",
-  "convex/supplierPaymentsRecon.scrum869.test.ts",
   "convex/supplierReceivables.test.ts",
 ];
 
