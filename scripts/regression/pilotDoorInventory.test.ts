@@ -134,6 +134,27 @@ describe("SCRUM-795 per-door inventory", () => {
     expect(problems).toEqual([]);
   });
 
+  test("every row of the oracle's blocked-doors section is bound to a test title that exists and calls the door", () => {
+    const oracle = read(ORACLE);
+    const start = oracle.indexOf("## SCRUM-760-DECISION-B-BLOCKED-DOORS");
+    expect(start, "oracle section missing").toBeGreaterThanOrEqual(0);
+    const rest = oracle.slice(start + 3);
+    const end = rest.indexOf("\n## ");
+    const section = end < 0 ? rest : rest.slice(0, end);
+    const rows = [...section.matchAll(/^\| `([\w./]+?)`[^|]*\| `(\w+)` \| `([^`]+)` \|$/gm)];
+    expect(rows.length, "rows in the section").toBe(7);
+    const file = "convex/pilotBlockedDoors.scrum795.test.ts";
+    const src = read(file);
+    const problems: string[] = [];
+    for (const [, door, code, title] of rows) {
+      if (!src.includes(`test("${title}"`)) problems.push(`${door}: no test titled "${title}"`);
+      if (!src.includes(code)) problems.push(`${door}: ${code} not in ${file}`);
+      if (!callsDoor(src, door)) problems.push(`${door}: not called in ${file}`);
+      if (!entries.some((e) => e.door === door && e.blocks?.some((b) => b.code === code))) problems.push(`${door}: inventory has no block with ${code}`);
+    }
+    expect(problems).toEqual([]);
+  });
+
   test("a door classed non-financial writes no ledger, cash or subledger table and calls no posting helper", () => {
     const FINANCIAL = /postAccountingEvent|postOrEnqueue|enqueueAccountingEvent|post[A-Z]\w*Occurrence|"journalEntries"|"journalLines"|"collectionPayments"|"cashMovements"|"bankTransactions"|"deposits"|"payrollRuns"|"expenses"|"transactions"|"receivables"/;
     const touching = entries.filter((x) => x.class === "NON_FINANCIAL" && FINANCIAL.test(live.get(x.door) ?? "")).map((x) => x.door);
