@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/sales/wizard/components/VehicleCostBar.tsx",
-      "callSiteId": "components/sales/wizard/components/VehicleCostBar.tsx:33:5",
+      "callSiteId": "components/sales/wizard/components/VehicleCostBar.tsx:35:5",
       "functionId": "expenses:totalByVehicle",
       "contractPath": "vehicleId",
       "kind": "TYPE_UNKNOWN",

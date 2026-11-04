@@ -5,7 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, requireOrgMember, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
 import { AppErrorCode, throwAppError } from "./utils/errors";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
 import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
@@ -362,7 +362,14 @@ export const list = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES]);
+    // SCRUM-902: one car's expenses sum to its landed cost, so that view needs view:cost_price. The shop-wide list does
+    // not, but its capitalized amounts (what each row added to a car's cost) are withheld below without it.
+    const { role } = await requireTenantAuth(
+      ctx,
+      args.orgId,
+      args.vehicleId ? [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_COST_PRICE] : [PERMISSIONS.VIEW_EXPENSES]
+    );
+    const mayReadCost = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let pageResult;
 
@@ -396,8 +403,10 @@ export const list = query({
             payerName = payer.name;
           }
         }
+        // Absent, never zeroed: a zero would read as "added nothing to the car's cost".
+        const { capitalizedAmount: _capitalizedAmount, ...withoutCapitalized } = exp;
         return {
-          ...exp,
+          ...(mayReadCost ? exp : withoutCapitalized),
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model} - ${vehicle.vin}` : null,
           payerName,
           status: exp.status || "PAID", // Default old records to PAID
@@ -419,7 +428,8 @@ export const totalByVehicle = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES]);
+    // SCRUM-902: the per-car total is the car's landed cost (a SCRUM-886 COST field), so it needs view:cost_price too.
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_COST_PRICE]);
 
     const expenses = await ctx.db
       .query("expenses")

@@ -105,7 +105,7 @@ async function seedWithoutPeriod() {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId, name: "Owner",
-      permissions: ["view:sales", "manage:finance", "view:finance", "create:expenses", "view:expenses"],
+      permissions: ["view:sales", "manage:finance", "view:finance", "view:cost_price", "create:expenses", "view:expenses"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));

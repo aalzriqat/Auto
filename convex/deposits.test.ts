@@ -20,6 +20,7 @@ vi.mock("./rateLimit", () => ({
 }));
 
 const PERMISSIONS = [
+  "view:cost_price", // listAccountingEvents payloads carry cost (SCRUM-902)
   "create:sales",
   "edit:sales",
   "view:sales",

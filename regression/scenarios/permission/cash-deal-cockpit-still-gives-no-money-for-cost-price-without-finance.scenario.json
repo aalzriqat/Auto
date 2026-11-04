@@ -1,0 +1,39 @@
+{
+  "id": "cash-deal-cockpit-still-gives-no-money-for-cost-price-without-finance",
+  "fingerprint": "30ef810b296533835f97f663e2c7db26c6d2ec2bf843cda9fb3f7a1635e19c3e",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-cost-no-finance",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "money",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "sales.dealCockpit: view:cost_price without view:finance still gets no money at all (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

@@ -1,0 +1,47 @@
+{
+  "id": "financed-deal-profit-withheld-without-cost-price-in-overview-and-cockpit",
+  "fingerprint": "59424b8e9d51bcd18864886e351d46b2a7c647fab9811a5276b66246550d104d",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-finance-no-cost",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "profit.reason",
+      "value": "CostAccessRequired"
+    },
+    {
+      "observable": "vehicleCostLine",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealOverview.test.ts",
+    "testName": "SCRUM-902: view:finance without view:cost_price gets the financed profit withheld as CostAccessRequired, in the overview and in the cockpit"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

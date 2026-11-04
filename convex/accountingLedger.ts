@@ -370,7 +370,8 @@ export const listAccountingEvents = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: event payloads carry costMinor and cogsMinor, so this reads like the journal readers.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const limit = Math.min(args.limit ?? 50, 200);

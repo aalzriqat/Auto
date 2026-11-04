@@ -1,0 +1,39 @@
+{
+  "id": "expenses-total-by-vehicle-still-serves-expenses-and-cost-price",
+  "fingerprint": "54872c24fb157c614720645a19f02d14261296e20485fcdf0d5cf06f8415eb17",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-expenses-and-cost",
+        "org": "A"
+      },
+      "action": "expenses.totalByVehicle",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "total"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "expenses.totalByVehicle: a role holding both view:expenses and view:cost_price still reads the total (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

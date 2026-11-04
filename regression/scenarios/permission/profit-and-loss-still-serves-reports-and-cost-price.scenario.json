@@ -1,0 +1,39 @@
+{
+  "id": "profit-and-loss-still-serves-reports-and-cost-price",
+  "fingerprint": "7129b63d3781ba57a768d3b1dd1df3c0ef1b8e1661db125f120289142a6c98bb",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-and-cost",
+        "org": "A"
+      },
+      "action": "reports.getProfitAndLoss",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "report"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "reports.getProfitAndLoss: a role holding both view:reports and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

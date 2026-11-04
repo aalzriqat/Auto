@@ -2655,11 +2655,19 @@ export const dealCockpit = query({
       firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
     }
 
+    // SCRUM-902: the management profit is measured against what the dealership paid the supplier, so it follows
+    // view:cost_price as well as view:finance. Both keys carry it (`managementProfit` is the transitional duplicate).
+    const mayReadCost =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const costWithheld = { available: false, reason: "CostAccessRequired" } as const;
+    const cockpitMoney = await buildCockpitMoney(ctx, app, quote, settlementFacts);
+
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: {
-        ...(await buildCockpitMoney(ctx, app, quote, settlementFacts)),
+        ...cockpitMoney,
+        ...(mayReadCost ? {} : { profit: costWithheld, managementProfit: costWithheld }),
         // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
         forward: {
           dueMinor: forwardProof.dueMinor,

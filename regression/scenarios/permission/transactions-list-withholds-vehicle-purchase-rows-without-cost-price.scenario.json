@@ -1,0 +1,47 @@
+{
+  "id": "transactions-list-withholds-vehicle-purchase-rows-without-cost-price",
+  "fingerprint": "2687551cf46651c746211bb2ebff62aefd49e101bf8ffda4ef968e6c8448ef36",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "transactions.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehiclePurchaseRows",
+      "value": "absent"
+    },
+    {
+      "observable": "otherRows",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/transactions.test.ts",
+    "testName": "a role with view:finance but not view:cost_price gets no purchase-cost rows and the other rows unchanged"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

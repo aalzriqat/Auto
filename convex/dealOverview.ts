@@ -551,7 +551,11 @@ export const financedDealOverview = query({
           expensesReason !== null
             ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: expensesReason }
             : { ...cockpit.money.expenses, reason: null },
-        profit: routeSpecificProfit({
+        // SCRUM-902: every route's profit is measured against acquisition cost (the STOCK one carries a VEHICLE_COST
+        // line, the consignment one the supplier's settlement), so a caller without view:cost_price gets the reason.
+        profit: !mayReadCost
+          ? ({ available: false, reason: "CostAccessRequired" } as const)
+          : routeSpecificProfit({
           app,
           consigned,
           money: cockpit.money,

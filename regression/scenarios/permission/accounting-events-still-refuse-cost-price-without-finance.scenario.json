@@ -1,0 +1,43 @@
+{
+  "id": "accounting-events-still-refuse-cost-price-without-finance",
+  "fingerprint": "d36e2de2d3288cd823601b32c196601889f5aadce29c9d67e34f3f2125c07ef3",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "accountingLedger.listAccountingEvents",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:finance"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "accountingLedger.listAccountingEvents: view:cost_price without view:finance is still refused (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

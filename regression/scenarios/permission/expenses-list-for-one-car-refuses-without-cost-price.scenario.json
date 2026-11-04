@@ -1,0 +1,47 @@
+{
+  "id": "expenses-list-for-one-car-refuses-without-cost-price",
+  "fingerprint": "77c0008ded9ea0646348675dc355074007311849dd1acfb31231f678ac509df4",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-expenses-only",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "expenses.list: a role without view:cost_price asking for one car's expenses is refused (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

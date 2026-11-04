@@ -2338,7 +2338,9 @@ export type ManagementProfit =
          */
         | "ExecutionFeeUnclassified"
         | "CorruptInput"
-        | "DealCancelled";
+        | "DealCancelled"
+        /** SCRUM-902: the caller lacks view:cost_price, and every profit figure is measured against acquisition cost. */
+        | "CostAccessRequired";
     };
 
 /**
@@ -2434,7 +2436,9 @@ export type AccountingProfit =
         | "UnknownMargin"
         | "DealCancelled"
         | "SaleNotCompleted"
-        | "FinancedDirectUnverified";
+        | "FinancedDirectUnverified"
+        /** SCRUM-902: the caller lacks view:cost_price, and every profit figure is measured against acquisition cost. */
+        | "CostAccessRequired";
     };
 
 /**

@@ -1,0 +1,47 @@
+{
+  "id": "expenses-list-withholds-capitalized-amount-without-cost-price",
+  "fingerprint": "03ed5d2cc28ca5c00be74906ff41fef3dff1d482ec04d04b7927fae99ff574b2",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-expenses-only",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": "present"
+    },
+    {
+      "observable": "capitalizedAmount",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "expenses.list: a role with view:expenses but without view:cost_price gets the expense rows without the capitalized amount (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

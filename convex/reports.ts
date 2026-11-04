@@ -1312,7 +1312,10 @@ export const getProfitAndLoss = query({
     endDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+    // SCRUM-902: cost of goods sold and gross profit are acquisition-cost figures. Withheld as a whole (null), never
+    // zeroed, and never thrown, like the sibling reports above.
+    if (!(isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE))) return null;
 
     const rateStatus = await rateLimiter.check(ctx, "heavyRead");
     if (!rateStatus.ok) {

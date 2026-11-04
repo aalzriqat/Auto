@@ -52,6 +52,19 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
 | `reports.getSalespersonPerformance` | per-rep revenue and profit; profit is revenue less `capitalizedCost` per sale | view:reports | view:reports AND view:cost_price (else `null`) | GATED (class sweep; fail-soft null) |
 | `reports.getExpensesReport` | expense rows with the related vehicle; vehicle-linked rows are landed cost per car | view:reports | view:reports AND view:cost_price (else `null`) | GATED (class sweep; fail-soft null). Trade-off: a report-only role loses the operational expense report, as with Q2 |
 | `accountingReports.subledgerReconciliation` | AR control accounts against the receivables subledger (customer and finance-company receivables) | view:finance | unchanged | NOT cost-bearing: it reads only AR accounts and customer receivables, no inventory, COGS, supplier or per-car cost. A scenario pins that `view:finance` alone still reads |
+| `transactions.list` | `VEHICLE_PURCHASE` rows: `amount` is the purchase price, with the vehicle label | view:finance | view:finance; rows with category `VEHICLE_PURCHASE` are withheld unless the caller holds view:cost_price | GATED (round 3 H1; rows absent, not zeroed). Other categories are not cost. The GL register view shows an English and Arabic note and its totals leave the rows out |
+| `reports.getProfitAndLoss` | `costOfGoodsSold`, `grossProfit` | view:reports | view:reports AND view:cost_price (else `null`) | GATED (round 3 H2; fail-soft null) |
+| `accountingLedger.listAccountingEvents` | raw event payloads with `costMinor`, `cogsMinor` | view:finance | both (`STATEMENT_PERMISSIONS`) | GATED (round 3 H3; refuses). The release rehearsal reads it as the owner, who passes |
+| `expenses.list` | `capitalizedAmount` per row; with a `vehicleId` the rows are the car's landed cost | view:expenses | view:expenses. `capitalizedAmount` is removed from every row for a caller without view:cost_price. A `vehicleId` query needs both | GATED (round 3 H4; field absent, rows kept) |
+| `expenses.totalByVehicle` | per-car landed expense total | view:expenses | view:expenses AND view:cost_price | GATED (round 3 H4; refuses). The sale dialog's cost bar skips the query and renders nothing without both |
+| `sales.dealCockpit` | `money.profit` lines including `VEHICLE_COST` | view:sales + view:finance | same; `profit` is `{ available: false, reason: "CostAccessRequired" }` without view:cost_price | GATED (round 3 H5; the rest of the cockpit stays) |
+| `applications.dealCockpit` (financed) | `money.profit`, `money.managementProfit` | view:finance | same; both are `{ available: false, reason: "CostAccessRequired" }` without view:cost_price | GATED (round 3 H5 sibling) |
+| `dealOverview.financedDealOverview` | financed `profit` with the vehicle cost line | view:finance | same; `profit` withheld as `CostAccessRequired` without view:cost_price | GATED (round 3 H5 sibling) |
+| `accountingCutover.postedOpeningAllocationReadback`, `financingEconomics.getEconomics` | `landed` / `costMinor` tokens | their own gates | unchanged | Already gated or not a cost surface: the readback holds `landed` only in a status word, and `getEconomics` is gated on cost access (SCRUM-886) |
+| `accountingCutover.listOpeningStockChoices` | per-car opening cost `amountMinor` for imported stock | manage:finance | unchanged | RULED OUT, owner to confirm. The amount is the figure finance imported and must exhaust to approve the opening balance. Gating it strands the cutover wizard for a finance role without cost access, and the posted opening journal that shows the same total is already gated. Flagged to the coordinator in the round note |
+| `approvals.checkPendingApproval`, `listPendingApprovals`, `listMyPendingApprovals`, `profitApprovalStatus` | deal margin against the minimum profit | view:vehicles / approval permissions | unchanged | DEFERRED to SCRUM-879 (held under SCRUM-886 c24247). Not widened here by instruction |
+| `vehicles.getAcquisitionCostCorrectionContext`, `listAcquisitionCorrectionBankOptions` | purchase price and bank options for a cost correction | `COST_CORRECTION_PERMISSIONS` | unchanged | Already gated (the sweep marks them ungated because the gate is a constant it does not match) |
+| `supplierReceivables.listReceiptBankOptions`, `changelog.getLatestPublishedAt` | none ("margin" and "landed" match unrelated words) | n/a | unchanged | NOT cost-bearing |
 
 ## Consequences
 
@@ -73,6 +86,15 @@ a zero reads as "nothing owed". Absent beats zeroed, as in `vehicleCostVisibilit
   table above. Five are gated; `subledgerReconciliation` is not cost-bearing. `incomeStatement` was not on that list but carries COGS, so
   it is gated with them. The web Financial Reports tab and the web and mobile reports screens skip the gated queries and show an English
   and Arabic note; the VAT return tab is unchanged. `getAccountActivity` has no screen.
+- Round 3 (both seats, CHANGES_REQUESTED): the class was closed by sweeping every `query(` in `convex/` for `purchasePrice`, `costMinor`,
+  `cogsMinor`, `capitalizedAmount`, `capitalizedCost`, `sourceCost`, `VEHICLE_COST`, `costOfGoodsSold`, `grossProfit`, `margin`,
+  `landed`, `totalInvestment`, `minimumProfit`, `recognizedCost`, `supplierEntitlement` and `amountDue` (33 readers hit, 24 already
+  gated, the 9 others classified in the table). The mechanism is one of three shared checks: `STATEMENT_PERMISSIONS` for refusing
+  readers, `canReadVehicleCost` or `role.permissions.includes(VIEW_COST_PRICE)` for fail-soft readers. Absent beats zeroed.
+- Round 3 screens: the GL register view shows a note that car purchase rows and the totals leave them out; the sale dialog cost bar
+  renders nothing without the pair; the cash and financed cockpits show the profit tile as "needs cost-price access" in English and
+  Arabic. Open sibling, not changed: the supplier party outstanding amount inside the cockpits' `parties` block. Mobile accounting
+  lists simply omit the withheld rows, and mobile totals are not separately recomputed.
 - Still ungated by design: the AR aging and VAT readers (no cost figures). Any reader added later that returns inventory, COGS, supplier
   or per-car cost needs a row in this table.
 - Evidence boundary: `convex-test` role fixtures and rendered screens at desktop and mobile widths. No production run.

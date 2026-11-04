@@ -1,0 +1,51 @@
+{
+  "id": "cash-deal-cockpit-withholds-profit-without-cost-price",
+  "fingerprint": "422271e5124e449bd7675f784a9466cd463a99763d792a2c8d542346bbc4167d",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-finance-no-cost",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "profit.reason",
+      "value": "CostAccessRequired"
+    },
+    {
+      "observable": "vehicleCostLine",
+      "value": "absent"
+    },
+    {
+      "observable": "stages",
+      "value": "present"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "sales.dealCockpit: a role with view:finance but without view:cost_price gets the deal and no profit or vehicle-cost line (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

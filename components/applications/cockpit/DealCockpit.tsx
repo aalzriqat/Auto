@@ -447,7 +447,9 @@ const PROFIT_BLOCKED_REASON: Record<
   /** CASH only: a draft has posted no journal, so nothing is postable yet. */
   | "SaleNotCompleted"
   /** Financed + DIRECT with no application: the recorded margin cannot be trusted. */
-  | "FinancedDirectUnverified",
+  | "FinancedDirectUnverified"
+  /** SCRUM-902: the caller lacks view:cost_price. */
+  | "CostAccessRequired",
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",
@@ -463,6 +465,7 @@ const PROFIT_BLOCKED_REASON: Record<
   UnknownMargin: "ProfitUnknownMargin",
   SaleNotCompleted: "ProfitSaleNotCompleted",
   FinancedDirectUnverified: "ProfitFinancedDirectUnverified",
+  CostAccessRequired: "ProfitCostAccessRequired",
 };
 
 /** What the money card hands the commissions row: the headline profit and its own formatter. */

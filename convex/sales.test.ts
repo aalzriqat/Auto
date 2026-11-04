@@ -813,7 +813,7 @@ describe("cancelled sales must not stay on the P&L", () => {
       ctx.db.insert("roles", {
         orgId,
         name: "Manager",
-        permissions: ["view:sales", "edit:sales", "approve:requests", "view:vehicles", "view:reports"],
+        permissions: ["view:sales", "edit:sales", "approve:requests", "view:vehicles", "view:reports", "view:cost_price"],
       })
     );
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: managerId, roleId: managerRoleId }));

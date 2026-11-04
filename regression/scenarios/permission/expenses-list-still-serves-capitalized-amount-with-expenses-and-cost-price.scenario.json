@@ -1,0 +1,39 @@
+{
+  "id": "expenses-list-still-serves-capitalized-amount-with-expenses-and-cost-price",
+  "fingerprint": "16976fc9f3765e86bbcf032fee40dde3e5f16cf65bca0b26b8b38e79f74814ce",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-expenses-and-cost",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "capitalizedAmount",
+      "value": "present"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "expenses.list: a role holding both view:expenses and view:cost_price still gets the capitalized amount (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

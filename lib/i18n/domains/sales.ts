@@ -3401,6 +3401,8 @@ export const salesEn = {
     "What this deal earned is not recorded, so it cannot be shown. It is not zero.",
   ProfitSaleNotCompleted:
     "This sale has not been completed, so nothing has been posted to the books yet.",
+  ProfitCostAccessRequired:
+    "The profit on this deal is measured against what the car cost. Your role needs cost-price access as well as finance access to see it. Ask an administrator to update your role.",
   ProfitFinancedDirectUnverified:
     "This deal was financed and settled directly with the supplier, and what the finance company approved is not recorded — so what the dealership earned cannot be shown.",
   ActualExpensesHeading: "Actual expenses",
@@ -4585,6 +4587,8 @@ export const salesAr = {
   LineSupplierEntitlement: "مستحق المورد",
   ProfitUnknownMargin: "ربح هذه الصفقة غير مُسجَّل، لذا لا يمكن عرضه. وهو ليس صفراً.",
   ProfitSaleNotCompleted: "لم تكتمل عملية البيع بعد، فلا توجد قيود مُرحَّلة إلى الدفاتر.",
+  ProfitCostAccessRequired:
+    "يُقاس ربح هذه الصفقة بتكلفة المركبة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
   ProfitFinancedDirectUnverified:
     "صفقة مموَّلة وتمت تسويتها مباشرة مع المورد، وقيمة الشراء المعتمدة من شركة التمويل غير مُسجَّلة، لذا لا يمكن عرض ربح المعرض.",
   ActualExpensesHeading: "المصاريف الفعلية",

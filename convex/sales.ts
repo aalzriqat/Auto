@@ -2867,6 +2867,10 @@ export const dealCockpit = query({
     // SERVER, because a permission enforced by rendering is not enforced.
     const canSeeMoney =
       isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE);
+    // SCRUM-902: the profit headline and its VEHICLE_COST line are measured against acquisition cost, so they follow
+    // view:cost_price as well. The rest of the money (parties, invoice, receipt) stays with view:finance.
+    const canSeeCost =
+      isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     const [vehicle, customer, salesperson] = await Promise.all([
       ctx.db.get(sale.vehicleId),
@@ -3291,7 +3295,9 @@ export const dealCockpit = query({
          * about.
          */
         routeKnown: true,
-        profit: deriveAccountingProfit({
+        profit: !canSeeCost
+          ? ({ available: false, reason: "CostAccessRequired" } as const)
+          : deriveAccountingProfit({
           dealCancelled,
           // A PENDING draft has posted nothing, so it has no journal to call
           // this figure postable against.
