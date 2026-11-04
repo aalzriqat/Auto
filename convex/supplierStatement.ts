@@ -1,4 +1,4 @@
-import { ConvexError, v } from "convex/values";
+import { ConvexError, v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -156,7 +156,7 @@ const attentionRow = v.object({
 const attentionSection = v.object({ rows: v.array(attentionRow), complete: v.boolean() });
 
 function attentionOf(section: StatementSection) {
-  const rows = [];
+  const rows: Infer<typeof attentionRow>[] = [];
   for (const r of section.rows) {
     const s = alertStatusFor(r);
     if (s.status === "NOT_YET") continue;

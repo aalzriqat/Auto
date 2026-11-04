@@ -24,6 +24,7 @@ const world = vi.hoisted(() => ({
   statement: undefined as unknown,
   settled: undefined as unknown,
   recon: undefined as unknown,
+  attention: undefined as unknown,
   queryThrows: null as null | Error,
   queryCalls: [] as Array<{ name: string; args: unknown }>,
 }));
@@ -54,6 +55,7 @@ vi.mock("convex/react", async () => {
       if (args === "skip") return undefined;
       const name = getFunctionName(reference);
       if (name === "supplierStatement:paymentsReconciliation") return world.recon;
+      if (name === "supplierStatement:attention") return world.attention;
       return name === "supplierStatement:settled" ? world.settled : world.statement;
     },
   };
@@ -96,6 +98,7 @@ beforeEach(() => {
   world.queryThrows = null;
   world.settled = undefined;
   world.recon = undefined;
+  world.attention = undefined;
   world.queryCalls.length = 0;
   world.statement = {
     supplierId: "sup_1",
@@ -368,6 +371,47 @@ describe("supplier statement section", () => {
     world.recon = undefined;
     renderIt();
     expect(screen.queryByRole("heading", { name: en.SuppliersStmtReconTitle })).toBeNull();
+  });
+
+  test("needs attention: alerting steps, the dispute hold and the no-due-date hold are told apart, in EN and AR; an empty answer says so", () => {
+    const row = (over: Record<string, unknown>) => ({
+      kind: "PAYABLE", id: "p1", currency: "JOD", outstandingMinor: 9_500_000, disputedMinor: 0, dueDate: "2026-06-05", daysOverdue: 10, ...over,
+    });
+    const attention = {
+      supplierId: "sup_1",
+      payable: {
+        rows: [
+          row({ status: "ALERTING", step: "OVERDUE_7" }),
+          row({ id: "p2", status: "HELD", heldReason: "DISPUTED", disputedMinor: 1 }),
+          row({ id: "p3", status: "HELD", heldReason: "NO_DUE_DATE", dueDate: null, daysOverdue: null }),
+        ],
+        complete: false,
+      },
+      receivable: { rows: [], complete: true },
+    };
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      world.attention = attention;
+      const { unmount } = renderIt();
+      expect(screen.getByRole("heading", { name: dict.SuppliersStmtAttnTitle })).toBeTruthy();
+      for (const key of [
+        "SuppliersStmtAttnStepOverdue7",
+        "SuppliersStmtAttnHeldDisputed",
+        "SuppliersStmtAttnHeldNoDue",
+        "SuppliersStmtAttnIncomplete",
+      ] as const) {
+        expect(screen.getByText(dict[key])).toBeTruthy();
+      }
+      unmount();
+      world.attention = { supplierId: "sup_1", payable: { rows: [], complete: true }, receivable: { rows: [], complete: true } };
+      renderIt();
+      expect(screen.getByText(dict.SuppliersStmtAttnNone)).toBeTruthy();
+      cleanup();
+    }
+    world.attention = undefined;
+    renderIt();
+    expect(screen.queryByRole("heading", { name: en.SuppliersStmtAttnTitle })).toBeNull();
   });
 
   test("the time window is refreshed while the page stays open, so a long-lived tab never trips the server clock check", () => {

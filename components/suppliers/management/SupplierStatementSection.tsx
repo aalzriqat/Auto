@@ -331,6 +331,60 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
   );
 }
 
+export type SupplierAttentionData = FunctionReturnType<typeof api.supplierStatement.attention>;
+type AttentionRow = SupplierAttentionData["payable"]["rows"][number];
+
+const ATTN_STEP_KEY = {
+  T_MINUS_3: "SuppliersStmtAttnStepT3",
+  DUE_DAY: "SuppliersStmtAttnStepDue",
+  OVERDUE_7: "SuppliersStmtAttnStepOverdue7",
+  OVERDUE_WEEKLY: "SuppliersStmtAttnStepWeekly",
+} as const;
+const ATTN_HELD_KEY = { DISPUTED: "SuppliersStmtAttnHeldDisputed", NO_DUE_DATE: "SuppliersStmtAttnHeldNoDue" } as const;
+
+function attentionLabel(row: AttentionRow, translate: Translate): string {
+  if (row.status === "ALERTING" && row.step) return translate(ATTN_STEP_KEY[row.step]);
+  if (row.heldReason) return translate(ATTN_HELD_KEY[row.heldReason]);
+  return translate("SuppliersStmtAttnAlerting");
+}
+
+/** Which obligations are alerting now or held back and why (SCRUM-869 feature 5); A/P and A/R stay apart. */
+export function SupplierAttentionView({ attention }: Readonly<{ attention: SupplierAttentionData | undefined }>) {
+  const translate = useTranslate();
+  if (attention === undefined) return null;
+  const sections = [
+    { key: "payable", section: attention.payable },
+    { key: "receivable", section: attention.receivable },
+  ] as const;
+  const empty = sections.every(({ section }) => section.rows.length === 0 && section.complete);
+  return (
+    <section aria-labelledby="supplier-attn-title" className="space-y-2">
+      <h3 id="supplier-attn-title" className="text-lg font-semibold">
+        {translate("SuppliersStmtAttnTitle")}
+      </h3>
+      {empty && <p className="text-sm text-muted-foreground">{translate("SuppliersStmtAttnNone")}</p>}
+      {sections.map(({ key, section }) => (
+        <div key={key}>
+          {section.rows.length > 0 && (
+            <ul className="divide-y">
+              {section.rows.map((row) => (
+                <li key={`${row.kind}:${row.id}`} className="flex flex-wrap items-baseline justify-between gap-x-4 py-2 text-sm">
+                  <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
+                  <span className="text-muted-foreground">{attentionLabel(row, translate)}</span>
+                  <span className="text-end">
+                    <Money minor={row.outstandingMinor} currency={row.currency} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!section.complete && <p className="text-xs text-muted-foreground">{translate("SuppliersStmtAttnIncomplete")}</p>}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const { hasPermission, isLoading } = usePermissions();
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
@@ -342,12 +396,14 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
     return () => clearInterval(timer);
   }, []);
   const statement = useQuery(api.supplierStatement.outstanding, allowed ? { orgId, supplierId, nowMs } : "skip");
+  const attention = useQuery(api.supplierStatement.attention, allowed ? { orgId, supplierId, nowMs } : "skip");
   const settled = useQuery(api.supplierStatement.settled, allowed ? { orgId, supplierId } : "skip");
   const recon = useQuery(api.supplierStatement.paymentsReconciliation, allowed ? { orgId, supplierId } : "skip");
   if (!allowed) return null;
   return (
     <div className="space-y-6">
       <SupplierStatementView statement={statement} />
+      {statement !== undefined && <SupplierAttentionView attention={attention} />}
       {statement !== undefined && <SupplierSettledView settled={settled} />}
       {statement !== undefined && <SupplierReconView recon={recon} />}
     </div>
