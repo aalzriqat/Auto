@@ -20,6 +20,8 @@ const PERMISSIONS = [
   "approve:requests",
   "manage:finance",
   "view:finance",
+  // SCRUM-902: the sourcing readers need cost access as well as finance.
+  "view:cost_price",
 ];
 
 async function setup() {

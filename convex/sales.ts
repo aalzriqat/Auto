@@ -2717,11 +2717,14 @@ export const consignedSalePreview = query({
     // cost-bearing answer is withheld by returning null, exactly as
     // dashboard.stats withholds its profit figures.
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    // SCRUM-902: the supplier entitlement is the car's acquisition cost, so view:cost_price is required as well as
+    // one of the finance-side grants (SCRUM-886 / ACC-10). Completing a SOURCED sale already needs it.
     const canSeeCost =
       isSystemOwnerRole(role) ||
-      [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_REPORTS, PERMISSIONS.VIEW_FINANCE].some((p) =>
-        role.permissions.includes(p)
-      );
+      (role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE) &&
+        [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_REPORTS, PERMISSIONS.VIEW_FINANCE].some((p) =>
+          role.permissions.includes(p)
+        ));
     if (!canSeeCost) return null;
 
     const vehicle = await ctx.db.get(args.vehicleId);

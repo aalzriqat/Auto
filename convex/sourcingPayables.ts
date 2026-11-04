@@ -5,6 +5,8 @@ import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+// SCRUM-902: a SOURCED car's supplier amount is its acquisition cost, so these readers need the same pair as the statement.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { fromMinorUnits, toMinorUnits } from "./utils/money";
@@ -130,7 +132,7 @@ export const list = query({
     ),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
 
     let payables;
     if (args.status) {
@@ -175,7 +177,7 @@ export const listBounded = query({
     ),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     const fetched = args.status
       ? await ctx.db
           .query("vehicleSupplierPayables")
@@ -251,7 +253,7 @@ export const listPipeline = query({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
 
     // Keyed on sourceType so this reads only sourced cars. Going through
     // by_org_status meant fetching every AVAILABLE vehicle in the org — the
@@ -337,7 +339,7 @@ export const get = query({
     payableId: v.id("vehicleSupplierPayables"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
 
     const p = await ctx.db.get(args.payableId);
     if (!p || p.orgId !== args.orgId) return null;

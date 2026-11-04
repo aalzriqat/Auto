@@ -7,6 +7,8 @@ import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+// SCRUM-902: a margin receivable is derived from the supplier entitlement (the car's cost); same pair as the statement.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { runWithIdempotency } from "./utils/idempotency";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { fromMinorUnits, toMinorUnits } from "./utils/money";
@@ -129,7 +131,7 @@ export const list = query({
     ),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
 
     // SCRUM-869 S1: read one past the limit so a truncated list says so instead of looking complete.
     const fetched = args.status
@@ -196,7 +198,7 @@ const unresolvedPartyKey = (rowId: string): string => `unresolved:${rowId}`;
 export const outstandingSummary = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
 
     const fetched = await ctx.db
       .query("vehicleSupplierReceivables")

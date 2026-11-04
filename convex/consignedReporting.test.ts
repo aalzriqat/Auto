@@ -48,6 +48,8 @@ const PERMS = [
   "view:customers", "create:customers",
   "manage:finance", "view:finance", "view:reports",
   "view:commissions", "manage:commissions",
+  // SCRUM-902: the consigned sale preview shows the supplier entitlement, which is cost.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;
