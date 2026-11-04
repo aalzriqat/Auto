@@ -1045,7 +1045,7 @@ export const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
 );
 
 export async function hasPendingAffectingPosting(
-  ctx: QueryCtx,
+  ctx: Pick<QueryCtx, "db">,
   events: Array<Doc<"pendingAccountingEvents">>,
   affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {

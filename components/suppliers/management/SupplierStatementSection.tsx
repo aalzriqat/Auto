@@ -293,9 +293,9 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
   if (recon === undefined) return null;
   let verdict: string;
   if (recon.status === "UNAVAILABLE") {
-    verdict = `${translate("SuppliersStmtReconUnavailable")}: ${translate(
-      RECON_REASON_KEY[recon.unavailableReason ?? "OVER_LIMIT"],
-    )}`;
+    // No reason given reads as the bare "unavailable" line, never as a guessed reason.
+    const reason = recon.unavailableReason ? `: ${translate(RECON_REASON_KEY[recon.unavailableReason])}` : "";
+    verdict = `${translate("SuppliersStmtReconUnavailable")}${reason}`;
   } else {
     verdict = translate(recon.isReconciled ? "SuppliersStmtReconOk" : "SuppliersStmtReconDiffers");
   }

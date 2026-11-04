@@ -106,6 +106,34 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     );
   });
 
+  test("a reversed payment nets to zero on both sides (the reversed original stays counted)", async () => {
+    const s = await seed("reversed");
+    await pay(s, 4_000);
+    // The shape accounting/reversals.ts leaves behind: original patched REVERSED, plus an inverted POSTED entry with the same source.
+    await s.t.run(async (ctx) => {
+      const original = (await ctx.db.query("journalEntries").collect()).find(
+        (e) => e.sourceType === "vehicleSupplierPayables" && e.sourceId === s.payable._id
+      )!;
+      const lines = (await ctx.db.query("journalLines").collect()).filter((l) => l.journalEntryId === original._id);
+      const { _id, _creationTime, ...rest } = original;
+      void _id; void _creationTime;
+      const reversalId = await ctx.db.insert("journalEntries", {
+        ...rest, journalNumber: "JE-REVTEST", category: "REVERSAL", status: "POSTED", reversalOfJournalEntryId: original._id,
+      });
+      for (const l of lines) {
+        const { _id: lid, _creationTime: lct, ...lr } = l;
+        void lid; void lct;
+        await ctx.db.insert("journalLines", { ...lr, journalEntryId: reversalId, debitMinor: l.creditMinor, creditMinor: l.debitMinor });
+      }
+      await ctx.db.patch(original._id, { status: "REVERSED", reversedByJournalEntryId: reversalId });
+      await ctx.db.patch(s.payable._id, { amountPaid: 0 });
+    });
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+    expect(r.isReconciled).toBe(true);
+    expect(r.differences).toEqual([]);
+  });
+
   test("no payment yet: nothing to compare, reconciled, no currencies", async () => {
     const s = await seed("none");
     const r = await recon(s);

@@ -45,20 +45,20 @@ export type PaymentsReconciliation = {
 /** Journal entries read across all of the supplier's payables. Each costs two index ranges; Convex allows 4,096 per function. */
 const ENTRY_BUDGET = 1000;
 const OUTBOX_READ_LIMIT = 400;
+const LINES_PER_ENTRY_LIMIT = 50;
 
-const PAYABLE_STATUS_READ = {
+type PayableStatus = Doc<"vehicleSupplierPayables">["status"];
+// Every status is read; a cancelled row may still carry payments. The record type makes a new status a compile error here.
+const PAYABLE_STATUS_SET: Record<PayableStatus, true> = {
   PENDING: true,
   NOT_YET_DUE: true,
   DUE_ON_SALE: true,
   PARTIALLY_PAID: true,
   DISPUTED: true,
   PAID: true,
-  // A cancelled row may still carry payments, so it is read too.
   CANCELLED: true,
-} satisfies Record<Doc<"vehicleSupplierPayables">["status"], boolean>;
-const PAYABLE_STATUSES = (Object.keys(PAYABLE_STATUS_READ) as Array<keyof typeof PAYABLE_STATUS_READ>).filter(
-  (status) => PAYABLE_STATUS_READ[status],
-);
+};
+const PAYABLE_STATUSES = Object.keys(PAYABLE_STATUS_SET) as PayableStatus[];
 
 const unavailable = (unavailableReason: PaymentsReconciliationUnavailableReason): PaymentsReconciliation => ({
   status: "UNAVAILABLE",
@@ -87,7 +87,13 @@ export async function readSupplierPaymentsReconciliation(
     ),
   );
   if (queued.length > OUTBOX_READ_LIMIT || failed.length > OUTBOX_READ_LIMIT) return unavailable("OVER_LIMIT");
-  if (await hasPendingAffectingPosting(ctx as QueryCtx, [...queued, ...failed], AP_AFFECTING_EVENT_TYPES)) {
+  const inFlight = [...queued, ...failed];
+  // A queued reversal of a supplier payment is typed JOURNAL_REVERSAL, which the AP classification marks false:
+  // unknown must not read as safe, so any queued reversal makes this unavailable.
+  if (
+    inFlight.some((event) => event.eventType === "JOURNAL_REVERSAL") ||
+    (await hasPendingAffectingPosting(ctx, inFlight, AP_AFFECTING_EVENT_TYPES))
+  ) {
     return unavailable("PENDING_POSTINGS");
   }
 
@@ -132,12 +138,12 @@ export async function readSupplierPaymentsReconciliation(
       if (entries.length > budget) return unavailable("OVER_LIMIT");
       entriesRead += entries.length;
       for (const entry of entries) {
-        if (entry.status !== "POSTED") continue;
+        if (entry.status !== "POSTED" && entry.status !== "REVERSED") continue;
         const lines = await ctx.db
           .query("journalLines")
           .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-          .take(51);
-        if (lines.length > 50) return unavailable("OVER_LIMIT");
+          .take(LINES_PER_ENTRY_LIMIT + 1);
+        if (lines.length > LINES_PER_ENTRY_LIMIT) return unavailable("OVER_LIMIT");
         for (const line of lines) {
           if (line.orgId !== orgId) return unavailable("INCONSISTENT_REFERENCE");
           if (line.accountId !== controlAccount._id) continue;

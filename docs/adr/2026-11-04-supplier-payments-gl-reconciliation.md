@@ -43,6 +43,14 @@ Reconcile only what the ledger lets us attribute. `api.supplierStatement.payment
 4. More payables than the bound, or more journal entries than the entry budget (1,000, two index ranges each, against Convex's 4,096-range limit). Answer: UNAVAILABLE `OVER_LIMIT`. The payable bound is tested.
 5. A legacy PAID row with no `amountPaid` (read by `settlementView` as fully paid) whose payment predates the posting hook would show a difference that is a data fact. Answer: it is reported as a difference on that payable, not hidden; the ADR does not claim reconciliation for history the ledger never saw.
 
+## Additional decisions from review
+
+- A reversal entry copies the original's source and the original is patched to status `REVERSED` (`accounting/reversals.ts`). The reader therefore counts entries in status POSTED and REVERSED. Counting POSTED only would drop the original and keep the reversal, and a reversed payment would show a false difference. A test seeds that shape and asserts both sides net to zero.
+- A queued or failed `JOURNAL_REVERSAL` outbox event makes the result UNAVAILABLE `PENDING_POSTINGS`. `AP_AFFECTING_EVENT_TYPES` classifies it as not AP-affecting, and unknown must not read as safe.
+- With no 2400 control account, a supplier with a nonzero subledger paid amount is UNAVAILABLE `NO_CONTROL_ACCOUNT`. A supplier with nothing paid reconciles at zero.
+- The outbox read is capped at 400 per status for the whole organization, not per supplier. Past the cap the result is UNAVAILABLE `OVER_LIMIT`, which is coarse but never wrong.
+- A line count above 50 on one entry is UNAVAILABLE `OVER_LIMIT`; a supplier payment entry has a handful of lines.
+
 ## Not covered, stated
 
 - The obligation (credit) side per supplier and the 1240 side: no supplier dimension on the ledger. Reconciliation of those stays organization-wide.
