@@ -866,6 +866,7 @@ async function seedReversedAdvancePairs(
   tag: string,
   family: SeededFamily = ADVANCE_FAMILY,
   balancingAccountId?: Id<"chartOfAccounts">,
+  eventPayloadBytes = 0,
 ) {
   // Seed in chunks: under `transactionLimits` each insert's triggers also count against one function's read ceilings.
   for (let from = 0; from < pairs; from += SEED_CHUNK) {
@@ -897,7 +898,7 @@ async function seedReversedAdvancePairs(
         occurredAt: now,
         accountingDate: now,
         currency: "JOD",
-        payload: {},
+        payload: eventPayloadBytes > 0 ? { note: "x".repeat(eventPayloadBytes) } : {},
         status: "REVERSED",
         createdBy: actorId,
         createdAt: now,
@@ -948,7 +949,7 @@ async function seedReversedAdvancePairs(
         occurredAt: now,
         accountingDate: now,
         currency: "JOD",
-        payload: {},
+        payload: eventPayloadBytes > 0 ? { note: "x".repeat(eventPayloadBytes) } : {},
         status: "POSTED",
         reversalOfEventId: forwardEventId,
         createdBy: actorId,
@@ -1163,6 +1164,24 @@ test("two-control history inside one checklist transaction never exceeds the Con
   }
   expect(documents.reads.documents).toBeLessThan(32_000);
   expect(documents.reads.ranges).toBeLessThan(4_096);
+}), 300_000);
+
+// SCRUM-858 round 13 (Seat 2 MEDIUM): admission by an assumed 2 KiB per document is an estimate, not a bound. 300 reversed
+// pairs (600 control journals, so the batch strategy) whose events each keep a 40,000-byte payload read about 24 MiB of
+// events, and the reader threw Convex's 16 MiB read error (https://docs.convex.dev/production/state/limits) instead of
+// answering. The reader must measure the real bytes as it reads and refuse with OVER_LIMIT before the limit is reached.
+test("events with large payloads make the provenance reader answer OVER_LIMIT, never a platform read-limit error", () => withFrozenScheduler(async () => {
+  const seed = await fixture(undefined, false, true);
+  const { t, owner, orgId, employeeId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find((a) => a.systemKey === "EMPLOYEE_ADVANCES");
+  const cash = accounts.find((a) => a.systemKey === "CASH_ON_HAND");
+  if (!advances || !cash) throw new Error("Missing system accounts");
+  const actor = await t.run(async (ctx) => ctx.db.query("users").first());
+  if (!actor) throw new Error("Missing actor");
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 300, "fat", ADVANCE_FAMILY, cash._id, 40_000);
+  const result = await t.run((ctx) => computeEmployeeAdvancesReconciliation(ctx, orgId, undefined));
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT" });
 }), 300_000);
 
 // SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide

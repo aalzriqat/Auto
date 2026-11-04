@@ -195,43 +195,50 @@ export const VERIFICATION_RESERVE_QUERIES = 256;
 type HeadroomCtx = { meta?: { getTransactionMetrics?: () => Promise<TransactionMetrics> } };
 
 /**
- * What one document of an unknown table is assumed to weigh when a bounded read is admitted before it runs. A policy,
- * not a measurement: ledger lines are a few hundred bytes and events carry a payload, so 2 KiB errs high without
- * assuming the 1 MiB worst case (which would admit 16 documents out of a 16 MiB budget).
- */
-export const ASSUMED_DOCUMENT_BYTES = 2 * 1024;
-
-/**
- * How many of `wanted` documents a bounded read may take in this transaction and still leave the verification
+ * True when the transaction can take one more read of a worst-case (1 MiB) document and still leave the verification
  * reserve for the readers beside it. Convex stops a function that scans over 32,000 documents or reads over 16 MiB
  * (https://docs.convex.dev/production/state/limits) with a platform error, not a result, so a reader that has to
- * answer must ask first and report OVER_LIMIT when the answer is smaller than it needs. Per-reader caps alone do
- * not bound the sum of several readers in one function (SCRUM-858 PR #710 R11).
+ * answer must ask before each read and report OVER_LIMIT when the answer is no. The bytes are the transaction's own
+ * metering, read fresh each time, never an assumed document size (SCRUM-858 PR #710 R13: 40 KB event payloads
+ * overran a 2 KiB-per-document estimate).
  *
- * A context that reports no metrics (convex-test without `transactionLimits`) is admitted at its own cap: the
- * platform always provides them, so the cap is the only bound the test can exercise there.
+ * A context that reports no metrics (convex-test without `transactionLimits`) is admitted: the platform always
+ * provides them, so the reader's own document cap is the only bound a test can exercise there.
  */
-export async function admissibleReadDocuments(ctx: HeadroomCtx, wanted: number): Promise<number> {
-  const read = ctx.meta?.getTransactionMetrics;
-  if (typeof read !== "function") return wanted;
-  const metrics = await read.call(ctx.meta);
-  const byDocuments = metrics.documentsRead.remaining - VERIFICATION_RESERVE_DOCUMENTS;
-  const byBytes = Math.floor((metrics.bytesRead.remaining - VERIFICATION_RESERVE_BYTES) / ASSUMED_DOCUMENT_BYTES);
-  const byQueries = metrics.databaseQueries.remaining - VERIFICATION_RESERVE_QUERIES;
-  return Math.max(0, Math.min(wanted, byDocuments, byBytes, byQueries > 0 ? wanted : 0));
-}
-
-/** True when `documents` reads over `ranges` index ranges fit the transaction with the reserve to spare (same admission rule). */
-export async function hasReadHeadroom(ctx: HeadroomCtx, documents: number, ranges: number): Promise<boolean> {
+export async function hasDocumentHeadroom(ctx: HeadroomCtx): Promise<boolean> {
   const read = ctx.meta?.getTransactionMetrics;
   if (typeof read !== "function") return true;
   const metrics = await read.call(ctx.meta);
   return (
-    metrics.documentsRead.remaining >= documents + VERIFICATION_RESERVE_DOCUMENTS &&
-    metrics.bytesRead.remaining >= documents * ASSUMED_DOCUMENT_BYTES + VERIFICATION_RESERVE_BYTES &&
-    metrics.databaseQueries.remaining >= ranges + VERIFICATION_RESERVE_QUERIES
+    metrics.bytesRead.remaining >= MAX_DOCUMENT_BYTES + VERIFICATION_RESERVE_BYTES &&
+    metrics.documentsRead.remaining >= 1 + VERIFICATION_RESERVE_DOCUMENTS &&
+    metrics.databaseQueries.remaining >= 1 + VERIFICATION_RESERVE_QUERIES
   );
 }
+
+/**
+ * Reads up to `cap` documents of `query` as a stream, asking `hasDocumentHeadroom` before every document, and
+ * returns "OVER_LIMIT" when the query holds more than `cap` or the transaction runs out of headroom first. A
+ * single `take(n)` page cannot stop part-way, so it cannot honour a byte limit.
+ */
+export async function readBoundedDocuments<T>(
+  ctx: HeadroomCtx,
+  query: AsyncIterable<T>,
+  cap: number
+): Promise<T[] | "OVER_LIMIT"> {
+  const documents: T[] = [];
+  const iterator = query[Symbol.asyncIterator]();
+  for (;;) {
+    if (!(await hasDocumentHeadroom(ctx))) return "OVER_LIMIT";
+    const next = await iterator.next();
+    if (next.done) return documents;
+    if (documents.length >= cap) return "OVER_LIMIT";
+    documents.push(next.value);
+  }
+}
+
+/** Thrown by a guarded point read when the transaction has no headroom left for it; the caller answers OVER_LIMIT. */
+export class ReadHeadroomExhausted extends Error {}
 
 /** The size Convex's own read metering is built on (`getDocumentSize`), not a JSON approximation of it. */
 function documentSize(doc: object): number {

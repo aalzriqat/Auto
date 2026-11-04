@@ -579,7 +579,7 @@ export async function computeCloseChecklist(
       }),
     ]);
   // The three opening-family readers run AFTER the readers above, one at a time. Each admits its own reads against the
-  // transaction's remaining read headroom (admissibleReadDocuments), and that headroom is only true once the earlier
+  // transaction's remaining read headroom (readBoundedDocuments, measured as they stream), and that headroom is only true once the earlier
   // readers have finished reading: run beside them, every reader would be admitted against the same untouched budget
   // and together overrun it (SCRUM-858 PR #710 R11: the readers above already take ~24.6k of the 32,000 documents).
   const employeeAdvancesRecon = await computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate, sharedGl);
@@ -643,8 +643,8 @@ export async function computeCloseChecklist(
       ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
       ["PARTNER_CAPITAL", partnerCapitalRecon],
     ])),
+    ...customerDepositsWarnings(customerDepositsRecon, heldOpeningLiabilities.status === "UNAVAILABLE"),
   );
-  warnings.push(...customerDepositsWarnings(customerDepositsRecon, heldOpeningLiabilities.status === "UNAVAILABLE"));
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
     // The subledger side sums only what the commission ENTRIES actually

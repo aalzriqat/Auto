@@ -22,11 +22,12 @@ import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
 import {
-  admissibleReadDocuments,
   getControlAccountBalancesAsOf,
   getCumulativeBalancesAsOf,
   getCumulativeBalancesAsOfChecked,
-  hasReadHeadroom,
+  hasDocumentHeadroom,
+  ReadHeadroomExhausted,
+  readBoundedDocuments,
 } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
@@ -1671,26 +1672,40 @@ async function controlSourceFamilyRefusal(
   if (distinctJournalIds.size === 0) return null;
 
   if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
-    if (!(await hasReadHeadroom(ctx, 3 * distinctJournalIds.size, 3 * distinctJournalIds.size))) return "OVER_LIMIT";
+    // Each point read asks the transaction for headroom first; running out answers OVER_LIMIT, never a platform error.
+    const requireHeadroom = async () => {
+      if (!(await hasDocumentHeadroom(ctx))) throw new ReadHeadroomExhausted();
+    };
     const journals = new Map<Id<"journalEntries">, Doc<"journalEntries"> | null>();
-    return evaluateControlProvenance(
-      orgId, distinctJournalIds, family,
-      async (id) => {
-        if (!journals.has(id)) journals.set(id, await ctx.db.get(id));
-        return journals.get(id) ?? null;
-      },
-      (id) => ctx.db.get(id),
-    );
+    try {
+      return await evaluateControlProvenance(
+        orgId, distinctJournalIds, family,
+        async (id) => {
+          if (!journals.has(id)) {
+            await requireHeadroom();
+            journals.set(id, await ctx.db.get(id));
+          }
+          return journals.get(id) ?? null;
+        },
+        async (id) => {
+          await requireHeadroom();
+          return ctx.db.get(id);
+        },
+      );
+    } catch (error) {
+      if (error instanceof ReadHeadroomExhausted) return "OVER_LIMIT";
+      throw error;
+    }
   }
 
   const config = SUPPORTED_SOURCE_FAMILIES[family];
   let docsLeft = PROVENANCE_BATCH_DOC_BUDGET;
-  const journalBatches = await readSourceBatches(ctx, config.journalSourceTypes, docsLeft, (sourceType, take) =>
-    ctx.db.query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)).take(take));
+  const journalBatches = await readSourceBatches(ctx, config.journalSourceTypes, docsLeft, (sourceType) =>
+    ctx.db.query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
   if (journalBatches === "OVER_LIMIT") return "OVER_LIMIT";
   docsLeft -= journalBatches.size;
-  const eventBatches = await readSourceBatches(ctx, config.eventSourceTypes, docsLeft, (sourceType, take) =>
-    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)).take(take));
+  const eventBatches = await readSourceBatches(ctx, config.eventSourceTypes, docsLeft, (sourceType) =>
+    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
   if (eventBatches === "OVER_LIMIT") return "OVER_LIMIT";
   return evaluateControlProvenance(
     orgId, distinctJournalIds, family,
@@ -1708,12 +1723,12 @@ async function readControlJournalIds(
   let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
   const distinctJournalIds = new Set<Id<"journalEntries">>();
   for (const accountId of controls) {
-    const allowed = await admissibleReadDocuments(ctx, remaining);
-    const lines = await ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
-      .take(allowed + 1);
-    if (lines.length > allowed) return "OVER_LIMIT";
+    const lines = await readBoundedDocuments(
+      ctx,
+      ctx.db.query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId)),
+      remaining,
+    );
+    if (lines === "OVER_LIMIT") return "OVER_LIMIT";
     remaining -= lines.length;
     for (const line of lines) distinctJournalIds.add(line.journalEntryId);
   }
@@ -1725,14 +1740,13 @@ async function readSourceBatches<Row extends { _id: Id<"journalEntries"> | Id<"a
   ctx: QueryCtx,
   sourceTypes: readonly string[],
   budget: number,
-  readBatch: (sourceType: string, take: number) => Promise<Row[]>,
+  readBatch: (sourceType: string) => AsyncIterable<Row>,
 ): Promise<Map<Row["_id"], Row> | "OVER_LIMIT"> {
   let left = budget;
   const byId = new Map<Row["_id"], Row>();
   for (const sourceType of sourceTypes) {
-    const allowed = await admissibleReadDocuments(ctx, left);
-    const batch = await readBatch(sourceType, allowed + 1);
-    if (batch.length > allowed) return "OVER_LIMIT";
+    const batch = await readBoundedDocuments(ctx, readBatch(sourceType), left);
+    if (batch === "OVER_LIMIT") return "OVER_LIMIT";
     left -= batch.length;
     for (const row of batch) byId.set(row._id, row);
   }
@@ -1756,7 +1770,7 @@ async function addSystemAccount(
  * three. This removes the repeated whole-ledger scans and nothing more: it does NOT keep the checklist inside Convex's
  * 32,000-document, 4,096-range and 16 MiB function limits (https://docs.convex.dev/production/state/limits), because
  * the provenance and subledger reads still sit on top of it (SCRUM-858 PR #710 R11: two controls with 1,024 reversed
- * pairs each read 38,045 documents). That bound is the headroom admission in `admissibleReadDocuments`, which makes
+ * pairs each read 38,045 documents). That bound is the headroom check in `readBoundedDocuments`, which makes
  * each of those reads report OVER_LIMIT instead of letting the platform stop the function. */
 export type SharedGlBalances = (cutoff: number) => Promise<Awaited<ReturnType<typeof getCumulativeBalancesAsOf>>>;
 
@@ -1805,12 +1819,12 @@ export async function computeEmployeeAdvancesReconciliation(
   const cutoff = toDate ?? now;
   if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
-  const advanceBudget = await admissibleReadDocuments(ctx, SUPPLIER_PAYABLES_RECON_READ_LIMIT);
-  const rows = await ctx.db
-    .query("employeeAdvances")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .take(advanceBudget + 1);
-  if (rows.length > advanceBudget) return unavailableFamilyResult("OVER_LIMIT");
+  const rows = await readBoundedDocuments(
+    ctx,
+    ctx.db.query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+  );
+  if (rows === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
   const subByCurrency = new Map<string, number>();
   for (const row of rows) {
     if (row.date > cutoff || row.updatedAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
@@ -1862,12 +1876,12 @@ export async function computeSupplierRecoverablesReconciliation(
   const rows: Array<Doc<"supplierCostRecoveries">> = [];
   // REVERSED is the one status whose source posting was reversed out of the GL, so it is excluded.
   for (const status of ["OPEN", "PARTIALLY_RECOVERED", "RECOVERED"] as const) {
-    const budget = await admissibleReadDocuments(ctx, SUPPLIER_PAYABLES_RECON_READ_LIMIT - rows.length);
-    const batch = await ctx.db
-      .query("supplierCostRecoveries")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .take(budget + 1);
-    if (batch.length > budget) return unavailableFamilyResult("OVER_LIMIT");
+    const batch = await readBoundedDocuments(
+      ctx,
+      ctx.db.query("supplierCostRecoveries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)),
+      SUPPLIER_PAYABLES_RECON_READ_LIMIT - rows.length,
+    );
+    if (batch === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
     rows.push(...batch);
   }
   const subByCurrency = new Map<string, number>();
@@ -1931,23 +1945,25 @@ export async function computePartnerCapitalReconciliation(
   if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
-  const partnerBudget = await admissibleReadDocuments(ctx, SUPPLIER_PAYABLES_RECON_READ_LIMIT);
-  const partners = await ctx.db
-    .query("partnerEquity")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .take(partnerBudget + 1);
-  if (partners.length > partnerBudget) return unavailableFamilyResult("OVER_LIMIT");
+  const partners = await readBoundedDocuments(
+    ctx,
+    ctx.db.query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+  );
+  if (partners === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
   const subByCurrency = new Map<string, number>();
   const add = (currency: string, minor: number) => subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
   for (const partner of partners) {
     if (partner.isDeleted) continue;
     add(orgCurrency, partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency));
-    const movementBudget = await admissibleReadDocuments(ctx, SUPPLIER_PAYABLES_RECON_READ_LIMIT);
-    const movements = await ctx.db
-      .query("partnerEquityTransactions")
-      .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id))
-      .take(movementBudget + 1);
-    if (movements.length > movementBudget) return unavailableFamilyResult("OVER_LIMIT");
+    const movements = await readBoundedDocuments(
+      ctx,
+      ctx.db
+        .query("partnerEquityTransactions")
+        .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id)),
+      SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+    );
+    if (movements === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
     if (!addDatedPartnerMovements(subByCurrency, movements, cutoff)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
   }
   const controls = await openingAllocationAccounts(ctx, orgId, new Set(["PARTNER_CAPITAL"]));
