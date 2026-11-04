@@ -421,6 +421,13 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   SUPPLIER_ENTITLEMENT: "LineSupplierEntitlement",
 };
 
+function profitLineLabel(key: string, profit: HeadlineProfit): string {
+  if (key === "COMMISSIONS" && profit.available && profit.basis === "MANAGEMENT_ESTIMATE") {
+    return "DealCommissionsRegisteredToDate";
+  }
+  return PROFIT_LINE_LABEL[key] ?? key;
+}
+
 /**
  * Keyed by the reason itself rather than tested with a ternary, which had two
  * branches for what is now three reasons and would have labelled a missing
@@ -436,7 +443,9 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoVehicleCost"
   /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
   | "PreparationExpensesUnreadable"
+  | "VehicleCostBasisUnreadable"
   | "CommissionsUnreadable"
+  | "CommissionsReadBoundExceeded"
   | "CommissionsPending"
   | "CostAccessRequired"
   | "CommissionAccessRequired"
@@ -462,7 +471,9 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
+  VehicleCostBasisUnreadable: "ProfitVehicleCostBasisUnreadable",
   CommissionsUnreadable: "DealCommissionsUnreadable",
+  CommissionsReadBoundExceeded: "ProfitCommissionsReadBoundExceeded",
   CommissionsPending: "ProfitCommissionsPending",
   CostAccessRequired: "ProfitCostAccessRequired",
   CommissionAccessRequired: "ProfitCommissionAccessRequired",
@@ -4508,7 +4519,7 @@ function selectSummaryFacts({
   // tile exactly as it does in the breakdown, so the tiles never show the
   // magnitude of a cost as if it were an inflow.
   return profit.lines.map((line) => ({
-    labelKey: PROFIT_LINE_LABEL[line.key] ?? line.key,
+    labelKey: profitLineLabel(line.key, profit),
     value: signedMoney(line, money),
     unavailableKey: "NotRecorded",
   }));
@@ -4687,7 +4698,8 @@ function DealPartyFacts({
           <MoneyFact
             key={party.party}
             label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
-            value={positioned ? money(party.amountMinor) : null}
+            value={positioned && party.amountMinor !== null ? money(party.amountMinor) : null}
+            unavailableKey={party.amountMinor === null ? "CostAmountWithheld" : "NotRecorded"}
             note={
               <>
                 <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
@@ -4823,7 +4835,7 @@ function ProfitBreakdown({
       <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
         {profit.lines.map((line) => (
           <div key={line.key} className="flex items-center justify-between gap-4">
-            <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+            <dt className="text-muted-foreground">{t(profitLineLabel(line.key, profit))}</dt>
             <dd>
               <Money>{signedMoney(line, money)}</Money>
             </dd>
@@ -7538,7 +7550,7 @@ export function DealCockpitView({
       {/* Mounted only while the action is offered: losing authority or the
           settle-able state UNMOUNTS an open dialog rather than leaving a form
           whose submit the server will refuse. */}
-      {supplierRow && canSettleSupplier && (
+      {supplierRow && supplierRow.amountMinor !== null && canSettleSupplier && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}

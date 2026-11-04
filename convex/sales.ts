@@ -3278,7 +3278,7 @@ export const dealCockpit = query({
               // margin back on the other.
               collectsGross ? "DEALERSHIP_OWES" : "OWED_TO_DEALERSHIP"
             ),
-            amountMinor: supplierOutstandingMinor ?? 0,
+            amountMinor: canReadVehicleCost(role) ? (supplierOutstandingMinor ?? 0) : null,
             currency,
             reference: supplierReference,
             receivableId: supplierReceivableId,
@@ -3329,7 +3329,9 @@ export const dealCockpit = query({
          * about.
          */
         routeKnown: true,
-        profit: accountingProfit,
+        profit: canReadVehicleCost(role)
+          ? accountingProfit
+          : { available: false as const, reason: "CostAccessRequired" as const },
         managementNetProfit: canReadVehicleCost(role)
           ? withDealManagementCosts({ profit: accountingProfit, showroomExpenses, commissions })
           : { available: false as const, reason: "CostAccessRequired" as const },

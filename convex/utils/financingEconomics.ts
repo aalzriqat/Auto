@@ -2327,7 +2327,9 @@ export type ManagementProfit =
         | "NoVehicleCost"
         /** SOURCED only: the dealership's preparation spend cannot be stated (unreadable, too many rows, ambiguous history). */
         | "PreparationExpensesUnreadable"
+        | "VehicleCostBasisUnreadable"
         | "CommissionsUnreadable"
+        | "CommissionsReadBoundExceeded"
         | "CommissionsPending"
         | "CostAccessRequired"
         | "CommissionAccessRequired"

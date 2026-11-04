@@ -2583,6 +2583,16 @@ const dealCommissionMessages = defineBilingualMessages({
     "A commission amount cannot be read, so the total is not shown.",
     "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي.",
   ],
+  DealCommissionsRegisteredToDate: ["Commissions registered to date", "العمولات المسجلة حتى الآن"],
+  CostAmountWithheld: ["This amount requires permission to view vehicle cost.", "عرض هذا المبلغ يتطلب صلاحية عرض تكلفة السيارة."],
+  ProfitCommissionsReadBoundExceeded: [
+    "The commission lines exceed the readable bound, so net profit is unavailable.",
+    "تتجاوز بنود العمولات حد القراءة، لذلك لا يتوفر صافي الربح.",
+  ],
+  ProfitVehicleCostBasisUnreadable: [
+    "The vehicle's cost basis cannot be read completely in the deal currency, so net profit is unavailable.",
+    "تعذّرت قراءة أساس تكلفة السيارة بالكامل بعملة الصفقة، لذلك لا يتوفر صافي الربح.",
+  ],
   DealCommissionsRegisteredNote: [
     "Registered amounts. Each is recorded in the books when added and paid with the employee's salary.",
     "مبالغ مسجلة. يُسجَّل كل مبلغ في الدفاتر عند إضافته ويُدفع مع راتب الموظف.",

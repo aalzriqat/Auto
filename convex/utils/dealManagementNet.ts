@@ -1,20 +1,27 @@
 import type { AccountingProfit, DealProfit, ManagementProfit } from "./financingEconomics";
 import { isMinorAmount } from "./financingEconomics";
+import type { DealerPreparationExpenses } from "./vehicleCostBasis";
 
 export type ProfitCommissions =
   | { available: true; totalMinor: number }
-  | { available: false; reason: "CommissionAccessRequired" | "CommissionsPending" | "CommissionsUnreadable" };
+  | { available: false; reason: "CommissionAccessRequired" | "CommissionsPending" | "CommissionsUnreadable" | "CommissionsReadBoundExceeded" };
 
 /** Derive the headline from the same signed lines the screen renders. */
 export function withDealManagementCosts(args: {
   profit: ManagementProfit | AccountingProfit;
-  showroomExpenses: { available: true; totalMinor: number } | { available: false };
+  showroomExpenses: { available: true; totalMinor: number } | {
+    available: false;
+    reason?: Exclude<DealerPreparationExpenses, { available: true }>["reason"] | "VehicleCostBasisUnreadable";
+  };
   commissions: ProfitCommissions;
 }): DealProfit {
   const { profit, showroomExpenses, commissions } = args;
   if (!profit.available) return profit;
   if (!commissions.available) return { available: false, reason: commissions.reason };
-  if (!showroomExpenses.available) return { available: false, reason: "PreparationExpensesUnreadable" };
+  if (!showroomExpenses.available) return {
+    available: false,
+    reason: showroomExpenses.reason === "VehicleCostBasisUnreadable" ? "VehicleCostBasisUnreadable" : "PreparationExpensesUnreadable",
+  };
   if (!isMinorAmount(showroomExpenses.totalMinor) || !isMinorAmount(commissions.totalMinor)) {
     return { available: false, reason: "CorruptInput" };
   }

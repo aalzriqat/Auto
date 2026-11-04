@@ -31,7 +31,7 @@ export async function loadProfitCommissions(ctx: QueryCtx, args: {
   const rows = await boundedLineRowsForSale(ctx, args.orgId, saleId);
   const active = rows.filter((row) => row.removedAt === undefined);
   if (rows.length > MAX_DEAL_COMMISSION_LINE_ROWS || active.length > MAX_DEAL_COMMISSION_LINES) {
-    return { available: false, reason: "CommissionsUnreadable" };
+    return { available: false, reason: "CommissionsReadBoundExceeded" };
   }
   const totals = dealCommissionTotals(sale, active, args.currency);
   if (totals.salePending || totals.totalMinor === null) return { available: false, reason: "CommissionsUnreadable" };
@@ -74,7 +74,7 @@ export async function loadShowroomExpenses(ctx: QueryCtx, args: {
     const basis = deriveVehicleCostBasis({
       vehicle, expenses, cutoffCreationTime: null, dealCurrency: args.currency, orgCurrency: args.orgCurrency,
     });
-    if (!basis.available) return { available: false as const };
+    if (!basis.available) return { available: false as const, reason: "VehicleCostBasisUnreadable" as const };
   }
   return deriveDealerPreparationExpenses({
     expenses, cutoffCreationTime: null, dealCurrency: args.currency, orgCurrency: args.orgCurrency,

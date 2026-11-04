@@ -158,64 +158,64 @@ test.each([
 test("SCRUM-908 complete cockpit responses withhold every cost projection", async () => {
   const variants = [[false, "SOURCED"], [true, "SOURCED"], [false, "STOCK"], [true, "STOCK"]] as const;
   for (let index = 0; index < variants.length; index += 1) {
-  const [financed, sourceType] = variants[index];
-  const s = await seedDealNetProfit(modules, sourceType, financed);
-  const permissions = ["view:sales", "view:finance", "view:commissions"];
-  await s.t.run((ctx) => ctx.db.patch(s.roleId, {
-    name: "Deal reader", isSystemOwnerRole: false, permissions: [...permissions, "view:cost_price"],
-  }));
-  const readApplication = () => s.asOwner.query(api.applications.dealCockpit, {
-    orgId: s.orgId, applicationId: s.applicationId,
-  });
-  const readSale = () => s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
-  const allowedApplication = await readApplication();
-  const allowedSale = await readSale();
-  if (!allowedApplication?.money || (!financed && !allowedSale?.money)) throw new Error("Expected finance evidence");
-  expect(allowedApplication.money.profit).toMatchObject(sourceType === "SOURCED"
-    ? { available: true, amountMinor: 1_433_700 }
-    : { available: false, reason: "NoSupplierSettlement" });
-  expect(allowedApplication.money.managementProfit).toEqual(allowedApplication.money.profit);
-  if (!financed) expect(allowedSale?.money?.profit).toMatchObject({ available: true, amountMinor: 2_200_000 });
-  else expect(allowedSale?.money).toBeNull(); // The application is the sole financed money reader.
+    const [financed, sourceType] = variants[index];
+    const s = await seedDealNetProfit(modules, sourceType, financed);
+    const permissions = ["view:sales", "view:finance", "view:commissions"];
+    await s.t.run((ctx) => ctx.db.patch(s.roleId, {
+      name: "Deal reader", isSystemOwnerRole: false, permissions: [...permissions, "view:cost_price"],
+    }));
+    const readApplication = () => s.asOwner.query(api.applications.dealCockpit, {
+      orgId: s.orgId, applicationId: s.applicationId,
+    });
+    const readSale = () => s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+    const allowedApplication = await readApplication();
+    const allowedSale = await readSale();
+    if (!allowedApplication?.money || (!financed && !allowedSale?.money)) throw new Error("Expected finance evidence");
+    expect(allowedApplication.money.profit).toMatchObject(sourceType === "SOURCED"
+      ? { available: true, amountMinor: 1_433_700 }
+      : { available: false, reason: "NoSupplierSettlement" });
+    expect(allowedApplication.money.managementProfit).toEqual(allowedApplication.money.profit);
+    if (!financed) expect(allowedSale?.money?.profit).toMatchObject({ available: true, amountMinor: 2_200_000 });
+    else expect(allowedSale?.money).toBeNull(); // The application is the sole financed money reader.
 
-  await s.t.run((ctx) => ctx.db.patch(s.roleId, { permissions }));
-  const withheld = { available: false, reason: "CostAccessRequired" };
-  const restrictedApplication = await readApplication();
-  const restrictedSale = await readSale();
-  // Compare the COMPLETE API payloads. Only the declared cost projections may change;
-  // all other finance evidence must remain readable.
-  expect(restrictedApplication).toEqual({
-    ...allowedApplication,
-    money: {
-      ...allowedApplication.money, profit: withheld, managementProfit: withheld,
-      parties: allowedApplication.money.parties.map((party) =>
-        party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party),
-    },
-  });
-  expect(restrictedSale).toEqual(!financed && allowedSale?.money ? {
-    ...allowedSale,
-    money: {
-      ...allowedSale.money, profit: withheld, managementNetProfit: withheld,
-      parties: allowedSale.money.parties.map((party) => ({ ...party, amountMinor: null })),
-    },
-  } : allowedSale);
-  for (const response of [restrictedApplication, restrictedSale]) {
-    const wire = JSON.stringify(response);
-    for (const costField of ["SUPPLIER_SETTLEMENT", "VEHICLE_COST", "SUPPLIER_ENTITLEMENT", "ACCOUNTING_MARGIN", "purchasePrice", "sourceCost"]) {
-      expect(wire).not.toContain(`"${costField}"`);
+    await s.t.run((ctx) => ctx.db.patch(s.roleId, { permissions }));
+    const withheld = { available: false, reason: "CostAccessRequired" };
+    const restrictedApplication = await readApplication();
+    const restrictedSale = await readSale();
+    // Compare the COMPLETE API payloads. Only the declared cost projections may change;
+    // all other finance evidence must remain readable.
+    expect(restrictedApplication).toEqual({
+      ...allowedApplication,
+      money: {
+        ...allowedApplication.money, profit: withheld, managementProfit: withheld,
+        parties: allowedApplication.money.parties.map((party) =>
+          party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party),
+      },
+    });
+    expect(restrictedSale).toEqual(!financed && allowedSale?.money ? {
+      ...allowedSale,
+      money: {
+        ...allowedSale.money, profit: withheld, managementNetProfit: withheld,
+        parties: allowedSale.money.parties.map((party) => ({ ...party, amountMinor: null })),
+      },
+    } : allowedSale);
+    for (const response of [restrictedApplication, restrictedSale]) {
+      const wire = JSON.stringify(response);
+      for (const costField of ["SUPPLIER_SETTLEMENT", "VEHICLE_COST", "SUPPLIER_ENTITLEMENT", "ACCOUNTING_MARGIN", "purchasePrice", "sourceCost"]) {
+        expect(wire).not.toContain(`"${costField}"`);
+      }
+      expect(wire).not.toContain("9900000");
     }
-    expect(wire).not.toContain("9900000");
-  }
 
-  // Owner bypass is independent of explicit grants, including view:finance/cost.
-  await s.t.run((ctx) => ctx.db.patch(s.roleId, { name: "OWNER", isSystemOwnerRole: true, permissions: [] }));
-  expect((await readApplication())?.money).toMatchObject({
-    profit: allowedApplication.money.profit, managementProfit: allowedApplication.money.managementProfit,
-    parties: allowedApplication.money.parties,
-  });
-  if (!financed) expect((await readSale())?.money).toMatchObject({
-    profit: allowedSale?.money?.profit, managementNetProfit: allowedSale?.money?.managementNetProfit,
-  });
+    // Owner bypass is independent of explicit grants, including view:finance/cost.
+    await s.t.run((ctx) => ctx.db.patch(s.roleId, { name: "OWNER", isSystemOwnerRole: true, permissions: [] }));
+    expect((await readApplication())?.money).toMatchObject({
+      profit: allowedApplication.money.profit, managementProfit: allowedApplication.money.managementProfit,
+      parties: allowedApplication.money.parties,
+    });
+    if (!financed) expect((await readSale())?.money).toMatchObject({
+      profit: allowedSale?.money?.profit, managementNetProfit: allowedSale?.money?.managementNetProfit,
+    });
   }
 });
 
