@@ -1,0 +1,73 @@
+{
+  "id": "sourced-cash-held-deposit-forfeited-before-sale-moves-only-customer-money",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum486-pilot-route-cells",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "vehicle": "SOURCED",
+        "method": "CASH",
+        "amount": 200
+      }
+    },
+    {
+      "actor": {
+        "role": "APPROVER",
+        "org": "A"
+      },
+      "action": "deposits.release",
+      "input": {
+        "resolution": "FORFEITED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.otherIncomeMinor",
+      "value": 200000
+    },
+    {
+      "observable": "journal.depositLiabilityNetMinor",
+      "value": 0
+    },
+    {
+      "observable": "incomeStatement.totalRevenueMinor",
+      "value": 0
+    },
+    {
+      "observable": "incomeStatement.netIncomeMinor",
+      "value": 200000
+    },
+    {
+      "observable": "supplierPayable.count",
+      "value": 0
+    },
+    {
+      "observable": "sale.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SOURCED CASH × held deposit × FORFEITED before sale: only customer money moves, no agency economics"
+  },
+  "matrixRow": "SCRUM486-SRC-CASH-FORFEIT",
+  "fingerprint": "7e65b348ea92fc3047890bafd7b14a9cac4d697f7886d70595cabc39b2cd575a"
+}
