@@ -143,7 +143,6 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
           CLERK_SECRET_KEY: secret("CLERK_SECRET_KEY"),
           E2E_LOGIN_USER: secret("E2E_LOGIN_USER"),
           E2E_APPROVER_USER: secret("E2E_APPROVER_USER"),
-          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1",
         },
       },
       {
@@ -160,7 +159,6 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
         ].join("\n"),
         env: {
           AUTOFLOW_LOCAL_CONVEX_CI: "1",
-          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1",
           JEV_FORM_EXPLORER: "0",
           NEXT_PUBLIC_CONVEX_URL: fromEnv("NEXT_PUBLIC_CONVEX_URL"),
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: secret("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY"),
@@ -192,7 +190,7 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
         name: "Upload Playwright reports",
         uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
         if: "always()",
-        with: { name: "regression-library-playwright-reports", path: "regression-reports/\nplaywright-json/\n", "if-no-files-found": "warn", "retention-days": 14 },
+        with: { name: "regression-library-playwright-reports", path: "regression-reports/\nplaywright-json/\ntest-results/deal-cockpit-visual/artifacts/\n", "if-no-files-found": "warn", "retention-days": 14 },
       },
     ]);
   });

@@ -119,13 +119,15 @@ jobs:
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           E2E_APPROVER_USER: ${{ secrets.E2E_APPROVER_USER }}
-          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
 
       # The three backend-backed Playwright configs (authenticated tests, scenario matrix and explorer
       # walks, terminal opening witnesses). Same commands as trusted-main-e2e.yml, deal-scenarios-e2e.yml
       # and the opening proof; a red config does not stop the others, and the step still fails.
       # Role-fixture specs (audit-role-access) run only in pilot-role-audit.yml: records bound to them
       # have no report here and fail ROLE_AUDIT_EVIDENCE_NOT_JOINED until that evidence is joined.
+      # The legacy manual-journal seed (SCRUM-795) is requested only by trusted-main-e2e.yml, which
+      # legacyManualJournalSeedScope.test.ts enforces. Its approve-door test is therefore not
+      # registered here, and a record bound to it fails BROWSER_REPLAY_NOT_EXECUTED, never skips.
       - name: Run the backend-backed browser projects
         id: browser
         run: |
@@ -137,7 +139,6 @@ jobs:
           exit "$status"
         env:
           AUTOFLOW_LOCAL_CONVEX_CI: "1"
-          E2E_SEED_LEGACY_MANUAL_JOURNAL: "1"
           JEV_FORM_EXPLORER: "0"
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
@@ -187,5 +188,6 @@ jobs:
           path: |
             regression-reports/
             playwright-json/
+            test-results/deal-cockpit-visual/artifacts/
           if-no-files-found: warn
           retention-days: 14

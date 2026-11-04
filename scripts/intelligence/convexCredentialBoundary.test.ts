@@ -334,7 +334,7 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // (start, env, deploy, mark, seed, browser projects, verify, stop). No preview and
   // no Convex cloud credential; pinned in regressionLibraryWorkflow.test.ts.
   "regression-library.yml":
-    "80efcfc61e3bb571d5e57171ad70e9aaf2c79e76eacee83844388d74a7c73b44",
+    "1b766a0a7512ffe18fda972ed097066faddff73937cd187d5cd200a746bf2de7",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":

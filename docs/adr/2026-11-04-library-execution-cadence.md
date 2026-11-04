@@ -45,6 +45,11 @@ schemas, and requires `verify` to run exactly `if: always()`. The browser steps 
   job. The code names the reason, so the failure is a recorded gap and not a mystery. It is not a skip, and the nightly
   stays red until the SCRUM-761 follow-up lands. The 10 records bound to `role-access.visual.spec.ts` are not affected: the
   static visual step runs them.
+- **No legacy manual-journal seed.** `E2E_SEED_LEGACY_MANUAL_JOURNAL` (SCRUM-795) is requested only by `trusted-main-e2e.yml`;
+  `legacyManualJournalSeedScope.test.ts` fails any other workflow that names it, and its allowlist is unchanged. The
+  approve-door test in `accounting.spec.ts` is therefore not registered here. No library record binds that file today
+  (checked: zero records name it), so no verdict depends on it. A record added later for that test fails
+  `BROWSER_REPLAY_NOT_EXECUTED`, never skips.
 - **Not a required check**, and not in the release guard. Requiring `regression-library` at release changes the release
   policy and needs the owner. Until then the release dispatch produces a result nobody enforces.
 - **Fresh hunt.** The nightly runs the recorded library. Appending new scenarios from a fresh explorer hunt is the swarm
