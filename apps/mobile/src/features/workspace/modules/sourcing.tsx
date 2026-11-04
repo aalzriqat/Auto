@@ -7,8 +7,16 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { type Option, money, maybeText, parseOptionalNumber, useCommandIdentity, useGenericError, PrimaryButton, SegmentedControl, FormField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { useStyles } from "./moduleStyles";
 
-export function SourcingModule({ orgId }: { orgId: string }) {
+/** SCRUM-902: shown instead of the payables to a role with finance access and without cost-price access. */
+export const SOURCING_COST_ACCESS_NOTE = {
+  en: "Supplier payables show what each sourced car cost. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+  ar: "تعرض مستحقات الموردين تكلفة كل مركبة مورَّدة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+} as const;
+
+export function SourcingModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
   const styles = useStyles();
+  // The server requires view:finance and view:cost_price (a sourced car's supplier amount is its cost).
+  const canViewSupplierCost = permissions.includes("view:finance") && permissions.includes("view:cost_price");
   const { locale } = useLocale();
   const reportError = useGenericError();
   const markPaid = useMutation(api.sourcingPayables.markPaid);
@@ -16,7 +24,7 @@ export function SourcingModule({ orgId }: { orgId: string }) {
   const [statusFilter, setStatusFilter] = useState<MobileSupplierPayableStatus | "ALL">("PENDING");
   const payables = useQuery(
     api.sourcingPayables.list,
-    statusFilter === "ALL" ? { orgId } : { orgId, status: statusFilter },
+    !canViewSupplierCost ? "skip" : statusFilter === "ALL" ? { orgId } : { orgId, status: statusFilter },
   );
   const [selected, setSelected] = useState<MobileSupplierPayable | null>(null);
   const [saving, setSaving] = useState(false);
@@ -58,6 +66,14 @@ export function SourcingModule({ orgId }: { orgId: string }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (!canViewSupplierCost) {
+    return (
+      <RecordCard>
+        <Text accessibilityRole="text" style={styles.recordMeta}>{SOURCING_COST_ACCESS_NOTE[locale === "ar" ? "ar" : "en"]}</Text>
+      </RecordCard>
+    );
   }
 
   if (payables === undefined) {

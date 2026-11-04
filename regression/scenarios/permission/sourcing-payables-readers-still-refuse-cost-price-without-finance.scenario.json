@@ -1,0 +1,43 @@
+{
+  "id": "sourcing-payables-readers-still-refuse-cost-price-without-finance",
+  "fingerprint": "620cbb2d6551d7fb69d2ee044a104f9c9e036215ca0b8c174a35b266e978d10e",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-sweep-from-pr765",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:finance"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSourcingCostGate.scrum902.test.ts",
+    "testName": "sourcingPayables readers: view:cost_price without view:finance is still refused (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-SUPPLIER-SOURCING"
+}

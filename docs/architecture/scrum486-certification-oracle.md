@@ -976,3 +976,17 @@ refund makes the shown figure too high, so for them it is only partial (the scre
 They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
+
+## SCRUM-902-SUPPLIER-SOURCING
+
+Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level authorization); owner ruling SCRUM-886#c24358 (ACCOUNTANT holds `view:cost_price`; the rollout backfill grants it). A SOURCED car's supplier entitlement equals its acquisition cost, so the per-car supplier and sourcing readers need `STATEMENT_PERMISSIONS` (`view:finance` and `view:cost_price`, `convex/supplierStatement.ts`), exactly like the supplier statement and `supplierDueAging.list`. ADR `docs/adr/2026-11-04-supplier-sourcing-readers-cost-permission.md` holds the class table of every cost-derived reader, and the owner questions for the readers that are not changed.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `sourcingPayables.list`, `listBounded`, `listPipeline`, `get` called by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price`; no rows | `sourcingPayables.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)`, and the same title for `listBounded`, `listPipeline`, `get` |
+| `supplierReceivables.list`, `outstandingSummary` by the same role | refused naming `view:cost_price` | `supplierReceivables.list: …`, `supplierReceivables.outstandingSummary: …` |
+| `sales.consignedSalePreview` by the same role | `null` (fail-soft, so the sale dialog does not crash), not the supplier entitlement or margin | `consignedSalePreview: a caller with view:finance but without view:cost_price gets null, not the supplier entitlement (SCRUM-902)` |
+| Role with both grants (positive controls) | sourcing lists and `get` return the seeded payable (amount 9,500), receivable readers answer, the preview is served | `sourcingPayables readers: a role holding both … (SCRUM-902 positive control)`, `supplierReceivables readers: … positive control`, `consignedSalePreview: … still gets the preview (SCRUM-902 positive control)` |
+| Role with `view:cost_price` and without `view:finance` (negative controls) | refused naming `view:finance`; the preview stays `null` without a finance-side grant | `… (SCRUM-902 negative control)` for sourcing, receivables and the preview |
+
+Failing-first: the six refusals and the preview test failed at `ce61849b3` against the unchanged readers (they resolved with rows) while the positive and negative controls passed. Screens: the web sourcing page and the mobile sourcing module ask for the same pair, send no query without it and show a note in English and Arabic (`SourcingCostAccessRequired`); covered by `app/(dashboard)/[orgId]/sourcing/client.cost.test.tsx` and `apps/mobile/src/features/workspace/modules/sourcing.costGate.test.tsx` (jsdom and React Native test renderers, not a browser). Evidence boundary: `convex-test` only, no production run. Not changed and awaiting owner ruling (ADR Q1-Q4): `supplierCostRecoveries.list` and `listReceipts`, the sales and inventory reports, the GL reconciliations and journal readers, `dashboard.stats`.

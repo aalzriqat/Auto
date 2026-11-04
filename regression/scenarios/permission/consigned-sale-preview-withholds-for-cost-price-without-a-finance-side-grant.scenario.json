@@ -1,0 +1,39 @@
+{
+  "id": "consigned-sale-preview-withholds-for-cost-price-without-a-finance-side-grant",
+  "fingerprint": "5f9adf74b8bffbacca554415900e722342902780747b44d6c5dc729554cbf6c4",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-sweep-from-pr765",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "sales.consignedSalePreview",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSourcingCostGate.scrum902.test.ts",
+    "testName": "consignedSalePreview: view:cost_price without any of expenses, reports or finance still gets null (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-SUPPLIER-SOURCING"
+}
