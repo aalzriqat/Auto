@@ -11,7 +11,7 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { NOTIFICATION_TYPES } from "../lib/notifications/types";
 import { fromMinorUnits, scaleForCurrency } from "./utils/money";
-import { alertStepFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
+import { alertStatusFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
 import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type ObligationRow } from "./utils/supplierObligationDue";
 
 /**
@@ -130,10 +130,8 @@ interface PlannedAlert {
  * `runWithIdempotency` call to the exported function it sits in.
  */
 function planAlert(row: ObligationRow): PlannedAlert | null {
-  // A missing due date can never alert, and a disputed obligation is held back.
-  if (row.dueAt === null || row.disputedMinor > 0) return null;
-  const plan = alertStepFor(row.daysOverdue);
-  if (!plan) return null;
+  const plan = alertStatusFor(row);
+  if (plan.status !== "ALERTING") return null;
   return {
     type: alertTypeFor(plan.step),
     data: alertData(row),

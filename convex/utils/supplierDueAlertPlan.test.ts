@@ -7,7 +7,23 @@
  * date. Coordinator ruling 2026-10-29 (missed-day gap): catch-up semantics - each run returns the latest step whose day has been reached; the caller sends it only if its idempotency record does not exist, so a missed day is made up once and never as a burst.
  */
 import { describe, expect, test } from "vitest";
-import { alertStepFor } from "./supplierDueAlertPlan";
+import { alertStatusFor, alertStepFor } from "./supplierDueAlertPlan";
+
+describe("SCRUM-869 attention view - alert status (shared with the sweep)", () => {
+  const base = { dueAt: 1, disputedMinor: 0 };
+  test("an undisputed row with a due date alerts at the step its day has reached", () => {
+    expect(alertStatusFor({ ...base, daysOverdue: -2 })).toEqual({ status: "ALERTING", step: "T_MINUS_3", occurrence: 0 });
+    expect(alertStatusFor({ ...base, daysOverdue: 8 })).toEqual({ status: "ALERTING", step: "OVERDUE_7", occurrence: 0 });
+  });
+  test("before the first step the row is NOT_YET", () => {
+    expect(alertStatusFor({ ...base, daysOverdue: -4 })).toEqual({ status: "NOT_YET" });
+  });
+  test("a disputed row is held, whatever its day; a row with no due date is held for that reason", () => {
+    expect(alertStatusFor({ dueAt: 1, disputedMinor: 5, daysOverdue: 30 })).toEqual({ status: "HELD", reason: "DISPUTED" });
+    expect(alertStatusFor({ dueAt: null, disputedMinor: 0, daysOverdue: null })).toEqual({ status: "HELD", reason: "NO_DUE_DATE" });
+    expect(alertStatusFor({ dueAt: null, disputedMinor: 5, daysOverdue: null })).toEqual({ status: "HELD", reason: "NO_DUE_DATE" });
+  });
+});
 
 describe("SCRUM-869 S8 - alert schedule (catch-up)", () => {
   test("before the first step nothing is due", () => {

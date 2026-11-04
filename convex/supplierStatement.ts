@@ -3,7 +3,8 @@ import { query } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
-import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
+import { readSupplierOutstanding, readSupplierSettled, type StatementSection } from "./utils/supplierObligationDue";
+import { alertStatusFor } from "./utils/supplierDueAlertPlan";
 import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
@@ -14,6 +15,12 @@ import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
  * no net, balance or difference field, and nothing here adds one to the other.
  */
 const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
+
+function assertNowWithinSkew(nowMs: number): void {
+  if (!Number.isSafeInteger(nowMs) || Math.abs(nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
+    throw new ConvexError("nowMs must be a whole number of milliseconds within one day of the server clock.");
+  }
+}
 
 const row = v.object({
   kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
@@ -125,11 +132,55 @@ export const outstanding = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-    if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
-      throw new ConvexError("nowMs must be a whole number of milliseconds within one day of the server clock.");
-    }
+    assertNowWithinSkew(args.nowMs);
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
     const { payable, receivable } = await readSupplierOutstanding(ctx, args);
     return { supplierId: args.supplierId, payable, receivable };
+  },
+});
+
+const attentionRow = v.object({
+  kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
+  id: v.string(),
+  currency: v.string(),
+  outstandingMinor: v.number(),
+  disputedMinor: v.number(),
+  dueDate: v.union(v.string(), v.null()),
+  daysOverdue: v.union(v.number(), v.null()),
+  status: v.union(v.literal("ALERTING"), v.literal("HELD")),
+  step: v.optional(
+    v.union(v.literal("T_MINUS_3"), v.literal("DUE_DAY"), v.literal("OVERDUE_7"), v.literal("OVERDUE_WEEKLY"))
+  ),
+  heldReason: v.optional(v.union(v.literal("NO_DUE_DATE"), v.literal("DISPUTED"))),
+});
+const attentionSection = v.object({ rows: v.array(attentionRow), complete: v.boolean() });
+
+function attentionOf(section: StatementSection) {
+  const rows = [];
+  for (const r of section.rows) {
+    const s = alertStatusFor(r);
+    if (s.status === "NOT_YET") continue;
+    const { kind, id, currency, outstandingMinor, disputedMinor, dueDate, daysOverdue } = r;
+    const common = { kind, id, currency, outstandingMinor, disputedMinor, dueDate, daysOverdue };
+    rows.push(s.status === "ALERTING" ? { ...common, status: s.status, step: s.step } : { ...common, status: s.status, heldReason: s.reason });
+  }
+  return { rows, complete: section.complete };
+}
+
+/**
+ * SCRUM-869 feature 5 - which of this supplier's obligations are alerting now, and which are held back and
+ * why (ADR docs/adr/2026-11-04-supplier-attention-view.md). Uses the same decision as the alert sweep.
+ * A/P and A/R stay separate; read-only; nothing is scheduled or written.
+ */
+export const attention = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers"), nowMs: v.number() },
+  returns: v.object({ supplierId: v.id("suppliers"), payable: attentionSection, receivable: attentionSection }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    assertNowWithinSkew(args.nowMs);
+    await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    const { payable, receivable } = await readSupplierOutstanding(ctx, args);
+    return { supplierId: args.supplierId, payable: attentionOf(payable), receivable: attentionOf(receivable) };
   },
 });
