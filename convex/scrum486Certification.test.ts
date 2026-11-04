@@ -2126,7 +2126,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
     expect(state.application?.status).toBe("CLOSED");
     expect(state.deposit?.status).toBe("APPLIED");
     expect(state.payables).toHaveLength(1);
-    expect(state.payables[0]).toMatchObject({ amountDue: 10_000, currency: "JOD", status: "PENDING" });
+    expect(state.payables[0]).toMatchObject({ amountDue: 10_000, currency: "JOD", status: "PENDING", supplierId: s.supplierId });
     expect(state.receivable).toMatchObject({
       payerType: "FINANCE_COMPANY", financeCompanyId: s.companyId, originalAmountMinor: 12_500_000, status: "OPEN",
     });
@@ -2169,6 +2169,31 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
     ]);
     expectBalanced(receiptRows);
+    // Both 1210 lines carry the financier. The supplier is carried by the payable row (asserted above).
+    const receivableLines = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      const out: Array<{ debit: number; credit: number; financeCompanyId?: string }> = [];
+      for (const line of lines) {
+        if ((await ctx.db.get(line.accountId))?.code === "1210") {
+          out.push({ debit: line.debitMinor, credit: line.creditMinor, financeCompanyId: line.financeCompanyId });
+        }
+      }
+      return out;
+    });
+    expect(receivableLines).toHaveLength(2);
+    expect(receivableLines).toEqual(expect.arrayContaining([
+      { debit: 12_500_000, credit: 0, financeCompanyId: s.companyId },
+      { debit: 0, credit: 12_500_000, financeCompanyId: s.companyId },
+    ]));
+    // The sub-ledger agrees with the GL: the whole 12,500,000 is allocated to the financier receivable.
+    const balance = await s.approver.as.query(api.subledger.getReceivableBalance, {
+      orgId: s.orgId, receivableDocumentId: state.receivable!._id,
+    });
+    expect(balance?.outstandingMinor).toBe(0);
+    expect(balance?.doc.status).toBe("PAID");
+    const allocations = await s.t.run((ctx) => ctx.db.query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", state.receivable!._id)).collect());
+    expect(allocations.filter((a) => a.status === "ACTIVE").map((a) => a.amountMinor)).toEqual([12_500_000]);
     expect(await trialBalanceNormalBalance(s)).toEqual({
       "1100|JOD": 200_000,
       "1110|JOD": 10_925_000,
