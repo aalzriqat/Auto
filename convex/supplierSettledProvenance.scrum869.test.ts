@@ -402,6 +402,31 @@ describe("SCRUM-869 settled history: an unverifiable claim does not make older, 
  * with convex-test's `transactionLimits: true`, which enforces the 16 MiB ceiling in the test database. Evidence boundary: that is
  * convex-test's emulation, not the Convex backend; the budget arithmetic itself is pinned in utils/transactionReadHeadroom.test.ts.
  */
+describe("SCRUM-869 settled history: a spent read budget never counts a deposit-only claim as unverified (#764 round 4, LOW-2)", () => {
+  test("the older deposit-only claim holds no supplier receipt to verify: only the newer, budget-exhausting claim is unverified", async () => {
+    const s = await seed("lowtwo", { transactionLimits: true });
+    const depositOnly = await openClaim(s, DEPOSIT); // older: receiptSeq 0, amountReceived = the customer deposit
+    const heavy = await openClaim(s, 0); // newer: one real receipt, then ledger entries too large to read together
+    await receive(s, heavy, RECEIPT, "lowtwo-1");
+    for (let i = 0; i < 20; i += 1) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("journalEntries", {
+          orgId: s.orgId, journalNumber: `JE-LOW2-${i}`, accountingDate: Date.now(), sourceType: "vehicleSupplierReceivables",
+          sourceId: heavy, category: "SYSTEM", memo: "m".repeat(900_000), status: "POSTED", currency: "JOD",
+          postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+        } as never),
+      );
+    }
+    const stored = await s.t.run((ctx) => ctx.db.get(depositOnly));
+    expect(stored?.amountReceived).toBe(DEPOSIT);
+    expect(stored?.receiptSeq ?? 0).toBe(0);
+    const r = await settled(s);
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.totals).toEqual([]);
+    expect(r.receivable.unverifiedCount).toBe(1);
+  });
+});
+
 describe("SCRUM-869 settled history: the read stays inside the transaction's byte limit (Finding 2)", () => {
   const HEAVY_CHARS = 900_000;
   const CLAIMS = 20;

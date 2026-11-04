@@ -32,8 +32,8 @@ const PERMS = [
 const SALE_PRICE = 12_500;
 const ENTITLEMENT = 9_500;
 
-async function seed(tag: string) {
-  const t = convexTestWithComponents(schema, MODULE_GLOB);
+async function seed(tag: string, options: { transactionLimits?: boolean } = {}) {
+  const t = convexTestWithComponents(schema, MODULE_GLOB, options);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `RC ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -266,6 +266,57 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
         } as never);
       }
     });
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
+  });
+
+  // #764 round 4 (MEDIUM, Convex limit). A row cap bounds documents, not bytes: one transaction may read 16 MiB
+  // (https://docs.convex.dev/production/state/limits) and `paymentNotes` can be ~1 MiB, so 20 payables read ~18 MB while far under
+  // the 100-row cap. `transactionLimits: true` makes convex-test enforce that ceiling. Evidence boundary: that is the test
+  // database's emulation, not the Convex backend.
+  const HEAVY_CHARS = 900_000;
+
+  test("CONTROL: 20 small payables are read in full with the limits enforced", async () => {
+    const s = await seed("limsmall", { transactionLimits: true });
+    for (let i = 0; i < 20; i++) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierPayables", {
+          orgId: s.orgId, vehicleId: s.vehicleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", amountDue: 1,
+          amountPaid: 0, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+        } as never)
+      );
+    }
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+  });
+
+  test("20 payables of ~0.9 MB each: UNAVAILABLE (OVER_LIMIT) with no totals, never a thrown read error", async () => {
+    const s = await seed("limheavy", { transactionLimits: true });
+    for (let i = 0; i < 20; i++) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("vehicleSupplierPayables", {
+          orgId: s.orgId, vehicleId: s.vehicleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", amountDue: 1,
+          amountPaid: 1, currency: "JOD", status: "PAID", paymentNotes: "n".repeat(HEAVY_CHARS), createdBy: s.userId,
+          createdAt: Date.now(), updatedAt: Date.now(),
+        } as never)
+      );
+    }
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [], differences: [] });
+  });
+
+  test("20 journal entries of ~0.9 MB on one payable: UNAVAILABLE (OVER_LIMIT), never a thrown read error", async () => {
+    const s = await seed("limentries", { transactionLimits: true });
+    await pay(s, 4_000);
+    for (let i = 0; i < 20; i++) {
+      await s.t.run((ctx) =>
+        ctx.db.insert("journalEntries", {
+          orgId: s.orgId, journalNumber: `JE-HEAVY-${i}`, accountingDate: Date.now(), sourceType: "vehicleSupplierPayables",
+          sourceId: s.payable._id, category: "SYSTEM", memo: "m".repeat(HEAVY_CHARS), status: "POSTED", currency: "JOD",
+          postedBy: s.userId, postedAt: Date.now(), createdAt: Date.now(),
+        } as never)
+      );
+    }
     const r = await recon(s);
     expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
   });

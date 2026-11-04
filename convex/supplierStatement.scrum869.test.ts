@@ -20,10 +20,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
+async function seed(
+  tag: string,
+  permissions: string[] = ["view:finance", "view:cost_price"],
+  options: { transactionLimits?: boolean } = {},
+) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
-  const t = convexTestWithComponents(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES, options);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `ST ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -185,6 +189,34 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.payable.complete).toBe(false);
     expect(r.payable.rows).toHaveLength(100);
     expect(r.receivable.complete).toBe(true);
+  });
+
+  // #764 round 4 (LOW-1). A row cap bounds documents, not bytes: 20 open payables with ~0.9 MB `paymentNotes` pass the 100-row cap and
+  // read ~18 MB, past the 16 MiB per-function read limit (https://docs.convex.dev/production/state/limits). `transactionLimits: true`
+  // makes convex-test enforce that ceiling (evidence boundary: the emulation, not the Convex backend).
+  test("CONTROL: 20 small open payables are read in full with the limits enforced", async () => {
+    const s = await seed("olimsmall", undefined, { transactionLimits: true });
+    for (let i = 0; i < 20; i += 1) await addPayable(s, { amountDue: 1 });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.rows).toHaveLength(20);
+  });
+
+  test("20 open payables of ~0.9 MB each: the section is incomplete with no totals, never a thrown read error", async () => {
+    const s = await seed("olimheavy", undefined, { transactionLimits: true });
+    for (let i = 0; i < 20; i += 1) await addPayable(s, { amountDue: 1, paymentNotes: "n".repeat(900_000) });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    expect(r.receivable.complete).toBe(true);
+  });
+
+  test("a section over the row bound withholds its totals too (W14), as settled history does", async () => {
+    const s = await seed("obound");
+    for (let i = 0; i < 101; i += 1) await addPayable(s, { amountDue: 1 });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
   });
 
   test("tenancy and permission: foreign supplier, other org, missing view:finance and a stale clock all refuse", async () => {
