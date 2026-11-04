@@ -8,7 +8,9 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { STATEMENT_FAMILY_LIMIT } from "./utils/supplierObligationDue";
-
+// SCRUM-802 legacy-cash-lifecycle opt-out: the seed completes a THROUGH_DEALERSHIP sale with no customer deposit, which the
+// full-payment pilot gate refuses. The sale only seeds the supplier payable; the suite proves the payments reconciliation, not
+// cash-sale completion, which scrum486Certification and the SCRUM-802 attack suites cover with the real switch.
 vi.mock("./utils/saleDebtContainment", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./utils/saleDebtContainment")>()),
   CASH_SALE_FULL_PAYMENT_PILOT_REQUIRED: false,
