@@ -15,6 +15,7 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { ammanDateString } from "@/convex/utils/supplierDueDates";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
 import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
@@ -174,13 +175,6 @@ export type SupplierSettledData = FunctionReturnType<typeof api.supplierStatemen
 type SettledSectionData = SupplierSettledData["payable"];
 type SettledRowData = SettledSectionData["rows"][number];
 
-const AMMAN_DATE = new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Asia/Amman",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
-
 function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; translate: Translate }>) {
   const inFull = row.settledMinor >= row.dueMinor;
   return (
@@ -188,7 +182,7 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
       <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
       <span className="text-muted-foreground">
         <span>{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</span> ·{" "}
-        {translate("SuppliersStmtHistoryLastChange")}: <bdi>{AMMAN_DATE.format(row.lastChangedAt)}</bdi>
+        {translate("SuppliersStmtHistoryLastChange")}: <bdi>{ammanDateString(row.lastChangedAt)}</bdi>
       </span>
       <span className="text-end">
         <Money minor={row.settledMinor} currency={row.currency} />

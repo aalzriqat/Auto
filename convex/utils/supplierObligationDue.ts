@@ -347,12 +347,12 @@ const PAYABLE_STATEMENT_OPEN = {
 const RECEIVABLE_STATEMENT_OPEN = {
   OPEN: true, PARTIALLY_PAID: true, DISPUTED: true, PAID: false, CANCELLED: false,
 } satisfies Record<Doc<"vehicleSupplierReceivables">["status"], boolean>;
-const openStatuses = <S extends string>(map: Record<S, boolean>): S[] => (Object.keys(map) as S[]).filter((status) => map[status]);
-const OPEN_PAYABLE_STATUSES = openStatuses(PAYABLE_STATEMENT_OPEN);
-const OPEN_RECEIVABLE_STATUSES = openStatuses(RECEIVABLE_STATEMENT_OPEN);
+const statusesWhere = <S extends string>(map: Record<S, boolean>): S[] => (Object.keys(map) as S[]).filter((status) => map[status]);
+const OPEN_PAYABLE_STATUSES = statusesWhere(PAYABLE_STATEMENT_OPEN);
+const OPEN_RECEIVABLE_STATUSES = statusesWhere(RECEIVABLE_STATEMENT_OPEN);
 
 /** One bounded read per open status, run together and concatenated; callers compare the length with the limit. */
-async function openByStatus<S extends string, D>(statuses: readonly S[], read: (status: S) => Promise<D[]>): Promise<D[]> {
+async function readByStatuses<S extends string, D>(statuses: readonly S[], read: (status: S) => Promise<D[]>): Promise<D[]> {
   return (await Promise.all(statuses.map(read))).flat();
 }
 /**
@@ -370,19 +370,19 @@ export async function readSupplierOutstanding(
   // Settled families are left out by index, not read and discarded, so a supplier with a long
   // paid history cannot push open rows past the bound. A row whose stored status says settled
   // while its amounts say otherwise is a data defect for the reconciliation slice, not this read.
-  const payableDocs = await openByStatus(OPEN_PAYABLE_STATUSES, (status) =>
+  const payableDocs = await readByStatuses(OPEN_PAYABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierPayables")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
       .take(STATEMENT_FAMILY_LIMIT + 1)
   );
-  const receivableDocs = await openByStatus(OPEN_RECEIVABLE_STATUSES, (status) =>
+  const receivableDocs = await readByStatuses(OPEN_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
       .take(STATEMENT_FAMILY_LIMIT + 1)
   );
-  const recoveryDocs = await openByStatus(OPEN_RECOVERY_STATUSES, (status) =>
+  const recoveryDocs = await readByStatuses(OPEN_RECOVERY_STATUSES, (status) =>
     ctx.db
       .query("supplierCostRecoveries")
       .withIndex("by_org_and_supplierId_and_status", (q) => q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status))
@@ -464,9 +464,9 @@ const RECOVERY_HAS_SETTLED = {
   RECOVERED: true,
   REVERSED: false,
 } satisfies Record<Doc<"supplierCostRecoveries">["status"], boolean>;
-const SETTLED_PAYABLE_STATUSES = openStatuses(PAYABLE_HAS_SETTLED);
-const SETTLED_RECEIVABLE_STATUSES = openStatuses(RECEIVABLE_HAS_SETTLED);
-const SETTLED_RECOVERY_STATUSES = openStatuses(RECOVERY_HAS_SETTLED);
+const SETTLED_PAYABLE_STATUSES = statusesWhere(PAYABLE_HAS_SETTLED);
+const SETTLED_RECEIVABLE_STATUSES = statusesWhere(RECEIVABLE_HAS_SETTLED);
+const SETTLED_RECOVERY_STATUSES = statusesWhere(RECOVERY_HAS_SETTLED);
 
 /** The newest STATEMENT_FAMILY_LIMIT rows across the statuses read; callers compare the unsliced length with the limit. */
 function newest<D extends { updatedAt: number }>(docs: D[]): D[] {
@@ -499,7 +499,8 @@ export async function readSupplierSettled(
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
 ): Promise<{ payable: SettledSection; receivable: SettledSection }> {
   const { orgId, supplierId } = args;
-  const payableDocs = await openByStatus(SETTLED_PAYABLE_STATUSES, (status) =>
+  const [payableDocs, receivableDocs, recoveryDocs] = await Promise.all([
+  readByStatuses(SETTLED_PAYABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierPayables")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
@@ -507,8 +508,8 @@ export async function readSupplierSettled(
       )
       .order("desc")
       .take(STATEMENT_FAMILY_LIMIT + 1),
-  );
-  const receivableDocs = await openByStatus(SETTLED_RECEIVABLE_STATUSES, (status) =>
+  ),
+  readByStatuses(SETTLED_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
@@ -516,8 +517,8 @@ export async function readSupplierSettled(
       )
       .order("desc")
       .take(STATEMENT_FAMILY_LIMIT + 1),
-  );
-  const recoveryDocs = await openByStatus(SETTLED_RECOVERY_STATUSES, (status) =>
+  ),
+  readByStatuses(SETTLED_RECOVERY_STATUSES, (status) =>
     ctx.db
       .query("supplierCostRecoveries")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
@@ -525,7 +526,8 @@ export async function readSupplierSettled(
       )
       .order("desc")
       .take(STATEMENT_FAMILY_LIMIT + 1),
-  );
+  ),
+  ]);
   const payableRows: SettledRow[] = [];
   for (const row of newest(payableDocs)) {
     const settledMinor = toMinorUnits(row.amountPaid ?? 0, row.currency);
