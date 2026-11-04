@@ -15,10 +15,76 @@ test("SCRUM-908 STOCK capitalized expense is deducted once through the vehicle b
   expect(await s.read()).toMatchObject({ available: true, amountMinor: 1_009_200 });
 });
 
+test.each([false, true])("SCRUM-908 financed=%s STOCK completed work order is a period expense deducted once, including legacy rows", async (financed) => {
+  const s = await seedDealNetProfit(modules, "STOCK", financed);
+  const workOrderId = await s.asOwner.mutation(api.workOrders.create, {
+    orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic repair", status: "COMPLETED",
+    idempotencyKey: "scrum908-work-order",
+    tasks: [{ id: "repair", description: "Synthetic repair", partsCost: 12, laborCost: 8, completed: true }],
+  });
+  const expense = await s.t.run(async (ctx) => {
+    const workOrder = await ctx.db.get(workOrderId);
+    if (!workOrder?.expenseId) throw new Error("Expected work order expense");
+    return ctx.db.get(workOrder.expenseId);
+  });
+  // This numeric assertion reproduces the headline failure before checking the writer's new metadata.
+  expect(await s.read()).toMatchObject({ available: true, amountMinor: financed ? 989_200 : 1_755_500 });
+  expect(expense?.accountingTreatment).toBe("PERIOD_EXPENSE");
+  if (!expense) throw new Error("Expected expense");
+  await s.t.run((ctx) => ctx.db.patch(expense._id, { accountingTreatment: undefined }));
+  expect(await s.read()).toMatchObject({ available: true, amountMinor: financed ? 989_200 : 1_755_500 });
+});
+
+test("SCRUM-908 an unknown STOCK legacy expense cannot claim work-order provenance by its title", async () => {
+  const s = await seedDealNetProfit(modules, "STOCK");
+  await s.expense({ title: "Work Order: Synthetic repair", accountingTreatment: undefined });
+  expect(await s.read()).toMatchObject({ available: false });
+});
+
+test.each(["STOCK", "SOURCED"] as const)("SCRUM-908 %s legacy work-order links prove period treatment", async (sourceType) => {
+  const s = await seedDealNetProfit(modules, sourceType);
+  await s.t.run(async (ctx) => {
+    const expenseId = await ctx.db.insert("expenses", {
+      orgId: s.orgId, vehicleId: s.vehicleId, title: "Legacy work order", amount: 20,
+      category: "REPAIR", status: "PAID", date: 1,
+    });
+    await ctx.db.insert("workOrders", {
+      orgId: s.orgId, vehicleId: s.vehicleId, title: "Legacy work order", status: "COMPLETED",
+      totalCost: 20, tasks: [], expenseId,
+    });
+  });
+  expect(await s.read()).toMatchObject({ available: true, amountMinor: 989_200 });
+});
+
+test.each(["foreign org", "different vehicle", "different amount", "truncated links"] as const)(
+  "SCRUM-908 %s cannot prove a legacy expense's work-order treatment", async (evidence) => {
+    const s = await seedDealNetProfit(modules, "STOCK");
+    await s.expense({ category: "REPAIR", accountingTreatment: undefined });
+    await s.t.run(async (ctx) => {
+      const orgId = evidence === "foreign org"
+        ? await ctx.db.insert("organizations", { name: "Synthetic foreign org", createdAt: 1 }) : s.orgId;
+      const vehicleId = evidence === "different vehicle"
+        ? await ctx.db.insert("vehicles", {
+          orgId, vin: "SYNTHETIC908-OTHER", make: "Example", model: "Other", year: 2026, mileage: 0,
+          color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 12_100, status: "AVAILABLE",
+        }) : s.vehicleId;
+      const count = evidence === "truncated links" ? 201 : 1;
+      for (let index = 0; index < count; index += 1) {
+        await ctx.db.insert("workOrders", {
+          orgId, vehicleId, title: "Synthetic provenance", status: "COMPLETED", tasks: [],
+          totalCost: evidence === "different amount" ? 201 : 200,
+          ...(index === 0 ? { expenseId: s.expenseIds[0] } : {}),
+        });
+      }
+    });
+    expect(await s.read()).toMatchObject({ available: false });
+  }
+);
+
 test("SCRUM-908 unreadable commission withholds profit rather than treating it as zero", async () => {
   const s = await seedDealNetProfit(modules);
   await s.t.run((ctx) => ctx.db.patch(s.commissionIds[0], { amountMinor: Number.NaN }));
-  expect(await s.read()).toMatchObject({ available: false });
+  expect(await s.read()).toEqual({ available: false, reason: "CommissionsUnreadable" });
 });
 
 test("SCRUM-908 execution fee and car expenses remain separate operands", async () => {
@@ -71,7 +137,22 @@ test.each([
 test("SCRUM-908 pending salesperson commission is unknown, never zero", async () => {
   const s = await seedDealNetProfit(modules);
   await s.t.run((ctx) => ctx.db.patch(s.saleId, { commissionAmount: undefined }));
-  expect(await s.read()).toMatchObject({ available: false });
+  expect(await s.read()).toEqual({ available: false, reason: "CommissionsPending" });
+});
+
+test.each([
+  [false, "SOURCED"], [true, "SOURCED"], [false, "STOCK"], [true, "STOCK"],
+] as const)("SCRUM-908 financed=%s %s management net requires cost permission", async (financed, sourceType) => {
+  const s = await seedDealNetProfit(modules, sourceType, financed);
+  await s.t.run((ctx) => ctx.db.patch(s.roleId, {
+    name: "Deal reader", isSystemOwnerRole: false,
+    permissions: ["view:sales", "view:finance", "view:commissions"],
+  }));
+  expect(await s.read()).toEqual({ available: false, reason: "CostAccessRequired" });
+  await s.t.run((ctx) => ctx.db.patch(s.roleId, {
+    permissions: ["view:sales", "view:finance", "view:commissions", "view:cost_price"],
+  }));
+  expect(await s.read()).toMatchObject({ available: true, amountMinor: financed ? 1_009_200 : 1_775_500 });
 });
 
 test("SCRUM-908 a decided salesperson commission joins the registered lines exactly once", async () => {

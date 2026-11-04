@@ -3330,7 +3330,9 @@ export const dealCockpit = query({
          */
         routeKnown: true,
         profit: accountingProfit,
-        managementNetProfit: withDealManagementCosts({ profit: accountingProfit, showroomExpenses, commissions }),
+        managementNetProfit: canReadVehicleCost(role)
+          ? withDealManagementCosts({ profit: accountingProfit, showroomExpenses, commissions })
+          : { available: false as const, reason: "CostAccessRequired" as const },
         /**
          * Cash has no financed fee records. Car expenses appear as their own
          * deduction in managementNetProfit; capitalized costs remain in the

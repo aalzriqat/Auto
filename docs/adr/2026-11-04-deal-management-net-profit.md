@@ -40,10 +40,16 @@ The deal management net headline subtracts every paid, live, showroom-borne car 
 | No linked sale yet | No recorded sale-keyed commissions exist; zero registered-to-date deduction, estimate remains provisional | Same |
 | Unreadable amount, mixed denomination or cap exceeded | Net unavailable, never partial or zero | Same |
 | Caller without commission permission | Withhold management net and its deduction lines, preventing inference of private pay | Same |
+| Caller without cost permission | Withhold the entire management net, including its breakdown, with `CostAccessRequired` | Same |
+| Legacy work-order expense without treatment | Infer period treatment only from its same-org, same-vehicle work-order expense link and matching amount | Same; subtract as period spend, never capitalize it |
 
 ## Impact and alternatives
 
-This is a read-only change. Writers, money transitions, reversals, retry identities, audit records and historical documents stay unchanged. Reads re-evaluate paid/deleted/reversed/removed state, so reversal and restoration affect the headline on the next query. Expenses use the existing `(org, vehicle)` index and commissions the `(org, sale)` index, each with a cap plus one sentinel row. Tenant checks and existing cost gates remain intact. The unmerged SCRUM-902 cost-gate branch overlaps these readers; its integration belongs to the coordinator, not a base update in this lane.
+Money transitions, postings, reversals, retry identities and historical documents stay unchanged. The review fix records `PERIOD_EXPENSE` on new work-order expenses, matching their existing posting. Reads re-evaluate paid/deleted/reversed/removed state, so reversal and restoration affect the headline on the next query. Expenses and legacy work-order provenance use the existing `(org, vehicle)` indexes, with a cap plus one sentinel row; truncated provenance never establishes a treatment. Commissions use the bounded `(org, sale)` read. The review fix gates both management headline readers with `canReadVehicleCost`; the separate cash accounting result remains unchanged as required by this task.
+
+The commissions row accepts a financed net only when its source headline includes `COMMISSIONS`. This withholds the row's net during the frontend/backend deploy gap without performing client arithmetic. Unset commissions on an existing sale return `CommissionsPending`, rendered separately from unreadable evidence in English and Arabic.
+
+Two optional changes remain for SCRUM-879: removing the preparation helper's unused cutoff API, and making an unlinked-sale estimate pending. The latter changes eight existing overview scenarios that currently estimate with zero registered sale-keyed commissions; it needs its own scenario update. Neither is part of this fix round.
 
 Rejected: changing the GL margin or subtracting commissions in the browser. Either would change accounting semantics or allow headline/lines and permissions to diverge. Chosen: server composition in the existing query snapshot, with a truthful management classification for cash and no schema or migration.
 

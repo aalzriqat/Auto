@@ -2328,6 +2328,8 @@ export type ManagementProfit =
         /** SOURCED only: the dealership's preparation spend cannot be stated (unreadable, too many rows, ambiguous history). */
         | "PreparationExpensesUnreadable"
         | "CommissionsUnreadable"
+        | "CommissionsPending"
+        | "CostAccessRequired"
         | "CommissionAccessRequired"
         | "ManagementNetUnavailable"
         /** A dealer-borne cost line is denominated in another currency: the expense operand would be a partial sum, so the figure is withheld. */

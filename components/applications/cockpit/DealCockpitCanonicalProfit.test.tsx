@@ -14,8 +14,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import type { DealCockpitData } from "./DealStagePresentation";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
+import { getFunctionName } from "convex/server";
 
 const language = vi.hoisted(() => ({ locale: "en" }));
+const commissionRead = vi.hoisted(() => ({ enabled: false }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
     t: (key: string) => ((language.locale === "ar" ? salesAr : salesEn) as Record<string, string>)[key] ?? key,
@@ -29,10 +31,18 @@ vi.mock("@/hooks/useCurrency", () => ({
 vi.mock("@/components/accounting/AccountingTabShared", () => ({ scaleForCurrency: () => 3 }));
 vi.mock("convex/react", async (importOriginal) => ({
   ...await importOriginal<typeof import("convex/react")>(),
-  useQuery: () => undefined,
+  useQuery: (ref: Parameters<typeof import("convex/react").useQuery>[0]) =>
+    commissionRead.enabled && getFunctionName(ref) === "dealCommissions:forSale" ? {
+      currency: "JOD", saleStatus: "COMPLETED", salePending: false, totalMinor: 125_000,
+      salesperson: { employeeName: "Synthetic salesperson", amountMinor: 125_000 }, lines: [],
+    } : undefined,
+}));
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ isLoading: false, hasPermission: () => true }),
 }));
 
 import { DealCockpitView } from "./DealCockpit";
+import { DealCommissionsRow } from "@/components/commissions/DealCommissionsRow";
 
 const SCALE = 1_000;
 type Financed = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
@@ -197,9 +207,59 @@ function cashDeal(): DealCockpitData {
 const money = (minor: number, currency: string) => `${(minor / SCALE).toLocaleString("en-US")} ${currency}`;
 
 afterEach(cleanup);
-beforeEach(() => { language.locale = "en"; });
+beforeEach(() => { language.locale = "en"; commissionRead.enabled = false; });
 
 describe("one canonical profit on the financed cockpit", () => {
+  test.each([false, true])("SCRUM-908 commissions line present=%s controls the financed net supplied to the row", (hasCommissions) => {
+    commissionRead.enabled = true;
+    const data = overview();
+    if (!data.financialSummary?.profit.available || data.financialSummary.profit.basis !== "MANAGEMENT_ESTIMATE") {
+      throw new Error("Expected readable overview");
+    }
+    if (hasCommissions) data.financialSummary.profit.lines.push({ key: "COMMISSIONS", sign: -1, amountMinor: 0 });
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money}
+      renderCommissions={({ profitMinor, money: format, t }) => <DealCommissionsRow
+        orgId={"org_1" as Id<"organizations">} saleId={"sale_1" as Id<"sales">}
+        profitMinor={profitMinor} money={format} t={t} />} />);
+    const row = within(screen.getByTestId("deal-commissions-row"));
+    expect(row.getByText("125 JOD")).toBeTruthy();
+    if (hasCommissions) expect(row.getByText("2,110 JOD")).toBeTruthy();
+    else {
+      expect(row.queryByText("2,110 JOD")).toBeNull();
+      expect(row.getByText(salesEn.DealCommissionsNetUnavailable)).toBeTruthy();
+    }
+  });
+
+  test.each([
+    ["CostAccessRequired", "Viewing net profit requires permission to view vehicle cost.", "عرض صافي الربح يتطلب صلاحية عرض تكلفة السيارة."],
+    ["CommissionsPending", "The commission has not been decided yet, so net profit is unavailable.", "لم تُحدّد العمولة بعد، لذلك لا يتوفر صافي الربح."],
+    ["CommissionsUnreadable", "A commission amount cannot be read, so the total is not shown.", "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي."],
+  ] as const)("SCRUM-908 %s has truthful EN/AR refusal text", (reason, en, ar) => {
+    for (const locale of ["en", "ar"] as const) {
+      language.locale = locale;
+      const original = overview();
+      if (!original.financialSummary) throw new Error("Expected overview");
+      const data: FinancedDealOverviewData = { ...original, financialSummary: {
+        ...original.financialSummary, profit: { available: false, reason },
+      } };
+      render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+        financialOverview={{ data, loading: false }} custodyMoney={money} />);
+      expect(screen.getAllByText(locale === "en" ? en : ar).length).toBeGreaterThan(0);
+      expect(screen.queryByText("2,110 JOD")).toBeNull();
+      cleanup();
+      const cash = cashDeal();
+      if (cash.dealKind !== "CASH" || !cash.money) throw new Error("Expected cash money");
+      render(<DealCockpitView deal={{ ...cash, money: {
+        ...cash.money, managementNetProfit: { available: false, reason },
+      } }} onRecordSupplierReceipt={async () => {}} />);
+      expect(screen.getAllByText(locale === "en" ? en : ar).length).toBeGreaterThan(0);
+      expect(screen.queryByText("2,800 JOD")).toBeNull();
+      expect(screen.queryByText("3,000 JOD")).toBeNull();
+      cleanup();
+    }
+  });
+
   test.each(["en", "ar"])("SCRUM-908 %s headline renders both deductions and isolates the amount", (locale) => {
     language.locale = locale;
     const original = overview();

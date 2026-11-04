@@ -437,6 +437,8 @@ const PROFIT_BLOCKED_REASON: Record<
   /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
   | "PreparationExpensesUnreadable"
   | "CommissionsUnreadable"
+  | "CommissionsPending"
+  | "CostAccessRequired"
   | "CommissionAccessRequired"
   | "ManagementNetUnavailable"
   /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
@@ -460,7 +462,9 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
-  CommissionsUnreadable: "DealCommissionsNetUnavailable",
+  CommissionsUnreadable: "DealCommissionsUnreadable",
+  CommissionsPending: "ProfitCommissionsPending",
+  CostAccessRequired: "ProfitCostAccessRequired",
   CommissionAccessRequired: "ProfitCommissionAccessRequired",
   ManagementNetUnavailable: "ProfitOverviewWithheld",
   ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
@@ -4926,7 +4930,9 @@ function MoneyPanel({
         )}
         {renderCommissions?.({
           profitMinor:
-            typeof canonicalProfit !== "string" && canonicalProfit.available ? canonicalProfit.amountMinor : null,
+            typeof canonicalProfit !== "string" && canonicalProfit.available &&
+              canonicalProfit.lines.some((line) => line.key === "COMMISSIONS")
+              ? canonicalProfit.amountMinor : null,
           money,
           t,
         })}

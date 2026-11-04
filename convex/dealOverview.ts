@@ -8,6 +8,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { deriveExpectedFees, summarizeFees, unreadableFeeAmounts, type ExpectedFeeRow } from "./financeDealCosts";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { loadActiveFees, unrecordedConfiguredFeePositions } from "./utils/settlementDeductions";
 import {
   composeCustomerGapToDealer,
@@ -25,13 +26,12 @@ import {
 import {
   deriveDealerPreparationExpenses,
   deriveVehicleCostBasis,
-  MAX_COST_BASIS_EXPENSES,
   type DealerPreparationExpenses,
   type VehicleCostBasis,
 } from "./utils/vehicleCostBasis";
 import { toMinorUnits } from "./utils/money";
 import { withDealManagementCosts } from "./utils/dealManagementNet";
-import { loadProfitCommissions } from "./utils/dealProfitReads";
+import { loadProfitCommissions, loadVehicleProfitExpenses } from "./utils/dealProfitReads";
 import {
   executionFeeHeadline,
   executionFeePosition,
@@ -123,9 +123,9 @@ export type FinancedDealOverview = Readonly<{
    * figure the cockpit withholds. Every input is FINANCE-class in
    * `financeApplicationProjection` (funding composition, dealer contribution,
    * expected remittance, target selling amount, legal invoice) or is read off
-   * `money` itself. The STOCK profit's VEHICLE_COST line is served under the
-   * same gate the cash cockpit already serves it under (`sales.dealCockpit`
-   * shows `view:finance` the vehicle cost inside the accounting profit).
+   * `money` itself. The management profit and its entire breakdown also require
+   * `view:cost_price`: a headline beside the sale price would otherwise reveal
+   * the cost even if its VEHICLE_COST line alone were removed.
    */
   financialSummary: DealFinancialSummary | null;
   /**
@@ -402,7 +402,7 @@ export const financedDealOverview = query({
     // ownership of the row it reads LOCALLY, whatever the cockpit just proved.
     const app = await requireOwnedRow(ctx, args.orgId, "financeApplications", args.applicationId);
     const owner = isSystemOwnerRole(role);
-    const mayReadCost = owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+    const mayReadCost = canReadVehicleCost(role);
     // Neither branch of this response is visible to this role. Return after
     // the existing authorization and ownership checks, before reading costs.
     if (cockpit.money === null && !mayReadCost) {
@@ -419,10 +419,7 @@ export const financedDealOverview = query({
     const expenses =
       vehicle === null
         ? []
-        : await ctx.db
-            .query("expenses")
-            .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id))
-            .take(MAX_COST_BASIS_EXPENSES + 1);
+        : await loadVehicleProfitExpenses(ctx, vehicle);
     const costBasisFor = (cutoffCreationTime: number | null): VehicleCostBasis | null =>
       vehicle === null
         ? null
@@ -550,7 +547,7 @@ export const financedDealOverview = query({
           expensesReason !== null
             ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: expensesReason }
             : { ...cockpit.money.expenses, reason: null },
-        profit: withDealManagementCosts({
+        profit: mayReadCost ? withDealManagementCosts({
           showroomExpenses: preparation ?? { available: false },
           commissions,
           profit: routeSpecificProfit({
@@ -567,7 +564,7 @@ export const financedDealOverview = query({
               (frozenEstimatedFees !== undefined &&
                 expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
           }),
-        }),
+        }) : { available: false, reason: "CostAccessRequired" },
         vehicleConsigned: consigned,
         app: {
           ...app,

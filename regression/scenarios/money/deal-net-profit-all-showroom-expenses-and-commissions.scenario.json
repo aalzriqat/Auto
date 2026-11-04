@@ -90,9 +90,5 @@
     "testName": "SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions"
   },
   "matrixRow": "SCRUM908-net-profit",
-  "bugRef": {
-    "key": "SCRUM-908",
-    "failingFirst": "f119b20e5a969e3503f5aeaba8531dd9711e25ae"
-  },
   "fingerprint": "759ecf2a3b838a216a5f1adc76884b434724216f794e39ff989ae8e1e6238a51"
 }

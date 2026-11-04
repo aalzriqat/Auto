@@ -1,5 +1,49 @@
 # SCRUM-908 implementation evidence
 
+## PR #772 review fix round at d83326f0 (2026-11-04)
+
+Started in `E:\tmp\auto-908`, branch `claude/scrum908-deal-net-profit`, at the required full SHA `d83326f0de3af48708a0fd30d3a6722f80e20d3d`. `git fetch origin` found zero commits in `HEAD..origin/main`. No main merge, push, deployment, accounting posting/report change, cash `money.profit` change, or containment-switch change is part of this round. Existing `.gitignore`/`.ignore` changes were left alone.
+
+### Findings reproduced before their fixes
+
+| Finding | Red evidence | Final behavior |
+| --- | --- | --- |
+| Cost permission | `dealNetProfit.scrum908.test.ts` returned cash `1,775,500` and financed `1,009,200`, including cost lines, to `view:sales` + `view:finance` + `view:commissions`. | Both management readers use `canReadVehicleCost`. Exact refusal is `{ available: false, reason: "CostAccessRequired" }`, with no amount or lines. CASH/FINANCED × STOCK/SOURCED controls also grant cost access and require the real positive amount. |
+| Old financed backend | The component passed `2,110,000` to the commission slot with no `COMMISSIONS` line. After strengthening the test to render the real row, temporarily removing only the guard again produced one failure: visible `2,110 JOD` in that row. The source was restored byte-for-byte in `finally`. | The row receives null unless the headline carries `COMMISSIONS`. Its positive control keeps the server net unchanged. |
+| Commission reason | The pending test received `CommissionsUnreadable`; three rendered-reason controls failed on the old EN wording/mapping. | Unset commission on a linked sale is `CommissionsPending`. Corrupt/capped/foreign/deleted evidence stays unreadable. Both reasons and the cost note are rendered in EN/AR on cash and financed screens. |
+| Work orders | Two public `workOrders.create` → deal-read controls returned unavailable instead of `989,200` financed / `1,755,500` cash after a 20 JOD repair. Separate legacy STOCK/SOURCED link controls also failed before normalization. | Work orders record period treatment; linked legacy rows are recognized and deducted exactly once. Unknown rows, mismatched org/vehicle/amount, and truncated provenance remain unavailable. |
+| Scenario provenance | The record test failed because `bugRef` named base `f119b20e5…`. `git show` of its named certification file contained no `SCRUM908-net-profit` test. | This ruling-driven preventive scenario has no `bugRef` and retains the current certification test title. The full library-loader suite passes. |
+
+The initial combined backend run also had an overly specific new assertion on the unknown-legacy refusal reason. STOCK correctly returned `NoVehicleCost`, rather than `PreparationExpensesUnreadable`; that assertion was corrected to the required unavailable state. This was a test expectation error, not separate defect evidence.
+
+### Work-order treatment and historical provenance
+
+The expense has no direct work-order field. Its durable provenance is the inverse `workOrders.expenseId` link. `git log -p HEAD --follow -- convex/workOrders.ts` enumerated all 11 file revisions reachable from this branch: `02f20d103`, `63a4ac185`, `2d669e52b`, `ce92f3009`, `faf3e9b15`, `db145e31d`, `68b74964b`, `29f9dcc17`, `6c64d1ddb`, `976d59357`, `13cd04829`. The introducing version inserts the expense and stores its id on both create and completion-via-update; the intervening diffs retain those assignments. This is repository-history evidence about this writer, not a production-data census.
+
+The GL hook was introduced at `faf3e9b15`. Current `createWorkOrderExpense` calls `hookExpensePosted` without `capitalizeToInventory`, `vehicleId`, `isPrepaid`, or `category`. `convex/accounting/workflowHooks.ts:1450` forwards that posting payload. `classifyExpensePosting` at `convex/accounting/postingRules.ts:2069` requires an explicit capitalization flag plus a vehicle id, so this payload is neither capitalized nor prepaid. `ruleExpensePosted` at line 2079 selects `expenseAccountKeyForCategory(undefined)`, whose default at line 737 is `GENERAL_EXPENSE`. Therefore the recorded treatment is `PERIOD_EXPENSE`; neither the hook nor posting rule was edited.
+
+Both management readers now share the bounded expense loader. Only an absent treatment on a REPAIR row with no prepaid/capitalized metadata, a same-org/same-vehicle work-order link, and a matching amount is normalized in memory. No historical document is rewritten. Both indexed reads use a 200-row bound plus a sentinel. A truncated provenance read supplies no inferred treatment. Explicit stored treatments win. Existing live/deleted/reversed/bearer rules still decide whether the period expense is deducted.
+
+### Checks and limitations
+
+The main named run with coverage collection executed 396 tests in 13 files, all tests passed, with no skips. After strengthening the final cash/financed EN/AR assertions, the three touched suites ran again: 109/109 passed, exit 0. The main run includes the five SCRUM-908 suites, the complete SCRUM-486 certification suite, all three touched test files, and work-order/cost-basis/commission compatibility controls:
+
+```powershell
+pnpm exec vitest run convex/dealNetProfit.scrum908.test.ts convex/utils/dealManagementNet.test.ts convex/dealOverview.test.ts convex/cashDealCockpit.test.ts convex/utils/dealerPreparationExpenses.test.ts convex/scrum486Certification.test.ts convex/workOrders.test.ts components/commissions/DealCommissionsRow.test.tsx components/applications/cockpit/DealCockpitCanonicalProfit.test.tsx scripts/regression/scenarioRecord.test.ts convex/utils/vehicleCostBasis.test.ts convex/utils/stockManagementProfit.test.ts convex/dealCostsReadable.test.ts --maxWorkers=1 --testTimeout=20000
+```
+
+`pnpm typecheck` and `pnpm typecheck:convex` passed. The root command excludes `convex/`, `test-utils/`, `apps/`, `packages/`, and `dealer-worker/` as entry sets; the Convex command checks the backend and test utilities. Initial new-test type errors were fixed before the passing runs. ESLint on all 11 changed TS/TSX files reports zero errors and seven warnings on pre-existing source. No `NOSONAR` was added.
+
+Local SonarJS 4.2.2 S3776 measured the financial helpers at complexity 1–9. The new expense loader measures 2; its predicates measure 1–2. The complete plugin profile could not load its cached `@sonarsource/analyzer-commons-configurations/secret-patterns.json` dependency, so no full-profile or SonarCloud no-new-smell claim is made.
+
+The same 396-test run collected V8 coverage for `dealProfitReads.ts`, `workOrders.ts`, `sales.ts`, `dealOverview.ts`, and `DealCockpit.tsx` using repeated `--coverage.include=<file>` plus `--coverage --coverage.reportsDirectory=$env:TEMP/scrum908-fix-coverage`. No threshold was overridden. Tests passed, but this scoped whole-file measurement exited 1: 28.48% lines, 27.74% statements, 29.29% branches, 23.39% functions, below the existing 90/90/75/85 thresholds for those large legacy files. It is not a passed repository coverage gate. A separate nonempty LCOV/new-line intersection against `d83326f0…` measured 14/14 executable points covered: 12 in `dealProfitReads`, one in `dealOverview`, and one in `DealCockpit`. The added sales/work-order object properties have no separate V8 line point and receive no independent line-coverage claim; public-query tests exercise their behavior. This local measurement does not certify SonarCloud's new-code set.
+
+The supplied relocation command with `--base 644d785d78361c351b6fb9f1166da18bdfd3527d --write` refused all 49 shifted entries because their prior sites already refer to the PR version. Re-running with the verified starting `d83326f0…` proved 49 identical-call relocations, zero refusals. `checkBaselineIdentity.mjs` matched all 945 entries. Renewal uses committed source blob evidence, retains each entry's UNKNOWN classification and expiry, and is freshness evidence only.
+
+Optional work deferred to SCRUM-879: the unused preparation cutoff argument/always-zero counter, and the unlinked-sale zero commission estimate. Trying the latter exposed eight existing overview scenarios whose estimation contract needs separate revision; their assertions were preserved and the optional behavior change was restored. No tests or gates were weakened.
+
+Author review used `clean-code-guard`, `test-guard`, and the financial invariant checklist. Five failure modes checked were cost inference through the remaining headline, double commission deduction, work-order capitalization/double deduction, forged or truncated legacy provenance, and pending amounts reported as zero/unreadable. The implementing session is neither review seat. Fresh exact-head seats, CI/SonarCloud, authenticated three-hunter checks, desktop/mobile visual verification, real-backend execution, build and deployment remain unverified. DOM rendering covers the EN/AR notes; no dev server was started under the workstation rule. `convex-test` proves serial harness behavior, not Convex platform or concurrency behavior.
+
 Base: `f119b20e5a969e3503f5aeaba8531dd9711e25ae`. Branch: `claude/scrum908-deal-net-profit`. Synthetic fixtures only. See the [ADR and surface/class tables](../adr/2026-11-04-deal-management-net-profit.md).
 
 ## Red before production edits

@@ -3,7 +3,7 @@ import { isMinorAmount } from "./financingEconomics";
 
 export type ProfitCommissions =
   | { available: true; totalMinor: number }
-  | { available: false; reason: "CommissionAccessRequired" | "CommissionsUnreadable" };
+  | { available: false; reason: "CommissionAccessRequired" | "CommissionsPending" | "CommissionsUnreadable" };
 
 /** Derive the headline from the same signed lines the screen renders. */
 export function withDealManagementCosts(args: {
