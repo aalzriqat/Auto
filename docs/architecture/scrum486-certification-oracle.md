@@ -746,6 +746,18 @@ and tenancy only; the registry itself is certified under SCRUM-868.
 Not certified by these rows: relationship navigation to payables, receivables and
 recoveries (slice B), and the registry initialisation in production (SCRUM-888).
 
+## SCRUM-486 pilot route cells: SOURCED deposit endings and SOURCED financed deposit with contribution
+
+Three harness cells in `convex/scrum486Certification.test.ts` close matrix rows that the ledger listed as Required for the SOURCED routes. Each figure is derived from the owner ruling SCRUM-407 c21031 and ACC-1 (SOURCED is consignment, never salePrice minus cost), not read from code. Each has a regression record under `regression/scenarios/money/`.
+
+| Row | Scenario | Literal expectation (JOD minor units) | Record |
+| --- | --- | --- | --- |
+| `SCRUM486-SRC-CASH-REFUND` | SOURCED CASH, 200 held deposit, refunded before any sale. | Dr 1100 / Cr 2100 200,000, then Dr 2100 / Cr 1100 200,000; trial balance empty; revenue, other income and net income zero; no sale, no supplier payable, no 4170, 4100, 5100, 1400 or 2400. | `sourced-cash-held-deposit-refunded-before-sale-moves-only-customer-money` |
+| `SCRUM486-SRC-CASH-FORFEIT` | The same, forfeited. | Release is Dr 2100 / Cr 4200 200,000; cash stays 200,000; other income and net income 200,000; revenue zero; same absences. | `sourced-cash-held-deposit-forfeited-before-sale-moves-only-customer-money` |
+| `SCRUM486-SRC-FIN-DEP` | SOURCED configured financier, THROUGH_DEALERSHIP, approved 12,500,000, supplier entitlement 10,000,000, 87.4% policy, 200,000 held first payment. | Funded 10,925,000; contribution 12,500,000 - 10,925,000 - 200,000 = 1,375,000. Sale: Dr 1210 12,500,000; Cr 2400 10,000,000; Cr 4170 2,500,000; Dr 4180 / Cr 2220 1,375,000 (contra-revenue, not a cost); Dr 2100 / Cr 2220 200,000. Forward Dr 2220 / Cr 1110 1,575,000, so 2220 nets to zero. Agency revenue net 2,500,000 - 1,375,000 = 1,125,000, COGS zero, supplier payable 10,000 JOD. Full receipt Dr 1110 / Cr 1210 12,500,000 clears 1210 and leaves 2400, 4170 and 4180 unchanged. | `sourced-financed-held-deposit-contribution-is-contra-revenue` |
+
+Mutation attack on `SCRUM486-SRC-FIN-DEP`: booking the contribution to an expense account instead of 4180 turns the cell red (the 4180 line becomes 6900). Evidence class: serial `convex-test` harness only; no real-backend replay (SCRUM-762), no closed-period or concurrency proof. Not covered here: the DIRECT_TO_SUPPLIER route with a held deposit, a SOURCED financed deposit refunded or forfeited, and cancellation after the forward.
+
 ## SCRUM-760-G8-SOURCED — hunter bindings, runtime pending
 
 G8 binds four literal public-API certification tests in

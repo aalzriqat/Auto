@@ -1,0 +1,110 @@
+{
+  "id": "sourced-financed-held-deposit-contribution-is-contra-revenue",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum486-pilot-route-cells",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "deposits.create",
+      "input": {
+        "vehicle": "SOURCED",
+        "method": "CASH",
+        "amount": 200
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.createFromQuote",
+      "input": {
+        "approvedAmount": 12500,
+        "ltvPercent": 87.4
+      }
+    },
+    {
+      "actor": {
+        "role": "APPROVER",
+        "org": "A"
+      },
+      "action": "financeCompanyForward.recordFinanceCompanyForward",
+      "input": {
+        "expectedAmountMinor": 1575000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "vehicle": "SOURCED",
+        "supplierCost": 10000,
+        "route": "THROUGH_DEALERSHIP"
+      }
+    },
+    {
+      "actor": {
+        "role": "APPROVER",
+        "org": "A"
+      },
+      "action": "applications.confirmDisbursement",
+      "input": {
+        "disbursedAmountMinor": 12500000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "journal.agencyRevenue4170Minor",
+      "value": 2500000
+    },
+    {
+      "observable": "journal.contraRevenue4180Minor",
+      "value": 1375000
+    },
+    {
+      "observable": "incomeStatement.netIncomeMinor",
+      "value": 1125000
+    },
+    {
+      "observable": "incomeStatement.totalCogsMinor",
+      "value": 0
+    },
+    {
+      "observable": "supplierPayable.amountDue",
+      "value": 10000
+    },
+    {
+      "observable": "financeCompanyReceivable.balanceMinor",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-407#c21031",
+      "digest": "99f59545d497a313e188159cf130574d61cdb3c0a40fd1cfeda6ab8f9cc44efa"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SOURCED configured financier × through dealership × held 200 first payment: contribution is contra-revenue against agency margin, deposit forwarded"
+  },
+  "matrixRow": "SCRUM486-SRC-FIN-DEP",
+  "fingerprint": "87cdea2da6883d50a624a5a8b1c01fcc1384e15f60e8704763e402753a38bb9f"
+}
