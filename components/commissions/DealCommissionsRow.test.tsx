@@ -41,9 +41,9 @@ beforeEach(() => {
 });
 
 describe("DealCommissionsRow", () => {
-  test("shows the total collapsed, the breakdown on demand, and profit less commissions", () => {
+  test("shows the server net unchanged so commissions are not subtracted twice", () => {
     useQueryMock.mockReturnValue(view());
-    render(<DealCommissionsRow orgId={orgId} saleId={saleId} profitMinor={1_000_000} money={money} t={t} />);
+    render(<DealCommissionsRow orgId={orgId} saleId={saleId} profitMinor={875_000} money={money} t={t} />);
     expect(screen.getByText("125.000 JOD")).toBeTruthy();
     expect(screen.getByText("875.000 JOD")).toBeTruthy();
     expect(screen.queryByText("DealCommissionKindPURCHASE")).toBeNull();
@@ -56,6 +56,16 @@ describe("DealCommissionsRow", () => {
     useQueryMock.mockReturnValue(view());
     render(<DealCommissionsRow orgId={orgId} saleId={saleId} profitMinor={null} money={money} t={t} />);
     expect(screen.getByText("DealCommissionsNetUnavailable")).toBeTruthy();
+  });
+
+  test("unavailable line evidence shows no partial breakdown or net", () => {
+    useQueryMock.mockReturnValue(view({ totalMinor: null, lineEvidence: "UNAVAILABLE" }));
+    render(<DealCommissionsRow orgId={orgId} saleId={saleId} profitMinor={1_009_200} money={money} t={t} />);
+    expect(screen.getByText("DealCommissionsUnreadable")).toBeTruthy();
+    expect(screen.getByText("DealCommissionsNetUnavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.queryByText("DealCommissionKindPURCHASE")).toBeNull();
+    expect(screen.queryByText("DealCommissionSalespersonLine")).toBeNull();
   });
 
   test("an undecided salesperson commission is flagged as incomplete", () => {

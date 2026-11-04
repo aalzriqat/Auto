@@ -2276,11 +2276,11 @@ export type ManagementProfitLine =
    */
   | { key: "VEHICLE_COST"; sign: -1; amountMinor: number }
   /**
-   * SOURCED only: what the dealership spent preparing the supplier's car
-   * before the deal (period expenses — never capitalized, never part of the
-   * supplier's entitlement). Subtracted exactly once, here.
+   * Paid, live showroom expenses on the car in every category. STOCK
+   * capitalized expenses are already in VEHICLE_COST and excluded here.
    */
   | { key: "PREPARATION_EXPENSES"; sign: -1; amountMinor: number }
+  | { key: "COMMISSIONS"; sign: -1; amountMinor: number }
   | { key: "DEALER_CONTRIBUTION"; sign: -1; amountMinor: number }
   | { key: "ACTUAL_EXPENSES"; sign: -1; amountMinor: number }
   | { key: "FORECAST_EXPENSES"; sign: -1; amountMinor: number };
@@ -2327,6 +2327,9 @@ export type ManagementProfit =
         | "NoVehicleCost"
         /** SOURCED only: the dealership's preparation spend cannot be stated (unreadable, too many rows, ambiguous history). */
         | "PreparationExpensesUnreadable"
+        | "CommissionsUnreadable"
+        | "CommissionAccessRequired"
+        | "ManagementNetUnavailable"
         /** A dealer-borne cost line is denominated in another currency: the expense operand would be a partial sum, so the figure is withheld. */
         | "ExpensesMixedDenomination"
         /** A live cost line carries an amount that is not a safe non-negative integer, or the lines overflow: the expense operand is not a figure. */
@@ -2437,17 +2440,19 @@ export type AccountingProfit =
         | "FinancedDirectUnverified";
     };
 
-/**
- * What the deal screen's headline can be.
- *
- * A union rather than one widened type, so the two cannot be built from each
- * other's parts. `basis` is the discriminant, and the two arms carry DIFFERENT
- * ledger fields rather than the same field with opposite values: financed
- * carries `postable: false`, cash carries `reconcilesToLedger: true`. Neither is
- * independently settable, and no caller can read one arm's field off the other —
- * TypeScript refuses the access outside its branch.
- */
-export type DealProfit = ManagementProfit | AccountingProfit;
+/** Cash management net keeps the accounting result's meaning separate. */
+export type CashManagementNetProfit = {
+  available: true;
+  basis: "MANAGEMENT_NET";
+  amountMinor: number;
+  currency: string;
+  lines: Array<AccountingProfitLine | Extract<ManagementProfitLine, { key: "PREPARATION_EXPENSES" | "COMMISSIONS" }> |
+    { key: "ACCOUNTING_MARGIN"; sign: 1 | -1; amountMinor: number }>;
+  postable: false;
+};
+
+/** Management headlines and the separate ledger margin retain distinct basis tags. */
+export type DealProfit = ManagementProfit | AccountingProfit | CashManagementNetProfit;
 
 /**
  * Returns `available: false` rather than a zero when an input is missing.
@@ -2680,8 +2685,7 @@ export function deriveStockManagementProfit(args: {
 }
 
 /**
- * The consignment management profit with the dealership's pre-deal
- * preparation spend on the supplier's car subtracted — exactly once, as its
+ * The management profit with the dealership's car expenses subtracted as its
  * own line, leaving every other operand (and the supplier's entitlement)
  * exactly as the cockpit served it. An unavailable cockpit figure passes
  * through untouched; an unstatable preparation figure makes the whole

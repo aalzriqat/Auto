@@ -13,8 +13,8 @@ import {
   composeCustomerGapToDealer,
   deriveStockManagementProfit,
   isMinorAmount,
-  withPreparationExpenses,
-  type DealProfit,
+  type ManagementProfit,
+  type AccountingProfit,
 } from "./utils/financingEconomics";
 import {
   deriveDealFinancialSummary,
@@ -30,6 +30,8 @@ import {
   type VehicleCostBasis,
 } from "./utils/vehicleCostBasis";
 import { toMinorUnits } from "./utils/money";
+import { withDealManagementCosts } from "./utils/dealManagementNet";
+import { loadProfitCommissions } from "./utils/dealProfitReads";
 import {
   executionFeeHeadline,
   executionFeePosition,
@@ -135,9 +137,9 @@ export type FinancedDealOverview = Readonly<{
   vehicleCostBasis: ServedVehicleCostBasis | null;
   /**
    * SOURCED only, under the same `view:cost_price` gate: what the dealership
-   * spent preparing the supplier's car before the deal — shown beside the
-   * supplier's cost, never added to it. `null` on the dealership's own car
-   * (those costs are capitalized into the basis above) and for a caller who
+   * paid in live showroom expenses on the supplier's car, in every category
+   * and regardless of registration date. `null` on the dealership's own car
+   * (its period costs still reduce management net) and for a caller who
    * may not read costs.
    */
   dealerPreparation: ServedDealerPreparation | null;
@@ -296,8 +298,6 @@ function routeSpecificProfit(args: {
   money: CockpitMoney;
   /** The vehicle's WHOLE book value (no cutoff), or why it cannot be stated. */
   fullCostBasis: VehicleCostBasis | null;
-  /** SOURCED: the dealership's pre-deal preparation spend, subtracted once. */
-  preparation: DealerPreparationExpenses | null;
   expectedExpensesMinor?: number;
   /** F-PNTR-1: the execution-fee operand, the same one the cockpit's SOURCED figure uses. */
   executionFee: ExecutionFeeHeadline | null;
@@ -311,7 +311,7 @@ function routeSpecificProfit(args: {
   expensesMixed: boolean;
   /** A live line's amount is not a safe non-negative integer, or the lines overflow: the expense operand is corrupt. */
   expensesUnreadable: boolean;
-}): DealProfit {
+}): ManagementProfit | AccountingProfit {
   const { app, money } = args;
   // Refused before either route: both derive against `actualExpensesMinor`,
   // and on a mixed deal that figure is missing a cost the dealership bore.
@@ -323,13 +323,7 @@ function routeSpecificProfit(args: {
   if (args.expensesUnreadable) return { available: false, reason: "ExpensesUnreadable" };
   if (args.consigned === null) return money.profit;
   if (args.consigned) {
-    // Consignment economics, the cockpit's own, less what the dealership
-    // spent preparing the supplier's car. A management estimate stays one.
-    if (money.profit.available && money.profit.basis !== "MANAGEMENT_ESTIMATE") return money.profit;
-    return withPreparationExpenses(
-      money.profit,
-      args.preparation === null ? { available: false } : args.preparation
-    );
+    return money.profit;
   }
 
   const vehicleCostMinor =
@@ -433,21 +427,26 @@ export const financedDealOverview = query({
       vehicle === null
         ? null
         : deriveVehicleCostBasis({ vehicle, expenses, cutoffCreationTime, dealCurrency, orgCurrency });
-    // Ownership is the cockpit's verdict; the preparation figure exists only
-    // for a consigned car, cut off at the deal's registration like the basis.
+    // Management costs have no registration cutoff. STOCK capitalized costs
+    // stay in its full basis; only additional costs enter this operand.
     const consignedByCockpit = cockpit.vehicle?.consigned ?? null;
     const preparation: DealerPreparationExpenses | null =
-      vehicle !== null && consignedByCockpit === true
+      vehicle !== null && !vehicle.isDeleted && consignedByCockpit !== null
         ? deriveDealerPreparationExpenses({
             expenses,
-            cutoffCreationTime: app._creationTime,
+            cutoffCreationTime: null,
             dealCurrency,
             orgCurrency,
+            consigned: consignedByCockpit,
           })
         : null;
 
     let financialSummary: DealFinancialSummary | null = null;
     if (cockpit.money !== null) {
+      const commissions = await loadProfitCommissions(ctx, {
+        orgId: args.orgId, saleId: app.finalizedSaleId ?? null, currency: cockpit.money.currency,
+        mayReadCommissions: owner || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS),
+      });
       // The configured-fee checklist, as the handover-cost panel derives it —
       // the same function, the same snapshot, the same live lines.
       const fees = await loadActiveFees(ctx, app._id);
@@ -551,20 +550,23 @@ export const financedDealOverview = query({
           expensesReason !== null
             ? { actualTotalMinor: null, awaitingActuals: cockpit.money.expenses.awaitingActuals, reason: expensesReason }
             : { ...cockpit.money.expenses, reason: null },
-        profit: routeSpecificProfit({
-          app,
-          consigned,
-          money: cockpit.money,
-          fullCostBasis: costBasisFor(null),
-          preparation,
-          expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
-          executionFee: feeHeadline,
-          fullySettled,
-          expensesMixed,
-          expensesUnreadable:
-            expensesUnreadable ||
-            (frozenEstimatedFees !== undefined &&
-              expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
+        profit: withDealManagementCosts({
+          showroomExpenses: preparation ?? { available: false },
+          commissions,
+          profit: routeSpecificProfit({
+            app,
+            consigned,
+            money: cockpit.money,
+            fullCostBasis: costBasisFor(null),
+            expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
+            executionFee: feeHeadline,
+            fullySettled,
+            expensesMixed,
+            expensesUnreadable:
+              expensesUnreadable ||
+              (frozenEstimatedFees !== undefined &&
+                expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
+          }),
         }),
         vehicleConsigned: consigned,
         app: {
@@ -586,7 +588,7 @@ export const financedDealOverview = query({
       // registration instant.
       const basis = costBasisFor(app._creationTime);
       vehicleCostBasis = basis === null ? null : serveVehicleCostBasis(basis, mayReadLines);
-      dealerPreparation = preparation === null ? null : serveDealerPreparation(preparation, mayReadLines);
+      dealerPreparation = preparation === null || consignedByCockpit !== true ? null : serveDealerPreparation(preparation, mayReadLines);
     }
 
     return { financialSummary, vehicleCostBasis, dealerPreparation };

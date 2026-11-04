@@ -413,6 +413,8 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   ACTUAL_EXPENSES: "LineActualExpenses",
   FORECAST_EXPENSES: "LineForecastExpenses",
   PREPARATION_EXPENSES: "LinePreparationExpenses",
+  COMMISSIONS: "DealCommissionsTotal",
+  ACCOUNTING_MARGIN: "LineAccountingMargin",
   /** CASH only. A different derivation, so deliberately different keys. */
   SALE_PRICE: "LineSalePrice",
   VEHICLE_COST: "LineVehicleCost",
@@ -434,6 +436,9 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoVehicleCost"
   /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
   | "PreparationExpensesUnreadable"
+  | "CommissionsUnreadable"
+  | "CommissionAccessRequired"
+  | "ManagementNetUnavailable"
   /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
   | "ExpensesMixedDenomination"
   /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
@@ -455,6 +460,9 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
+  CommissionsUnreadable: "DealCommissionsNetUnavailable",
+  CommissionAccessRequired: "ProfitCommissionAccessRequired",
+  ManagementNetUnavailable: "ProfitOverviewWithheld",
   ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
   ExpensesUnreadable: "ProfitExpensesUnreadable",
   ExecutionFeeUnclassified: "ProfitExecutionFeeUnclassified",
@@ -4376,6 +4384,7 @@ export function SaleDealCockpit({
  * because amount and classification travel in one object.
  */
 type DealMoney = NonNullable<DealCockpitData["money"]>;
+type HeadlineProfit = import("@/convex/utils/financingEconomics").DealProfit;
 
 /**
  * One fact of the six-fact summary. `value` is already formatted; `null`
@@ -4459,7 +4468,7 @@ function selectSummaryFacts({
   money,
   moneyIn,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   applicationId: string | null;
   evidence: ServedEvidence | undefined;
   money: (minor: number) => string;
@@ -4513,11 +4522,9 @@ function signedMoney(
  * The headline figure and its qualifier — the ONE branch this screen is not
  * allowed to get wrong.
  *
- * A financed deal's headline is a MANAGEMENT figure built on a spread that
- * appears on no invoice: it is `postable: false` and must never be shown
- * without its qualifier. A cash deal's is an ordinary accounting result that
- * reconciles to the GL, and stamping an "estimated / never postable" badge on
- * it would be just as false in the other direction.
+ * The headline is management net. Financing retains its settlement qualifier;
+ * cash is a separate MANAGEMENT_NET derived from an unchanged accounting
+ * margin. Neither management figure claims ledger reconciliation.
  *
  * Read off `basis` rather than from the presence of a `classification` field,
  * so the distinction is one the type system enforces: `AccountingProfit` has
@@ -4530,11 +4537,10 @@ function ProfitHeadline({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
-  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
   const isLoss = profit.available && profit.amountMinor < 0;
   const isEstimatedLoss =
     profit.available &&
@@ -4575,7 +4581,7 @@ function ProfitHeadline({
               </Badge>
             )}
           </div>
-          {isManagementEstimate && (
+          {profit.basis !== "ACCOUNTING_RESULT" && (
             <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
           )}
         </>
@@ -4616,7 +4622,7 @@ function DealSummaryFacts({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   summary: SummaryEvidence;
   money: (minor: number) => string;
   t: (key: string) => string;
@@ -4793,7 +4799,7 @@ function ProfitBreakdown({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
@@ -4841,7 +4847,7 @@ function MoneyPanel({
   money: (minor: number) => string;
   /** The employee commissions row, supplied by the container that holds the permissions. */
   renderCommissions?: DealCommissionsSlot;
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   summary: SummaryEvidence;
   /**
    * The server's overview, rendered between the headline and the served
@@ -4883,9 +4889,9 @@ function MoneyPanel({
    * card. Here the overview's profit drives the headline, the fact tiles and
    * the breakdown alike, and while the overview is still loading nothing is
    * painted from the legacy figure in its place. A cash deal has no overview
-   * and keeps the accounting result the sale cockpit serves.
+   * and reads the separate management net the sale cockpit serves.
    */
-  const canonicalProfit: DealMoney["profit"] | "LOADING" | "WITHHELD" = overview
+  const canonicalProfit: HeadlineProfit | "LOADING" | "WITHHELD" = overview
     ? overview.loading
       ? "LOADING"
       : (overview.data?.financialSummary?.profit ?? "WITHHELD")
@@ -6304,6 +6310,10 @@ export function DealCockpitView({
   };
 
   const overviewProfit = financialOverview?.data?.financialSummary?.profit;
+  // An older backend's accounting margin is not a management net headline.
+  const cashHeadline: HeadlineProfit = deal.money && "managementNetProfit" in deal.money
+    ? deal.money.managementNetProfit
+    : { available: false, reason: "ManagementNetUnavailable" };
   const handoverManagementProfit = {
     managementProfitMinor: overviewProfit?.available ? overviewProfit.amountMinor : null,
     managementProfitClassification:
@@ -6366,7 +6376,7 @@ export function DealCockpitView({
                   payload. */}
               <MoneyPanel
                 money={money}
-                profit={deal.money.profit}
+                profit={deal.applicationId === null ? cashHeadline : deal.money.profit}
                 summary={{
                   applicationId: deal.applicationId,
                   evidence: handoverEvidence ?? undefined,

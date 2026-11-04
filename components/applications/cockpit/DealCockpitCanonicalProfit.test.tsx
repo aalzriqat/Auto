@@ -8,18 +8,19 @@
  * figure, that the legacy figure never paints while the overview loads, and
  * that a cash deal (no overview) keeps its accounting result.
  */
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { Id } from "@/convex/_generated/dataModel";
-import { salesEn } from "@/lib/i18n/domains/sales";
+import { salesAr, salesEn } from "@/lib/i18n/domains/sales";
 import type { DealCockpitData } from "./DealStagePresentation";
 import type { FinancedDealOverviewData } from "./DealFinancialOverview";
 
+const language = vi.hoisted(() => ({ locale: "en" }));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
-    t: (key: string) => (salesEn as Record<string, string>)[key] ?? key,
-    isRtl: false,
-    locale: "en",
+    t: (key: string) => ((language.locale === "ar" ? salesAr : salesEn) as Record<string, string>)[key] ?? key,
+    isRtl: language.locale === "ar",
+    locale: language.locale,
   }),
 }));
 vi.mock("@/hooks/useCurrency", () => ({
@@ -161,6 +162,19 @@ function cashDeal(): DealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: false,
       routeKnown: true,
+      managementNetProfit: {
+        available: true,
+        basis: "MANAGEMENT_NET",
+        amountMinor: 2_800 * SCALE,
+        currency: "JOD",
+        postable: false,
+        lines: [
+          { key: "SALE_PRICE", sign: 1, amountMinor: 20_000 * SCALE },
+          { key: "VEHICLE_COST", sign: -1, amountMinor: 17_000 * SCALE },
+          { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 100 * SCALE },
+          { key: "COMMISSIONS", sign: -1, amountMinor: 100 * SCALE },
+        ],
+      },
       profit: {
         available: true,
         basis: "ACCOUNTING_RESULT",
@@ -183,8 +197,37 @@ function cashDeal(): DealCockpitData {
 const money = (minor: number, currency: string) => `${(minor / SCALE).toLocaleString("en-US")} ${currency}`;
 
 afterEach(cleanup);
+beforeEach(() => { language.locale = "en"; });
 
 describe("one canonical profit on the financed cockpit", () => {
+  test.each(["en", "ar"])("SCRUM-908 %s headline renders both deductions and isolates the amount", (locale) => {
+    language.locale = locale;
+    const original = overview();
+    if (!original.financialSummary) throw new Error("Expected overview fixture");
+    const data: FinancedDealOverviewData = { ...original, financialSummary: {
+      ...original.financialSummary, profit: {
+      available: true, basis: "MANAGEMENT_ESTIMATE", amountMinor: 1_009_200,
+      currency: "JOD", postable: false, classification: "ESTIMATED_AWAITING_SETTLEMENT",
+      lines: [
+        { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_100_000 },
+        { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_900_000 },
+        { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 315_000 },
+        { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 451_300 },
+        { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 314_500 },
+        { key: "COMMISSIONS", sign: -1, amountMinor: 110_000 },
+      ],
+      },
+    } };
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money} />);
+    const dictionary = locale === "ar" ? salesAr : salesEn;
+    expect(screen.getAllByText(dictionary.LinePreparationExpenses).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(dictionary.DealCommissionsTotal).length).toBeGreaterThan(0);
+    for (const amount of screen.getAllByText(/1,009\.200 (JOD|JD)/)) {
+      expect(amount.closest("bdi")).not.toBeNull();
+    }
+  });
+
   test("the overview's route-aware profit drives the headline, the fact tiles and the breakdown — the legacy figure paints nowhere", () => {
     render(
       <DealCockpitView
@@ -287,9 +330,10 @@ describe("one canonical profit on the financed cockpit", () => {
     expect(plannedTile.getByText(salesEn.OverviewGapCashPlannedNote)).toBeTruthy();
   });
 
-  test("a genuine CASH deal has no overview and keeps the accounting result the sale cockpit serves", () => {
+  test("a CASH deal renders server management net rather than its unchanged accounting margin", () => {
     render(<DealCockpitView deal={cashDeal()} onRecordSupplierReceipt={async () => {}} />);
-    expect(screen.getAllByText("3,000 JOD").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("2,800 JOD").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("3,000 JOD")).toBeNull();
     expect(screen.getAllByText(salesEn.LineSalePrice).length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByTestId("deal-financial-overview")).toBeNull();
     expect(screen.queryByTestId("deal-financial-overview-withheld")).toBeNull();
