@@ -319,6 +319,7 @@ import type * as utils_supplierIdentityRepair from "../utils/supplierIdentityRep
 import type * as utils_supplierNames from "../utils/supplierNames.js";
 import type * as utils_supplierObligationDue from "../utils/supplierObligationDue.js";
 import type * as utils_supplierPaymentAmounts from "../utils/supplierPaymentAmounts.js";
+import type * as utils_supplierPaymentsReconciliation from "../utils/supplierPaymentsReconciliation.js";
 import type * as utils_supplierRegistry from "../utils/supplierRegistry.js";
 import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_supplierSettlementContainment from "../utils/supplierSettlementContainment.js";
@@ -673,6 +674,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierNames": typeof utils_supplierNames;
   "utils/supplierObligationDue": typeof utils_supplierObligationDue;
   "utils/supplierPaymentAmounts": typeof utils_supplierPaymentAmounts;
+  "utils/supplierPaymentsReconciliation": typeof utils_supplierPaymentsReconciliation;
   "utils/supplierRegistry": typeof utils_supplierRegistry;
   "utils/supplierSettlement": typeof utils_supplierSettlement;
   "utils/supplierSettlementContainment": typeof utils_supplierSettlementContainment;

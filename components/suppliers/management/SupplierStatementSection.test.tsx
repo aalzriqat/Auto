@@ -399,7 +399,7 @@ describe("supplier statement section", () => {
         world.recon = c.recon;
         const { unmount } = renderIt();
         expect(screen.getByRole("heading", { name: dict.SuppliersStmtReconTitle })).toBeTruthy();
-        expect(screen.getByText(new RegExp(dict[c.key].replace(/[()]/g, "\\$&")))).toBeTruthy();
+        expect(screen.getByText(new RegExp(dict[c.key].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeTruthy();
         expect(screen.getByText(dict.SuppliersStmtReconCreditNote)).toBeTruthy();
         // SCRUM-879 L2: the check compares paid amounts only, so an overpaid payable is not flagged and the note says so.
         expect(dict.SuppliersStmtReconCreditNote).toMatch(locale === "en" ? /overpa/i : /زائد|أكثر/);
