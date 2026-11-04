@@ -70,7 +70,19 @@ Five predicted failure classes are exercised: wrong cohort or owner identity; du
 
 These are serial `convex-test`, template and rollout-helper checks. They do not establish Convex platform concurrency, a real deployed schema push, production data mutation, PR #772 management-net reader integration, authenticated browser hunters, CI, SonarCloud or release readiness. No production access, push or deployment was performed. Formal Opus/Codex review seats remain with the coordinator. Advisory design review identified the seed and raw-admin provenance gaps, now covered by tests; it is not a formal seat.
 
-Committed-head baseline evidence is appended after the final source commit.
+Implementation source commit: `1920aed8021c641a06e10fc395f82e8d39ebc318`. Advisory standards review found no introduced violation. Advisory spec review found one stale matrix sentence about bugRef; it was corrected. Neither review is a formal seat.
+
+The first committed-head evidence check found five stale entries, all in the admin data browser shard after adding metadata protection. The five renewals were reviewed against the unchanged client and changed defining backend module, then appended with current git-blob evidence using the repository shard writer. Entry identity, classification, rationale, fingerprint, multiplicity and expiry are unchanged. This is source-evidence freshness, not live-backend or independent-review evidence.
+
+```text
+node scripts/contractSkew/renewBaselineReviewed.mjs --check-evidence --reviewed HEAD --pr-base 644d785d78361c351b6fb9f1166da18bdfd3527d
+945 checked, 0 unrenewed, 0 stale, 0 malformed, 0 missing; exit 0 after renewal.
+
+node scripts/contractSkew/checkBaselineIdentity.mjs
+945 call identities matched; exit 0. This command does not check backend finding identity.
+```
+
+Both commands are repeated at the final committed head before handoff. The only remaining worktree changes are the pre-existing ignore files, which were never staged.
 
 ## Official sources checked
 
