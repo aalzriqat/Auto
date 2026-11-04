@@ -1,0 +1,103 @@
+{
+  "id": "supplier-history-heavy-claims-withhold-only-their-own-family",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review-r2",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertPayable",
+      "input": {
+        "dueJod": 9500,
+        "paidJod": 9500,
+        "status": "PAID"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertPayable",
+      "input": {
+        "dueJod": 9500,
+        "paidJod": 4000,
+        "status": "PARTIALLY_PAID"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openClaimsWithReceipts",
+      "input": {
+        "claims": 20,
+        "receiptJodEach": 100,
+        "receiptNotesChars": 900000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.complete",
+      "value": true
+    },
+    {
+      "observable": "payable.total.settledJod",
+      "value": 13500
+    },
+    {
+      "observable": "receivable.complete",
+      "value": false
+    },
+    {
+      "observable": "receivable.totals",
+      "value": "withheld"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "mixed families: small payables stay complete with their total while the heavy claims family is withheld"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c94a39db33cc550c7b4d3c848716d90088cf9d64"
+  },
+  "fingerprint": "58ff19d1b9e2c983b264f2cc052f6d6d6f11b6a7e95651baaeb5ca000715d94e"
+}

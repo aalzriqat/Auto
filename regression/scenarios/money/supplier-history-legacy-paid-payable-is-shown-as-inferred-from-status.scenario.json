@@ -1,0 +1,79 @@
+{
+  "id": "supplier-history-legacy-paid-payable-is-shown-as-inferred-from-status",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertLegacyPaidPayable",
+      "input": {
+        "amountDueJod": 9500,
+        "status": "PAID",
+        "amountPaid": "absent"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.paymentsReconciliation",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.row.settledJod",
+      "value": 9500
+    },
+    {
+      "observable": "payable.row.basis",
+      "value": "INFERRED_FROM_PAID_STATUS"
+    },
+    {
+      "observable": "payable.complete",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.subledgerPaidJod",
+      "value": 9500
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "shows the 9,500 JOD, labelled as inferred from the paid status, and agrees with the payments reconciliation"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "cf449671f0e0b95c8b854930e2b6d64971e39874"
+  },
+  "fingerprint": "c2a23b2f9a77dcbbae1d7ce8f253b29f31531c46f96157955359d81f041aa433"
+}

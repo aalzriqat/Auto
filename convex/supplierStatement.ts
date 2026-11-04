@@ -3,7 +3,8 @@ import { query } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
-import { readSupplierOutstanding } from "./utils/supplierObligationDue";
+import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
+import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
 /**
@@ -34,12 +35,104 @@ const row = v.object({
   daysOverdue: v.union(v.number(), v.null()),
   bucket: v.string(),
 });
+/** ROW_LIMIT: more rows than the per-family cap. READ_BUDGET: the transaction had no room to read them all (bytes, not rows). */
+const incompleteReason = v.union(v.literal("ROW_LIMIT"), v.literal("READ_BUDGET"));
 const section = v.object({
   rows: v.array(row),
   totals: v.array(
     v.object({ currency: v.string(), grossMinor: v.number(), disputedMinor: v.number(), overdueMinor: v.number() })
   ),
   complete: v.boolean(),
+  incompleteReason: v.optional(incompleteReason),
+});
+
+const settledRow = v.object({
+  kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
+  id: v.string(),
+  currency: v.string(),
+  status: v.string(),
+  dueMinor: v.number(),
+  settledMinor: v.number(),
+  /**
+   * Whether the obligation is settled in full, derived on the server. Not `settledMinor >= dueMinor`: for a margin claim the cash
+   * leaves out the customer deposit applied to it, so a claim closed by deposit + a smaller receipt is COMPLETE.
+   */
+  settlement: v.union(v.literal("COMPLETE"), v.literal("PARTIAL")),
+  lastChangedAt: v.number(),
+  /** RECORDED payments or receipts, or a legacy PAID payable whose amount is inferred from its status. */
+  basis: v.union(v.literal("RECORDED"), v.literal("INFERRED_FROM_PAID_STATUS")),
+});
+const settledSection = v.object({
+  rows: v.array(settledRow),
+  totals: v.array(v.object({ currency: v.string(), settledMinor: v.number() })),
+  complete: v.boolean(),
+  incompleteReason: v.optional(incompleteReason),
+  /** Margin claims with a recorded supplier receipt that could not be read back from the ledger; their cash is unknown. */
+  unverifiedCount: v.number(),
+});
+
+/**
+ * SCRUM-869 slice 4 - what this supplier has been paid (A/P) and has paid back (A/R): settled and
+ * part-settled rows with the cash actually moved, newest first. A/R shows supplier receipts established from their
+ * postings, not `amountReceived` (which includes customer deposits applied to the settlement). Same gate and tenancy
+ * as `outstanding`; no net field, no currency blending.
+ */
+export const settled = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
+  returns: v.object({ supplierId: v.id("suppliers"), payable: settledSection, receivable: settledSection }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
+    await requireFeature(ctx, args.orgId, "accounting");
+    await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    const { payable, receivable } = await readSupplierSettled(ctx, args);
+    return { supplierId: args.supplierId, payable, receivable };
+  },
+});
+
+/**
+ * SCRUM-869 - what was paid to one supplier according to the subledger, against the net debit to GL 2400 posted
+ * against that supplier's payables (ADR docs/adr/2026-11-04-supplier-payments-gl-reconciliation.md). The obligation
+ * side has no supplier dimension on the ledger and is reported as NOT_ATTRIBUTABLE, never as a number. Read-only.
+ */
+export const paymentsReconciliation = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
+  returns: v.object({
+    supplierId: v.id("suppliers"),
+    status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+    unavailableReason: v.optional(
+      v.union(
+        v.literal("OVER_LIMIT"),
+        v.literal("PENDING_POSTINGS"),
+        v.literal("NO_CONTROL_ACCOUNT"),
+        v.literal("INCONSISTENT_REFERENCE"),
+      ),
+    ),
+    currencies: v.array(
+      v.object({
+        currency: v.string(),
+        subledgerPaidMinor: v.number(),
+        glPaidMinor: v.number(),
+        differenceMinor: v.number(),
+      }),
+    ),
+    isReconciled: v.boolean(),
+    differences: v.array(
+      v.object({
+        payableId: v.id("vehicleSupplierPayables"),
+        currency: v.string(),
+        subledgerPaidMinor: v.number(),
+        glPaidMinor: v.number(),
+      }),
+    ),
+    excludedOpeningRows: v.number(),
+    creditSide: v.literal("NOT_ATTRIBUTABLE"),
+  }),
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
+    await requireFeature(ctx, args.orgId, "accounting");
+    await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    return { supplierId: args.supplierId, ...(await readSupplierPaymentsReconciliation(ctx, args)) };
+  },
 });
 
 export const outstanding = query({

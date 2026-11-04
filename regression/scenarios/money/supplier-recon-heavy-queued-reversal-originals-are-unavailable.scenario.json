@@ -1,0 +1,78 @@
+{
+  "id": "supplier-recon-heavy-queued-reversal-originals-are-unavailable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-round5",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "system",
+        "org": "A"
+      },
+      "action": "database.enableTransactionLimits",
+      "input": {
+        "limitBytes": 16777216
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.insertQueuedReversals",
+      "input": {
+        "count": 20,
+        "originalPayloadChars": 900000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.paymentsReconciliation",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "query.limitError",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "currencies",
+      "value": "withheld"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierPaymentsRecon.scrum869.test.ts",
+    "testName": "20 queued reversals whose originals are ~0.9 MB each: UNAVAILABLE (OVER_LIMIT), never a thrown read error"
+  },
+  "matrixRow": "SCRUM869-supplier-read-limits",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6"
+  },
+  "fingerprint": "40cbc0e13cfd3c53d3374cf54638ffcf0ef0a2430a64ad215bfcf6786e8591e8"
+}
