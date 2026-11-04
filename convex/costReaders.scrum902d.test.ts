@@ -72,6 +72,21 @@ describe("SCRUM-902 accounting event payloads", () => {
   });
 });
 
+describe("SCRUM-902 opening stock choices", () => {
+  test("accountingCutover.listOpeningStockChoices: a role with manage:finance but without view:cost_price is refused (SCRUM-902)", async () => {
+    const s = await seed("os", ["manage:finance"]);
+    await expect(s.as.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/view:cost_price/);
+  });
+  test("accountingCutover.listOpeningStockChoices: a role holding both manage:finance and view:cost_price still reads (SCRUM-902 positive control)", async () => {
+    const s = await seed("osboth", ["manage:finance", "view:cost_price"]);
+    await expect(s.as.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).resolves.toEqual([]);
+  });
+  test("accountingCutover.listOpeningStockChoices: view:cost_price without manage:finance is still refused (SCRUM-902 negative control)", async () => {
+    const s = await seed("oscost", ["view:cost_price"]);
+    await expect(s.as.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/manage:finance/);
+  });
+});
+
 describe("SCRUM-902 expense readers", () => {
   async function withExpense(tag: string, permissions: string[]) {
     const s = await seed(tag, permissions);
