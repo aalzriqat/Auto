@@ -3157,6 +3157,8 @@ export const dealCockpit = query({
       financingApplicationId,
       /** The id whose tail the header shows. */
       dealRef: sale._id as string,
+      /** SCRUM-808: the shareable per-organization number, absent until the deploy backfill reaches an older deal. */
+      ...(sale.dealNumber === undefined ? {} : { dealNumber: sale.dealNumber }),
       saleId: sale._id,
       /** Absent, not empty: a cash deal has no finance application. */
       applicationId: null,

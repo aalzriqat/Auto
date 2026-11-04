@@ -1,0 +1,60 @@
+{
+  "id": "deal-number-backfill-numbers-legacy-deals-in-creation-order-per-organization",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "dealNumberBackfill.runPage",
+      "input": {
+        "numItems": 1,
+        "legacyRowsA": 4,
+        "legacyRowsB": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "orgA.dealNumbers",
+      "value": [
+        1,
+        2,
+        2,
+        3
+      ]
+    },
+    {
+      "observable": "orgB.dealNumbers",
+      "value": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "observable": "numberedCount",
+      "value": 7
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "numbers legacy rows per organization in creation order across both tables, a finalized sale sharing its application's number"
+  },
+  "matrixRow": "SCRUM808-deal-number-backfill",
+  "fingerprint": "4765962068b1ec6ed8f9defd27babbd8a3167d28823d0d21a04a204b832b98af"
+}

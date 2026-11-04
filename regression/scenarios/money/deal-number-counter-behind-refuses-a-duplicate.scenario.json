@@ -1,0 +1,65 @@
+{
+  "id": "deal-number-counter-behind-refuses-a-duplicate",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "V1"
+      }
+    },
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "counter.reset",
+      "input": {
+        "lastNumber": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "V2"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "second.refusal",
+      "value": "ALREADY_IN_USE"
+    },
+    {
+      "observable": "deal1.dealNumber",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "a counter that fell behind refuses instead of issuing a duplicate"
+  },
+  "matrixRow": "SCRUM808-deal-number-allocation",
+  "fingerprint": "cb5b99b8a0dcfb592ae6c799b7a79bc101dd42b63dbe46b28a064708e28b725d"
+}

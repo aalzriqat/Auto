@@ -3,6 +3,8 @@ import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
+import { resolveDealNumber, type DealNumberMatch } from "./utils/dealNumber";
+import { parseDealNumberQuery } from "./utils/dealNumberFormat";
 
 type VehicleResult = {
   id: Id<"vehicles">;
@@ -45,8 +47,12 @@ export const globalSearch = query({
     const canSearchCustomers = canViewCustomers;
 
     const searchTerm = args.query.trim();
+    // SCRUM-808: a deal number is an exact index lookup, so even one digit is searchable.
+    const dealNumber = hasPermission(PERMISSIONS.VIEW_SALES) ? parseDealNumberQuery(searchTerm) : null;
+    const dealMatch = dealNumber === null ? null : await resolveDealNumber(ctx, args.orgId, dealNumber);
+    const deals: DealNumberMatch[] = dealMatch ? [dealMatch] : [];
     if (searchTerm.length < 2) {
-      return { vehicles: [], customers: [], leads: [] };
+      return { vehicles: [], customers: [], leads: [], deals };
     }
 
     const [vehiclesByMake, vehiclesByVin, customersByFirstName, customersByLastName] = await Promise.all([
@@ -133,6 +139,7 @@ export const globalSearch = query({
       vehicles: Array.from(vehicleMap.values()),
       customers: canViewCustomers ? Array.from(matchingCustomers.values()) : [],
       leads,
+      deals,
     };
   },
 });

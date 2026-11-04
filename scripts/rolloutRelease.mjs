@@ -41,6 +41,7 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runDealNumberBackfillPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -95,6 +96,7 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let dealNumberSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -119,6 +121,7 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (dealNumberSummary) body += `\n### Deal number backfill\n\n${dealNumberSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -403,6 +406,17 @@ console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
 lastVerdict = before.verdict;
 accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${accountantCostPriceSummary}`);
+
+// ─── 2f. Number the deals created before deal numbers existed ────────────────
+
+// SCRUM-808: every deal gets a readable per-organization number at creation; rows created before this release get theirs
+// here, in creation order, from each organization's counter. One page per call through the operator key (internal
+// function), cursor passed back until the backend says it is done. Reads only rows without a number, so a re-run
+// resumes and a finished walk costs one empty page. After the empty-deployment exit: no organizations, no deals. Same
+// shared deadline. Counts only. The helper calls this script's `fail` on a refusal, so the refusal branch is tested code.
+console.log(`Numbering existing deals…`);
+dealNumberSummary = runDealNumberBackfillPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
+console.log(`  ${dealNumberSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 

@@ -1,0 +1,55 @@
+{
+  "id": "deal-number-refused-creation-consumes-no-number",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "V1"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "V1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "second.refusal",
+      "value": "present"
+    },
+    {
+      "observable": "counter.lastNumber",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "a refused creation hands out no number"
+  },
+  "matrixRow": "SCRUM808-deal-number-allocation",
+  "fingerprint": "ad081255caa0da3be36bffb05c811319425cd92706e57bc50280fbf15919aaf5"
+}

@@ -1,5 +1,6 @@
 "use client";
 import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
+import { formatDealNumber } from "@/convex/utils/dealNumberFormat";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
@@ -761,7 +762,11 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * A clipboard the browser refuses is not an error worth a toast — the id is
  * still on screen to select by hand.
  */
-function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: string) => string }>) {
+function CopyableReference({
+  value,
+  t,
+  testId = "deal-reference-copy",
+}: Readonly<{ value: string; t: (key: string) => string; testId?: string }>) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -784,7 +789,7 @@ function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: stri
         className="h-7 w-7 shrink-0"
         onClick={copy}
         aria-label={t(copied ? "DealReferenceCopied" : "CopyDealReference")}
-        data-testid="deal-reference-copy"
+        data-testid={testId}
       >
         {copied ? <Check className="h-3.5 w-3.5 text-profit-positive" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
       </Button>
@@ -6981,6 +6986,8 @@ export function DealCockpitView({
   // phone copy is the last node of the document (where a phone paints it, after
   // the step). So Tab and a screen reader meet it in the order it is drawn, at
   // either width, with no CSS `order` to make the two disagree (SCRUM-417 UX5 R2-2).
+  // SCRUM-808: null for a deal the backfill has not reached yet.
+  const dealNumberLabel = formatDealNumber(deal.dealNumber);
   const identityStrip = (placement: "desktop" | "phone") => (
       <dl
         className={cn(
@@ -6996,6 +7003,14 @@ export function DealCockpitView({
             {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
           </dd>
         </div>
+        {dealNumberLabel !== null && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("DealNumberLabel")}</dt>
+            <dd className="flex min-w-0 items-center gap-1 font-medium" data-testid="deal-number">
+              <CopyableReference value={dealNumberLabel} t={t} testId="deal-number-copy" />
+            </dd>
+          </div>
+        )}
         <div className="min-w-0">
           <dt className="text-xs text-muted-foreground">
             {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
@@ -7085,7 +7100,10 @@ export function DealCockpitView({
                 it. `dealRef` rather than the application id for the same
                 reason. Both queries supply both. */}
             {t(deal.applicationId === null ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
-            <bdi className="font-normal text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
+            {/* SCRUM-808: the issued deal number; the id tail only for a deal the backfill has not reached. */}
+            <bdi dir="ltr" className="font-normal text-muted-foreground" data-testid="deal-title-number">
+              {dealNumberLabel ?? `#${String(deal.dealRef).slice(-4)}`}
+            </bdi>
           </h1>
           <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
             {t(dealStatusBadgeKey(deal.status, deal.stages))}
