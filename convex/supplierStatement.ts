@@ -50,6 +50,11 @@ const settledRow = v.object({
   status: v.string(),
   dueMinor: v.number(),
   settledMinor: v.number(),
+  /**
+   * Whether the obligation is settled in full, derived on the server. Not `settledMinor >= dueMinor`: for a margin claim the cash
+   * leaves out the customer deposit applied to it, so a claim closed by deposit + a smaller receipt is COMPLETE.
+   */
+  settlement: v.union(v.literal("COMPLETE"), v.literal("PARTIAL")),
   lastChangedAt: v.number(),
   /** RECORDED payments or receipts, or a legacy PAID payable whose amount is inferred from its status. */
   basis: v.union(v.literal("RECORDED"), v.literal("INFERRED_FROM_PAID_STATUS")),

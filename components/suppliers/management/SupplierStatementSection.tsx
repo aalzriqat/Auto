@@ -177,7 +177,10 @@ type SettledSectionData = SupplierSettledData["payable"];
 type SettledRowData = SettledSectionData["rows"][number];
 
 function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; translate: Translate }>) {
-  const inFull = row.settledMinor >= row.dueMinor;
+  // Completion is the server's fact about the obligation. It is not `settledMinor >= dueMinor`: that figure is the cash the
+  // supplier moved, which for a margin claim leaves out the customer deposit applied to it.
+  const inFull = row.settlement === "COMPLETE";
+  const cashBelowClaim = row.settledMinor < row.dueMinor;
   return (
     <li className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-sm">
       <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
@@ -190,6 +193,11 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
         {!inFull && (
           <span className="ms-2 text-xs text-muted-foreground">
             {translate("SuppliersStmtHistoryOf")} <Money minor={row.dueMinor} currency={row.currency} />
+          </span>
+        )}
+        {inFull && cashBelowClaim && (
+          <span className="ms-2 text-xs text-muted-foreground">
+            {translate("SuppliersStmtHistoryClaimTotal")}: <Money minor={row.dueMinor} currency={row.currency} />
           </span>
         )}
       </span>

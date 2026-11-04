@@ -325,6 +325,7 @@ import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_supplierSettlementContainment from "../utils/supplierSettlementContainment.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_trafficSource from "../utils/trafficSource.js";
+import type * as utils_transactionReadHeadroom from "../utils/transactionReadHeadroom.js";
 import type * as utils_userAgent from "../utils/userAgent.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleCost from "../utils/vehicleCost.js";
@@ -680,6 +681,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierSettlementContainment": typeof utils_supplierSettlementContainment;
   "utils/tenancy": typeof utils_tenancy;
   "utils/trafficSource": typeof utils_trafficSource;
+  "utils/transactionReadHeadroom": typeof utils_transactionReadHeadroom;
   "utils/userAgent": typeof utils_userAgent;
   "utils/validation": typeof utils_validation;
   "utils/vehicleCost": typeof utils_vehicleCost;

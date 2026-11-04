@@ -62,7 +62,7 @@ on branch `claude/scrum869-design` holds the full invariants W1 to W16.
 ## Amendment 2026-11-04: settled history (slice 4)
 
 `api.supplierStatement.settled` shows the cash actually paid to the supplier (A/P) and received from it (A/R), as the same two
-sections with the same gate (VIEW_FINANCE, accounting feature, `requireOwnedRow`) and no net field. It reads only the statuses
+sections with the same gate (`view:finance` and `view:cost_price`, accounting feature, `requireOwnedRow`) and no net field. It reads only the statuses
 that can hold settled cash through `by_org_and_supplierId_and_status` (payables and receivables PAID and PARTIALLY_PAID; cost
 recoveries RECOVERED and PARTIALLY_RECOVERED, plus DISPUTED payables and receivables, which can be part-paid and are left out only
 when nothing was paid; CANCELLED and REVERSED rows are not settlements), so open rows cannot use up the bound. Exhaustive `satisfies Record<status, boolean>`
@@ -79,5 +79,23 @@ postings are over the read budget, is not shown with a guessed figure: the secti
 the total is withheld. A claim whose net supplier receipts are zero (deposit only, or fully reversed) is left out. A row whose settled status
 holds no settled amount after that reading is left out. Not here: payer or payee, payment method and per-payment lines. Those
 live in the settlement and cash-movement records and need their own slice; this query reports the running totals on the row.
+
+Amendment 2026-11-04 (PR #764 review): two changes to the settled read.
+
+- Completion is returned separately from cash. Each row carries `settlement` (`COMPLETE` or `PARTIAL`), derived on the server. The
+  screen no longer compares `settledMinor` with `dueMinor`: for a margin claim the cash leaves out the customer deposit, so a 3,000 JOD
+  claim closed by a 1,000 JOD deposit and a 2,000 JOD supplier receipt (status PAID, cash 2,000) was labelled "Partly settled". A claim is
+  `COMPLETE` when its own record says PAID and none of its receipt postings was reversed (a journal reversal does not touch the claim row, so
+  a reversed receipt means the record overstates what was collected). A payable and a cost recovery are `COMPLETE` when paid or recovered
+  reaches due. When cash is below the claim and the claim is complete, the screen also shows the claim total, never a "2,000 of 3,000" fraction.
+- The read is byte-bounded as well as row-bounded. Convex limits one transaction to 16 MiB
+  (https://docs.convex.dev/production/state/limits) and `receiptNotes` and `paymentNotes` are unbounded strings up to the 1 MiB document limit,
+  so 100 rows can pass the row cap and still throw. Every document of the three families and every receipt-provenance ledger read is admitted
+  by the transaction's own headroom (`ctx.meta.getTransactionMetrics()`, https://docs.convex.dev/database/writing-data) in
+  `convex/utils/transactionReadHeadroom.ts`: the decision `VerificationBudget.hasHeadroom` makes, with the same 2 MiB, 2,000-document and
+  256-query reserve. The families and the provenance reads share one budget and are read in turn. A family the budget cut short is `complete: false`
+  with its totals withheld, and is not counted as unconfirmed receipts. Pagination was not chosen: the screen shows one bounded list and the
+  truthful incomplete state already exists. Limiting future note lengths is not enough, because existing records stay exposed. Not proven against
+  the Convex backend (SCRUM-762); `outstanding` is unchanged.
 
 Known limit: cost recoveries still use `amountRecoveredMinor` (no deposit is mixed into it). A legacy PAID payable carries no date of its own, so its `lastChangedAt` is the row's `updatedAt`. A row stored as RECOVERED whose amounts still show a remainder is not read here; that belongs to per-supplier GL reconciliation (gap 4).

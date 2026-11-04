@@ -5,6 +5,7 @@ import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import { OPEN_RECOVERY_STATUSES } from "./costBearer";
 import { SYSTEM_KEYS } from "./defaultChart";
+import { readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
 import {
   agingFor,
   ammanDateString,
@@ -420,6 +421,13 @@ export async function readSupplierOutstanding(
  */
 export type SettledBasis = "RECORDED" | "INFERRED_FROM_PAID_STATUS";
 
+/**
+ * Whether the obligation itself is closed. This is a different fact from `settledMinor`: a margin claim closed by a customer
+ * deposit plus a smaller supplier receipt is COMPLETE although the supplier's cash is below the claim, so the two are never
+ * derived from each other.
+ */
+export type SettlementCompletion = "COMPLETE" | "PARTIAL";
+
 export interface SettledRow {
   kind: ObligationKind;
   id: string;
@@ -430,6 +438,11 @@ export interface SettledRow {
   dueMinor: number;
   /** Cash actually paid (A/P) or received from the supplier (A/R) so far, in minor units of `currency`. */
   settledMinor: number;
+  /**
+   * Whether the obligation is settled in full, derived on the server from the obligation's own record, never by comparing
+   * `settledMinor` with `dueMinor` (which for a margin claim leaves out the customer deposit applied to it).
+   */
+  settlement: SettlementCompletion;
   /** When the row last changed. For a settled row this is when the last payment was recorded. */
   lastChangedAt: number;
   basis: SettledBasis;
@@ -511,40 +524,82 @@ const RECEIPT_LINES_PER_ENTRY = 10;
  * (`SUPPLIER_RECEIVABLE_COLLECTED`: Dr cash or bank, Cr 1240, journal source = the claim). `amountReceived` cannot be the
  * source: it also holds the customer deposit applied to the settlement when the claim was opened (`openSupplierReceivable`'s
  * `alreadyReceivedAmount`), which is the dealership's margin in customer cash, not a supplier payment. Net of reversals
- * (a reversal entry carries the same source with the lines inverted). Returns null when the cash cannot be established:
- * `receiptSeq` counts recorded receipts, so fewer posted entries than that means a receipt is missing from the ledger.
+ * (a reversal entry carries the same source with the lines inverted). `receiptSeq` counts recorded receipts, so fewer posted
+ * entries than that means a receipt is missing from the ledger.
+ *
+ * The outcome says WHY a figure is missing, because the caller must treat the two reasons differently:
+ *   - UNVERIFIED: this claim's cash cannot be established from the ledger (a receipt is missing, a line is foreign or in another
+ *     currency, a net debit). The entries read for it are spent from the shared entry budget, and the next claim is read normally.
+ *   - OUT_OF_BUDGET: the shared entry budget or the transaction's read headroom ran out. Nothing about THIS claim is known, and
+ *     no later claim can be read either.
+ * `reversed` is true when any receipt posting of the claim has been reversed: the claim row (`status`, `amountReceived`) is not
+ * touched by a journal reversal, so a reversed receipt means the claim record overstates what was collected.
  */
+type ReceiptRead =
+  | { outcome: "READ"; minor: number; entriesRead: number; reversed: boolean }
+  | { outcome: "UNVERIFIED"; entriesRead: number }
+  | { outcome: "OUT_OF_BUDGET" };
+
 async function supplierReceiptsMinor(
-  ctx: Reader,
+  ctx: Reader & HeadroomCtx,
   args: { orgId: Id<"organizations">; claim: Doc<"vehicleSupplierReceivables">; controlAccountId: Id<"chartOfAccounts"> | null; entriesLeft: number },
-): Promise<{ minor: number; entriesRead: number } | null> {
+): Promise<ReceiptRead> {
   const { orgId, claim, controlAccountId, entriesLeft } = args;
   const recorded = claim.receiptSeq ?? 0;
   // No receipt was ever recorded and no posting exists: whatever `amountReceived` holds is the deposit seed.
-  const entries = await ctx.db
-    .query("journalEntries")
-    .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierReceivables").eq("sourceId", claim._id))
-    .take(Math.max(entriesLeft, 0) + 1);
-  if (entries.length > entriesLeft) return null;
+  const read = await readBoundedStream(
+    ctx,
+    ctx.db
+      .query("journalEntries")
+      .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleSupplierReceivables").eq("sourceId", claim._id)),
+    Math.max(entriesLeft, 0),
+  );
+  if (read.outOfHeadroom || read.docs.length > entriesLeft) return { outcome: "OUT_OF_BUDGET" };
+  const entries = read.docs;
   const posted = entries.filter((entry) => entry.status === "POSTED" || entry.status === "REVERSED");
-  if (posted.filter((entry) => entry.category !== "REVERSAL").length < recorded) return null;
-  if (posted.length === 0) return { minor: 0, entriesRead: entries.length };
-  if (!controlAccountId) return null;
+  if (posted.filter((entry) => entry.category !== "REVERSAL").length < recorded) return { outcome: "UNVERIFIED", entriesRead: entries.length };
+  if (posted.length === 0) return { outcome: "READ", minor: 0, entriesRead: entries.length, reversed: false };
+  if (!controlAccountId) return { outcome: "UNVERIFIED", entriesRead: entries.length };
   let minor = 0;
   for (const entry of posted) {
-    const lines = await ctx.db
-      .query("journalLines")
-      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-      .take(RECEIPT_LINES_PER_ENTRY + 1);
-    if (lines.length > RECEIPT_LINES_PER_ENTRY) return null;
-    for (const line of lines) {
-      if (line.orgId !== orgId) return null;
+    const lines = await readBoundedStream(
+      ctx,
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)),
+      RECEIPT_LINES_PER_ENTRY,
+    );
+    if (lines.outOfHeadroom) return { outcome: "OUT_OF_BUDGET" };
+    if (lines.docs.length > RECEIPT_LINES_PER_ENTRY) return { outcome: "UNVERIFIED", entriesRead: entries.length };
+    for (const line of lines.docs) {
+      if (line.orgId !== orgId) return { outcome: "UNVERIFIED", entriesRead: entries.length };
       if (line.accountId !== controlAccountId) continue;
-      if (line.currency !== claim.currency) return null;
+      if (line.currency !== claim.currency) return { outcome: "UNVERIFIED", entriesRead: entries.length };
       minor += line.creditMinor - line.debitMinor;
     }
   }
-  return minor < 0 ? null : { minor, entriesRead: entries.length };
+  if (minor < 0) return { outcome: "UNVERIFIED", entriesRead: entries.length };
+  const reversed = posted.some((entry) => entry.status === "REVERSED" || entry.category === "REVERSAL");
+  return { outcome: "READ", minor, entriesRead: entries.length, reversed };
+}
+
+/**
+ * One settled family, read one document at a time through the supplier index, newest first within each status. Every document is
+ * admitted by the transaction's own read headroom before it is fetched (see transactionReadHeadroom.ts), so a family of large
+ * records stops at the budget instead of throwing at the platform's 16 MiB limit. `cut` is true when the transaction ran out of
+ * room: `docs` is then partial. The statuses are read in turn, not together, because each read must see what the one before spent.
+ * `docs.length > STATEMENT_FAMILY_LIMIT` is the row-cap signal, as before.
+ */
+async function readSettledFamily<S extends string, D>(
+  ctx: HeadroomCtx,
+  statuses: readonly S[],
+  source: (status: S) => AsyncIterable<D>,
+): Promise<{ docs: D[]; cut: boolean }> {
+  const docs: D[] = [];
+  for (const status of statuses) {
+    const read = await readBoundedStream(ctx, source(status), STATEMENT_FAMILY_LIMIT);
+    docs.push(...read.docs);
+    if (read.outOfHeadroom) return { docs, cut: true };
+  }
+  return { docs, cut: false };
 }
 
 /**
@@ -557,54 +612,61 @@ async function supplierReceiptsMinor(
  * - A/R: supplier receipts established from their postings, never `amountReceived` (it includes customer deposits applied to
  *   the settlement). A claim whose receipts cannot be read back is counted in `unverifiedCount`, left out, and withholds
  *   the totals.
+ * Two limits bound the read, and both end in a truthful incomplete section rather than a throw:
+ * - rows: STATEMENT_FAMILY_LIMIT per family, as before;
+ * - bytes: every document read, the receipt-provenance ledger reads included, is first admitted by the transaction's own read
+ *   headroom (`readBoundedStream`), one shared budget across the three families and the provenance reads. A family cut short by
+ *   it is `complete: false` with its totals withheld. A row cap alone does not bound bytes: `receiptNotes` can be ~1 MiB.
  * The caller must already have proved the supplier belongs to `orgId`.
  */
 export async function readSupplierSettled(
-  ctx: Reader,
+  ctx: Reader & HeadroomCtx,
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
 ): Promise<{ payable: SettledSection; receivable: SettledSection }> {
   const { orgId, supplierId } = args;
-  const [payableDocs, receivableDocs, recoveryDocs] = await Promise.all([
-  readByStatuses(SETTLED_PAYABLE_STATUSES, (status) =>
+  // Read in turn, not together: each document's headroom check must see what the reads before it spent.
+  const payables = await readSettledFamily(ctx, SETTLED_PAYABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierPayables")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
         q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
       )
-      .order("desc")
-      .take(STATEMENT_FAMILY_LIMIT + 1),
-  ),
-  readByStatuses(SETTLED_RECEIVABLE_STATUSES, (status) =>
+      .order("desc"),
+  );
+  const claimsRead = await readSettledFamily(ctx, SETTLED_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
         q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
       )
-      .order("desc")
-      .take(STATEMENT_FAMILY_LIMIT + 1),
-  ),
-  readByStatuses(SETTLED_RECOVERY_STATUSES, (status) =>
+      .order("desc"),
+  );
+  const recoveries = await readSettledFamily(ctx, SETTLED_RECOVERY_STATUSES, (status) =>
     ctx.db
       .query("supplierCostRecoveries")
       .withIndex("by_org_and_supplierId_and_status", (q) =>
         q.eq("orgId", orgId).eq("supplierId", supplierId).eq("status", status),
       )
-      .order("desc")
-      .take(STATEMENT_FAMILY_LIMIT + 1),
-  ),
-  ]);
+      .order("desc"),
+  );
+  const payableDocs = payables.docs;
+  const receivableDocs = claimsRead.docs;
+  const recoveryDocs = recoveries.docs;
   const payableRows: SettledRow[] = [];
   for (const row of newest(payableDocs)) {
     // The same view every other reader uses: a PAID row with no recorded payments was paid in full before `amountPaid` existed.
     const settledMinor = toMinorUnits(settlementView(row).amountPaid, row.currency);
     if (settledMinor <= 0) continue;
+    const dueMinor = toMinorUnits(row.amountDue, row.currency);
     payableRows.push({
       kind: "PAYABLE",
       id: row._id,
       currency: row.currency,
       status: row.status,
-      dueMinor: toMinorUnits(row.amountDue, row.currency),
+      dueMinor,
       settledMinor,
+      // Payments are the whole of what settles a payable, so here cash against the obligation is the completion.
+      settlement: settledMinor >= dueMinor ? "COMPLETE" : "PARTIAL",
       lastChangedAt: row.updatedAt,
       basis: row.status === "PAID" && (row.amountPaid ?? 0) === 0 ? "INFERRED_FROM_PAID_STATUS" : "RECORDED",
     });
@@ -612,7 +674,9 @@ export async function readSupplierSettled(
 
   // A/R rows from both families, merged newest-created first (the ADR's order), whatever the family.
   const receivableRows: { createdAt: number; row: SettledRow }[] = [];
-  const claims = newest(receivableDocs);
+  // When the claims family itself was cut short by the budget the transaction has no room left for ledger reads either; the
+  // section is already incomplete, so provenance is not attempted and no claim is miscounted as an unconfirmed receipt.
+  const claims = claimsRead.cut ? [] : newest(receivableDocs);
   // The control account is read only when some claim holds money that might be a receipt.
   const controlAccountId = claims.some((claim) => (claim.amountReceived ?? 0) > 0)
     ? ((
@@ -624,16 +688,28 @@ export async function readSupplierSettled(
     : null;
   let entriesLeft = RECEIPT_ENTRY_BUDGET;
   let unverifiedCount = 0;
+  // Once the shared entry budget or the transaction's headroom is gone, no later claim can be read: each one that holds money
+  // that might be a receipt is counted unconfirmed (it could not be checked) without another read.
+  let budgetSpent = false;
   for (const claim of claims) {
     // Nothing was ever applied to the claim: nothing to attribute, and no ledger read.
     if (toMinorUnits(claim.amountReceived ?? 0, claim.currency) <= 0) continue;
-    const receipts = await supplierReceiptsMinor(ctx, { orgId, claim, controlAccountId, entriesLeft });
-    if (receipts === null) {
+    if (budgetSpent) {
       unverifiedCount += 1;
-      entriesLeft = 0;
       continue;
     }
+    const receipts = await supplierReceiptsMinor(ctx, { orgId, claim, controlAccountId, entriesLeft });
+    if (receipts.outcome === "OUT_OF_BUDGET") {
+      budgetSpent = true;
+      unverifiedCount += 1;
+      continue;
+    }
+    // Entries read for a claim are spent from the shared budget whether or not its cash could be established.
     entriesLeft -= receipts.entriesRead;
+    if (receipts.outcome === "UNVERIFIED") {
+      unverifiedCount += 1;
+      continue;
+    }
     if (receipts.minor <= 0) continue; // deposit only, or every receipt reversed: no supplier cash
     receivableRows.push({
       createdAt: claim._creationTime,
@@ -644,6 +720,9 @@ export async function readSupplierSettled(
         status: claim.status,
         dueMinor: toMinorUnits(claim.amountDue, claim.currency),
         settledMinor: receipts.minor,
+        // The claim's own record decides (`recordReceipt` sets PAID when deposit + receipts reach the claim), not the cash figure,
+        // which leaves the deposit out. A reversed receipt means that record overstates what was collected, so it is not "in full".
+        settlement: claim.status === "PAID" && !receipts.reversed ? "COMPLETE" : "PARTIAL",
         lastChangedAt: claim.updatedAt,
         basis: "RECORDED",
       },
@@ -660,6 +739,7 @@ export async function readSupplierSettled(
         status: row.status,
         dueMinor: row.amountDueMinor,
         settledMinor: row.amountRecoveredMinor,
+        settlement: row.amountRecoveredMinor >= row.amountDueMinor ? "COMPLETE" : "PARTIAL",
         lastChangedAt: row.updatedAt,
         basis: "RECORDED",
       },
@@ -667,10 +747,10 @@ export async function readSupplierSettled(
   }
   receivableRows.sort((a, b) => b.createdAt - a.createdAt);
   return {
-    payable: settledSection(payableRows, payableDocs.length <= STATEMENT_FAMILY_LIMIT),
+    payable: settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT),
     receivable: settledSection(
       receivableRows.map((entry) => entry.row),
-      receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
+      !claimsRead.cut && !recoveries.cut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
       unverifiedCount,
     ),
   };
