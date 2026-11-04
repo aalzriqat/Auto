@@ -1,5 +1,9 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM908-cockpit-cost-projection
+
+Bound check: `convex/dealNetProfit.scrum908.test.ts`, `SCRUM-908 complete cockpit responses withhold every cost projection` (bounded CASH/FINANCED × STOCK/SOURCED matrix). Under SCRUM-902 c24475 and SCRUM-908's cost-gate requirement, a non-owner with sales, finance and commission grants receives exact `CostAccessRequired` profit objects, no supplier amount, and no cost keys or sentinel acquisition amount anywhere in either complete cockpit API response. Other finance facts are preserved. Adding cost access and the owner-without-explicit-grants control restore the existing calculations; verified financed sales retain `money: null` on the sale reader. Serial harness evidence only; independent seats, authenticated browser hunters and real backend certification remain pending.
+
 ## SCRUM-760-RT11-DOORS
 
 Owner ruling RT11-DOORS, [SCRUM-760 comment 23862](https://autoflowdealer.atlassian.net/browse/SCRUM-760?focusedCommentId=23862), 2026-10-28.

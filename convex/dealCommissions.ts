@@ -14,7 +14,7 @@ import {
   hookDealCommissionLineReversed,
 } from "./accounting/workflowHooks";
 import { checkPostingAllowed } from "./accountingPeriods";
-import { allLinesForSale, MAX_DEAL_COMMISSION_LINE_ROWS } from "./utils/dealCommissionLineReads";
+import { allLinesForSale, boundedLineRowsForSale, MAX_DEAL_COMMISSION_LINE_ROWS } from "./utils/dealCommissionLineReads";
 import {
   scaleForCurrency,
   supportedCurrencyScale,
@@ -115,7 +115,10 @@ export const forSale = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
     const sale = await loadSale(ctx, args.orgId, args.saleId);
     const currency = await getOrgCurrency(ctx, args.orgId);
-    const lines = await activeLines(ctx, args.orgId, args.saleId);
+    const rows = await boundedLineRowsForSale(ctx, args.orgId, args.saleId);
+    const live = rows.filter((row) => row.removedAt === undefined);
+    const tooMany = rows.length > MAX_DEAL_COMMISSION_LINE_ROWS || live.length > MAX_DEAL_COMMISSION_LINES;
+    const lines = tooMany ? [] : live;
 
     const out = [];
     for (const line of lines) {
@@ -142,7 +145,8 @@ export const forSale = query({
       },
       salePending,
       lines: out,
-      totalMinor,
+      totalMinor: tooMany ? null : totalMinor,
+      lineEvidence: tooMany ? "UNAVAILABLE" as const : "SERVED" as const,
       canManage: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.MANAGE_COMMISSIONS),
       writesEnabled: !DEAL_COMMISSION_LINES_PILOT_DISABLED,
     };
