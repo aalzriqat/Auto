@@ -164,10 +164,14 @@ describe("the committed library", () => {
     expect(validateLibrary([missingName], { rulings, repoRoot: REPO_ROOT }).map(problem => problem.rule)).toContain("skip");
   });
 
+  // Reads every scenario record and parses every bound test file's AST. Measured 2026-11-04 with 781
+  // records, 99 files and 4 MB: about 0.5 s to read the records and 0.7 to 0.9 s to validate (1.4 to 2.4 s
+  // in this test alone), over the 5 s default under CI slice contention (PR #710, run 41785010140). The work
+  // grows with the library, so this one test carries its own limit; the global timeout is unchanged.
   test("loads the committed library and it has no problems", () => {
     const { records, rulings, problems } = loadLibrary(REPO_ROOT);
     expect([...problems, ...validateLibrary(records, { rulings, repoRoot: REPO_ROOT })]).toEqual([]);
-  });
+  }, 30_000);
 });
 
 describe("implementation source snapshots", () => {
