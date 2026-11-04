@@ -219,6 +219,13 @@ Run on `claude/scrum795-server-blocks-evidence` (merge base `origin/main` 440bd9
   `registerSaleInvoiceCheque`, `reserveSaleInvoiceReceipt`, `activateSaleInvoiceReceipt` and the
   `recordPayment` `invoiceSaleId` branch). 7 of 7 killed. These were the round 1 runs, restored with
   `git checkout --`. The round 2 runs below restore by file copy.
+- Guard-position mutants (round 2). `registerSaleInvoiceCheque` and `reserveSaleInvoiceReceipt` are now called
+  with a sale id that names no row. Control 8 of 8. Mutant 1 moves the guard in `registerSaleInvoiceCheque` below
+  `requireOwnedRow`: 1 failed, 7 passed (the cheque test). Mutant 2 does the same in `reserveSaleInvoiceReceipt`:
+  1 failed, 7 passed (the reserve test). `collections.ts` was restored by file copy after each, the tree showed
+  no change to it, and the control was 8 of 8 again. Denominator: `convex/pilotBlockedDoors.scrum795.test.ts`,
+  8 tests, 2 mutants. The payout doors, `activateSaleInvoiceReceipt` and `recordPayment` were not mutated this
+  round: their guard position is read from the cited lines (see "How a block is built").
 - The existing refusal suites cited above (`rt11DoorContainment`, `supplierSettlementContainment`,
   `fixedAssetLifecycleContainment.scrum560`, `legacyCollectionRefundContainment`,
   `postDeliveryDoorContainment`, `manualJournalsPilotOff.scrum795`, `manualJournalsPilotOffControl.scrum795`,

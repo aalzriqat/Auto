@@ -16,9 +16,10 @@ import {
 // are excluded from the pilot and must refuse on the server. The behavioural suites that exercise these
 // doors (chequeCancelledSaleCredit, dealUnwind, scrum486Certification) mock the switch module so they can
 // also test the open state. This file mocks nothing: the real shipped constants and the real public
-// mutations. The guard in each door runs after authentication and before any read, so a document id that
-// names a row of another table is enough to prove the refusal precedes the lookup (a lookup would answer
-// with a not-found or a validation error instead of the pilot code).
+// mutations. Each test proves a coded refusal with English and Arabic text and that nothing was committed
+// (full table and scheduler snapshot unchanged). Where the guard sits is read from the handler source, not
+// proven by the snapshot. The payout doors and the sale-invoice cheque and reserve doors are called with ids
+// that name no row, so a guard moved below the first lookup answers not-found and fails the code assertion.
 
 type Seed = Awaited<ReturnType<typeof seed>>;
 
@@ -69,11 +70,12 @@ async function refused(s: Seed, code: string, call: () => Promise<unknown>) {
   expect(await snapshot(s)).toEqual(before);
 }
 
-// The guard precedes every lookup, so these ids only have to pass the argument validator: convex-test reads
-// the table from the id suffix and no such row exists. A door that looked the row up first would answer with
-// a not-found error instead of the pilot code, and the assertion on the code would fail.
-const missingId = <T extends "receiptMovements" | "retainedCreditRefundRequests" | "invoiceReceiptApplications">(table: T) =>
+// These ids only have to pass the argument validator: convex-test reads the table from the id suffix and no
+// such row exists. A door that looked the row up before its guard would answer with a not-found error instead
+// of the pilot code, and the assertion on the code would fail.
+const missingId = <T extends "receiptMovements" | "retainedCreditRefundRequests" | "invoiceReceiptApplications" | "sales">(table: T) =>
   `99999${table}` as Id<T>;
+const missingSaleId = () => missingId("sales");
 const receiptMovementId = () => missingId("receiptMovements");
 const refundRequestId = () => missingId("retainedCreditRefundRequests");
 const receiptApplicationId = () => missingId("invoiceReceiptApplications");
@@ -107,14 +109,14 @@ test("executeRetainedCreditRefund refuses the customer-credit payout without wri
 test("registerSaleInvoiceCheque refuses the sale-invoice receipt without writes", async () => {
   const s = await seed();
   await refused(s, "SALE_INVOICE_RECEIPT_DOORS_DISABLED", () => s.as.mutation(api.collections.registerSaleInvoiceCheque, {
-    orgId: s.orgId, saleId: s.saleId, bank: "Test Bank", chequeNumber: "000123", chequeDate: Date.now(), amountMinor: 1000,
+    orgId: s.orgId, saleId: missingSaleId(), bank: "Test Bank", chequeNumber: "000123", chequeDate: Date.now(), amountMinor: 1000,
   }));
 });
 
 test("reserveSaleInvoiceReceipt refuses the sale-invoice receipt without writes", async () => {
   const s = await seed();
   await refused(s, "SALE_INVOICE_RECEIPT_DOORS_DISABLED", () => s.as.mutation(api.collections.reserveSaleInvoiceReceipt, {
-    orgId: s.orgId, saleId: s.saleId, receiptMovementId: receiptMovementId(), amountMinor: 1000, idempotencyKey: crypto.randomUUID(),
+    orgId: s.orgId, saleId: missingSaleId(), receiptMovementId: receiptMovementId(), amountMinor: 1000, idempotencyKey: crypto.randomUUID(),
   }));
 });
 
