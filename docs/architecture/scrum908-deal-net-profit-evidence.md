@@ -35,6 +35,21 @@ pnpm exec vitest run convex/dealNetProfit.scrum908.test.ts convex/utils/dealMana
 
 Author guard pass used `clean-code-guard`, `test-guard`, Convex/React review checklists and `/correct`'s behavior-test level. The repeated escape is recorded by the prior round's headline-only permission controls versus this round's independent original-profit/alias and supplier-balance disclosure. A broad new projection framework would conflict with the task's deliberately bounded #766 overlap; the complete-response regression closes this class here. Reuse/simplification review: existing cost predicate and bilingual dictionaries are reused, one label helper serves tiles/working, and null is handled at both display consumers. No new schema, writer, posting or report path.
 
+### Contract baseline close-out
+
+Source commit: `a3f199aef774ec178b360a2ee5a8c0961721036b`. `relocateBaseline.mjs --base 544c1a05324c45c99dc91ceb624d08034ece6d43 --write` proved and relocated 49 identical call expressions, zero refusals. The first evidence check then reported 95 stale entries, zero malformed/missing; their required files intersect exactly the changed `DealCockpit.tsx`, `applications.ts`, and `sales.ts`. Renewed only those 95 entries in 11 shards with committed blob pairs; preserved expiry, classification, cause, multiplicity, fingerprints, rationale and issue. The common renewal note describes this round's response projection and labels, not changed input validators. No argument validator or call payload changed.
+
+Both required final checks passed:
+
+```text
+node scripts/contractSkew/renewBaselineReviewed.mjs --check-evidence --reviewed HEAD --pr-base 644d785d78361c351b6fb9f1166da18bdfd3527d
+renewal evidence: 945 renewed entries checked, 0 unrenewed, 0 stale, 0 malformed, 0 missing
+node scripts/contractSkew/checkBaselineIdentity.mjs
+Call identity check: 945 baseline entries matched
+```
+
+This is freshness and call identity evidence, not independent review or live backend finding verification. `git diff 544c1a05 --exit-code` on `workOrders.ts`, `convex/accounting`, `reports.ts`, `customerCreditPayoutContainment.ts`, and generated `api.d.ts` is empty.
+
 Unverified: fresh independent seats on the new head, CI/SonarCloud/new-code coverage, build, authenticated E2E, desktop/mobile EN/AR/RTL browser screens, screen audit/explorer swarm, real-backend execution, deployment and production. No watcher or dev server was started. Existing `.gitignore`/`.ignore` remain outside staging. Local commits only; no push, merge or deployment.
 
 ## PR #772 review fix round at d83326f0 (2026-11-04)
