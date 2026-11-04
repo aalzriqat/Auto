@@ -306,12 +306,16 @@ function exactOpeningTotals(lines: readonly OpeningEntryLine[]): { debit: bigint
 function assertExactOpeningBalance(lines: readonly OpeningEntryLine[]): void {
   const totals = exactOpeningTotals(lines);
   if (!totals) return; // a non-safe-integer amount is refused by line in validateManualJournalLines
-  const largest = totals.debit > totals.credit ? totals.debit : totals.credit;
-  if (largest > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
-  }
+  assertTotalsWithinSafeRange(totals);
   if (totals.debit !== totals.credit) {
     throw new ConvexError(`Manual journal is unbalanced: debits=${totals.debit} credits=${totals.credit}.`);
+  }
+}
+
+/** Refuses an opening whose debit or credit total cannot be held exactly as a JS number. */
+function assertTotalsWithinSafeRange(totals: { debit: bigint; credit: bigint }): void {
+  if (totals.debit > BigInt(Number.MAX_SAFE_INTEGER) || totals.credit > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
   }
 }
 
@@ -323,17 +327,14 @@ async function withSuspenseBalancing(
 ): Promise<OpeningEntryLine[]> {
   const totals = exactOpeningTotals(lines);
   if (!totals) return lines;
-  const largest = totals.debit > totals.credit ? totals.debit : totals.credit;
-  if (largest > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
-  }
+  assertTotalsWithinSafeRange(totals);
   const difference = Number(totals.debit - totals.credit);
   if (difference === 0) return lines;
   const accountId = await ensureOpeningSuspenseAccount(ctx, orgId, actorId);
   return [...lines, {
     accountId,
-    debitMinor: difference < 0 ? -difference : 0,
-    creditMinor: difference > 0 ? difference : 0,
+    debitMinor: Math.max(-difference, 0),
+    creditMinor: Math.max(difference, 0),
     description: "Opening balance difference (suspense)",
   }];
 }

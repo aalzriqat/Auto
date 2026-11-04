@@ -458,6 +458,31 @@ export type CloseChecklistResult = {
   partnerCapitalReconciliation: OpeningFamilyReconciliationResult;
 };
 
+function supplierPayablesWarnings(recon: Awaited<ReturnType<typeof computeSupplierPayablesReconciliation>>): string[] {
+  // Could not see everything (too many rows to read, or AP-affecting postings still in flight): never report that
+  // as reconciled, and never as a difference in an empty list of currencies either.
+  if (recon.status === "UNAVAILABLE") return [supplierPayablesUnavailableWarning(recon.unavailableReason)];
+  if (recon.isReconciled) return [];
+  const badCurrencies = recon.currencies.filter((c) => !recon.byCurrency[c].isReconciled);
+  return [`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`];
+}
+
+function customerDepositsWarnings(
+  recon: Awaited<ReturnType<typeof computeCustomerDepositsReconciliation>>,
+  openingBasisUnavailable: boolean,
+): string[] {
+  if (recon.status === "UNAVAILABLE") {
+    // Could not compare as of the period end: never reported as reconciled, and never as a difference
+    // in an empty list of currencies. An unavailable opening liability basis already has its own warning;
+    // an opening deposit row that cannot be dated (its draft is gone) does not, so it is warned here.
+    const covered = recon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE" && openingBasisUnavailable;
+    return covered ? [] : [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING];
+  }
+  if (recon.isReconciled) return [];
+  const badCurrencies = recon.currencies.filter((c) => !recon.byCurrency[c].isReconciled);
+  return [`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`];
+}
+
 /**
  * Everything that must be true before a period can close. Closing only flips
  * a status flag and writes an audit entry — this is what actually protects
@@ -601,15 +626,7 @@ export async function computeCloseChecklist(
     const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
     warnings.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
-  if (supplierPayablesRecon.status === "UNAVAILABLE") {
-    // Could not see everything (too many rows to read, or AP-affecting postings
-    // still in flight): never report that as reconciled, and never as a
-    // difference in an empty list of currencies either.
-    warnings.push(supplierPayablesUnavailableWarning(supplierPayablesRecon.unavailableReason));
-  } else if (!supplierPayablesRecon.isReconciled) {
-    const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
-    warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
-  }
+  warnings.push(...supplierPayablesWarnings(supplierPayablesRecon));
   // SCRUM-858 (owner ruling 2026-10-28): a labelled opening-balance difference is reported here and
   // never corrected by a posting. The label text is a fixed constant because close matches it verbatim.
   if (supplierPayablesRecon.unexplainedOpeningDifference) {
@@ -627,20 +644,7 @@ export async function computeCloseChecklist(
       ["PARTNER_CAPITAL", partnerCapitalRecon],
     ])),
   );
-  if (customerDepositsRecon.status === "UNAVAILABLE") {
-    // Could not compare as of the period end: never reported as reconciled, and never as a difference
-    // in an empty list of currencies. An unavailable opening liability basis already has its own warning
-    // above; an opening deposit row that cannot be dated (its draft is gone) does not, so it is warned here.
-    const coveredByOpeningBasisWarning =
-      customerDepositsRecon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE" &&
-      heldOpeningLiabilities.status === "UNAVAILABLE";
-    if (!coveredByOpeningBasisWarning) {
-      warnings.push(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
-    }
-  } else if (!customerDepositsRecon.isReconciled) {
-    const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
-    warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
-  }
+  warnings.push(...customerDepositsWarnings(customerDepositsRecon, heldOpeningLiabilities.status === "UNAVAILABLE"));
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
     // The subledger side sums only what the commission ENTRIES actually

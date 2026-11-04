@@ -597,12 +597,12 @@ export function OpeningBalanceCard() {
                   </span>
                 </div>
                 {totals.toSuspense && (
-                  <p className="text-sm text-amber-700 dark:text-amber-300" role="status">
+                  <output className="block text-sm text-amber-700 dark:text-amber-300">
                     {t("OpeningBalanceSuspenseNotice").replace(
                       "{amount}",
                       fromMinorUnits(totals.differenceMinor, currency).toFixed(scaleForCurrency(currency)),
                     )}
-                  </p>
+                  </output>
                 )}
                 {(!totals.valid || currencyChanged) && (
                   <p className="text-sm text-amber-700 dark:text-amber-300" role="alert">

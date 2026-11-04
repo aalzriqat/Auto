@@ -1,0 +1,65 @@
+{
+  "id": "close-checklist-two-control-history-answers-without-platform-limit-error",
+  "fingerprint": "4427d36b259d18fc726fd42624c5b5c288e6d230373e640c416f552faa4fb438",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-suspense",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedReversedPairs",
+      "input": {
+        "controls": 2,
+        "pairsPerControl": 1024,
+        "balancedAgainstCash": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {
+        "period": "open"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "closeChecklist.platformLimitError",
+      "value": false
+    },
+    {
+      "observable": "openingReader.outcome",
+      "value": "RECONCILED_OR_OVER_LIMIT"
+    },
+    {
+      "observable": "closeChecklist.documentsRead.belowLimit",
+      "value": true
+    },
+    {
+      "observable": "closeChecklist.rangesRead.belowLimit",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "two-control history inside one checklist transaction never exceeds the Convex read limits"
+  },
+  "matrixRow": "SCRUM-858-opening-suspense"
+}
