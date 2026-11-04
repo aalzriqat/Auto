@@ -1,0 +1,59 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-accountant-commissions",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-04"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-role-saves-preserve-authority",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "permissions": "FINANCE_COST_DISBURSEMENT_COMMISSIONS_VIEW"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "permissions": "FINANCE_COST_DISBURSEMENT_COMMISSIONS_VIEW"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.accepted",
+      "value": true
+    },
+    {
+      "observable": "update.accepted",
+      "value": true
+    },
+    {
+      "observable": "storedPermissions",
+      "value": "EXACT_SUBMITTED"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsAccess.scrum908.test.ts",
+    "testName": "SCRUM-908: owner role saves accept commission visibility alongside accounting permissions"
+  },
+  "fingerprint": "290e35ebb588799a45af185556b9e9858693763333840ac7ede4fe644da567d0"
+}

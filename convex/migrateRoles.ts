@@ -314,6 +314,42 @@ export const backfillAccountantCostPriceAccess = internalMutation({
 });
 
 /**
+ * SCRUM-908 c24538: grant commission visibility to the same legacy ACCOUNTANT cohort as the cost-price repair.
+ * The rollout must call this BEFORE backfillAccountantCostPriceAccess: that repair removes the qualifying state.
+ * Already-cost-repaired roles are deliberately excluded; widening this predicate would override valid owner restrictions.
+ * Same bounded cursor contract as the cost-price repair. `updates` contains tenant identifiers and must not reach public logs.
+ */
+export const backfillAccountantCommissionsAccess = internalMutation({
+  args: {
+    numItems: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.object({
+    updatedCount: v.number(),
+    updates: v.array(v.string()),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("roles")
+      .paginate({ numItems: Math.min(Math.max(Math.floor(args.numItems ?? 100), 1), 500), cursor: args.cursor ?? null });
+    let updatedCount = 0;
+    const updates: string[] = [];
+    const accountant = normalizeRoleName("ACCOUNTANT");
+
+    for (const role of page.page) {
+      if (role.isDeleted) continue;
+      if (normalizeRoleName(role.name) !== accountant) continue;
+      if (!completesSalesWithoutCostAccess(role.permissions)) continue;
+      if (await patchRoleIfNeeded(ctx, role, new Set([PERMISSIONS.VIEW_COMMISSIONS]), updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates, isDone: page.isDone, continueCursor: page.continueCursor };
+  },
+});
+
+/**
  * One-time backfill for the new SENIOR_ACCOUNTANT role template (founder-
  * independence readiness review). Unlike the backfills above, this doesn't
  * patch an existing role's permissions — it INSERTS the new role for every

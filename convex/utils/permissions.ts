@@ -466,6 +466,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       // SCRUM-886 round 13 (owner ruling comment 24358): finalizing a SOURCED car's deal needs the right to read vehicle cost, and
       // this role holds CONFIRM_FINANCE_DISBURSEMENT, so it must hold this too (see SALE_COMPLETING_PERMISSIONS).
       PERMISSIONS.VIEW_COST_PRICE,
+      // SCRUM-908 c24538: management net profit subtracts commissions and requires their visibility.
+      PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.VIEW_PAYROLL,
       PERMISSIONS.MANAGE_PAYROLL,
     ],

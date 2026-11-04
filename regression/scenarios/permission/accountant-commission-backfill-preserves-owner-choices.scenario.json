@@ -1,0 +1,107 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-accountant-commissions",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-04"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-backfill-preserves-owner-choices",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT",
+        "rename": "RENAMED_ACCOUNTANT"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "name": "ACCOUNTANT",
+        "permissions": "LEGACY_PLUS_COST_WITHOUT_COMMISSIONS"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.remove",
+      "input": {
+        "role": "RECREATED_ACCOUNTANT"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "RENAMED_ACCOUNTANT",
+        "rename": "ACCOUNTANT"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT",
+        "permissions": "OWNER_RESTRICTED_COST_WITHOUT_COMMISSIONS"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "run": "NEXT_DEPLOY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "custom.grant",
+      "value": false
+    },
+    {
+      "observable": "ownerRestriction.overridden",
+      "value": false
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: commission backfill respects an owner's public rename, recreation and later restriction"
+  },
+  "fingerprint": "762885655e7f6c3cbf5e68dd97249501f8309e456ab3795bdc9d2662688e1be2"
+}

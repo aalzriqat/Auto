@@ -41,6 +41,7 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runAccountantCommissionsPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -95,6 +96,7 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let accountantCommissionsSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -119,6 +121,7 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (accountantCommissionsSummary) body += `\n### ACCOUNTANT commissions backfill\n\n${accountantCommissionsSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -388,6 +391,10 @@ const supplierIdentity = repairAndVerifySupplierIdentity({
 supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
+
+// SCRUM-908: the exact legacy predicate requires MISSING cost access, so commission repair must precede cost repair.
+// Already-cost-repaired roles stay excluded. The tested helper owns all paging, refusal and public-summary behavior.
+accountantCommissionsSummary = runAccountantCommissionsPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail, log: console.log });
 
 // ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
 

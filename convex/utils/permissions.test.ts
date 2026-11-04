@@ -21,6 +21,13 @@ describe("cancelAuthorityFor", () => {
 });
 
 describe("RBAC Permissions Configuration", () => {
+  it.each(["ACCOUNTANT", "SENIOR_ACCOUNTANT"])("%s sees commissions under SCRUM-908 c24538", (name) => {
+    const role = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === name);
+    expect(role).toBeDefined();
+    expect(role!.permissions).toContain(PERMISSIONS.VIEW_COMMISSIONS);
+    if (name === "ACCOUNTANT") expect(role!.permissions).not.toContain(PERMISSIONS.MANAGE_COMMISSIONS);
+  });
+
   it("should have exactly 30 permissions defined in ALL_PERMISSIONS", () => {
     // This will catch accidental removals or additions without updating tests
     expect(ALL_PERMISSIONS.length).toBeGreaterThan(25);
