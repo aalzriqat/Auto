@@ -976,3 +976,24 @@ refund makes the shown figure too high, so for them it is only partial (the scre
 They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
+
+## SOURCED supplier-cost mirror (SCRUM-907)
+
+Owner invariant in `SCRUM-907#description`: `purchasePrice === sourceCost` after a
+SOURCED cost write. Supplier entitlement remains authoritative. These rows bind
+`convex/sourcedCostMirror.scrum907.test.ts` and the money scenario records. They
+are serial harness evidence, not platform, browser or production certification.
+
+| Matrix row | Scenario and expected result | Named backend check |
+| --- | --- | --- |
+| SCRUM907-mirror | Create at 10,250 then edit supplier cost to 9,900; stored costs and approved audit show 9,900 | updating supplier cost mirrors purchasePrice and the approved edit audit |
+| SCRUM907-conflict | Conflicting costs refused with EN/AR code; no vehicle or edit change | conflicting submitted costs are refused without changing the vehicle or its audit |
+| SCRUM907-posted | Posted acquisition prevents editing either cost | posted acquisition still locks supplier cost and the mirror |
+| SCRUM907-approval | Old pending supplier-cost request applies and audits both fields | an old pending supplier-cost request applies and audits the mirror at approval |
+| SCRUM907-repair | Bounded cursor page repairs mismatch; rerun changes zero; STOCK/deleted untouched | repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched |
+| SCRUM907-repair-lock | Posted acquisition counted locked and untouched | repair reports posted-cost locks and does not change them |
+| SCRUM907-repair-history | Sold/opening locks and missing cost counted; none patched | repair reports sold, opening-locked and unreadable supplier costs without changing them |
+
+Deploy rollout phase 2f uses a tested `releaseGuard.ts` helper, pages of at most
+25 vehicles, the shared deadline and a 10,000-page cap. Outstanding locked/invalid
+counts refuse completion. The implementer ran no repair against a deployment.

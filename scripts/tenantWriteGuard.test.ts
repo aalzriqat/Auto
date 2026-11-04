@@ -792,11 +792,13 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // other counts unchanged. Re-measured FROM THE ANALYSER (567/383/15/169 -> 568/383/15/170). It writes only the `permissions` of a
   // role row it has just read in the same page, and only for a non-deleted role whose normalized name is ACCOUNTANT.
   test("the analysed surface matches the pinned counts", () => {
+    // SCRUM-907 adds vehicles.backfillSourcedCostMirror: one internal, global cursor walk,
+    // no caller-supplied org/document id. Measured delta: total +1, no-org +1; analysed unchanged.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 568,
+      totalMutations: 569,
       analysed: 383,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 170,
+      skippedNoOrgId: 171,
     });
   });
 });

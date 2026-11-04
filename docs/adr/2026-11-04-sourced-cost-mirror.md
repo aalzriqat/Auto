@@ -16,8 +16,9 @@ Declarations, validators and cost-visibility classifiers are not money readers.
 | `vehicles.update`, `vehicleEdits.requestUpdate` / `resolve` UPDATE | Defective writer paths; normalize before existing locks and persist the effective audit payload. |
 | `vehicles.correctAcquisitionCost`; `saleCompletion` trade-in attach; `saleCancellation` trade-in restore | purchasePrice writers restricted to owned stock; SOURCED refused. |
 | `adminData` generic patch | Ownership/cost fields locked; cannot bypass the vehicle workflow. |
-| `VehicleCostBar`, `ReviewVehicleCard`, `VehiclePicker`, `Step1QuoteSetup`, `VehicleDetailsDialog`, vehicles page | Displayed cost / suggested pricing basis can be stale; server money decisions remain authoritative. |
-| `VehicleDialog`, `ApprovalOwnershipChooser`, `VehicleImportDialog`, `vehicleSheet`, `vehicle.schema`; lib `ownershipGaps`, `importSupplierMapping` | Form/export/import values and completeness hints; submitted costs can become writes. |
+| `VehicleCostBar`, `ReviewVehicleCard`, `VehiclePicker`, `Step1QuoteSetup`, `VehicleDetailsDialog` | Displayed recorded cost can be stale; the cost bar derives no profit or sale amount. |
+| Vehicles page | Missing-cost indicator uses sourceCost for SOURCED; unaffected by stale purchasePrice. |
+| `VehicleDialog`, `ApprovalOwnershipChooser`, `VehicleImportDialog`, `vehicleSheet`, `vehicle.schema`; lib `ownershipGaps`, `importSupplierMapping` | Form/import values and completeness hints; the old edit form resubmitted the hidden stale mirror. Export prefers sourceCost for SOURCED (purchasePrice is a fallback for missing sourceCost). |
 | `VehicleHistoryDialog` | Audit display must include the mirrored field actually written. |
 | `saleCompletion`, `sales`, `applications`, `dealOverview`, `vehicleOwnership`, `vehicleCost`, `vehicleCostBasis` | Money: SOURCED entitlement from sourceCost or frozen sale/application basis; purchasePrice applies to STOCK/trade-ins. |
 | `supplierConcession`, `sourcingPayables`, sourcing page | Money: concession basis / payable derived from sourceCost or frozen entitlement. |
@@ -32,7 +33,8 @@ Declarations, validators and cost-visibility classifiers are not money readers.
 Use native `db.patch` to write the source and mirror in one transaction. Refuse
 contradictory submitted costs, including purchasePrice-only edits that disagree
 with the stored supplier cost. The direct and approval doors share a pure patch
-normalizer. Keep concession, opening-basis and posted-acquisition checks in their
+normalizer. The form submits only sourceCost for SOURCED edits; its hidden
+purchasePrice is the old mirror. Keep concession, opening-basis and posted-acquisition checks in their
 existing order. Ownership flips remain behind the existing pilot containment.
 
 Repair only live SOURCED mismatches with a valid positive supplier cost, in one

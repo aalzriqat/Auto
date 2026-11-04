@@ -41,6 +41,7 @@ import {
   parseVehicleSourceType,
   requestedVehicleSourceTypeChange,
   throwVehicleSourceShape,
+  sourcedCostMirrorPatch,
 } from "./utils/vehicleSourceShape";
 import type { SupplierSnapshot } from "./utils/supplierRegistry";
 import {
@@ -293,6 +294,7 @@ export const requestUpdate = mutation({
     }
     const payload = normalizeVehicleEditPayload(args.payload);
     assertVehicleCostPrecision(payload, await getOrgCurrency(ctx, args.orgId), vehicle);
+    Object.assign(payload, sourcedCostMirrorPatch(vehicle, payload));
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertNoPendingBeforeAvailable(ctx, {
       orgId: args.orgId,
@@ -584,6 +586,7 @@ export const resolve = mutation({
         const payload: NormalizedVehicleEditPayload = resolvedSourced
           ? { ...requestedPayload, sourcedFromName: resolvedSourced.name, sourcedSupplierId: resolvedSourced.supplierId }
           : requestedPayload;
+        Object.assign(payload, sourcedCostMirrorPatch(previousVehicle, payload));
         assertDirectVehicleStatusTransition(previousVehicle.status, payload.status);
         await assertNoPendingBeforeAvailable(ctx, {
           orgId: args.orgId,
@@ -703,6 +706,8 @@ export const resolve = mutation({
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });
+        // An older pending request may not yet carry the mirror that was applied.
+        await ctx.db.patch(request._id, { payload });
 
         // SCRUM-700 N1: same hold rule as vehicles.update.
         if (payload.status !== undefined) {

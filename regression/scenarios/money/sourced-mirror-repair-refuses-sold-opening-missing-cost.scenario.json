@@ -1,0 +1,53 @@
+{
+  "id": "sourced-mirror-repair-refuses-sold-opening-missing-cost",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-local",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "vehicles.backfillSourcedCostMirror",
+      "input": {
+        "vehicles": "SOLD_OPENING_MISSING_COST"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "repair.updated",
+      "value": 0
+    },
+    {
+      "observable": "repair.skippedLocked",
+      "value": 2
+    },
+    {
+      "observable": "repair.skippedInvalid",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcedCostMirror.scrum907.test.ts",
+    "testName": "repair reports sold, opening-locked and unreadable supplier costs without changing them"
+  },
+  "matrixRow": "SCRUM907-repair-history",
+  "bugRef": {
+    "key": "SCRUM-907",
+    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
+  },
+  "fingerprint": "63152ae83522a13c35091f7ca941b07ddf26e1986a9911721992ba6c0478c2b4"
+}

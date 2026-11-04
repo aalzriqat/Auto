@@ -41,6 +41,7 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runSourcedCostMirrorPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -95,6 +96,7 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let sourcedCostMirrorSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -119,6 +121,7 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (sourcedCostMirrorSummary) body += `\n### SOURCED cost mirrors\n\n${sourcedCostMirrorSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -403,6 +406,11 @@ console.log(`Granting view:cost_price to stored ACCOUNTANT roles…`);
 lastVerdict = before.verdict;
 accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${accountantCostPriceSummary}`);
+
+// ─── 2f. Repair unposted SOURCED purchase-price mirrors (SCRUM-907) ───────────
+console.log(`Repairing SOURCED cost mirrors…`);
+sourcedCostMirrorSummary = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
+console.log(`  ${sourcedCostMirrorSummary}`);
 
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 

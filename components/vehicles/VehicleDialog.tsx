@@ -443,14 +443,13 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       // The two ownership shapes are mutually exclusive on the wire, whatever the form
       // still holds from an earlier choice: an owned car never sends consignment fields
       // (the server refuses them); a consignment intake has no purchase (nothing is paid
-      // and nothing is posted), so its purchasePrice travels only with an edit.
+      // and nothing is posted). The server maintains its purchasePrice mirror.
       const ownershipFields =
         values.sourceType === "STOCK"
           ? { ...(costsUnlocked && !hidePurchasePrice ? { purchasePrice } : {}) }
           : {
               ...(sourcedSupplierId ? { sourcedSupplierId } : {}),
               ...(costsUnlocked && !hideSourceCost ? { sourceCost } : {}),
-              ...(vehicle && costsUnlocked && !costWithheld ? { purchasePrice } : {}),
             };
       const restValues = { ...baseValues, ...ownershipFields };
       // The settlement travels only when it is being decided now (creation or a buy-out).
