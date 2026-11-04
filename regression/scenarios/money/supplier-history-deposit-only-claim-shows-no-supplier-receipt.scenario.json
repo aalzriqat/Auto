@@ -1,0 +1,65 @@
+{
+  "id": "supplier-history-deposit-only-claim-shows-no-supplier-receipt",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openSupplierReceivable",
+      "input": {
+        "marginJod": 3000,
+        "depositAppliedJod": 1000,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.rows",
+      "value": "none"
+    },
+    {
+      "observable": "receivable.totals",
+      "value": "none"
+    },
+    {
+      "observable": "receivable.complete",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "deposit-only: a customer deposit applied to the settlement is not shown as received from the supplier"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "cf449671f0e0b95c8b854930e2b6d64971e39874"
+  },
+  "fingerprint": "a6bd5c46ed1af1dfef85afda2dd5e32d62dc2c2f8aefb9a7e42bcb1496dcf788"
+}
