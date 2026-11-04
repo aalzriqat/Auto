@@ -207,7 +207,8 @@ describe("the door-opening detector", () => {
       ["globals.ts", "const vi = unrelated;"],
       ["unbound.ts", `${DO_MOCK}(target, () => ({}));`],
       ["aliased.ts", 'import { vi as tools } from "vitest"; const { doMock: replace } = tools; replace(target, () => ({}));'],
-      ["shadowed.ts", 'export function f(vi) { vi.doMock(target, () => ({})); }'],
+      ["shadowed.ts", 'export function f(vi) { vi.doMock("./unrelated", () => ({})); }'],
+      ["shadowed-computed.ts", `export function f(vi) { ${DO_MOCK}(target, () => ({})); }`],
       ["literal.ts", 'export {}; replaceSomething("./gateModule", () => ({}));'],
     ]);
     expect(pilotDoorOpeners(sources, basenames, names)).toEqual(["unbound.ts", "aliased.ts", "literal.ts"]);
