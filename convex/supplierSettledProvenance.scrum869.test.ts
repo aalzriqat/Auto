@@ -501,5 +501,8 @@ describe("SCRUM-869 settled history: the read stays inside the transaction's byt
     expect(r.payable.totals).toEqual([]);
     expect(r.receivable.complete).toBe(false);
     expect(r.receivable.totals).toEqual([]);
+    // #764 round 5 (M3): a family the budget skipped says so, so a screen never reads it as "no receipts".
+    expect(r.payable.incompleteReason).toBe("READ_BUDGET");
+    expect(r.receivable.incompleteReason).toBe("READ_BUDGET");
   });
 });

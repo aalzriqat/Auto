@@ -321,6 +321,41 @@ describe("SCRUM-869 per-supplier payments reconciliation", () => {
     expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
   });
 
+  // #764 round 5 (M2). `hasPendingAffectingPosting` resolves each queued reversal's original event with an unbounded
+  // `Promise.all` of `db.get`, outside the shared read budget. The original's `payload` is `v.any()`, up to ~1 MiB.
+  async function queueReversals(s: Seed, count: number, payloadChars: number) {
+    for (let i = 0; i < count; i++) {
+      const originalEventId = await s.t.run((ctx) =>
+        ctx.db.insert("accountingEvents", {
+          orgId: s.orgId, eventType: "NOT_AP_EVENT", sourceType: "sales", sourceId: `s-${i}`, eventVersion: 1,
+          idempotencyKey: `orig-${i}`, occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD",
+          payload: { blob: "p".repeat(payloadChars) }, status: "POSTED", createdBy: s.userId, createdAt: Date.now(),
+        } as never)
+      );
+      await s.t.run((ctx) =>
+        ctx.db.insert("pendingAccountingEvents", {
+          orgId: s.orgId, kind: "REVERSE", status: "PENDING", idempotencyKey: `rev-${i}`, accountingDate: Date.now(),
+          actorId: s.userId, attempts: 0, eventType: "NOT_AP_REVERSE", sourceType: "sales", sourceId: `s-${i}`,
+          originalEventId, createdAt: Date.now(),
+        } as never)
+      );
+    }
+  }
+
+  test("CONTROL: 20 queued reversals of small originals that touch no AP do not block the comparison", async () => {
+    const s = await seed("limrevsmall", { transactionLimits: true });
+    await queueReversals(s, 20, 10);
+    const r = await recon(s);
+    expect(r.status).toBe("AVAILABLE");
+  });
+
+  test("20 queued reversals whose originals are ~0.9 MB each: UNAVAILABLE (OVER_LIMIT), never a thrown read error", async () => {
+    const s = await seed("limrevheavy", { transactionLimits: true });
+    await queueReversals(s, 20, HEAVY_CHARS);
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [], differences: [] });
+  });
+
   test("needs view:cost_price as well as view:finance (SCRUM-886): the paid amounts per payable are a SOURCED car's cost", async () => {
     const s = await seed("nocost");
     const roleId = await s.t.run((ctx) =>

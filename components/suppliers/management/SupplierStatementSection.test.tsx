@@ -15,6 +15,7 @@ type Section = {
     overdueMinor: number;
   }>;
   complete: boolean;
+  incompleteReason?: "ROW_LIMIT" | "READ_BUDGET";
 };
 
 const world = vi.hoisted(() => ({
@@ -197,6 +198,52 @@ describe("supplier statement section", () => {
     world.queryThrows = new Error("boom");
     renderIt();
     expect(screen.getByRole("alert").textContent).toContain(en.SuppliersStmtLoadError);
+  });
+
+  // #764 round 5 (M3). A section the server could not read in full is not an empty section: the empty-state sentence ("No receipts…")
+  // may show only when the section is complete, and a read-budget cut has its own sentence, not the row-count one.
+  test("a section cut by the read budget is never called empty, in English and Arabic (outstanding and settled history)", () => {
+    for (const locale of ["en", "ar"] as const) {
+      world.locale = locale;
+      const dict = locale === "en" ? en : ar;
+      expect(dict.SuppliersStmtIncompleteBudget, `${locale} budget copy exists`).toBeTruthy();
+      expect(dict.SuppliersStmtIncompleteBudget).not.toBe(dict.SuppliersStmtIncomplete);
+
+      world.statement = {
+        supplierId: "sup_1",
+        payable: section({ complete: false, incompleteReason: "READ_BUDGET" }),
+        receivable: section({ complete: false, incompleteReason: "READ_BUDGET" }),
+      };
+      const outstanding = renderIt();
+      expect(screen.queryByText(dict.SuppliersStmtPayableEmpty), `${locale} payable not empty`).toBeNull();
+      expect(screen.queryByText(dict.SuppliersStmtReceivableEmpty), `${locale} receivable not empty`).toBeNull();
+      expect(screen.getAllByText(dict.SuppliersStmtIncompleteBudget)).toHaveLength(2);
+      expect(screen.queryByText(dict.SuppliersStmtIncomplete)).toBeNull();
+      outstanding.unmount();
+
+      world.statement = {
+        supplierId: "sup_1",
+        payable: section({ complete: false, incompleteReason: "ROW_LIMIT" }),
+        receivable: section(),
+      };
+      const rowLimit = renderIt();
+      expect(screen.getAllByText(dict.SuppliersStmtIncomplete)).toHaveLength(1);
+      expect(screen.queryByText(dict.SuppliersStmtIncompleteBudget)).toBeNull();
+      expect(screen.getByText(dict.SuppliersStmtReceivableEmpty)).toBeTruthy();
+      rowLimit.unmount();
+
+      world.settled = {
+        supplierId: "sup_1",
+        payable: { rows: [], totals: [], complete: false, unverifiedCount: 0, incompleteReason: "READ_BUDGET" },
+        receivable: { rows: [], totals: [], complete: false, unverifiedCount: 0, incompleteReason: "READ_BUDGET" },
+      };
+      const history = renderIt();
+      expect(screen.queryByText(dict.SuppliersStmtHistoryPaidEmpty), `${locale} paid not empty`).toBeNull();
+      expect(screen.queryByText(dict.SuppliersStmtHistoryReceivedEmpty), `${locale} received not empty`).toBeNull();
+      expect(screen.getAllByText(dict.SuppliersStmtIncompleteBudget).length).toBeGreaterThanOrEqual(2);
+      history.unmount();
+      world.settled = undefined;
+    }
   });
 
   test("needs view:finance: without it nothing is requested or shown", () => {

@@ -210,6 +210,42 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.payable.totals).toEqual([]);
     // The budget is one for the whole transaction, so the receivable side may be withheld too; it must not claim a total either way.
     expect(r.receivable.complete ? r.receivable.totals.length : 0).toBe(0);
+    // #764 round 5 (M3): the server says WHY, so a screen never reads an unread section as empty.
+    expect(r.payable.incompleteReason).toBe("READ_BUDGET");
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.incompleteReason).toBe("READ_BUDGET");
+  });
+
+  // #764 round 5 (M1). Each row's enrichment reads its sale (and finance application) with a plain `db.get`, after the family was
+  // streamed. A sale's `commissionPaymentIdempotencyKey` is an unbounded string, so 20 small payables linked to 20 such sales read ~18 MB
+  // through reads that never asked the transaction for room.
+  async function payablesWithSales(s: Seed, count: number, keyChars: number) {
+    for (let i = 0; i < count; i += 1) {
+      const saleId = await s.t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 12_500,
+          saleDate: NOW - 40 * DAY, status: "COMPLETED", commissionPaymentIdempotencyKey: "k".repeat(keyChars),
+        } as never)
+      );
+      await addPayable(s, { amountDue: 1, saleId });
+    }
+  }
+
+  test("CONTROL: 20 small payables linked to small sales are read in full with the limits enforced", async () => {
+    const s = await seed("o2small", undefined, { transactionLimits: true });
+    await payablesWithSales(s, 20, 10);
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.rows).toHaveLength(20);
+  });
+
+  test("20 payables whose linked sales are ~0.9 MB each: the section is incomplete (READ_BUDGET), never a thrown read error", async () => {
+    const s = await seed("o2heavy", undefined, { transactionLimits: true });
+    await payablesWithSales(s, 20, 900_000);
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    expect(r.payable.incompleteReason).toBe("READ_BUDGET");
   });
 
   test("a section over the row bound withholds its totals too (W14), as settled history does", async () => {
@@ -218,6 +254,7 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     const r = await statement(s);
     expect(r.payable.complete).toBe(false);
     expect(r.payable.totals).toEqual([]);
+    expect(r.payable.incompleteReason).toBe("ROW_LIMIT");
   });
 
   test("tenancy and permission: foreign supplier, other org, missing view:finance and a stale clock all refuse", async () => {
