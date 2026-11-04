@@ -392,8 +392,9 @@ supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
 
-// SCRUM-908: the exact legacy predicate requires MISSING cost access, so commission repair must precede cost repair.
-// Already-cost-repaired roles stay excluded. The tested helper owns all paging, refusal and public-summary behavior.
+// SCRUM-908 c24538: grant view:commissions to unmarked roles that hold exactly the pre-change ACCOUNTANT template,
+// view:cost_price included, so the result does not depend on running before or after the cost-price phase below.
+// The tested helper owns all paging, refusal and public-summary behavior.
 accountantCommissionsSummary = runAccountantCommissionsPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail, log: console.log });
 
 // ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
