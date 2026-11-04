@@ -155,6 +155,92 @@ test.each([
   expect(await s.read()).toMatchObject({ available: true, amountMinor: financed ? 1_009_200 : 1_775_500 });
 });
 
+test.each([
+  [false, "SOURCED"], [true, "SOURCED"], [false, "STOCK"], [true, "STOCK"],
+] as const)("SCRUM-908 complete cockpit responses financed=%s %s withhold every cost projection", async (financed, sourceType) => {
+  const s = await seedDealNetProfit(modules, sourceType, financed);
+  const permissions = ["view:sales", "view:finance", "view:commissions"];
+  await s.t.run((ctx) => ctx.db.patch(s.roleId, {
+    name: "Deal reader", isSystemOwnerRole: false, permissions: [...permissions, "view:cost_price"],
+  }));
+  const readApplication = () => s.asOwner.query(api.applications.dealCockpit, {
+    orgId: s.orgId, applicationId: s.applicationId,
+  });
+  const readSale = () => s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+  const allowedApplication = await readApplication();
+  const allowedSale = await readSale();
+  if (!allowedApplication?.money || (!financed && !allowedSale?.money)) throw new Error("Expected finance evidence");
+  expect(allowedApplication.money.profit).toMatchObject(sourceType === "SOURCED"
+    ? { available: true, amountMinor: 1_433_700 }
+    : { available: false, reason: "NoSupplierSettlement" });
+  expect(allowedApplication.money.managementProfit).toEqual(allowedApplication.money.profit);
+  if (!financed) expect(allowedSale?.money?.profit).toMatchObject({ available: true, amountMinor: 2_200_000 });
+  else expect(allowedSale?.money).toBeNull(); // The application is the sole financed money reader.
+
+  await s.t.run((ctx) => ctx.db.patch(s.roleId, { permissions }));
+  const withheld = { available: false, reason: "CostAccessRequired" };
+  const restrictedApplication = await readApplication();
+  const restrictedSale = await readSale();
+  // Compare the COMPLETE API payloads. Only the declared cost projections may change;
+  // all other finance evidence must remain readable.
+  expect(restrictedApplication).toEqual({
+    ...allowedApplication,
+    money: {
+      ...allowedApplication.money, profit: withheld, managementProfit: withheld,
+      parties: allowedApplication.money.parties.map((party) =>
+        party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party),
+    },
+  });
+  expect(restrictedSale).toEqual(!financed && allowedSale?.money ? {
+    ...allowedSale,
+    money: {
+      ...allowedSale.money, profit: withheld, managementNetProfit: withheld,
+      parties: allowedSale.money.parties.map((party) => ({ ...party, amountMinor: null })),
+    },
+  } : allowedSale);
+  for (const response of [restrictedApplication, restrictedSale]) {
+    const wire = JSON.stringify(response);
+    for (const costField of ["SUPPLIER_SETTLEMENT", "VEHICLE_COST", "SUPPLIER_ENTITLEMENT", "ACCOUNTING_MARGIN", "purchasePrice", "sourceCost"]) {
+      expect(wire).not.toContain(`"${costField}"`);
+    }
+    expect(wire).not.toContain("9900000");
+  }
+
+  // Owner bypass is independent of explicit grants, including view:finance/cost.
+  await s.t.run((ctx) => ctx.db.patch(s.roleId, { name: "OWNER", isSystemOwnerRole: true, permissions: [] }));
+  expect((await readApplication())?.money).toMatchObject({
+    profit: allowedApplication.money.profit, managementProfit: allowedApplication.money.managementProfit,
+    parties: allowedApplication.money.parties,
+  });
+  if (!financed) expect((await readSale())?.money).toMatchObject({
+    profit: allowedSale?.money?.profit, managementNetProfit: allowedSale?.money?.managementNetProfit,
+  });
+});
+
+test.each(["deleted", "foreign"] as const)("SCRUM-908 %s finalized sale cannot supply commission evidence", async (state) => {
+  const s = await seedDealNetProfit(modules, "STOCK");
+  expect(await s.read()).toMatchObject({ available: true, amountMinor: 1_009_200 });
+  await s.t.run(async (ctx) => {
+    if (state === "deleted") await ctx.db.patch(s.saleId, { isDeleted: true });
+    else {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic foreign sale", createdAt: 1 });
+      await ctx.db.patch(s.saleId, { orgId });
+    }
+  });
+  expect(await s.read()).toEqual({ available: false, reason: "CommissionsUnreadable" });
+});
+
+test.each(["missing cost", "mixed currency"] as const)("SCRUM-908 cash STOCK %s has a cost-basis refusal", async (state) => {
+  const s = await seedDealNetProfit(modules, "STOCK", false);
+  if (state === "missing cost") await s.t.run((ctx) => ctx.db.patch(s.vehicleId, { purchasePrice: undefined }));
+  else await s.t.run(async (ctx) => {
+    const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).unique();
+    if (!settings) throw new Error("Expected settings");
+    await ctx.db.patch(settings._id, { currency: "USD" });
+  });
+  expect(await s.read()).toEqual({ available: false, reason: "VehicleCostBasisUnreadable" });
+});
+
 test("SCRUM-908 a decided salesperson commission joins the registered lines exactly once", async () => {
   const s = await seedDealNetProfit(modules);
   await s.t.run((ctx) => ctx.db.patch(s.saleId, { commissionAmount: 25 }));
@@ -181,8 +267,8 @@ test("SCRUM-908 unreadable expense withholds net", async () => {
   expect(await s.read()).toMatchObject({ available: false });
 });
 
-test("SCRUM-908 commission permission withholds the net without exposing pay through a deduction", async () => {
-  const s = await seedDealNetProfit(modules);
+test.each([false, true])("SCRUM-908 financed=%s commission permission withholds the net without exposing pay through a deduction", async (financed) => {
+  const s = await seedDealNetProfit(modules, "SOURCED", financed);
   await s.t.run((ctx) => ctx.db.patch(s.roleId, {
     name: "Finance reader", isSystemOwnerRole: false,
     permissions: ["view:sales", "view:finance", "view:cost_price"],
@@ -200,7 +286,7 @@ test("SCRUM-908 commission cap withholds the result and keeps the overview reada
       });
     }
   });
-  expect(await s.read()).toMatchObject({ available: false, reason: "CommissionsUnreadable" });
+  expect(await s.read()).toMatchObject({ available: false, reason: "CommissionsReadBoundExceeded" });
   expect(await s.asOwner.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId: s.saleId }))
     .toMatchObject({ totalMinor: null, lineEvidence: "UNAVAILABLE" });
 });

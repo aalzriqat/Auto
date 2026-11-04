@@ -235,6 +235,8 @@ describe("one canonical profit on the financed cockpit", () => {
     ["CostAccessRequired", "Viewing net profit requires permission to view vehicle cost.", "عرض صافي الربح يتطلب صلاحية عرض تكلفة السيارة."],
     ["CommissionsPending", "The commission has not been decided yet, so net profit is unavailable.", "لم تُحدّد العمولة بعد، لذلك لا يتوفر صافي الربح."],
     ["CommissionsUnreadable", "A commission amount cannot be read, so the total is not shown.", "تعذّرت قراءة مبلغ عمولة، لذلك لا يظهر الإجمالي."],
+    ["CommissionsReadBoundExceeded", "The commission lines exceed the readable bound, so net profit is unavailable.", "تتجاوز بنود العمولات حد القراءة، لذلك لا يتوفر صافي الربح."],
+    ["VehicleCostBasisUnreadable", "The vehicle's cost basis cannot be read completely in the deal currency, so net profit is unavailable.", "تعذّرت قراءة أساس تكلفة السيارة بالكامل بعملة الصفقة، لذلك لا يتوفر صافي الربح."],
   ] as const)("SCRUM-908 %s has truthful EN/AR refusal text", (reason, en, ar) => {
     for (const locale of ["en", "ar"] as const) {
       language.locale = locale;
@@ -260,6 +262,41 @@ describe("one canonical profit on the financed cockpit", () => {
     }
   });
 
+  test.each(["en", "ar"] as const)("SCRUM-908 %s cost-withheld cockpit aliases and supplier balance never render as zero", (locale) => {
+    language.locale = locale;
+    const dictionary = locale === "ar" ? salesAr : salesEn;
+    const withheld = { available: false, reason: "CostAccessRequired" } as const;
+    for (const original of [stockDeal(), cashDeal()]) {
+      if (!original.money) throw new Error("Expected money");
+      const deal = { ...original, money: {
+        ...original.money, profit: withheld,
+        ...(original.dealKind === "FINANCED" ? { managementProfit: withheld } : { managementNetProfit: withheld }),
+        parties: [{ party: "SUPPLIER", name: "Restricted supplier", position: "DEALERSHIP_OWES", amountMinor: null, currency: "JOD" }],
+      } } as DealCockpitData;
+      const data = overview();
+      if (!data.financialSummary) throw new Error("Expected summary");
+      data.financialSummary.profit = withheld;
+      render(<DealCockpitView deal={deal} onRecordSupplierReceipt={async () => {}}
+        financialOverview={deal.dealKind === "FINANCED" ? { data, loading: false } : undefined} custodyMoney={money} />);
+      expect(screen.getAllByText(dictionary.ProfitCostAccessRequired).length).toBeGreaterThan(0);
+      expect(screen.queryByText("0 JOD")).toBeNull();
+      expect(screen.queryByText("9,900 JOD")).toBeNull();
+      cleanup();
+    }
+  });
+
+  test.each(["en", "ar"] as const)("SCRUM-908 %s pre-sale estimate labels commissions registered to date in tiles and working", (locale) => {
+    language.locale = locale;
+    const data = overview();
+    if (!data.financialSummary?.profit.available) throw new Error("Expected estimate");
+    data.financialSummary.profit.lines.push({ key: "COMMISSIONS", sign: -1, amountMinor: 0 });
+    render(<DealCockpitView deal={stockDeal()} onRecordSupplierReceipt={async () => {}}
+      financialOverview={{ data, loading: false }} custodyMoney={money} />);
+    const label = locale === "en" ? "Commissions registered to date" : "العمولات المسجلة حتى الآن";
+    expect(screen.getAllByText(label)).toHaveLength(2);
+    expect(screen.queryByText(locale === "en" ? "Total commissions" : "إجمالي العمولات")).toBeNull();
+  });
+
   test.each(["en", "ar"])("SCRUM-908 %s headline renders both deductions and isolates the amount", (locale) => {
     language.locale = locale;
     const original = overview();
@@ -282,7 +319,7 @@ describe("one canonical profit on the financed cockpit", () => {
       financialOverview={{ data, loading: false }} custodyMoney={money} />);
     const dictionary = locale === "ar" ? salesAr : salesEn;
     expect(screen.getAllByText(dictionary.LinePreparationExpenses).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(dictionary.DealCommissionsTotal).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(dictionary.DealCommissionsRegisteredToDate).length).toBeGreaterThan(0);
     for (const amount of screen.getAllByText(/1,009\.200 (JOD|JD)/)) {
       expect(amount.closest("bdi")).not.toBeNull();
     }

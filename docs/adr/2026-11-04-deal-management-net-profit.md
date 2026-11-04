@@ -6,6 +6,16 @@ Status: implemented locally; independent seats pending. Written before productio
 
 The deal management net headline subtracts every paid, live, showroom-borne car expense, net of recoverable VAT, and the deal's commissions exactly once; STOCK capitalized costs enter through the full vehicle basis, and unreadable or incomplete evidence withholds the result.
 
+### Round 4 authorization closure (544c1a05)
+
+Invariant: every cost-derived cockpit profit, alias and supplier balance requires server-side `canReadVehicleCost(role)`; finance permission alone retains the other money facts. Accounting calculations and stored money do not change. This implements SCRUM-902 c24475, following [OWASP authorization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) (server-side checks on every request and authorization tests) and [Convex function authentication](https://docs.convex.dev/auth/functions-auth), checked 2026-11-04.
+
+The bounded class is the two public cockpit responses: application `profit`/`managementProfit` plus supplier party amounts, and cash `profit`/`managementNetProfit` plus supplier party amounts. The verified financed sale keeps `money: null`, its existing single-reader contract. Match PR #766's exact `{ available: false, reason: "CostAccessRequired" }` and nullable supplier amounts; its capitalized-fee census/projection is a separate dependency and is not imported here. The alternative of hiding the entire money block loses permitted finance facts; UI-only hiding leaves the API disclosure open.
+
+Writers, historical documents, transitions, reversals, retries, journals and audit records are unaffected: this is a read projection and reason/label correction. `financedDealOverview` consumes the application cockpit; its authorized derivation must stay unchanged and its no-cost supplier summary must preserve null. `DealCockpitView` consumes both readers; a null supplier balance must never be formatted as zero. No migration or new permission. Runtime deployment and independent seats remain separate gates. The read-only design attack identified the nullable summary input and supplier renderer as required side effects.
+
+Five attacks: original profit alias bypass; supplier balance disclosure outside profit; withheld null printed as zero; cash commission permission bypass; deleted/foreign finalized sale accepted as commission evidence. Public response, DOM and source mutation controls cover these in the evidence record. STOCK cost-basis failure and commission read bounds get distinct truthful EN/AR reasons. Every financed management estimate labels its commissions as registered to date, including the unlinked-sale zero estimate; neither arithmetic nor the SCRUM-879 estimation contract changes.
+
 ## Decision and surface map
 
 | Reader | Class and decision |
