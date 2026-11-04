@@ -2667,7 +2667,16 @@ export const dealCockpit = query({
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: {
         ...cockpitMoney,
-        ...(mayReadCost ? {} : { profit: costWithheld, managementProfit: costWithheld }),
+        ...(mayReadCost
+          ? {}
+          : {
+              profit: costWithheld,
+              managementProfit: costWithheld,
+              // The supplier balance is the purchase cost (or the margin it leaves): absent, not zero.
+              parties: cockpitMoney.parties.map((party) =>
+                party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party
+              ),
+            }),
         // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
         forward: {
           dueMinor: forwardProof.dueMinor,

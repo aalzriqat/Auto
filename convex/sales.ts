@@ -3275,7 +3275,8 @@ export const dealCockpit = query({
               // margin back on the other.
               collectsGross ? "DEALERSHIP_OWES" : "OWED_TO_DEALERSHIP"
             ),
-            amountMinor: supplierOutstandingMinor ?? 0,
+            // SCRUM-902: the supplier balance is the cost basis (or the margin it leaves), so it follows view:cost_price.
+            amountMinor: canSeeCost ? (supplierOutstandingMinor ?? 0) : null,
             currency,
             reference: supplierReference,
             receivableId: supplierReceivableId,

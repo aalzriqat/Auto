@@ -572,6 +572,7 @@ export function OpeningBalanceCard() {
                     canSelectEmployees={status.canSelectEmployees}
                     canSelectPartners={status.canSelectPartners}
                     canSelectVehicles={status.canSelectVehicles}
+                    canReadOpeningStockCost={status.canReadOpeningStockCost}
                   />
                 )}
 

@@ -4680,7 +4680,7 @@ function DealPartyFacts({
           <MoneyFact
             key={party.party}
             label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
-            value={positioned ? money(party.amountMinor) : null}
+            value={positioned && party.amountMinor !== null ? money(party.amountMinor) : null}
             note={
               <>
                 <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
@@ -5743,6 +5743,7 @@ export function DealCockpitView({
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
+    supplierRow.amountMinor !== null &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
   const supplierReceiptBankOptions = useQuery(
@@ -7525,7 +7526,7 @@ export function DealCockpitView({
       {/* Mounted only while the action is offered: losing authority or the
           settle-able state UNMOUNTS an open dialog rather than leaving a form
           whose submit the server will refuse. */}
-      {supplierRow && canSettleSupplier && (
+      {supplierRow && supplierRow.amountMinor !== null && canSettleSupplier && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}
