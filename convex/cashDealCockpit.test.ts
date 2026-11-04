@@ -617,6 +617,33 @@ describe("a consigned cash deal's supplier row, and UNKNOWN never reading as set
     expect(supplier!.position).toBe("UNKNOWN");
   });
 
+  test("SCRUM-902: a role without view:cost_price sees the supplier row and position but not its amount", async () => {
+    const s = await seed("supnocost", FULL_PERMS.filter((p) => p !== "view:cost_price"));
+    const vehicleId = await consignedVehicle(s, "SUPNOCOST0000001");
+    const saleId = await insertSale(s, vehicleId, {
+      salePrice: CONSIGNED_PRICE,
+      supplierSettlementRoute: "DIRECT_TO_SUPPLIER",
+      consignedMarginMinor: MARGIN * SCALE,
+      consignedSupplierEntitlementMinor: ENTITLEMENT * SCALE,
+      consignedMarginCurrency: "JOD",
+    });
+    await s.t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: s.orgId, vehicleId, saleId,
+        sourcedFromName: "Amman Importer Co",
+        amountDue: MARGIN, currency: "JOD", status: "OPEN",
+        createdBy: s.userId, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+
+    const deal = await s.asUser.query(api.sales.dealCockpit, { orgId: s.orgId, saleId });
+    const supplier = deal!.money!.parties.find((party) => party.party === "SUPPLIER");
+
+    expect(supplier!.position).toBe("OWED_TO_DEALERSHIP");
+    expect(supplier!.amountMinor).toBeNull();
+    expect(JSON.stringify(deal!.money)).not.toContain(String(MARGIN * SCALE));
+  });
+
   test("an open claim shows the supplier owing the dealership its margin", async () => {
     const s = await seed("openclaim");
     const vehicleId = await consignedVehicle(s, "OPENCLAIM0000001");
