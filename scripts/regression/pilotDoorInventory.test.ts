@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * SCRUM-795 / SCRUM-760 decision B: the per-door inventory in
  * docs/pilot/blocked-server-side-doors.inventory.json must list every public
@@ -8,9 +9,14 @@
  * its guard is removed. Those come from reading the cited lines and from the
  * mutant runs recorded in the doc.
  */
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import ts from "typescript";
+import {
+  exportedDeclaration, financialEvidence, hasFinancialEffect, mutationBody, parseSource,
+  publicMutationNames, rowCallsDoor, sourceAnalysis,
+} from "./pilotDoorAnalysis";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const INVENTORY = "docs/pilot/blocked-server-side-doors.inventory.json";
@@ -37,41 +43,86 @@ interface Entry {
 const read = (rel: string): string => fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
 const exists = (rel: string): boolean => fs.existsSync(path.join(REPO_ROOT, rel));
 
-/** Every `export const X = mutation(` under convex/, with the handler body text. */
-function liveDoors(): Map<string, string> {
-  const doors = new Map<string, string>();
-  const walk = (dir: string): void => {
-    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (e.name !== "_generated" && e.name !== "node_modules") walk(p);
-        continue;
-      }
-      if (!p.endsWith(".ts") || p.includes(".test.")) continue;
-      const src = fs.readFileSync(p, "utf8");
-      const mod = path.relative(path.join(REPO_ROOT, "convex"), p).replace(/\\/g, "/").replace(/\.ts$/, "");
-      const heads = [...src.matchAll(/^export const (\w+) = mutation\(/gm)];
-      heads.forEach((h, k) => {
-        const start = h.index ?? 0;
-        const rest = src.slice(start + 10);
-        const next = rest.search(/^export (const|function|async function) \w+/m);
-        const end = next > 0 ? start + 10 + next : src.length;
-        doors.set(`${mod}.${h[1]}`, src.slice(start, k + 1 < heads.length ? Math.min(end, heads[k + 1].index ?? end) : end));
-      });
-    }
-  };
-  walk(path.join(REPO_ROOT, "convex"));
-  return doors;
-}
-
 const entries: Entry[] = JSON.parse(read(INVENTORY));
-const live = liveDoors();
+const modules = import.meta.glob<Record<string, unknown>>([
+  "../../convex/**/*.ts", "!../../convex/**/*.test.ts", "!../../convex/**/*.d.ts",
+  "!../../convex/_generated/**", "!../../convex/auth.config.ts", "!../../convex/convex.config.ts",
+]);
+const moduleFile = (file: string): string => path.resolve(__dirname, file);
+const analysis = sourceAnalysis([
+  ...Object.keys(modules).map(moduleFile),
+  ...new Set(entries.flatMap((e) => e.certification ? [path.join(REPO_ROOT, e.certification.test)] : [])),
+]);
+const live = new Map<string, ts.Node>();
+const citedRows = new Map<string, boolean>();
+const nonFinancialEffects = new Map<string, string | undefined>();
+beforeAll(async () => {
+  for (const [file, load] of Object.entries(modules)) {
+    const exports = await load(); // Import failures fail the census, never silently omit a module.
+    const source = analysis.program.getSourceFile(moduleFile(file));
+    if (!source) throw new Error(`Missing source for ${file}`);
+    const mod = file.replace("../../convex/", "").replace(/\.ts$/, "");
+    for (const name of publicMutationNames(exports)) {
+      live.set(`${mod}.${name}`, mutationBody(exportedDeclaration(source, name, analysis.checker)));
+    }
+  }
+  // Compiler initialization and graph traversal belong to setup; assertions remain bounded and synchronous.
+  for (const entry of entries) {
+    if (entry.certification) {
+      const c = entry.certification;
+      const source = analysis.program.getSourceFile(path.join(REPO_ROOT, c.test));
+      citedRows.set(entry.door, !!source && !!c.row && rowCallsDoor(source, entry.door, c.row, analysis.checker));
+    }
+    if (entry.class === "NON_FINANCIAL") {
+      const body = live.get(entry.door);
+      if (!body) throw new Error(`Missing registered mutation ${entry.door}`);
+      nonFinancialEffects.set(entry.door, financialEvidence(body, analysis.checker));
+    }
+  }
+}, 60_000);
 const callsDoor = (testSrc: string, door: string): boolean => {
   const [mod, fn] = [door.slice(0, door.indexOf(".")), door.slice(door.indexOf(".") + 1)];
   return new RegExp(`api\\.${mod.replace(/\//g, "\\.")}\\.${fn}\\b`).test(testSrc);
 };
+const isFinancial = (src: string): boolean => hasFinancialEffect(mutationBody(parseSource(src)));
+const certificationCallsDoor = (src: string, door: string, row: string): boolean => rowCallsDoor(parseSource(src), door, row);
+
+function unclassifiedEvidenceProblems(entry: Entry): string[] {
+  const problems: string[] = [];
+  if ((entry.effect ?? "").length < 10) problems.push(`${entry.door}: no one-line money effect`);
+  if (entry.ruling !== "owner ruling needed") problems.push(`${entry.door}: ruling field`);
+  return problems;
+}
+
+function classEvidenceProblems(entry: Entry): string[] {
+  switch (entry.class) {
+    case "EXCLUDED_GUARDED":
+      return (entry.blocks?.length ?? 0) > 0 ? [] : [`${entry.door}: no block`];
+    case "ENABLED_CERTIFIED":
+      if (!entry.certification?.test || !entry.certification.row) return [`${entry.door}: no certification test and row`];
+      return [];
+    case "NON_FINANCIAL":
+      return (entry.reason ?? "").length >= 8 ? [] : [`${entry.door}: no reason`];
+    case "UNCLASSIFIED":
+      return unclassifiedEvidenceProblems(entry);
+  }
+}
 
 describe("SCRUM-795 per-door inventory", () => {
+  test("F1 negative control: acquisition posting cannot be NON_FINANCIAL", () => {
+    expect(isFinancial("export const resolve = mutation({ handler: async (ctx) => { await postVehicleAcquisitionIfOwned(ctx, {}); } });")).toBe(true);
+  });
+
+  test("F2 negative control: a public mutation built through a wrapper is counted", () => {
+    expect(live.has("socialInbox.setConversationVehicle")).toBe(true);
+  });
+
+  test("F3 negative control: a different row calling a door does not certify this row", () => {
+    const src = `test("unrelated", async () => {});
+      test("actual caller", async () => { await t.mutation(api.vehicles.create, {}); });`;
+    expect(certificationCallsDoor(src, "vehicles.create", "unrelated")).toBe(false);
+  });
+
   test("lists every public mutation exactly once, with nothing extra", () => {
     const names = entries.map((e) => e.door);
     expect(names.length, "duplicate door entries").toBe(new Set(names).size);
@@ -84,19 +135,7 @@ describe("SCRUM-795 per-door inventory", () => {
   });
 
   test("every entry carries what its class requires", () => {
-    const problems: string[] = [];
-    for (const e of entries) {
-      if (e.class === "EXCLUDED_GUARDED" && !(e.blocks?.length ?? 0)) problems.push(`${e.door}: no block`);
-      if (e.class === "ENABLED_CERTIFIED" && !(e.certification?.test && (e.certification.row || e.certification.oracleSection))) {
-        problems.push(`${e.door}: no certification test and row`);
-      }
-      if (e.class === "UNCLASSIFIED") {
-        if ((e.effect ?? "").length < 10) problems.push(`${e.door}: no one-line money effect`);
-        if (e.ruling !== "owner ruling needed") problems.push(`${e.door}: ruling field`);
-      }
-      if (e.class === "NON_FINANCIAL" && (e.reason ?? "").length < 8) problems.push(`${e.door}: no reason`);
-    }
-    expect(problems).toEqual([]);
+    expect(entries.flatMap(classEvidenceProblems)).toEqual([]);
   });
 
   test("every block cites a guard that exists and a test that names the door, the code and the guard file", () => {
@@ -126,9 +165,8 @@ describe("SCRUM-795 per-door inventory", () => {
         problems.push(`${e.door}: missing certification test`);
         continue;
       }
-      const src = read(c.test);
-      if (!callsDoor(src, e.door)) problems.push(`${e.door}: not called in ${c.test}`);
-      if (c.row && !src.includes(c.row)) problems.push(`${e.door}: row title not in ${c.test}`);
+      if (!citedRows.get(e.door)) problems.push(`${e.door}: not called by cited row ${c.row ?? "(missing)"} in ${c.test}`);
+      if (!c.row) problems.push(`${e.door}: no specific test row`);
       if (c.oracleSection && !oracle.includes(`## ${c.oracleSection}`)) problems.push(`${e.door}: oracle section ${c.oracleSection}`);
     }
     expect(problems).toEqual([]);
@@ -156,8 +194,8 @@ describe("SCRUM-795 per-door inventory", () => {
   });
 
   test("a door classed non-financial writes no ledger, cash or subledger table and calls no posting helper", () => {
-    const FINANCIAL = /postAccountingEvent|postOrEnqueue|enqueueAccountingEvent|post[A-Z]\w*Occurrence|"journalEntries"|"journalLines"|"collectionPayments"|"cashMovements"|"bankTransactions"|"deposits"|"payrollRuns"|"expenses"|"transactions"|"receivables"/;
-    const touching = entries.filter((x) => x.class === "NON_FINANCIAL" && FINANCIAL.test(live.get(x.door) ?? "")).map((x) => x.door);
+    const touching = [...nonFinancialEffects].filter(([, evidence]) => evidence !== undefined)
+      .map(([door, evidence]) => `${door}: ${evidence}`);
     expect(touching).toEqual([]);
   });
 

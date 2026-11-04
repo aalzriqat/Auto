@@ -7,14 +7,14 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Evidence boundary
 
-- **What this is.** A static map of the code at `origin/main` 440bd99b6 (2026-11-04), the merge base of this branch.
-  The inventory lists all 404 `export const … = mutation(` in `convex/**/*.ts`
+- **What this is.** A map of the code at baseline `7fb3c52112f35cb8ceaa8908690ecb5ebe52dde2`, with the inventory corrections below (2026-11-04).
+  The inventory lists all 405 registered public mutations exported by `convex/**/*.ts`
   ([`blocked-server-side-doors.inventory.json`](blocked-server-side-doors.inventory.json)). Each door has exactly one
   class, and `scripts/regression/pilotDoorInventory.test.ts` fails when a public mutation is missing, listed twice
   or no longer exists. Regenerate the list with that test's scan, not by hand.
 - **What the inventory test proves.** The list is complete, each cited guard symbol exists in its file, each cited
   test file calls the door through `api.<module>.<function>` and contains the refusal code, each certified door is
-  called in its certification test, and no door classed non-financial touches a ledger, cash or subledger table.
+  called within its cited test body or a helper that body reaches, and the NON_FINANCIAL entries pass the financial-effect scan described below.
   It does not prove that a guard runs before a read, or that a refusal test fails without its guard.
 - **What ran.** `convex/pilotBlockedDoors.scrum795.test.ts` (new), `scripts/regression/pilotDoorInventory.test.ts`
   (new), `scripts/regression/scenarioRecord.test.ts` and the suites under "Executed", serially
@@ -24,9 +24,9 @@ test that calls the public door and asserts a coded refusal with nothing written
 - **No policy is decided here.** A door classed UNCLASSIFIED is one that no ruling places. It stays as it is and
   needs an owner ruling, whatever it looks like.
 
-## Inventory: 404 public mutations
+## Inventory: 405 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 38 · UNCLASSIFIED 140 · NON_FINANCIAL 196.
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 38 · UNCLASSIFIED 167 · NON_FINANCIAL 170.
 
 | Class | Meaning | Evidence per door |
 | --- | --- | --- |
@@ -165,15 +165,15 @@ So the classes are:
 ## Doors that stay enabled
 
 The doors the pilot keeps on are the ENABLED_CERTIFIED entries of the inventory, each with the certification
-test that calls it. This file lists no door by wildcard. Two entries carry a limit that is easy to miss:
-`collections.registerCheque` and `collections.clearCheque` are certified only as the financier cheque receipt. A
-customer cheque is not a certification row, so the plain customer cheque path is not claimed as certified. The
-direct commission payout door is blocked (section 4); commission payout runs through payroll, and the payroll
-doors are UNCLASSIFIED.
+test row that reaches it. This file lists no door by wildcard. `collections.registerCheque` and
+`collections.clearCheque` are reached by `addActiveCustomerCredit` in U-REFUND. That helper asserts the receipt
+amount and status to prepare customer credit for the unwind payout-refusal test. This citation does not certify
+the general cheque lifecycle or a financier cheque receipt. The direct commission payout door is blocked
+(section 4); commission payout runs through payroll, and the payroll doors are UNCLASSIFIED.
 
 ## Unclassified money-moving doors (owner ruling needed, nothing guarded here)
 
-The inventory lists 140 UNCLASSIFIED doors, each with a one-line effect on money. No switch and no ruling places
+The inventory lists 167 UNCLASSIFIED doors, each with a one-line effect on money. No switch and no ruling places
 them. They are listed, not guarded, because guarding one would switch off a function and, per SCRUM-810, would
 need a matching UI capability flag. These are the ones that look like a deferred correction or refund, or that a
 review named:
@@ -204,10 +204,11 @@ The five retired `claims` writers (`CLAIMS_RETIRED`, `claimsRetirement.test.ts`)
 door uses plain retired-text `ConvexError` with no `AppErrorCode`; the inventory records that in the `code` field
 instead of inventing a code.
 
-Limit of the unwind certification citations: for `startDealUnwind`, `recordDealUnwindForwardReturn` and
-`finishDealUnwind` the inventory names the first test that calls the door in `scrum486Certification.test.ts`,
-because those calls sit in a shared helper. The rows that exercise them are U-RET, U-ABANDON and U-SOURCED in the
-oracle; the inventory test confirms the door is called in that file, not which row asserts what.
+The three unwind doors cite the U-RET `test.each` title that exercises start, forward return and finish.
+The inventory check parses that specific test body and follows helper bindings with the TypeScript compiler.
+A call in another test, an unused closure, a skipped row or a duplicate title cannot supply that citation.
+This proves static reachability inside the cited row, not that every branch ran or that the row fully certifies
+all behavior of a door.
 
 ## Executed in this change
 
@@ -241,3 +242,92 @@ The payout records cite SCRUM-795#c22479, SCRUM-795#c23829 and SCRUM-760#descrip
 SCRUM-795#c23829 and SCRUM-760#description. Caveat: the stored digests of c22479 and c23829 were computed from the
 Jira MCP markdown rendering of the comment with escaped brackets restored, so a digest taken from the raw comment
 body could differ. The earlier c22485 (deposit OTHER) binding was wrong for these doors and is removed.
+
+## Review-seat corrections at baseline 7fb3c521 (2026-11-04)
+
+F1, F2 and F3 were reproduced before the fixes. With HEAD still at the full baseline SHA above,
+`pnpm exec vitest run scripts/regression/pilotDoorInventory.test.ts --maxWorkers=1 -t 'negative control'`
+failed all three new controls: acquisition posting returned non-financial, the wrapped social mutation was
+absent, and the unrelated test row was accepted. Seven unselected tests were skipped by that focused run.
+
+The census imports the function modules and reads Convex's `isMutation` and `isPublic`
+markers. It excludes generated code, test files, declaration files and the two platform configuration files
+(`auth.config.ts` and `convex.config.ts`). An import error or unresolved handler fails the scan. There is no
+source-spelling fallback. `socialInbox.setConversationVehicle` is now NON_FINANCIAL: it links social events and
+the lead to a vehicle, then maintains conversation aggregates.
+
+The financial-effect scan follows real helper declarations and imported/local aliases with the TypeScript
+checker. It rejects any `post*` call, ledger/subledger writes, and numeric monetary-field writes, including
+fields supplied by typed patches. Opaque any/unknown payloads and open numeric/unknown index signatures also
+refuse NON_FINANCIAL evidence. It ignores comments and quoted examples. Timestamp and payment-type labels
+are not amounts. This is a conservative static check: broad patch types and a chat helper named `post*` can
+refuse NON_FINANCIAL evidence without proving that money moves. It is not runtime proof of the absence of
+financial effects.
+
+All 196 original NON_FINANCIAL entries were scanned. These 27 move to UNCLASSIFIED. No guard or switch changed.
+
+| Door | Reason |
+| --- | --- |
+| `vehicleEdits.resolve` | Calls `postVehicleAcquisitionIfOwned` on approved creation and acquisition-affecting updates, posting VEHICLE_ACQUIRED against cash, bank or supplier payable. No certification row covers it. |
+| `approvals.requestProfitApproval` | Writes requested/minimum profit and sale/list price approval amounts. |
+| `finance.createCompany`, `finance.updateCompany` | Write financier profit, insurance and fee pricing rules. |
+| `finance.saveValuation` | Writes a vehicle valuation amount used in financier pricing. |
+| `marketplaceListings.createListing`, `marketplaceListings.updateListing` | Write the advertised vehicle price. |
+| `marketplaceListings.adminSetListingStatus` | Its patch is typed to permit price fields. The scan conservatively refuses NON_FINANCIAL evidence; this does not prove the status change edits a price. |
+| `marketplaceResponses.respond` | Writes a vehicle offer price and financing offer. |
+| `marketplaceTradeIns.makeOffer` | Writes a trade-in offer amount. |
+| `smartReply.setSmartReplyConfig` | Writes the default down-payment percentage for financing estimates. |
+| `websites.searchDomain` | Writes a registrar domain-price quote to its search log. |
+| `liveChat.acceptOffer`, `liveChat.claimThread` | Call `postAgentJoinedNotice`. The broad posting-name check refuses NON_FINANCIAL evidence; these notices are not claimed to post journals. |
+
+The remaining 13 have open-ended `Record<string, unknown>` or `Record<string, any>` write payloads.
+The check cannot prove which fields they write from those types. These are conservative evidence refusals,
+not claims that each operation moves money:
+
+| Door | Opaque patch contents |
+| --- | --- |
+| `customers.update` | customer profile and financial data. |
+| `feedback.adminSetStatus` | feedback status. |
+| `feedback.setStatus` | feedback status. |
+| `guarantors.update` | guarantor details. |
+| `leads.update` | lead details. |
+| `orgCustomFields.update` | custom-field definitions. |
+| `orgCustomerStatuses.update` | customer-status definitions. |
+| `orgLeadSources.update` | lead-source definitions. |
+| `orgPipelineStages.update` | pipeline-stage definitions. |
+| `orgValuationCompanies.update` | valuation-company definitions. |
+| `roles.update` | role details and permissions. |
+| `users.updateMyNotificationProfile` | notification profile details. |
+| `websites.saveDraft` | website draft settings. |
+
+No certification row in this inventory covers these doors. The two vehicle-edit request doors now say that
+applying their pending request requires `vehicleEdits.resolve`; they no longer claim delegation to `vehicles.update`.
+
+The row-specific scan corrected 13 citations, retaining 38 ENABLED_CERTIFIED entries:
+
+- `startDealUnwind`, `recordDealUnwindForwardReturn`, `finishDealUnwind`, `vehicles.create`, `vehicles.update`,
+  `sales.setCommissionAmount` and `bankAccounts.setReconciliationTarget` now cite U-RET, including its helpers.
+- `applications.setSupplierSettlementRoute` cites the SOURCED configured-financier opening row.
+- `sales.create` cites the owned CASH full-deposit completion row.
+- `collections.registerCheque` and `collections.clearCheque` cite U-REFUND with the fixture-only scope above.
+- `sourcingPayables.markPaid` now names its payable-settlement test in addition to the oracle section.
+- `supplierCostRecoveries.recordReceipt` now names its allowed-receipt test in addition to the oracle section.
+
+Material design sources: [Convex registered mutations](https://docs.convex.dev/api/modules/server#registeredmutation),
+[Convex function visibility](https://docs.convex.dev/functions/internal-functions), and the
+[TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API).
+
+### Validation of the review-seat corrections
+
+- `pnpm exec vitest run scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts scripts/regression/scenarioRecord.test.ts convex/pilotBlockedDoors.scrum795.test.ts convex/scrum486Certification.test.ts convex/accountingVehicleInventory.test.ts convex/supplierSettlementContainment.test.ts --maxWorkers=1`: **340 passed**, seven files, no skips.
+- After simplifying the class-evidence validation, `pnpm exec vitest run scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts --maxWorkers=1`: **29 passed**, two files, no skips.
+- `pnpm exec vitest run convex/accountingVehicleInventory.test.ts --maxWorkers=1 -t 'an approved creation request'`: **2 passed**, 167 unselected tests skipped. These are the CASH/BANK and ON_ACCOUNT acquisition-posting reproductions, not the full-suite result above.
+- `pnpm exec eslint scripts/regression/pilotDoorAnalysis.ts scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts --rule 'complexity: [error, 14]'`: **passed**. This extra local check caps cyclomatic complexity; it is not a SonarCloud verdict.
+- `pnpm typecheck`: **passed**. Root exclusions are `node_modules`, `apps`, `packages`, `convex`, `dealer-worker` and `test-utils`; imported dependencies may still be followed.
+- `pnpm typecheck:convex`: **passed**. Its roots include `convex/**/*` and `test-utils/**/*`, exclude `convex/_generated`, and do not replace the frontend/mobile/shared/worker checks.
+
+Development runs also exposed the two non-function platform config modules, an unsupported runtime-marker
+assumption, and opaque patches. Those failures were corrected; none was skipped or accepted as passing.
+F4 and F5 remain outside this round. No fresh CI, SonarCloud, independent review-seat, browser or real-backend
+result is claimed for these local corrections. No server guards, shipped switch values, release waivers or
+review-evidence files changed.

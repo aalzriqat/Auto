@@ -379,7 +379,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned configured financier × no deposit × cancellation before receipt: finance AR and sale reverse"
+   "row": "SOURCED configured financier × no deposit: company AR funds supplier liability and agent margin"
   }
  },
  {
@@ -397,8 +397,9 @@
  },
  {
   "door": "approvals.requestProfitApproval",
-  "class": "NON_FINANCIAL",
-  "reason": "pricing-control approval rows (minimum price uplift, c22479 Q4); posts nothing"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes requested profit, minimum profit and sale/list price approval amounts; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "approvals.respondToApproval",
@@ -422,7 +423,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   }
  },
  {
@@ -647,9 +648,9 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "U-ABANDON: abandoning leaves the paid deal exactly as it was, releases the lock and a later unwind completes"
+   "row": "U-REFUND: unwind REFUND of positive customer credit is refused CUSTOMER_CREDIT_PAYOUT_DISABLED with nothing changed"
   },
-  "note": "certified only as the financier cheque receipt; a customer cheque is not a row"
+  "note": "Called by addActiveCustomerCredit in the U-REFUND fixture, which asserts the receipt amount/status before testing the unwind payout refusal. This citation does not certify the general cheque lifecycle or a financier cheque receipt."
  },
  {
   "door": "collections.createInstallmentPlan",
@@ -696,9 +697,9 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "U-ABANDON: abandoning leaves the paid deal exactly as it was, releases the lock and a later unwind completes"
+   "row": "U-REFUND: unwind REFUND of positive customer credit is refused CUSTOMER_CREDIT_PAYOUT_DISABLED with nothing changed"
   },
-  "note": "certified only as the financier cheque receipt; a customer cheque is not a row"
+  "note": "Called by addActiveCustomerCredit in the U-REFUND fixture, which asserts the receipt amount/status before testing the unwind payout refusal. This citation does not certify the general cheque lifecycle or a financier cheque receipt."
  },
  {
   "door": "collections.registerSaleInvoiceCheque",
@@ -817,8 +818,9 @@
  },
  {
   "door": "customers.update",
-  "class": "NON_FINANCIAL",
-  "reason": "customer directory rows; no ledger or balance field"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes customer profile and financial data through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "dealCommissions.addLine",
@@ -849,7 +851,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   },
   "blocks": [
    {
@@ -866,7 +868,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   },
   "note": "enabled financier leg: books the finance company's remittance back"
  },
@@ -875,7 +877,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   },
   "note": "enabled: oracle:256 deal unwind of a financed deal"
  },
@@ -1082,13 +1084,15 @@
  },
  {
   "door": "feedback.adminSetStatus",
-  "class": "NON_FINANCIAL",
-  "reason": "product feedback"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes feedback status through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "feedback.setStatus",
-  "class": "NON_FINANCIAL",
-  "reason": "product feedback"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes feedback status through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "feedback.submit",
@@ -1097,8 +1101,9 @@
  },
  {
   "door": "finance.createCompany",
-  "class": "NON_FINANCIAL",
-  "reason": "finance-company directory and vehicle valuations; no ledger posting"
+  "class": "UNCLASSIFIED",
+  "effect": "Creates financier profit, insurance and fee pricing rules used in financial calculations; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "finance.deleteCompany",
@@ -1107,13 +1112,15 @@
  },
  {
   "door": "finance.saveValuation",
-  "class": "NON_FINANCIAL",
-  "reason": "finance-company directory and vehicle valuations; no ledger posting"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a vehicle valuation amount used in financier pricing; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "finance.updateCompany",
-  "class": "NON_FINANCIAL",
-  "reason": "finance-company directory and vehicle valuations; no ledger posting"
+  "class": "UNCLASSIFIED",
+  "effect": "Updates financier profit, insurance and fee pricing rules used in financial calculations; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "financeCompanyForward.recordFinanceCompanyForward",
@@ -1434,8 +1441,9 @@
  },
  {
   "door": "guarantors.update",
-  "class": "NON_FINANCIAL",
-  "reason": "guarantor details on an application"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes guarantor details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "importMappings.save",
@@ -1459,18 +1467,21 @@
  },
  {
   "door": "leads.update",
-  "class": "NON_FINANCIAL",
-  "reason": "CRM lead rows"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes lead details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "liveChat.acceptOffer",
-  "class": "NON_FINANCIAL",
-  "reason": "support chat"
+  "class": "UNCLASSIFIED",
+  "effect": "Calls postAgentJoinedNotice to post a chat notice. The conservative post* call check refuses NON_FINANCIAL evidence; this is not a claim that the notice posts a journal.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "liveChat.claimThread",
-  "class": "NON_FINANCIAL",
-  "reason": "support chat"
+  "class": "UNCLASSIFIED",
+  "effect": "Calls postAgentJoinedNotice to post a chat notice. The conservative post* call check refuses NON_FINANCIAL evidence; this is not a claim that the notice posts a journal.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "liveChat.closeThread",
@@ -1614,8 +1625,9 @@
  },
  {
   "door": "marketplaceListings.adminSetListingStatus",
-  "class": "NON_FINANCIAL",
-  "reason": "marketplace listing content"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a marketplace listing patch typed to permit price fields. The conservative money-field check cannot establish NON_FINANCIAL from that patch type; no certification row covers it.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "marketplaceListings.confirmListingImageUpload",
@@ -1624,8 +1636,9 @@
  },
  {
   "door": "marketplaceListings.createListing",
-  "class": "NON_FINANCIAL",
-  "reason": "marketplace listing content"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the advertised vehicle price and currency; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "marketplaceListings.generateListingImageUploadUrl",
@@ -1644,13 +1657,15 @@
  },
  {
   "door": "marketplaceListings.updateListing",
-  "class": "NON_FINANCIAL",
-  "reason": "marketplace listing content"
+  "class": "UNCLASSIFIED",
+  "effect": "Updates the advertised vehicle price; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "marketplaceResponses.respond",
-  "class": "NON_FINANCIAL",
-  "reason": "marketplace replies"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a vehicle offer price and financing offer; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "marketplaceTradeIns.acceptOffer",
@@ -1674,8 +1689,9 @@
  },
  {
   "door": "marketplaceTradeIns.makeOffer",
-  "class": "NON_FINANCIAL",
-  "reason": "marketplace trade-in offers; no ledger posting"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the trade-in offer amount; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "memberships.acceptInvitation",
@@ -1799,8 +1815,9 @@
  },
  {
   "door": "orgCustomFields.update",
-  "class": "NON_FINANCIAL",
-  "reason": "custom field configuration"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes custom-field definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "orgCustomerStatuses.create",
@@ -1824,8 +1841,9 @@
  },
  {
   "door": "orgCustomerStatuses.update",
-  "class": "NON_FINANCIAL",
-  "reason": "customer status configuration"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes customer-status definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "orgLeadSources.create",
@@ -1849,8 +1867,9 @@
  },
  {
   "door": "orgLeadSources.update",
-  "class": "NON_FINANCIAL",
-  "reason": "lead source configuration"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes lead-source definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "orgPipelineStages.reorder",
@@ -1864,8 +1883,9 @@
  },
  {
   "door": "orgPipelineStages.update",
-  "class": "NON_FINANCIAL",
-  "reason": "pipeline configuration"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes pipeline-stage definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "orgSettings.generateLogoUploadUrl",
@@ -1906,8 +1926,9 @@
  },
  {
   "door": "orgValuationCompanies.update",
-  "class": "NON_FINANCIAL",
-  "reason": "valuation company directory"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes valuation-company definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "organizations.create",
@@ -2157,8 +2178,9 @@
  },
  {
   "door": "roles.update",
-  "class": "NON_FINANCIAL",
-  "reason": "role and permission configuration (authority, not money)"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes role details and permissions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "sales.completeDraft",
@@ -2193,7 +2215,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+   "row": "owned CASH × full price held as deposit: sale recognizes literal receivable, revenue, COGS and inventory, and the deposit settles the receivable"
   },
   "blocks": [
    {
@@ -2241,7 +2263,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   }
  },
  {
@@ -2274,8 +2296,14 @@
  },
  {
   "door": "smartReply.setSmartReplyConfig",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the default down-payment percentage used in financing estimates; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "socialInbox.setConversationVehicle",
   "class": "NON_FINANCIAL",
-  "reason": "auto-reply configuration"
+  "reason": "Links a vehicle to social conversation events and an associated lead, then maintains conversation aggregates; no money fields or posting helpers."
  },
  {
   "door": "socialIntegrations.createConnectUrl",
@@ -2312,7 +2340,8 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/accountingVehicleInventory.test.ts",
-   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE"
+   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE",
+   "row": "settling the payable via sourcingPayables.markPaid clears AP against Bank and reclassifies VAT out of Vehicle Inventory, not COGS"
   },
   "blocks": [
    {
@@ -2357,7 +2386,8 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/supplierSettlementContainment.test.ts",
-   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE"
+   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE",
+   "row": "recording a receipt is unaffected by the containment"
   },
   "note": "owner ruling SCRUM-869#c23881: in the pilot and certified"
  },
@@ -2518,23 +2548,25 @@
  },
  {
   "door": "users.updateMyNotificationProfile",
-  "class": "NON_FINANCIAL",
-  "reason": "user notification profile"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes notification profile details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "vehicleEdits.requestCreate",
   "class": "NON_FINANCIAL",
-  "reason": "vehicle edit requests; the applied change goes through vehicles.update"
+  "reason": "Stores a pending vehicle-edit request; applying it requires the separate vehicleEdits.resolve door."
  },
  {
   "door": "vehicleEdits.requestUpdate",
   "class": "NON_FINANCIAL",
-  "reason": "vehicle edit requests; the applied change goes through vehicles.update"
+  "reason": "Stores a pending vehicle-edit request; applying it requires the separate vehicleEdits.resolve door."
  },
  {
   "door": "vehicleEdits.resolve",
-  "class": "NON_FINANCIAL",
-  "reason": "vehicle edit requests; the applied change goes through vehicles.update"
+  "class": "UNCLASSIFIED",
+  "effect": "Approving CREATE or an acquisition-affecting UPDATE calls postVehicleAcquisitionIfOwned, posting VEHICLE_ACQUIRED against cash, bank or supplier payable. It does not delegate to vehicles.update; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "vehicleRequests.create",
@@ -2568,7 +2600,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   }
  },
  {
@@ -2622,7 +2654,7 @@
   "class": "ENABLED_CERTIFIED",
   "certification": {
    "test": "convex/scrum486Certification.test.ts",
-   "row": "owned CASH × foreign quote/deposit IDs: authorized second tenant cannot move either tenant's money"
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
   },
   "blocks": [
    {
@@ -2675,13 +2707,15 @@
  },
  {
   "door": "websites.saveDraft",
-  "class": "NON_FINANCIAL",
-  "reason": "website builder"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes website draft settings through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "websites.searchDomain",
-  "class": "NON_FINANCIAL",
-  "reason": "website builder"
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the registrar domain-price quote to domainSearchLogs; no certification row covers this door.",
+  "ruling": "owner ruling needed"
  },
  {
   "door": "websites.startSetup",
