@@ -234,5 +234,10 @@ Run on `claude/scrum795-server-blocks-evidence` (merge base `origin/main` 440bd9
 - `pnpm test:regression-library`: 62 of 62 pass with the seven new records loaded.
 
 Nothing here ran against a real backend, a browser or production. Each new refusal test is bound to a SCRUM-761 record under
-`regression/scenarios/money/shipped-*.scenario.json` (matrix label `SCRUM-760-DECISION-B-BLOCKED-DOORS`, a
-descriptive label, not a joined SCRUM-486 row id).
+`regression/scenarios/money/shipped-*.scenario.json`. The records' `matrixRow` is
+`SCRUM-760-DECISION-B-BLOCKED-DOORS`, the section of the SCRUM-486 oracle that holds the seven expected-refusal
+rows; `pilotDoorInventory.test.ts` checks that each row's test title and refusal code exist in the test file.
+The payout records cite SCRUM-795#c22479, SCRUM-795#c23829 and SCRUM-760#description. The receipt records cite
+SCRUM-795#c23829 and SCRUM-760#description. Caveat: the stored digests of c22479 and c23829 were computed from the
+Jira MCP markdown rendering of the comment with escaped brackets restored, so a digest taken from the raw comment
+body could differ. The earlier c22485 (deposit OTHER) binding was wrong for these doors and is removed.

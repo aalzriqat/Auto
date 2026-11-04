@@ -34,12 +34,12 @@
   ],
   "rulings": [
     {
-      "id": "SCRUM-760#description",
-      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+      "id": "SCRUM-795#c23829",
+      "digest": "8eb91bebed24a69f9700fd5987f218c9ffde4662410d8b3dfa9f25fb93631d28"
     },
     {
-      "id": "SCRUM-795#c22485",
-      "digest": "bd755080a878c8ff3d11c74259c7d36a7395cf1d926274131ca7927f65135378"
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
     }
   ],
   "impl": {
