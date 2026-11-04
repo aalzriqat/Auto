@@ -79,7 +79,8 @@ beforeAll(async () => {
       nonFinancialEffects.set(entry.door, financialEvidence(body, analysis.checker));
     }
   }
-}, 60_000);
+  // Coverage instruments every convex module this imports; 60 s timed out in CI coverage batch 42.
+}, 240_000);
 const callsDoor = (testSrc: string, door: string): boolean => {
   const [mod, fn] = [door.slice(0, door.indexOf(".")), door.slice(door.indexOf(".") + 1)];
   return new RegExp(`api\\.${mod.replace(/\//g, "\\.")}\\.${fn}\\b`).test(testSrc);
