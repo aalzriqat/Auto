@@ -98,5 +98,21 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED CASH pays by deposit and opens the completed deal with agency-only books"
   },
-  "fingerprint": "a21ccaa11503391869dcded0719bdc6133f047763a55b1a3956699174862a1d6"
+  "fingerprint": "a21ccaa11503391869dcded0719bdc6133f047763a55b1a3956699174862a1d6",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "components/vehicles/**",
+    "components/customers/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "components/payments/**"
+  ]
 }

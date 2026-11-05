@@ -1,10 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { callJev } from "../../scripts/intelligence/jevImpact.mjs";
 import { resolveOrgId } from "../utils";
 import { pilotExplorerSeed, pilotExplorerStarts, pilotExplorerTitle, withLocalePage, type PilotExplorerStart } from "../fixtures/pilotHunt";
 import { isCommitActionName } from "./jevExplorerActions";
-import { namesProduction, servesOtherThan } from "./productionGuard";
+import { attest, convexDeploymentOf, servedDeployments } from "./formExplorer/attestedPreview";
 
 /**
  * A random explorer (SCRUM-595): walk the dashboard by clicking what is on
@@ -47,74 +46,6 @@ const BROKEN_TEXT =/\bNaN\b|\bundefined\b|\[object Object\]/;
 const ERROR_BOUNDARY = /Something went wrong|Application error|حدث خطأ ما/i;
 
 type Finding = { step: number; url: string; check: string; detail: string };
-
-/**
- * The Convex URL proven to be the seeded disposable preview, or undefined.
- * "Not production" is not enough: a developer's own deployment, or anything
- * else the URL happens to name, would pass that (Codex AF-430-03). The proof is
- * always asked of the backend itself, in CI as well as locally:
- * assertE2EBootstrap is run against the preview named by CONVEX_PREVIEW_NAME,
- * through the bootstrap's own argv checks. An environment variable saying "this
- * was attested" is the caller's claim, not evidence, so none is trusted.
- */
-function attestedPreviewUrl(): string | undefined {
-  if (!process.env.CONVEX_PREVIEW_NAME) return undefined;
-  const res = spawnSync(process.execPath, ["--input-type=module", "-e", LOCAL_ATTESTATION], {
-    env: process.env,
-    encoding: "utf8",
-    timeout: 180_000,
-  });
-  if (res.status === 0) return process.env.NEXT_PUBLIC_CONVEX_URL;
-  const lines = (res.stderr || res.error?.message || "").split("\n").filter((l) => l.trim());
-  const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
-  console.warn(`Preview attestation failed: ${reason}`);
-  // A skip is green; in CI say so loudly, or the explorer could stop running
-  // every night without anyone noticing.
-  if (process.env.GITHUB_ACTIONS === "true") {
-    console.log(`::warning title=Jev explorer skipped::Preview attestation failed (${reason}); the explorer did not run.`);
-  }
-  return undefined;
-}
-
-/**
- * Runs the bootstrap's own assertExistingE2EPreview, with its own argv checks
- * (runConvex). It runs in a child because the bootstrap is an ES module that
- * Playwright's CommonJS transform cannot load. Node refuses to spawn
- * `pnpm.cmd` without a shell on Windows, and the bootstrap must not use one
- * (its JSON argv would be re-split), so locally the same validated
- * `exec convex run …` argv goes straight to the Convex CLI.
- */
-const LOCAL_ATTESTATION = `
-import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-const m = await import(pathToFileURL(resolve("scripts/e2ePreviewBootstrap.mjs")).href);
-const spawn = (command, args, options) => {
-  if (process.platform !== "win32") return spawnSync(command, args, options);
-  if (args[0] !== "exec" || args[1] !== "convex" || args[2] !== "run") {
-    throw new Error("Refusing to run anything but convex run for the preview attestation.");
-  }
-  return spawnSync(process.execPath, [resolve("node_modules/convex/bin/main.js"), ...args.slice(2)], options);
-};
-await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConvex(args, label, spawn) });
-`;
-
-/**
- * The Convex deployment a URL's host names, or undefined. The whole host must
- * be `<name>.convex.cloud`: `<preview>.convex.cloud.example.com` names nothing.
- */
-function convexDeploymentOf(url: string | undefined): string | undefined {
-  try {
-    return /^([a-z0-9-]+)\.convex\.cloud$/.exec(new URL(url ?? "").hostname)?.[1];
-  } catch {
-    return undefined;
-  }
-}
-
-function sameUrl(a: string | undefined, b: string | undefined): boolean {
-  if (!a || !b) return false;
-  return a.replace(/\/+$/, "") === b.replace(/\/+$/, "");
-}
 
 function rng(seed: number) {
   let s = seed >>> 0 || 1;
@@ -257,6 +188,34 @@ async function jevOpinion(screen: string): Promise<number | undefined> {
   }
 }
 
+async function observeScreen(page: Page, step: number, findings: Finding[]): Promise<string> {
+  const screen = await page.locator("body").innerText().catch(() => "");
+  if (ERROR_BOUNDARY.test(screen)) findings.push({ step, url: page.url(), check: "error-boundary", detail: "" });
+  const broken = screen.match(BROKEN_TEXT);
+  if (broken) findings.push({ step, url: page.url(), check: "raw-value", detail: broken[0] });
+  const steps = screen.match(/Step (\d+) of (\d+)/);
+  if (steps && Number(steps[1]) > Number(steps[2])) {
+    findings.push({ step, url: page.url(), check: "step-count", detail: steps[0] });
+  }
+  const opinion = await jevOpinion(screen);
+  if (opinion !== undefined && opinion >= 0.65) {
+    findings.push({ step, url: page.url(), check: "jev-opinion", detail: `p=${opinion.toFixed(2)}` });
+    await page.screenshot({ path: test.info().outputPath(`jev-${step}.png`), fullPage: true });
+  }
+  return screen;
+}
+
+async function dismissExplorerDialog(page: Page, step: number, findings: Finding[]): Promise<void> {
+  // Any dialog or menu the click opened is looked at, then dismissed — never submitted.
+  await page.waitForTimeout(600);
+  if (await page.getByRole("dialog").first().isVisible().catch(() => false)) {
+    const dialogText = await page.getByRole("dialog").first().innerText().catch(() => "");
+    const bad = dialogText.match(BROKEN_TEXT);
+    if (bad) findings.push({ step, url: page.url(), check: "raw-value-dialog", detail: bad[0] });
+  }
+  await page.keyboard.press("Escape").catch(() => undefined);
+}
+
 test.describe("Jev explorer (advisory)", () => {
   test.describe.configure({ timeout: 900_000 });
 
@@ -279,25 +238,6 @@ test.describe("Jev explorer (advisory)", () => {
 
   async function explore(page: Page, baseURL: string | undefined, start: Walk) {
     test.info().annotations.push({ type: "seed", description: `${start.seed} (${STEPS} steps; ${start.label}; base seed ${SEED})` });
-    const host = new URL(baseURL ?? "http://localhost:3000").hostname;
-    expect(["localhost", "127.0.0.1"], "Explorer runs against a local app only.").toContain(host);
-    expect(
-      namesProduction(process.env.NEXT_PUBLIC_CONVEX_URL),
-      "Explorer never runs against the production backend.",
-    ).toBe(false);
-
-    // The guard above reads THIS process's environment, which need not be what
-    // the served app was built against (PLAYWRIGHT_SKIP_WEBSERVER, a stale
-    // build). Before any screen text can reach Jev, prove the backend the
-    // browser actually talks to: its Convex websocket must belong to the
-    // deployment named here, and that deployment must not be production
-    // (Codex AF-430-03). Unverifiable means no run.
-    const expectedDeployment = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
-    expect(expectedDeployment, "Explorer needs NEXT_PUBLIC_CONVEX_URL naming its preview deployment.").toBeTruthy();
-    expect(
-      !sameUrl(attestedPreviewUrl(), process.env.NEXT_PUBLIC_CONVEX_URL),
-      "NEXT_PUBLIC_CONVEX_URL is not attested as the seeded disposable preview; not exploring.",
-    ).toBe(false);
     const sockets: string[] = [];
     page.on("websocket", (ws) => sockets.push(ws.url()));
     await page.addInitScript((keys) => {
@@ -309,22 +249,9 @@ test.describe("Jev explorer (advisory)", () => {
         }
       }
     }, TOUR_KEYS);
-    await page.goto("/");
-    await expect
-      .poll(() => sockets.some((u) => u.includes(".convex.cloud")), {
-        timeout: 30_000,
-        message: "the app must open its Convex connection",
-      })
-      .toBe(true)
-      .catch(() => undefined);
-    // Every socket that looks like Convex must name exactly the expected
-    // deployment; one whose host only contains ".convex.cloud" names none.
-    const served = sockets.filter((u) => u.includes(".convex.cloud")).map((u) => convexDeploymentOf(u) ?? u);
-    expect(served.length, "Could not observe which backend the served app uses; not exploring.").toBeGreaterThan(0);
-    expect(
-      servesOtherThan(served, expectedDeployment!),
-      `The served app talks to ${[...new Set(served)].join(", ")}, not the preview ${expectedDeployment}.`,
-    ).toBe(false);
+    const attestation = await attest(page, baseURL, sockets);
+    expect(attestation.refusal, attestation.refusal ?? "").toBeUndefined();
+    const expectedDeployment = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL);
 
     // A button can navigate as well as a link can; refusing the page itself
     // (document and RSC payload) stops either from mounting a write-on-view screen.
@@ -336,6 +263,7 @@ test.describe("Jev explorer (advisory)", () => {
     const random = rng(start.seed);
     const findings: Finding[] = [];
     const orgId = await resolveOrgId(page);
+    expect(orgId, "the app must open the attested QA organization").toBe(attestation.orgId);
     await page.goto(`/${orgId}/${start.route}`);
     if (start.locale) {
       await expect(page.locator("html")).toHaveAttribute("lang", start.locale);
@@ -349,10 +277,7 @@ test.describe("Jev explorer (advisory)", () => {
       if (!page.url().includes(`/${orgId}/`)) await page.goto(`/${orgId}/${start.route}`);
       await page.waitForTimeout(1_200);
       // Also every frame of the app talks only to the verified backend.
-      const stray = sockets
-        .filter((u) => u.includes(".convex.cloud"))
-        .map((u) => convexDeploymentOf(u) ?? u)
-        .find((d) => d !== expectedDeployment);
+      const stray = servedDeployments(sockets).find((d) => d !== expectedDeployment);
       if (stray) throw new Error(`The app opened a connection to ${stray}; stopping before Jev sees it.`);
       if (WRITES_ON_VIEW.test(new URL(page.url()).pathname)) {
         await page.goto(`/${orgId}/${start.route}`);
@@ -360,19 +285,7 @@ test.describe("Jev explorer (advisory)", () => {
       }
 
       visited.add(new URL(page.url()).pathname.replace(`/${orgId}`, ""));
-      const screen = await page.locator("body").innerText().catch(() => "");
-      if (ERROR_BOUNDARY.test(screen)) findings.push({ step, url: page.url(), check: "error-boundary", detail: "" });
-      const broken = screen.match(BROKEN_TEXT);
-      if (broken) findings.push({ step, url: page.url(), check: "raw-value", detail: broken[0] });
-      const steps = screen.match(/Step (\d+) of (\d+)/);
-      if (steps && Number(steps[1]) > Number(steps[2])) {
-        findings.push({ step, url: page.url(), check: "step-count", detail: steps[0] });
-      }
-      const opinion = await jevOpinion(screen);
-      if (opinion !== undefined && opinion >= 0.65) {
-        findings.push({ step, url: page.url(), check: "jev-opinion", detail: `p=${opinion.toFixed(2)}` });
-        await page.screenshot({ path: test.info().outputPath(`jev-${step}.png`), fullPage: true });
-      }
+      const screen = await observeScreen(page, step, findings);
 
       const options = await candidates(page);
       if (options.length === 0) {
@@ -382,14 +295,7 @@ test.describe("Jev explorer (advisory)", () => {
       const picked = (await jevPick(options.map((o) => o.name), screen)) ?? Math.floor(random() * options.length);
       const target = options[Math.min(picked, options.length - 1)];
       await target.el.click({ timeout: 5_000 }).catch(() => undefined);
-      // Any dialog or menu the click opened is looked at, then dismissed — never submitted.
-      await page.waitForTimeout(600);
-      if (await page.getByRole("dialog").first().isVisible().catch(() => false)) {
-        const dialogText = await page.getByRole("dialog").first().innerText().catch(() => "");
-        const bad = dialogText.match(BROKEN_TEXT);
-        if (bad) findings.push({ step, url: page.url(), check: "raw-value-dialog", detail: bad[0] });
-      }
-      await page.keyboard.press("Escape").catch(() => undefined);
+      await dismissExplorerDialog(page, step, findings);
     }
 
     for (const f of findings) {

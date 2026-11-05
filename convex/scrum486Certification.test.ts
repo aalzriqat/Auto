@@ -23,6 +23,7 @@ import schema from "./schema";
 // Setup only: the pilot-dark receipt-application doors have no public caller (see addActiveCustomerCredit).
 import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
 import { activatePendingInvoiceReceipt } from "./accounting/invoiceReceiptActivation";
+import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 
 // SCRUM-869#c23881: the supplier-payable rewrite is refused in the shipped pilot; these historical cases
 // keep exercising the deferred mechanics. The shipped-state refusal is convex/supplierObligationCorrections.test.ts.
@@ -70,6 +71,23 @@ vi.mock("./utils/depositCancellationPending", async (importOriginal) => {
 });
 
 const MODULES = import.meta.glob("./**/*.ts");
+
+test("SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions", async () => {
+  const s = await seedDealNetProfit(MODULES);
+  const result = await s.read();
+  expect(result).toMatchObject({ available: true, amountMinor: 1_009_200, postable: false });
+  if (!result?.available) throw new Error("Expected management net");
+  expect(result.lines).toEqual([
+    { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_100_000 },
+    { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 0 },
+    { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_900_000 },
+    { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 315_000 },
+    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 451_300 },
+    { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 314_500 },
+    { key: "COMMISSIONS", sign: -1, amountMinor: 110_000 },
+  ]);
+});
+
 const OWNER_PERMS = [
   "create:sales", "view:sales", "edit:sales",
   "view:vehicles", "create:vehicles", "edit:vehicles",

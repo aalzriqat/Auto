@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatLocalized } from "@/lib/dateLocale";
 import { cn } from "@/lib/utils";
+import { formatDealNumber, parseDealNumberQuery } from "@/convex/utils/dealNumberFormat";
 
 /**
  * The Deals list — one entry per canonical deal, cash or financed, opening the
@@ -59,7 +60,35 @@ export type DealRow = {
   salespersonName: string;
   /** Already formatted, or null when the caller is not shown it. */
   amountLabel: string | null;
+  /** SCRUM-808: the issued per-organization deal number; absent on a deal the backfill has not reached. */
+  dealNumber?: number;
 };
+
+/** The deal number before the vehicle line, kept left-to-right inside Arabic text. */
+function DealNumberTag({ value }: Readonly<{ value: number | undefined }>) {
+  const label = formatDealNumber(value);
+  if (label === null) return null;
+  return (
+    <>
+      <bdi dir="ltr" className="font-mono tabular-nums" data-testid="deal-row-number">
+        {label}
+      </bdi>
+      {" · "}
+    </>
+  );
+}
+
+/**
+ * The search box matches a typed deal number ("123", "D-000123", Arabic digits) exactly, never as a substring, so
+ * "123" does not find deal 1234; the text fields still match as substrings ("2024" still finds a 2024 car).
+ */
+function matchesSearch(row: DealRow, needle: string, dealNumber: number | null): boolean {
+  if (dealNumber !== null && row.dealNumber === dealNumber) return true;
+  return [row.customerName, row.vehicleDesc, row.financierLabel ?? "", row.salespersonName]
+    .join(" ")
+    .toLowerCase()
+    .includes(needle);
+}
 
 const REASON_LABEL: Record<DealReason, string> = {
   DEPOSIT_PENDING: "ReasonDepositPending",
@@ -225,20 +254,14 @@ export function DealsListView({
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
+    const typedDealNumber = parseDealNumberQuery(search);
     return loaded
       .filter((row) =>
         view === "needs" ? row.waitingOn === "DEALERSHIP" : view === "waiting" ? row.waitingOn === "OTHERS" : true
       )
       .filter((row) => (view === "needs" && reason ? row.reason === reason : true))
       .filter((row) => (kind ? row.kind === kind : true))
-      .filter((row) =>
-        needle
-          ? [row.customerName, row.vehicleDesc, row.financierLabel ?? "", row.salespersonName]
-              .join(" ")
-              .toLowerCase()
-              .includes(needle)
-          : true
-      )
+      .filter((row) => (needle ? matchesSearch(row, needle, typedDealNumber) : true))
       .sort((a, b) => b.since - a.since);
   }, [loaded, view, reason, kind, search]);
 
@@ -403,6 +426,7 @@ export function DealsListView({
                         className="truncate text-sm text-muted-foreground rtl:text-right"
                         title={row.vehicleDesc}
                       >
+                        <DealNumberTag value={row.dealNumber} />
                         <bdi>{row.vehicleDesc}</bdi>
                       </p>
                       <KindLine row={row} t={t} />
@@ -461,6 +485,7 @@ export function DealsListView({
                               className="truncate text-xs text-muted-foreground rtl:text-right"
                               title={row.vehicleDesc}
                             >
+                              <DealNumberTag value={row.dealNumber} />
                               <bdi>{row.vehicleDesc}</bdi>
                             </p>
                             <KindLine row={row} t={t} />

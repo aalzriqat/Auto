@@ -3,9 +3,7 @@ import { expect, type Page } from "@playwright/test";
 import { namesProduction, servesOtherThan } from "../productionGuard";
 
 /**
- * The preview guard of jev-explorer.spec.ts (SCRUM-595, PR #430), copied
- * unchanged in behaviour so the form explorer (SCRUM-614) can reuse it without
- * editing that in-flight spec. Fold the two together once #430 has merged.
+ * Shared guard for the random explorer, form explorer and cross-screen oracle.
  *
  * The form explorer SUBMITS forms, so this is the only thing standing between
  * it and a real dealer's data: it must prove both that the configured backend
@@ -41,7 +39,11 @@ await m.assertExistingE2EPreview(process.env, { run: (args, label) => m.runConve
  * backend itself is asked.
  */
 export function attestedPreview(): { url: string | undefined; orgId: string | undefined } | undefined {
-  if (!process.env.CONVEX_PREVIEW_NAME) return undefined;
+  const local = convexDeploymentOf(process.env.NEXT_PUBLIC_CONVEX_URL) === LOCAL_CONVEX_DEPLOYMENT;
+  if (local ? process.env.AUTOFLOW_LOCAL_CONVEX_CI !== "1" : !process.env.CONVEX_PREVIEW_NAME) return undefined;
+  // The switch permits asking; it proves nothing. The bootstrap re-reads the
+  // exact backend identity, disposable marker and seeded Clerk/QA organization.
+  // Its local target resolver requires both self-hosted variables and refuses cloud keys.
   const res = spawnSync(process.execPath, ["--input-type=module", "-e", LOCAL_ATTESTATION], {
     env: process.env,
     encoding: "utf8",
@@ -49,11 +51,9 @@ export function attestedPreview(): { url: string | undefined; orgId: string | un
   });
   // assertE2EBootstrap returns { orgId, ... } and `convex run` prints it.
   if (res.status === 0) return { url: process.env.NEXT_PUBLIC_CONVEX_URL, orgId: /"orgId":\s*"([^"]+)"/.exec(res.stdout ?? "")?.[1] };
-  const lines = (res.stderr || res.error?.message || "").split("\n").filter((l) => l.trim());
-  const reason = (lines.find((l) => /Error/.test(l)) ?? lines.at(-1))?.trim() ?? `exit ${res.status}`;
-  console.warn(`Preview attestation failed: ${reason}`);
+  console.warn("EXPLORER_BACKEND_ATTESTATION_FAILED");
   if (process.env.GITHUB_ACTIONS === "true") {
-    console.log(`::error title=Jev form explorer could not run::Preview attestation failed (${reason}); the opted-in explorer fails.`);
+    console.log("::error title=Explorer could not run::EXPLORER_BACKEND_ATTESTATION_FAILED");
   }
   return undefined;
 }
@@ -107,7 +107,7 @@ export function servedDeployments(sockets: string[]): string[] {
  * same preview. `sockets` must already be collecting from `page`.
  */
 export async function attest(
-  page: Page,
+  page: Pick<Page, "goto" | "url">,
   baseURL: string | undefined,
   sockets: string[],
 ): Promise<{ refusal: string; orgId?: undefined } | { refusal?: undefined; orgId: string }> {
@@ -127,7 +127,7 @@ export async function attest(
   // A local server that redirects elsewhere is not the local app (Codex F614-02).
   if (new URL(page.url()).origin !== app.origin) return { refusal: `The local app redirected to ${new URL(page.url()).origin}; not exploring.` };
   await expect
-    .poll(() => sockets.some((u) => u.includes(".convex.cloud")), { timeout: 30_000 })
+    .poll(() => servedDeployments(sockets).length > 0, { timeout: 30_000 })
     .toBe(true)
     .catch(() => undefined);
   const served = servedDeployments(sockets);

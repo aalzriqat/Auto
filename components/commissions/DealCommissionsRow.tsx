@@ -6,7 +6,6 @@ import { useQuery } from "convex/react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { netProfitAfterCommissionsMinor } from "@/convex/utils/dealCommissionLines";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
@@ -19,8 +18,8 @@ type Translate = (key: string) => string;
  * Registration lives on the Commissions page; this only reads. It is hidden for
  * a caller who cannot view commissions, because the figures are employees' pay.
  *
- * `profitMinor` is the card's own headline profit (null when it is not known).
- * The net figure is derived from it and never shown when either side is unknown.
+ * `profitMinor` is the final server management net, already after commissions.
+ * Read it unchanged; subtracting this row's total again would charge pay twice.
  */
 export function DealCommissionsRow({
   orgId,
@@ -49,8 +48,8 @@ export function DealCommissionsRow({
   }
 
   // An undecided salesperson commission is UNKNOWN, so no net figure (never a net that treats it as zero).
-  const net = view.salePending ? null : netProfitAfterCommissionsMinor(profitMinor, view.totalMinor);
-  const rows: Array<{ key: string; label: string; who: string; amountMinor: number | null; note?: string | null }> = [
+  const net = view.salePending || view.totalMinor === null ? null : profitMinor;
+  const rows: Array<{ key: string; label: string; who: string; amountMinor: number | null; note?: string | null }> = view.lineEvidence === "UNAVAILABLE" ? [] : [
     {
       key: "salesperson",
       label: t("DealCommissionSalespersonLine"),

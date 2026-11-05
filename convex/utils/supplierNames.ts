@@ -65,7 +65,8 @@ export function normalizeNameKey(name: string): string {
 const ARABIC_INDIC_ZERO = 0x0660;
 const EXTENDED_ARABIC_INDIC_ZERO = 0x06f0;
 
-function foldDigits(value: string): string {
+/** Arabic-Indic (U+0660–0669) and Extended Arabic-Indic (U+06F0–06F9) digits to ASCII. */
+export function foldDigits(value: string): string {
   return value.replace(/[٠-٩۰-۹]/g, (digit) => {
     const code = digit.charCodeAt(0);
     const base = code >= EXTENDED_ARABIC_INDIC_ZERO ? EXTENDED_ARABIC_INDIC_ZERO : ARABIC_INDIC_ZERO;

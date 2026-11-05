@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census matches commission-line table-name arguments; no switch is replaced.
 /**
  * Extra employee commission lines on a deal reach the ledger and payroll.
  *

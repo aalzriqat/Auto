@@ -1,0 +1,50 @@
+{
+  "id": "sourced-pending-approval-applies-cost-mirror",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-local",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicleEdits.resolve",
+      "input": {
+        "sourceCost": 9900,
+        "status": "APPROVED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": 9900
+    },
+    {
+      "observable": "audit.purchasePrice",
+      "value": 9900
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcedCostMirror.scrum907.test.ts",
+    "testName": "an old pending supplier-cost request applies and audits the mirror at approval"
+  },
+  "matrixRow": "SCRUM907-approval",
+  "bugRef": {
+    "key": "SCRUM-907",
+    "failingFirst": "e827df86f6d06bda613c1b2fd1956a45c7d2d187"
+  },
+  "fingerprint": "df2b2c3b6d93018c3f49adb411baefb1a9a357661f92ee83f3a014432207b90c"
+}

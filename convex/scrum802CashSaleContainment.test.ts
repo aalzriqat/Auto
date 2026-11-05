@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census includes importActual calls; these tests still use the shipped switch.
 /**
  * SCRUM-802 (owner ruling 2026-10-08, «إجراء + منع»): pilot cash-sale containment.
  *

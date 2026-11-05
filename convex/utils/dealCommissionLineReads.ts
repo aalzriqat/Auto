@@ -13,18 +13,27 @@ export const MAX_DEAL_COMMISSION_LINE_ROWS = MAX_DEAL_COMMISSION_LINES * 5;
 /**
  * Every line row of one sale, removed ones included. One read for the
  * teardown, paid-line and limit checks so they cannot disagree. Bounded by the
- * row cap `addLine` enforces; one extra row is read so an over-cap sale throws
- * instead of being silently truncated.
+ * row cap `addLine` enforces, plus one sentinel so callers can refuse an
+ * incomplete set. This reader does not throw on a cap; its wrapper does.
  */
+export async function boundedLineRowsForSale(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  saleId: Id<"sales">
+): Promise<Doc<"dealCommissionLines">[]> {
+  return await ctx.db
+    .query("dealCommissionLines")
+    .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId))
+    .take(MAX_DEAL_COMMISSION_LINE_ROWS + 1);
+}
+
+/** Writers require a complete set; display readers may instead serve unavailable. */
 export async function allLinesForSale(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   saleId: Id<"sales">
 ): Promise<Doc<"dealCommissionLines">[]> {
-  const rows = await ctx.db
-    .query("dealCommissionLines")
-    .withIndex("by_org_sale", (q) => q.eq("orgId", orgId).eq("saleId", saleId))
-    .take(MAX_DEAL_COMMISSION_LINE_ROWS + 1);
+  const rows = await boundedLineRowsForSale(ctx, orgId, saleId);
   if (rows.length > MAX_DEAL_COMMISSION_LINE_ROWS) {
     throw new ConvexError("This sale has more commission line rows than the system allows; accounting must review it.");
   }

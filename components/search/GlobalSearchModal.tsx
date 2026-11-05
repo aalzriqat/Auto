@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Car, Search, Target, User } from "lucide-react";
+import { Car, FileText, Search, Target, User } from "lucide-react";
 import { useQuery } from "convex/react";
 import type { FunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { cn } from "@/lib/utils";
+import { formatDealNumber, parseDealNumberQuery } from "@/convex/utils/dealNumberFormat";
 
 type GlobalSearchModalProps = {
   open: boolean;
@@ -39,7 +40,15 @@ type GlobalSearchResults = {
     customerId: Id<"customers">;
     customerName: string;
   }>;
+  /** SCRUM-808: at most one deal, matched by its per-organization deal number. */
+  deals?: Array<
+    | { kind: "application"; id: Id<"financeApplications">; dealNumber: number }
+    | { kind: "sale"; id: Id<"sales">; dealNumber: number }
+  >;
 };
+
+/** A deal number may be one digit ("7"), so it searches below the two-character minimum. */
+const isSearchable = (query: string) => query.length >= 2 || parseDealNumberQuery(query) !== null;
 
 const globalSearchQuery = (api as unknown as {
   search: {
@@ -84,17 +93,23 @@ export default function GlobalSearchModal({ open, onOpenChange }: GlobalSearchMo
 
   const results = useQuery(
     globalSearchQuery,
-    debouncedQuery.length < 2 || !activeOrgId
+    !isSearchable(debouncedQuery) || !activeOrgId
       ? "skip"
       : { orgId: activeOrgId, query: debouncedQuery }
   );
+  const deals = results?.deals ?? [];
 
   const hasResults = useMemo(() => {
     if (!results) return false;
-    return results.vehicles.length > 0 || results.customers.length > 0 || results.leads.length > 0;
+    return (
+      (results.deals?.length ?? 0) > 0 ||
+      results.vehicles.length > 0 ||
+      results.customers.length > 0 ||
+      results.leads.length > 0
+    );
   }, [results]);
 
-  const isLoading = debouncedQuery.length >= 2 && results === undefined;
+  const isLoading = isSearchable(debouncedQuery) && results === undefined;
 
   const close = () => onOpenChange(false);
 
@@ -130,6 +145,25 @@ export default function GlobalSearchModal({ open, onOpenChange }: GlobalSearchMo
 
           {!isLoading && results && hasResults && (
             <div className="space-y-4">
+              {deals.length > 0 && (
+                <SearchGroup title={t("DealNumberSearchResult")} icon={FileText}>
+                  {deals.map((deal) => (
+                    <ResultLink
+                      key={deal.id}
+                      href={
+                        deal.kind === "application"
+                          ? `/${activeOrgId}/applications/${deal.id}/deal`
+                          : `/${activeOrgId}/sales/${deal.id}/deal`
+                      }
+                      title={formatDealNumber(deal.dealNumber) ?? ""}
+                      titleDir="ltr"
+                      subtitle={t(deal.kind === "application" ? "DealKindFinanced" : "DealKindCash")}
+                      onClick={close}
+                    />
+                  ))}
+                </SearchGroup>
+              )}
+
               {results.vehicles.length > 0 && (
                 <SearchGroup title={t("SearchVehicles" as any)} icon={Car}>
                   {results.vehicles.map((vehicle) => (
@@ -202,11 +236,14 @@ function SearchGroup({
 function ResultLink({
   href,
   title,
+  titleDir,
   subtitle,
   onClick,
 }: {
   href: string;
   title: string;
+  /** "ltr" for an identifier such as a deal number, which must not reorder inside Arabic text. */
+  titleDir?: "ltr";
   subtitle?: string;
   onClick: () => void;
 }) {
@@ -216,7 +253,9 @@ function ResultLink({
       onClick={onClick}
       className="block rounded-md px-3 py-2 text-sm transition-colors hover:bg-slate-50 focus:bg-slate-50 focus:outline-none"
     >
-      <div className="font-medium text-slate-900">{title}</div>
+      <div className="font-medium text-slate-900">
+        <bdi dir={titleDir}>{title}</bdi>
+      </div>
       {subtitle && <div className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</div>}
     </Link>
   );

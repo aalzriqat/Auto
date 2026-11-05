@@ -61,6 +61,8 @@ async function createWorkOrderExpense(
     date: now,
     category: "REPAIR",
     status: "PAID",
+    // Matches the plain expense posting below, which never capitalizes inventory.
+    accountingTreatment: "PERIOD_EXPENSE",
     notes: args.notes,
   });
 

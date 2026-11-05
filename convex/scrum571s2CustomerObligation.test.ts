@@ -113,6 +113,8 @@ describe("SCRUM-571 s2a: the customer's invoice gates 'settled' on every financi
         customerId: s.customerId,
         salespersonId: s.userId,
         salePrice: 10_500,
+        // A recorded no-commission decision makes management net readable.
+        commissionAmount: 0,
         saleDate: Date.now(),
         status: "COMPLETED",
         financingType: "FINANCED",

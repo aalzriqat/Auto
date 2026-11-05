@@ -13,6 +13,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
 import { economicTodayDateInput } from "@/lib/dateInput";
@@ -118,7 +119,10 @@ export function FixedAssetsTab() {
   const { code: currencyCode } = useCurrency();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
-  const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE);
+  // SCRUM-810 / SCRUM-560: the server refuses capitalize, impair and dispose while the fixed-asset
+  // lifecycle is off for the pilot, so none is offered. The register and event history are reads.
+  const lifecycleOff = isPilotSwitchOn("FIXED_ASSET_LIFECYCLE_PILOT_DISABLED");
+  const canManage = hasPermission(PERMISSIONS.MANAGE_FINANCE) && !lifecycleOff;
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
 
@@ -148,6 +152,11 @@ export function FixedAssetsTab() {
           </Button>
         )}
       </div>
+      {lifecycleOff && (
+        <p className="text-sm text-muted-foreground" role="status">
+          {t("ServerError_FIXED_ASSET_LIFECYCLE_DISABLED")}
+        </p>
+      )}
 
       <AccountingTableFrame>
         <Table>

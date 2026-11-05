@@ -109,6 +109,7 @@ function financedDeal(): FinancedDealCockpitData {
     dealKind: "FINANCED",
     denomination: { code: "JOD", scale: 3 },
     dealRef: "app_2048",
+    dealNumber: 1042,
     applicationId: "app_2048" as Id<"financeApplications">,
     saleId: null,
     canonicalSaleId: null,

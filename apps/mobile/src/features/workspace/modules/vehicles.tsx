@@ -394,7 +394,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
       if (editing) {
         await updateVehicle({
           ...payload, vehicleId: editing._id,
-          ...(canViewCost ? { purchasePrice } : {}),
+          ...(canViewCost && editing.sourceType !== "SOURCED" ? { purchasePrice } : {}),
           ...(firstPurchase ? { purchasePaymentMethod: form.purchasePaymentMethod as Exclude<MobileAcquisitionMethod, ""> } : {}),
           ...(firstPurchase && form.purchasePaymentMethod === "ON_ACCOUNT" ? { purchaseSupplierName: form.purchaseSupplierName.trim() } : {}),
           ...(bankPurchase ? { bankAccountId: form.purchaseBankAccountId } : {}),

@@ -693,6 +693,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-886. `vehicleEdits.requestUpdate` and `vehicles.update` refuse a cost field from a caller without
   // view:cost_price; `vehicles.upsertLandedCosts` and an opening-stock `vehicles.importBulk` refuse the call.
+  ServerError_VEHICLE_SOURCED_COST_CONFLICT: [
+    "For a consignment vehicle, purchase price must equal supplier cost. Submit the supplier cost only, or enter the same amount in both fields.",
+    "للمركبة برسم البيع، يجب أن يساوي سعر الشراء تكلفة المورد. أرسل تكلفة المورد فقط، أو أدخل المبلغ نفسه في الحقلين.",
+  ],
   ServerError_VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: [
     "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
     "تغيير تكلفة المركبة أو تفاصيل شرائها أو الحد الأدنى للربح يتطلب صلاحية الاطلاع على التكلفة. اطلب من المدير إجراء هذا التغيير.",

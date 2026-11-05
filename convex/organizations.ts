@@ -3,7 +3,7 @@ import { query, internalQuery, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner, requireOrCreateAuthenticatedUser } from "./utils/tenancy";
-import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
+import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME, ACCOUNTANT_COMMISSIONS_MIGRATION } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { ensureRegistryState } from "./utils/supplierRegistry";
@@ -147,6 +147,8 @@ export async function createOrganizationWithDefaultRoles(
       name: template.name,
       permissions: [...template.permissions],
       isSystemOwnerRole: template.name === SYSTEM_OWNER_ROLE_NAME,
+      // Record the default grant so a later owner restriction survives the rollout backfill.
+      ...(template.name === "ACCOUNTANT" ? { appliedRoleMigrations: [ACCOUNTANT_COMMISSIONS_MIGRATION] } : {}),
     });
     if (template.name === SYSTEM_OWNER_ROLE_NAME) {
       ownerRoleId = roleId;

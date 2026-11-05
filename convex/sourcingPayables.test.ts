@@ -173,6 +173,36 @@ async function seedDealerWithPayable(amountDue = 5000) {
 }
 
 describe("SCRUM-880 authoritative supplier payment", () => {
+  test.each(["direct", "request", "resolve"] as const)(
+    "SCRUM-907: %s refuses excess purchase precision before a SOURCED cost conflict",
+    async (door) => {
+      const { t, orgId, asOwner, vehicleId } = await seedDealerWithPayable();
+      const { registerRateLimiter } = await import("../test-utils/convexTest");
+      registerRateLimiter(t);
+      await t.run(ctx => ctx.db.patch(vehicleId, {
+        status: "AVAILABLE", sourceType: "SOURCED", sourcedFromName: "Legacy supplier",
+        sourceCost: 100, purchasePrice: 100,
+      }));
+      const payload = { color: "Green", purchasePrice: 101.0000000001 };
+      // Simulate an older pending request that approval must validate again.
+      const requestId = door === "resolve"
+        ? await asOwner.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload: { color: "Green" } })
+        : null;
+      if (requestId) await t.run(ctx => ctx.db.patch(requestId, { payload }));
+      const before = await dbSnapshot(t, Object.keys(schema.tables));
+      let attempt: Promise<unknown>;
+      if (door === "direct") {
+        attempt = asOwner.mutation(api.vehicles.update, { orgId, vehicleId, ...payload });
+      } else if (requestId) {
+        attempt = asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+      } else {
+        attempt = asOwner.mutation(api.vehicleEdits.requestUpdate, { orgId, vehicleId, payload });
+      }
+      await expect(attempt).rejects.toMatchObject({ data: { code: "SUPPLIER_AMOUNT_PRECISION" } });
+      expect(await dbSnapshot(t, Object.keys(schema.tables))).toEqual(before);
+    },
+  );
+
   test("list covers exactly the ordered native and opening payable schema variants", () => {
     const members = schema.tables.vehicleSupplierPayables.validator.members;
     expect(members.map(member => member.fields.origin.value)).toEqual(["NATIVE", "OPENING"]);
