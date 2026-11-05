@@ -14,12 +14,17 @@ Convex backend through the `mark`/`verify` tripwire and never uses a cloud previ
 | Cadence | Workflow | What runs | Backend |
 | --- | --- | --- | --- |
 | Pull request | `scenario-runner.yml` | every active backend record at its bound test; browser records only for screens the PR touches (a touched screen fails, because a browser replay cannot run there) | none (`convex-test`) |
-| Nightly | `regression-library.yml` (schedule, 02:30 UTC) | every active record | runner-local Convex, `mark`/`verify` |
-| Release | `regression-library.yml` (`repository_dispatch` `autoflow-release-regression-library`, `client_payload.commit_sha` = main's full tip) | every active record at that SHA | runner-local Convex, `mark`/`verify` |
+| Nightly | `regression-library.yml` (schedule, 02:30 UTC) | every active record | backend records: Vitest/`convex-test`; backend-backed browser records: runner-local Convex, `mark`/`verify` |
+| Release | `regression-library.yml` (`repository_dispatch` `autoflow-release-regression-library`, `client_payload.commit_sha` = main's full tip) | every active record at that SHA | backend records: Vitest/`convex-test`; backend-backed browser records: runner-local Convex, `mark`/`verify` |
 
 One runner, `scripts/regression/prRunner.mjs`, serves all three. `--tier pr` is the default. `--tier full` requires every
 active record: backend records run in one serial Vitest invocation, and browser records are judged from the Playwright JSON
 reports ([JSON reporter](https://playwright.dev/docs/test-reporters#json-reporter)) that the same job produced.
+Only browser projects touch the runner-local backend; static browser paint projects need no backend. The library has
+793 active backend records, 49 active browser records and 4 retired records at this revision (846 total, from
+`loadRecords` grouped by status and level). Passing the backend records under `convex-test` proves harness execution,
+not execution against the runner-local backend, Convex cloud behavior or concurrency. Full-library real-backend release
+certification under SCRUM-762 remains unproven by this job.
 
 Every active browser record must have non-empty `sourceGlobs`. The record validator rejects missing mappings, and the
 runner independently fails them with `BROWSER_SCREEN_MAPPING_MISSING`, including in the full tier. An unmapped record
