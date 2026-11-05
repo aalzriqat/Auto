@@ -471,6 +471,19 @@ describe("full tier", () => {
   });
 
 
+  it("a nested project testDir cannot credit a same-title file that did not run", () => {
+    const dir = withFiles("tests/a.spec.ts", "tests/tests/a.spec.ts");
+    const nested = {
+      config: { rootDir: dir, projects: [{ id: "chromium", name: "chromium", testDir: path.join(dir, "tests") }] },
+      suites: [{ specs: [{ file: "tests/a.spec.ts", title: "the replay", tests: [{ projectId: "chromium", projectName: "chromium", status: "expected" }] }] }],
+    };
+    expect(evaluatePlaywright([
+      browserRecord("executed", "tests/a.spec.ts"), browserRecord("never-ran", "tests/tests/a.spec.ts"),
+    ], [nested], dir)).toEqual([
+      { id: "executed", code: "PASS" }, { id: "never-ran", code: "BROWSER_REPLAY_NOT_EXECUTED" },
+    ]);
+  });
+
   it("the full tier fails on an unexecuted browser record, a parked candidate and an unreadable report", () => {
     const records = [browserRecord("replay"), { id: "cand", status: "candidate", level: "backend" }];
     const selection = selectFull(records as never);

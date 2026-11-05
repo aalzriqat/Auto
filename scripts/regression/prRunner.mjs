@@ -131,7 +131,7 @@ const ROLE_AUDIT_SPEC = "playwright/tests/audit-role-access.spec.ts";
  * One verdict per active browser record from Playwright JSON reports (https://playwright.dev/docs/test-reporters#json-reporter).
  * Every execution of the bound title (one per project that collects the file) must have run as expected; a skipped,
  * unexpected or flaky (passed only on retry) execution fails, and zero executions fail. Spec paths are resolved against
- * the report's rootDir and each project's testDir.
+ * config.rootDir only, as Playwright's JSON reporter serializes them.
  * @param {object[]} records active browser-level records
  * @param {object[]} reports parsed Playwright JSON reports
  * @param {string} root repository root
@@ -148,9 +148,8 @@ export function evaluatePlaywright(records, reports, root) {
   const walk = (suite, report) => {
     for (const spec of suite.specs ?? []) {
       for (const test of spec.tests ?? []) {
-        const project = (report.config?.projects ?? []).find(candidate => candidate.name === test.projectName || candidate.id === test.projectId);
-        const bases = new Set([report.config?.rootDir, project?.testDir].filter(base => typeof base === "string" && base));
-        for (const base of bases) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, test.status);
+        const base = report.config?.rootDir;
+        if (typeof base === "string" && base) add(path.resolve(base, spec.file ?? suite.file ?? ""), spec.title, test.status);
       }
     }
     for (const child of suite.suites ?? []) walk(child, report);
@@ -318,8 +317,10 @@ function prepareInvocation(argv, host) {
     reportPaths: (values["playwright-report"] ?? []).map(file => resolveRepoInput(root, file)) };
 }
 
+const DEFAULT_HOST = Object.freeze({ root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") });
+
 /** The embedding host may supply a fixture root; the standalone CLI uses this module's checkout. */
-export function main(argv = process.argv.slice(2), host = { root: path.join(path.dirname(fileURLToPath(import.meta.url)), "../..") }) {
+export function main(argv = process.argv.slice(2), host = DEFAULT_HOST) {
   let invocation;
   try {
     invocation = prepareInvocation(argv, host);
