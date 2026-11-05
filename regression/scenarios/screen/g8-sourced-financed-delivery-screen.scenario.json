@@ -82,5 +82,24 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED configured finance reaches delivery and full financier receipt with agency-only books"
   },
-  "fingerprint": "ea9fc20a6db45fd0096b4bddf34e82bcd08be6727a26860ccc4bed590c631e8b"
+  "fingerprint": "ea9fc20a6db45fd0096b4bddf34e82bcd08be6727a26860ccc4bed590c631e8b",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "components/vehicles/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "app/**/applications/**",
+    "app/**/customers/**",
+    "app/**/settings/finance/**",
+    "components/customers/**",
+    "components/settings/FinanceCompanyDialog.tsx"
+  ]
 }

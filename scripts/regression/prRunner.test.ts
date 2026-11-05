@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { changedFilesSince, evaluate, evaluatePlaywright, main, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
+import { changedFilesSince, evaluate, evaluatePlaywright, loadRecords, main, readPlaywrightReports, runPrScenarios, selectForPr, selectFull, summarise } from "./prRunner.mjs";
 import { resolveTrustedGitExecutable } from "../trustedGit.mjs";
 
 // The runner is exercised against a throwaway project and the real Vitest: the verdicts below come from
@@ -32,6 +32,7 @@ function makeProject(files: Record<string, string>, records: FixtureRecord[]): s
   for (const record of records) {
     const body = {
       id: record.id, domain: "money", level: record.level ?? "backend", status: record.status ?? "active",
+      ...(record.level === "browser" ? { sourceGlobs: ["components/fixture/**"] } : {}),
       ...(record.file === undefined ? {} : { impl: { file: record.file, testName: record.testName } }),
     };
     writeFileSync(path.join(root, "regression", "scenarios", "money", `${record.id}.scenario.json`), JSON.stringify(body));
@@ -316,11 +317,37 @@ describe("PR scenario runner", () => {
   });
 
   describe("browser records at PR time", () => {
+    it.each([
+      ["g8-owned-cash-delivery-screen", ["vehicles/page.tsx"]],
+      ["g8-owned-financed-delivery-screen", ["applications/[id]/deal/page.tsx", "vehicles/page.tsx", "customers/page.tsx", "settings/finance/page.tsx", "accounting/page.tsx"]],
+      ["g8-deals-list-to-detail", ["applications/[id]/deal/page.tsx", "settings/finance/page.tsx"]],
+      ["g8-sourced-direct-financed-delivery-screen", ["applications/[id]/deal/page.tsx", "customers/page.tsx", "settings/finance/page.tsx"]],
+      ["g8-sourced-financed-delivery-screen", ["applications/[id]/deal/page.tsx", "customers/page.tsx", "settings/finance/page.tsx"]],
+    ])("delivery replay %s is selected for every route its fixtures visit", (id, routes) => {
+      const { records: library } = loadRecords(path.resolve(__dirname, "../.."));
+      const record = library.find(record => record.id === id);
+      expect(record).toBeDefined();
+      for (const route of routes) {
+        const changed = `app/(dashboard)/[orgId]/${route}`;
+        expect(selectForPr([record], [changed]).browserSelected.map(record => record.id), changed).toEqual([id]);
+      }
+    });
+
+    it.each([undefined, []])("an active browser record without a screen mapping cannot leave a passing backend green (%s)", sourceGlobs => {
+      const selection = selectForPr([
+        { id: "backend", status: "active", level: "backend" },
+        { id: "unmapped", status: "active", level: "browser", sourceGlobs, impl: { file: "playwright/c.spec.ts" } },
+      ], ["components/ChangedScreen.tsx"]);
+      const summary = summarise(selection, [{ id: "backend", code: "PASS" }], []);
+      expect(summary.verdict).toBe("FAIL");
+      expect(summary.issues).toContain("BROWSER_SCREEN_MAPPING_MISSING:1");
+    });
+
     const records = [
       { id: "mapped-touched", status: "active", level: "browser", sourceGlobs: ["components/cockpit/**"], impl: { file: "playwright/a.spec.ts" } },
       { id: "mapped-untouched", status: "active", level: "browser", sourceGlobs: ["components/other/**"], impl: { file: "playwright/b.spec.ts" } },
       { id: "unmapped", status: "active", level: "browser", impl: { file: "playwright/c.spec.ts" } },
-      { id: "spec-edited", status: "active", level: "browser", impl: { file: "playwright/d.spec.ts" } },
+      { id: "spec-edited", status: "active", level: "browser", sourceGlobs: ["components/spec-screen/**"], impl: { file: "playwright/d.spec.ts" } },
     ] as never;
     const ids = (list: Array<{ id: string }>) => list.map(record => record.id);
 
@@ -337,20 +364,22 @@ describe("PR scenario runner", () => {
       expect(summary.verdict).toBe("FAIL");
       expect(summary.failureCodes).toEqual({ BROWSER_REPLAY_NOT_EXECUTED: 1 });
       expect(summary.failedIds).toEqual(["mapped-touched BROWSER_REPLAY_NOT_EXECUTED"]);
-      expect(summary.issues).toEqual(["SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:1"]);
-      expect(summary.browser).toEqual({ selected: 1, notRequiredAtPrTime: 1, unmappedToAScreen: 2 });
+      expect(summary.issues).toEqual(["BROWSER_SCREEN_MAPPING_MISSING:1", "SELECTED_BROWSER_RECORDS_NEED_A_BROWSER_AND_BACKEND_SCRUM762:1"]);
+      expect(summary.browser).toEqual({ selected: 1, notRequiredAtPrTime: 2, unmappedToAScreen: 1 });
     });
 
-    it("a PR that touches no screen passes, with the browser records counted as not required or unmapped", () => {
+    it("a PR that touches no mapped screen still fails on missing mappings", () => {
       const summary = summarise(selectForPr(records, ["README.md"]), [{ id: "b", code: "PASS" }], []);
-      expect(summary).toMatchObject({ verdict: "PASS", failed: 0, browser: { selected: 0, notRequiredAtPrTime: 2, unmappedToAScreen: 2 } });
+      expect(summary).toMatchObject({ verdict: "FAIL", failed: 0, browser: { selected: 0, notRequiredAtPrTime: 3, unmappedToAScreen: 1 }, issues: ["BROWSER_SCREEN_MAPPING_MISSING:1"] });
+      const mappedOnly = [{ id: "mapped", status: "active", level: "browser", sourceGlobs: ["components/other/**"] }];
+      expect(summarise(selectForPr(mappedOnly, ["README.md"]), [{ id: "b", code: "PASS" }], []).verdict).toBe("PASS");
     });
 
-    it("an unknown PR diff fails: every browser record counts as selected", () => {
+    it("an unknown PR diff fails: mapped browser records are selected and unmapped records fail validation", () => {
       const summary = summarise(selectForPr(records, null), [{ id: "b", code: "PASS" }], []);
       expect(summary.verdict).toBe("FAIL");
       expect(summary.issues).toContain("PR_DIFF_UNAVAILABLE");
-      expect(summary.browser.selected).toBe(4);
+      expect(summary.browser).toMatchObject({ selected: 3, unmappedToAScreen: 1 });
     });
   });
   it("evaluate matches by the exact file, not by a similarly named one", () => {
@@ -366,7 +395,7 @@ describe("PR scenario runner", () => {
 describe("full tier", () => {
   const root = path.resolve("/repo");
   const browserRecord = (id: string, file = "playwright/tests/a.spec.ts", testName = "the replay") =>
-    ({ id, status: "active", level: "browser", impl: { file, testName } });
+    ({ id, status: "active", level: "browser", sourceGlobs: ["components/fixture/**"], impl: { file, testName } });
   const report = (specs: Array<{ title: string; file?: string; status: string; project?: string }>) => ({
     config: { rootDir: path.join(root, "playwright", "tests"), projects: [{ id: "chromium", name: "chromium", testDir: path.join(root, "playwright", "tests") }] },
     suites: [{ title: "a.spec.ts", file: "a.spec.ts", specs: [], suites: [{ title: "group", file: "a.spec.ts", specs: specs.map(spec => ({
@@ -397,7 +426,8 @@ describe("full tier", () => {
     ] as never);
     expect(selection.browserSelected.map((record: { id: string }) => record.id)).toEqual(["mapped", "unmapped"]);
     expect(selection.run.map((record: { id: string }) => record.id)).toEqual(["b"]);
-    expect(selection).toMatchObject({ browserNotRequired: [], browserUnmapped: [], retired: 1 });
+    expect(selection).toMatchObject({ browserNotRequired: [], browserUnmapped: [{ id: "unmapped" }], retired: 1 });
+    expect(summarise(selection, [{ id: "b", code: "PASS" }], [], [{ id: "mapped", code: "PASS" }, { id: "unmapped", code: "PASS" }], "full").issues).toContain("BROWSER_SCREEN_MAPPING_MISSING:1");
   });
 
   it("green control: a browser record whose bound title ran as expected passes", () => {
@@ -439,6 +469,7 @@ describe("full tier", () => {
     other.config.projects[0].testDir = path.join(dir, "playwright", "scenarios");
     expect(evaluatePlaywright([browserRecord("r")] as never, [other], dir)[0].code).toBe("BROWSER_REPLAY_NOT_EXECUTED");
   });
+
 
   it("the full tier fails on an unexecuted browser record, a parked candidate and an unreadable report", () => {
     const records = [browserRecord("replay"), { id: "cand", status: "candidate", level: "backend" }];

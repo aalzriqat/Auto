@@ -39,5 +39,22 @@
     "file": "playwright/tests/sales.spec.ts",
     "testName": "can record a cash sale end to end via the sales wizard"
   },
-  "fingerprint": "3cdd5922da691e2eb32be487a2747f6ee622cd6732877f8083d3ebabeecdbc58"
+  "fingerprint": "3cdd5922da691e2eb32be487a2747f6ee622cd6732877f8083d3ebabeecdbc58",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "components/vehicles/**",
+    "components/customers/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "app/**/vehicles/**",
+    "components/payments/**"
+  ]
 }

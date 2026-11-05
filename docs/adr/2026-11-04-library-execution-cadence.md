@@ -21,6 +21,22 @@ One runner, `scripts/regression/prRunner.mjs`, serves all three. `--tier pr` is 
 active record: backend records run in one serial Vitest invocation, and browser records are judged from the Playwright JSON
 reports ([JSON reporter](https://playwright.dev/docs/test-reporters#json-reporter)) that the same job produced.
 
+Every active browser record must have non-empty `sourceGlobs`. The record validator rejects missing mappings, and the
+runner independently fails them with `BROWSER_SCREEN_MAPPING_MISSING`, including in the full tier. An unmapped record
+cannot be counted as unrelated to a PR. The 38 mappings added after seat review follow these executed surfaces:
+
+| Records | Mapping source |
+| --- | --- |
+| `g8-explorer-*` (12) | `jev-explorer.spec.ts` follows navigation links after its start. All app routes and components are in scope, plus `lib/navigation.ts` and `pilotHunt.ts`; mapping just the start route would be false. |
+| `role-routes-mount-after-authority` | `SCREEN_AUDIT_ROUTES` spans the dashboard route matrix, so app routes, components, navigation and that route fixture are in scope. |
+| `g8-accounting-workspace-traversal` | Accounting route, accounting, collections and deposit components, from `PILOT_ACCOUNTING_VIEWS`. |
+| `g8-deals-list-to-detail`, delivery records, Sales entry and picker records | The visited Sales wizard, Deals list and deal detail routes, with their sales, cockpit, deposit, vehicle or customer components. |
+| `role-pr-*`, lead and approval authority records | The particular route and components mounted by `RoleAccessVisualFixture.test.tsx` or visited by `audit-role-access.spec.ts`. Shared paint dependencies include CSS, UI, auth and provider components. |
+| `phone-audit-*` (4) | Synthetic DOM checks exercise `playwright/role-audit/readiness.ts`; they do not visit an app screen. Their mapping names that helper. |
+
+No active browser record remains without a derivable mapping. Broad navigation walks intentionally have broader mappings
+than fixed-screen records. Mappings describe impact selection, not proof that a replay executed.
+
 Browser verdicts: PASS only when every execution of the bound title (one per project that collects the file) has status
 `expected`. No execution is `BROWSER_REPLAY_NOT_EXECUTED`; `skipped` is `TEST_SKIPPED`; `unexpected` is `TEST_FAILED`; `flaky`
 (passed only on a retry) is `TEST_FLAKY`, so a first-attempt failure is never hidden by the CI retry. A missing or

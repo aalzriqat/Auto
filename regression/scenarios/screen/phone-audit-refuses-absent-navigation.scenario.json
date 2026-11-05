@@ -31,5 +31,8 @@
   "impl": {
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture refuses an absent navigation drawer before Escape"
-  }
+  },
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts"
+  ]
 }

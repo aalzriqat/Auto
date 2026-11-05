@@ -49,11 +49,11 @@ export function loadRecords(root) {
 }
 
 function classifyBrowserRecord(record, changedFiles) {
-  if (changedFiles === null) return "browserSelected";
   const globs = Array.isArray(record.sourceGlobs) ? record.sourceGlobs : [];
+  if (globs.length === 0) return "browserUnmapped";
+  if (changedFiles === null) return "browserSelected";
   const touched = changedFiles.some(file => file === record.impl?.file || globs.some(glob => globMatches(glob, file)));
   if (touched) return "browserSelected";
-  if (globs.length === 0) return "browserUnmapped";
   return "browserNotRequired";
 }
 
@@ -61,7 +61,7 @@ function classifyBrowserRecord(record, changedFiles) {
  * Active backend records run here. An active browser record is required at PR time only when the PR touches its
  * screen: a changed file matches one of its `sourceGlobs`, or its own bound spec changed. A selected browser record
  * cannot be executed here (it needs a browser and a backend, SCRUM-762), so it FAILS. Browser records without
- * `sourceGlobs` cannot be mapped to a screen; they are listed as a gap, never guessed at. The rest belong to the nightly
+ * `sourceGlobs` cannot be mapped to a screen and fail validation. The rest belong to the nightly
  * and release runs. An active cloud record has no runner, so it fails.
  * @param {object[]} records
  * @param {string[] | null} changedFiles repo-relative paths of the PR diff; null when they could not be determined
@@ -119,7 +119,6 @@ export function selectFull(records) {
   // selectForPr sorts browser records into "not required" or "unmapped"; in this tier all of them are required.
   selection.browserSelected = records.filter(record => record.status === "active" && record.level === "browser");
   selection.browserNotRequired = [];
-  selection.browserUnmapped = [];
   return selection;
 }
 
@@ -216,6 +215,7 @@ export function summarise(selection, verdicts, extraIssues, browserVerdicts = nu
   for (const verdict of all) counts[verdict.code] = (counts[verdict.code] ?? 0) + 1;
   const failures = all.filter(verdict => verdict.code !== "PASS");
   const issues = [...extraIssues];
+  if (selection.browserUnmapped.length) issues.push(`BROWSER_SCREEN_MAPPING_MISSING:${selection.browserUnmapped.length}`);
   if (all.length === 0) issues.push("ZERO_SCENARIOS_SELECTED");
   if (selection.cloud.length) issues.push(`CLOUD_RECORDS_HAVE_NO_RUNNER:${selection.cloud.length}`);
   if (tier === "full" && selection.candidate) issues.push(`CANDIDATE_RECORDS_ARE_NOT_EXECUTED:${selection.candidate}`);

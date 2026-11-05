@@ -378,6 +378,9 @@ function schemaProblems(r: unknown): string[] {
   if (r.sourceGlobs !== undefined && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.some((v) => !GLOB.test(String(v))))) {
     out.push("sourceGlobs must be path globs without spaces");
   }
+  if (r.status === "active" && r.level === "browser" && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.length === 0)) {
+    out.push("active browser records need non-empty sourceGlobs");
+  }
   // Metadata formats hold whatever the status: a malformed value must not wait for a status flip to be seen.
   if (r.matrixRow !== undefined && (typeof r.matrixRow !== "string" || !MATRIX_ROW.test(r.matrixRow))) out.push("matrixRow has an invalid format");
   if (r.candidateIssue !== undefined && (typeof r.candidateIssue !== "string" || !SCRUM_KEY.test(r.candidateIssue))) out.push("candidateIssue must be a SCRUM key");

@@ -64,5 +64,8 @@
   "impl": {
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture waits until the closing navigation overlay is gone"
-  }
+  },
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts"
+  ]
 }
