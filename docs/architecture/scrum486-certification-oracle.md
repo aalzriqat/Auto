@@ -1,5 +1,9 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM908-cockpit-cost-projection
+
+Bound check: `convex/dealNetProfit.scrum908.test.ts`, `SCRUM-908 complete cockpit responses withhold every cost projection` (bounded CASH/FINANCED × STOCK/SOURCED matrix). Under SCRUM-902 c24475 and SCRUM-908's cost-gate requirement, a non-owner with sales, finance and commission grants receives exact `CostAccessRequired` profit objects, no supplier amount, and no cost keys or sentinel acquisition amount anywhere in either complete cockpit API response. Other finance facts are preserved. Adding cost access and the owner-without-explicit-grants control restore the existing calculations; verified financed sales retain `money: null` on the sale reader. Serial harness evidence only; independent seats, authenticated browser hunters and real backend certification remain pending.
+
 ## SCRUM-760-RT11-DOORS
 
 Owner ruling RT11-DOORS, [SCRUM-760 comment 23862](https://autoflowdealer.atlassian.net/browse/SCRUM-760?focusedCommentId=23862), 2026-10-28.
@@ -994,6 +998,32 @@ They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
 
+## SOURCED supplier-cost mirror (SCRUM-907)
+
+Owner invariant in `SCRUM-907#description`: `purchasePrice === sourceCost` after a
+SOURCED cost write. Supplier entitlement remains authoritative. These rows bind
+`convex/sourcedCostMirror.scrum907.test.ts` and the money scenario records. They
+are serial harness evidence, not platform, browser or production certification.
+
+| Matrix row | Scenario and expected result | Named backend check |
+| --- | --- | --- |
+| SCRUM907-mirror | Create at 10,250 then edit supplier cost to 9,900; stored costs and approved audit show 9,900 | updating supplier cost mirrors purchasePrice and the approved edit audit |
+| SCRUM907-conflict | Conflicting costs refused with EN/AR code; no vehicle or edit change | conflicting submitted costs are refused without changing the vehicle or its audit |
+| SCRUM907-posted | Posted acquisition prevents editing either cost | posted acquisition still locks supplier cost and the mirror |
+| SCRUM907-approval | Old pending supplier-cost request applies and audits both fields | an old pending supplier-cost request applies and audits the mirror at approval |
+| SCRUM907-repair | Bounded cursor page repairs mismatch; rerun changes zero; STOCK/deleted untouched | repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched |
+| SCRUM907-repair-lock | Posted acquisition counted locked and untouched | repair reports posted-cost locks and does not change them |
+| SCRUM907-repair-history | Sold/opening locks and missing cost counted; none patched | repair reports sold, opening-locked and unreadable supplier costs without changing them |
+| SCRUM907-echo | A changed request records its mirror; an unchanged source-cost echo still refuses with No changes detected | `vehicleCostDisclosureWrites.scrum886.test.ts`: control: a requester who may read cost can still request a cost change |
+| SCRUM907-mobile-echo | Old mobile purchasePrice echo on a stale SOLD row saves color, preserves both costs and omits cost from audit; a different price alone refuses | M1 older mobile can edit a stale SOLD row with its unchanged purchasePrice |
+| SCRUM907-sold-echo | SOLD cost echo writes no vehicle cost or timestamp through direct and approval doors | M2 unchanged sourceCost echo preserves SOLD history through every update door |
+| SCRUM907-opening-echo | Opening-locked cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves opening history through every update door |
+| SCRUM907-posted-echo | Posted-cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves posted history through every update door |
+
+Deploy rollout phase 2f uses a tested `releaseGuard.ts` helper, pages of at most
+25 vehicles, the shared deadline and a 10,000-page cap. Locked and invalid
+rows are counted anomalies. Read failures and incomplete pages refuse the final
+rollout verdict after Social Inbox verification. The implementer ran no repair against a deployment.
 
 ### SCRUM-869 settled history: each figure comes from what its source records
 
@@ -1043,3 +1073,17 @@ Class table, every db read in the three readers:
 | | receivable-from-suppliers control account | one `unique()` document, no free-text field |
 
 Evidence boundary: convex-test with `transactionLimits: true`; the headroom call is not proven against the Convex backend's metering (SCRUM-762). Not changed: a generic reversal of `SUPPLIER_PAYMENT_SETTLED` leaves `amountPaid` as it was, so the payable history can still say "Settled in full" (LOW, SCRUM-879).
+
+## SCRUM-908 ACCOUNTANT commission visibility
+
+Matrix row `SCRUM908-accountant-commission-visibility` binds `convex/accountantCommissionsAccess.scrum908.test.ts` and the ACCOUNTANT/SENIOR_ACCOUNTANT template checks in `convex/utils/permissions.test.ts` to owner ruling SCRUM-908 c24538. A newly created organization seeds ACCOUNTANT with `view:commissions` and without `manage:commissions`. A member in that stored role may call `sales.listCommissions` for its own organization and is refused for a foreign organization. Owner-only role create and update accept commission viewing alongside finance, cost and disbursement permissions. An owner may still withhold commission visibility while retaining cost and sale-completion access. Regression records are under `regression/scenarios/permission/`. Original template/ruling-change records have no `bugRef`; round-2 defect records carry the committed failing-first revision.
+
+`convex/accountantCommissionsBackfill.scrum908.test.ts` extends this row with the coordinator-selected exact 19-permission pre-change ACCOUNTANT set, including cost access. Order is irrelevant; extra, missing, same-length substituted or duplicate permissions, renamed, deleted and system-owner roles are unchanged. The grant and `accountant-commissions-2026-11-04` marker commit in one patch. Replays do nothing, including after an owner removes commissions from a marked role. Public role saves, existing backfills and template sync preserve provenance; new organizations stamp it with the default grant. Owner-run template sync explicitly restores current template permissions, including commission viewing; its test asserts marker retention. The raw admin editor refuses provenance changes while accepting unchanged round trips and normal permission edits. One-row tenant pages preserve ownership, and the 500-row upper clamp resumes through the remaining row. The frozen-set test compares it with a literal snapshot of the pre-change template.
+
+Round-2 review remediation adds deployment-wide completion in `roleMigrationRuns`, atomic with the final page. New public-door tests recreate ACCOUNTANT with exactly 19 permissions and rename a 19-permission Bookkeeper to accountant after completion. Later migration calls must return zero updates and leave both roles without `view:commissions`. A multi-page control checks no premature completion, one final record, unchanged roles and completion history on replay, and a terminal page even with an unusable role cursor. These three records cite red revision `bc5c19cd0ffc34741d0e7c916ec5b82a904a2dfb`, which contains their named tests. Earlier custom-extra-permission recreation coverage remains separately bound.
+
+`scripts/accountantCommissionsRollout.test.ts` retains commissions-before-cost wiring, shared deadline, bounded cursor walking, counts-only output and malformed evidence refusal. Cost order does not affect the supported already-cost-bearing cohort. No-cost rows do not match this commission phase until the separate cost repair changes their set. The backfill remains internal.
+
+Round-2 defect checks have failing-first revision `a59e3afdf198c00c67aa1450a84cb37552bc65d0`, which contains the named tests. The coordinator's read-only observation counted one matching production ACCOUNTANT; this lane used synthetic fixtures and did not access production. See `docs/adr/2026-11-04-accountant-commissions-backfill-runs-in-the-deploy-rollout.md` for commands, mutation controls and provenance boundaries.
+
+Evidence boundary: serial `convex-test`, template and helper checks. This row does not certify PR #772's management-net headline, authenticated browser behavior, platform concurrency, real-backend schema deployment or production rollout. Independent seats and release verification remain pending.

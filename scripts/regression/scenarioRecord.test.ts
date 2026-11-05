@@ -49,6 +49,18 @@ const rules = (records: ScenarioRecord[], rulings = RULINGS) =>
   validateLibrary(records, { rulings, repoRoot: REPO_ROOT }).map((p) => p.rule);
 
 describe("scenario record validators", () => {
+  test("SCRUM-908 ruling-driven net-profit scenario is preventive and bound to its certification test", () => {
+    const record = JSON.parse(fs.readFileSync(path.join(REPO_ROOT,
+      "regression/scenarios/money/deal-net-profit-all-showroom-expenses-and-commissions.scenario.json"), "utf8")) as ScenarioRecord;
+    expect(record.bugRef).toBeUndefined();
+    expect(record.impl).toEqual({
+      file: "convex/scrum486Certification.test.ts",
+      testName: "SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions",
+    });
+    if (!record.impl) throw new Error("Expected scenario implementation");
+    expect(fs.readFileSync(path.join(REPO_ROOT, record.impl.file), "utf8")).toContain(record.impl.testName);
+  });
+
   test("a well-formed active scenario passes", () => {
     expect(rules([base()])).toEqual([]);
   });
@@ -627,4 +639,16 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
     const s = base();
     expect(scenarioFingerprint({ domain: s.domain, steps: s.steps, expected: s.expected })).toBe(s.fingerprint);
   });
+});
+
+// SCRUM-907 Seat 2: preventive controls and new repair coverage are not reproduced bugs.
+test.each([
+  "sourced-posted-cost-still-refuses-update",
+  "sourced-cost-conflict-refuses-without-writes",
+  "sourced-mirror-repair-idempotent-stock-deleted-untouched",
+  "sourced-mirror-repair-refuses-sold-opening-missing-cost",
+  "sourced-mirror-repair-reports-posted-cost-lock",
+])("SCRUM-907 protective scenario %s claims no failing-first bug", id => {
+  const record = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "regression/scenarios/money", `${id}.scenario.json`), "utf8")) as ScenarioRecord;
+  expect(record.bugRef).toBeUndefined();
 });

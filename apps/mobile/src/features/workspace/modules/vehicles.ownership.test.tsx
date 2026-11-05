@@ -376,3 +376,21 @@ describe("SCRUM-886: editing without view:cost_price", () => {
     }
   });
 });
+// SCRUM-907 M1: older stored mirrors must not be resubmitted by new mobile builds.
+test("editing a SOURCED vehicle omits purchasePrice from the payload", async () => {
+  const menu = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
+  mockUsePaginatedQuery.mockReturnValue({
+    results: [{ _id: "veh_1", vin: VALID_VIN, make: "Honda", model: "Accord", year: 2022, mileage: 12000,
+      color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000,
+      status: "SOLD", sourceType: "SOURCED", sourceCost: 9900, purchasePrice: 10250 }],
+    status: "Exhausted", loadMore: jest.fn(), isLoading: false,
+  } as unknown as ReturnType<typeof usePaginatedQuery>);
+  const view = await render(<ThemeProvider><LocaleProvider><VehiclesModule orgId="org_1" permissions={["edit:vehicles", "view:cost_price"]} /></LocaleProvider></ThemeProvider>);
+  await fireEvent.press(view.getByRole("button", { name: "More options" }));
+  const buttons = menu.mock.calls.at(-1)![2] as Array<{ text: string; onPress?: () => void }>;
+  await act(async () => buttons.find(button => button.text === "Edit")!.onPress!());
+  await next(view);
+  await save(view);
+  expect(updateVehicle).toHaveBeenCalledTimes(1);
+  expect(updateVehicle.mock.calls[0]![0]).not.toHaveProperty("purchasePrice");
+});

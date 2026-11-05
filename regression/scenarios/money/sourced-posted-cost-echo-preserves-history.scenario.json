@@ -1,0 +1,57 @@
+{
+  "id": "sourced-posted-cost-echo-preserves-history",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-review-remediation",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update-and-approval-doors",
+      "input": {
+        "lock": "posted",
+        "storedSourceCost": 9900,
+        "storedPurchasePrice": 10250,
+        "sourceCost": 9900,
+        "sourceType": "SOURCED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": 10250
+    },
+    {
+      "observable": "vehicle.sourceCost",
+      "value": 9900
+    },
+    {
+      "observable": "echoOnlyVehicleWrites",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcedCostMirror.scrum907.test.ts",
+    "testName": "M2 unchanged sourceCost echo preserves posted history through every update door"
+  },
+  "matrixRow": "SCRUM907-posted-echo",
+  "bugRef": {
+    "key": "SCRUM-907",
+    "failingFirst": "3d6bc3f88bf02ac906bf0168d95637ec01307599"
+  },
+  "fingerprint": "4bd3a2ca75a4c5e881f32ce8057d2c31f7b07dc716df26c5578d93bddfb8e466"
+}

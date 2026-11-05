@@ -49,7 +49,8 @@ export function sumCommissionMinor(
 /**
  * The deal's profit after its employee commissions, in minor units.
  *
- * `profitMinor` is the screen's existing net profit and is signed. Returns null
+ * `profitMinor` is a signed margin BEFORE commissions. Never pass the deal's
+ * management net, which already deducts them. Returns null
  * when either operand is unknown, so a missing figure is never shown as a
  * profit.
  */

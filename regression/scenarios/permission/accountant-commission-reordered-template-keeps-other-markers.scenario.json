@@ -1,0 +1,46 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-accountant-commissions",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-04"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-reordered-template-keeps-other-markers",
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "roleSet": "EXACT_TEMPLATE_REVERSED",
+        "markers": "OTHER_MIGRATION"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "updatedCount",
+      "value": 1
+    },
+    {
+      "observable": "role.markers",
+      "value": "OTHER_PLUS_COMMISSION_MIGRATION"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: reordered exact template preserves unrelated migration markers"
+  },
+  "fingerprint": "23e935f51a0db49fcba97ae2cb925852839a1c7906b0dcf756a2d28d2da7f277"
+}

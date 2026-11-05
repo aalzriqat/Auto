@@ -1,0 +1,46 @@
+{
+  "id": "sourced-posted-cost-still-refuses-update",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-local",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "acquisition": "POSTED",
+        "sourceCost": 9900
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.sourceCost",
+      "value": 10250
+    },
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": 10250
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcedCostMirror.scrum907.test.ts",
+    "testName": "posted acquisition still locks supplier cost and the mirror"
+  },
+  "matrixRow": "SCRUM907-posted",
+  "fingerprint": "f6ee4a035794b3902a00f56df0e55573fff712e553797d092dbd59522718f2ee"
+}
