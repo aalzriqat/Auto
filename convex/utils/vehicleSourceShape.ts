@@ -54,6 +54,8 @@ export const VEHICLE_SOURCE_SHAPE_MESSAGES = {
     "This vehicle is held on consignment, so a purchase can't be posted for it. Nothing was posted.",
   VEHICLE_COST_EDIT_NEEDS_COST_ACCESS:
     "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
+  VEHICLE_SOURCED_COST_CONFLICT:
+    "For a consignment vehicle, purchase price must equal supplier cost. Submit the supplier cost only, or enter the same amount in both fields.",
 } as const;
 
 export type VehicleSourceShapeCode = keyof typeof VEHICLE_SOURCE_SHAPE_MESSAGES;
@@ -61,6 +63,39 @@ export type VehicleSourceShapeCode = keyof typeof VEHICLE_SOURCE_SHAPE_MESSAGES;
 /** Throws the coded refusal for `code` with its English message. */
 export function throwVehicleSourceShape(code: VehicleSourceShapeCode): never {
   throwAppError(AppErrorCode[code], VEHICLE_SOURCE_SHAPE_MESSAGES[code]);
+}
+
+/** Refuse contradictory input; the mirror is derived from the supplier entitlement. */
+export function sourcedCostMirrorPatch(
+  existing: VehicleSourceFields & { purchasePrice?: number },
+  input: VehicleSourceFields & { purchasePrice?: number },
+): { purchasePrice?: number } {
+  if ((input.sourceType ?? existing.sourceType) !== "SOURCED") return {};
+  const sourceCost = input.sourceCost ?? existing.sourceCost;
+  const costChanges = input.sourceCost !== undefined && input.sourceCost !== existing.sourceCost;
+  const ownershipChanges = input.sourceType === "SOURCED" && existing.sourceType !== "SOURCED";
+  const expectedPrice = costChanges || ownershipChanges ? sourceCost : existing.purchasePrice;
+  if (input.purchasePrice !== undefined && input.purchasePrice !== expectedPrice) {
+    throwVehicleSourceShape("VEHICLE_SOURCED_COST_CONFLICT");
+  }
+  if (typeof sourceCost === "number" && (costChanges || ownershipChanges) && existing.purchasePrice !== sourceCost) {
+    return { purchasePrice: sourceCost };
+  }
+  return {};
+}
+
+/** Approval payloads may predate the mirror rule. Drop cost echoes before testing locks or writing. */
+export function normalizeSourcedCostUpdate<T extends VehicleSourceFields & { purchasePrice?: number }>(
+  existing: VehicleSourceFields & { purchasePrice?: number },
+  input: T,
+): T {
+  const patch = { ...input, ...sourcedCostMirrorPatch(existing, input) };
+  if ((input.sourceType ?? existing.sourceType) === "SOURCED") {
+    for (const field of ["sourceCost", "purchasePrice", "sourceType"] as const) {
+      if (patch[field] === existing[field]) delete patch[field];
+    }
+  }
+  return patch;
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runSourcedCostMirrorPhase,
   runAccountantCommissionsPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
@@ -96,6 +97,7 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let sourcedCostMirrorSummary = null;
 let accountantCommissionsSummary = null;
 
 function writeSummary(extra) {
@@ -121,6 +123,7 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (sourcedCostMirrorSummary) body += `\n### SOURCED cost mirrors\n\n${sourcedCostMirrorSummary}\n`;
   if (accountantCommissionsSummary) body += `\n### ACCOUNTANT commissions backfill\n\n${accountantCommissionsSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
@@ -413,6 +416,12 @@ lastVerdict = before.verdict;
 accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${accountantCostPriceSummary}`);
 
+// ─── 2f. Repair unposted SOURCED purchase-price mirrors (SCRUM-907) ───────────
+console.log(`Repairing SOURCED cost mirrors…`);
+const sourcedCostMirror = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS });
+sourcedCostMirrorSummary = sourcedCostMirror.ok ? sourcedCostMirror.summary : sourcedCostMirror.reason;
+console.log(`  ${sourcedCostMirrorSummary}`);
+
 // ─── 3. Refuse to finish until every org is verifiably on the fast path ──────
 
 const startedAt = rolloutStartedAt;
@@ -452,6 +461,12 @@ const supplierIdentityRefusal = lastOutcome === "verified" ? supplierIdentityRef
 if (supplierIdentityRefusal) {
   lastOutcome = "failed";
   fail(supplierIdentityRefusal);
+}
+
+// A failed repair remains a deploy failure, but cannot prevent Social Inbox verification.
+if (!sourcedCostMirror.ok) {
+  lastOutcome = "failed";
+  fail(sourcedCostMirror.reason);
 }
 
 if (lastOutcome === "verified") {

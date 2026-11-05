@@ -1,0 +1,49 @@
+{
+  "id": "sourced-cost-update-mirrors-purchase-price",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-local",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "sourceCost": 9900
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehicle.purchasePrice",
+      "value": 9900
+    },
+    {
+      "observable": "audit.purchasePrice",
+      "value": 9900
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/sourcedCostMirror.scrum907.test.ts",
+    "testName": "updating supplier cost mirrors purchasePrice and the approved edit audit"
+  },
+  "matrixRow": "SCRUM907-mirror",
+  "bugRef": {
+    "key": "SCRUM-907",
+    "failingFirst": "db5489a967e137e0c740a0b7eab5f8ac4ecc584f"
+  },
+  "fingerprint": "3fbc3bc550f904c6703b062b5014f3ac0f6f71813f12c7bfaaddd04c541cc722"
+}

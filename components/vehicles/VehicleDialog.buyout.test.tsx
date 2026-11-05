@@ -120,6 +120,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("buying out a saved consignment car", () => {
+  test("SCRUM-907 supplier-cost edits omit the hidden purchasePrice mirror", async () => {
+    renderEdit();
+    fireEvent.change(screen.getByLabelText(/SupplierCost/), { target: { value: "9900" } });
+    save();
+    await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
+    expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourceCost: 9900 });
+    expect(updateSpy().mock.calls[0][0]).not.toHaveProperty("purchasePrice");
+  });
   test("an unparsed form supplier ID never reaches the mutation", async () => {
     renderEdit();
     fireEvent.click(screen.getByRole("button", { name: "Tamper supplier ID" }));
@@ -189,7 +197,7 @@ describe("buying out a saved consignment car", () => {
     expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourceType: "STOCK", purchasePrice: 9000 });
   });
 
-  test("switching back to Consignment restores the stored mirror and sends no buy-out terms", async () => {
+  test("switching back to Consignment sends supplier cost and no buy-out terms", async () => {
     renderEdit();
     fireEvent.click(owned());
     fireEvent.click(consignment());
@@ -197,7 +205,8 @@ describe("buying out a saved consignment car", () => {
     await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
     const sent = updateSpy().mock.calls[0][0];
     // The supplier travels as its master id only; the typed or stored name is never submitted.
-    expect(sent).toMatchObject({ sourceType: "SOURCED", sourcedSupplierId: "sup_gulf", sourceCost: 9000, purchasePrice: 9000 });
+    expect(sent).toMatchObject({ sourceType: "SOURCED", sourcedSupplierId: "sup_gulf", sourceCost: 9000 });
+    expect(sent).not.toHaveProperty("purchasePrice");
     expect(sent).not.toHaveProperty("sourcedFromName");
     expect(sent).not.toHaveProperty("purchasePaymentMethod");
   });
@@ -254,7 +263,8 @@ describe("SCRUM-886 - a saved car whose cost the server withheld", () => {
     expect(screen.getByLabelText(/SupplierCost/)).toBeTruthy();
     save();
     await waitFor(() => expect(updateSpy()).toHaveBeenCalledTimes(1));
-    expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourceCost: 9000, purchasePrice: 9000 });
+    expect(updateSpy().mock.calls[0][0]).toMatchObject({ sourceCost: 9000 });
+    expect(updateSpy().mock.calls[0][0]).not.toHaveProperty("purchasePrice");
   });
 });
 

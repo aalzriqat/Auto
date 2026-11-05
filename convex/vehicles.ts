@@ -123,6 +123,7 @@ import {
   requestedVehicleSourceTypeChange,
   storedVehicleSourceType,
   throwVehicleSourceShape,
+  sourcedCostMirrorPatch,
 } from "./utils/vehicleSourceShape";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1240,6 +1241,75 @@ export function throwVehicleCostPosted(): never {
   );
 }
 
+/** Read-only lock probes: known business refusals skip a row; unexpected failures abort the page. */
+async function sourcedMirrorRepairLocked(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<boolean> {
+  if (vehicle.status === "SOLD" ||
+      await hasVehicleAcquisitionAccountingExposure(ctx, vehicle.orgId, vehicle._id) ||
+      await hasVehicleLandedCostAccountingExposure(ctx, vehicle.orgId, vehicle._id)) return true;
+  try {
+    await assertNoHeldSupplierConcession(ctx, vehicle.orgId, vehicle._id);
+    return await assertOpeningVehicleBasis(ctx, vehicle.orgId, vehicle._id) === "POSTED";
+  } catch (error) {
+    if (error instanceof ConvexError) return true;
+    throw error;
+  }
+}
+
+type SourcedMirrorRepairOutcome = "UNCHANGED" | "INVALID" | "LOCKED" | "REPAIR";
+
+async function sourcedMirrorRepairOutcome(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<SourcedMirrorRepairOutcome> {
+  if (vehicle.isDeleted || vehicle.sourceType !== "SOURCED" || vehicle.purchasePrice === vehicle.sourceCost) return "UNCHANGED";
+  if (!await validSourcedMirrorCost(ctx, vehicle)) return "INVALID";
+  return await sourcedMirrorRepairLocked(ctx, vehicle) ? "LOCKED" : "REPAIR";
+}
+
+/** SCRUM-907. Internal rollout only, one native page per transaction; never rewrites posted cost history. */
+export const backfillSourcedCostMirror = internalMutation({
+  args: {
+    numItems: v.optional(v.number()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  returns: v.object({
+    scanned: v.number(), updated: v.number(), skippedLocked: v.number(), skippedInvalid: v.number(),
+    isDone: v.boolean(), continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    try {
+      const size = args.numItems ?? 25;
+      if (!Number.isSafeInteger(size) || size < 1 || size > 25) {
+        throw new ConvexError("Invalid repair page size.");
+      }
+      const page = await ctx.db.query("vehicles").paginate({ numItems: size, cursor: args.cursor ?? null });
+      // Probes only read; the page's patches then run together. Any unexpected failure still rejects the whole page.
+      const outcomes = await Promise.all(page.page.map((vehicle) => sourcedMirrorRepairOutcome(ctx, vehicle)));
+      const repairs = page.page.filter((_, index) => outcomes[index] === "REPAIR");
+      await Promise.all(repairs.map((vehicle) => ctx.db.patch(vehicle._id, { purchasePrice: vehicle.sourceCost })));
+      const count = (outcome: SourcedMirrorRepairOutcome): number => outcomes.filter((o) => o === outcome).length;
+      return {
+        scanned: page.page.length, updated: repairs.length, skippedLocked: count("LOCKED"), skippedInvalid: count("INVALID"),
+        isDone: page.isDone, continueCursor: page.continueCursor,
+      };
+    } catch (error) {
+      console.error("SOURCED cost mirror repair failed", error);
+      // Throw, never return an error after a write: the entire page must roll back.
+      throw new ConvexError("Unable to repair vehicle costs. Please try again later.");
+    }
+  },
+});
+
+async function validSourcedMirrorCost(ctx: MutationCtx, vehicle: Doc<"vehicles">): Promise<boolean> {
+  const amount = vehicle.sourceCost;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) return false;
+  const currency = await getOrgCurrency(ctx, vehicle.orgId);
+  try {
+    requireSupplierAmountMinor(amount, currency);
+    return true;
+  } catch (error) {
+    if (error instanceof ConvexError) return false;
+    throw error;
+  }
+}
+
 /**
  * STRICTER than `hasVehicleAcquisitionAccountingExposure`, and deliberately local.
  *
@@ -1587,6 +1657,9 @@ export const update = mutation({
         patch.sourcedFromName = sourcedSnapshot.name;
       }
     }
+
+    // SCRUM-907: derive the mirror before the existing locks and edit audit.
+    Object.assign(patch, sourcedCostMirrorPatch(vehicle, args));
 
     // SCRUM-766 PR-C: the supplier terms (cost, supplier, type) are what an open deal's supplier
     // concession was agreed against. `patch` holds only the keys whose value actually changes, so
