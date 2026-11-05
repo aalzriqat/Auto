@@ -16,6 +16,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+  OPENING_SUSPENSE_OPEN_WARNING,
 } from "./utils/closeWarnings";
 import { computeCloseChecklist } from "./accountingPeriods";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
@@ -1147,6 +1148,107 @@ test("the close checklist reads the whole ledger once for the three opening-fami
   expect(documents.reads.ranges).toBeLessThan(4_096);
 }), 120_000);
 const EXPECTED_PERIOD_READS = 5;
+
+// R15f: zero suspense is not an open balance when a later verification read is refused.
+test("R15f exhausted close headroom reports unverified suspense rather than an open balance", () => withFrozenScheduler(async () => {
+  const seed = await cumulativeLimitSeed(160_000, 0);
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find(row => row.systemKey === "EMPLOYEE_ADVANCES");
+  const cash = accounts.find(row => row.systemKey === "CASH_ON_HAND");
+  const suspense = accounts.find(row => row.systemKey === "OPENING_SUSPENSE");
+  const actor = await t.run(ctx => ctx.db.query("users").first());
+  if (!advances || !cash || !suspense || !actor) throw new Error("Missing R15f synthetic accounts");
+  expect(await t.run(ctx => ctx.db.query("journalLines").withIndex("by_org_account", q =>
+    q.eq("orgId", orgId).eq("accountId", suspense._id)).collect())).toEqual([]);
+  const small = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(small.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 20, "r15f-close", ADVANCE_FAMILY, cash._id, 0,
+    { periodId, lineDescriptionBytes: 240_000 });
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(checklist.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
+  expect(checklist.warnings).toContain("[OPENING_SUSPENSE_UNAVAILABLE] The opening-balance suspense balance could not be verified. Review the opening source and ledger, then re-check.");
+  await owner.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: checklist.warnings });
+  expect((await t.run(ctx => ctx.db.get(periodId)))?.status).toBe("CLOSED");
+}), 300_000);
+
+async function retainedHeaderSeed(count = 11) {
+  const seed = await fixture(undefined, false, true);
+  const parent = await seed.t.run(ctx => ctx.db.query("openingBalanceDrafts").first());
+  if (!parent) throw new Error("Missing R15f opening source");
+  const { _id: _parentId, _creationTime: _created, ...header } = parent;
+  for (let index = 0; index < count; index++) {
+    await seed.t.run(async ctx => {
+      const journal = await ctx.db.get(parent.journalEntryId!);
+      if (!journal) throw new Error("Missing R15f current journal");
+      const { _id: _journalId, _creationTime: _journalCreated, ...historical } = journal;
+      const deletedJournal = await ctx.db.insert("journalEntries", { ...historical, status: "REVERSED", journalNumber: `R15f-${index}` });
+      await ctx.db.delete(deletedJournal);
+      await ctx.db.insert("openingBalanceDrafts", { ...header, journalEntryId: deletedJournal, memo: "x".repeat(800_000) });
+    });
+  }
+  await seed.t.run(async ctx => {
+    const recovery = await ctx.db.query("supplierCostRecoveries").first();
+    if (!recovery) throw new Error("Missing R15f recovery");
+    await ctx.db.patch(recovery._id, { amountDueMinor: recovery.amountDueMinor + 1 });
+  });
+  return seed;
+}
+
+test("R15f retained source history refuses without partial results or a generic reader exception", () => withFrozenScheduler(async () => {
+  const { owner, orgId } = await retainedHeaderSeed(18);
+  const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {},
+    isReconciled: false, unexplainedOpeningDifference: null });
+}), 300_000);
+
+test("R15f eleven retained headers reuse source proof and preserve the complete one-unit discrepancy", () => withFrozenScheduler(async () => {
+  const { owner, orgId } = await retainedHeaderSeed();
+  const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: false,
+    byCurrency: { JOD: { glBalanceMinor: 70_000, subledgerBalanceMinor: 70_001, discrepancyMinor: -1 } },
+    unexplainedOpeningDifference: { currencies: ["JOD"] } });
+}), 300_000);
+
+test("R15f retained source history becomes an acknowledgeable checklist unavailable warning", () => withFrozenScheduler(async () => {
+  const { owner, orgId, periodId } = await retainedHeaderSeed();
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT",
+    currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+  expect(checklist.warnings).toContain(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES);
+  expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES);
+}), 300_000);
+
+test.each([0, 1, 2, 4, 8, 16, 32, 64, 128])("R15f checklist refuses truthfully after admission stage %s", (stage) => withFrozenScheduler(async () => {
+  const { t, orgId, periodId } = await fixture(undefined, false, true);
+  const period = await t.run(ctx => ctx.db.get(periodId));
+  if (!period) throw new Error("Missing R15f period");
+  let admissions = 0;
+  let refused = false;
+  const checklist = await t.run(ctx => computeCloseChecklist({ ...ctx, meta: {
+    ...ctx.meta,
+    getTransactionMetrics: async () => {
+      const metrics = await ctx.meta.getTransactionMetrics();
+      if (admissions++ < stage) return metrics;
+      refused = true;
+      return { ...metrics, bytesRead: { ...metrics.bytesRead, remaining: 0 } };
+    },
+  } }, orgId, period));
+  expect(refused).toBe(true);
+  expect(checklist.canClose).toBe(true);
+  expect(checklist.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
+  const families = [
+    ["EMPLOYEE_ADVANCES", checklist.employeeAdvancesReconciliation],
+    ["SUPPLIER_RECOVERABLES", checklist.supplierRecoverablesReconciliation],
+    ["PARTNER_CAPITAL", checklist.partnerCapitalReconciliation],
+  ] as const;
+  for (const [family, result] of families) {
+    if (result.status !== "UNAVAILABLE") continue;
+    expect(result).toMatchObject({ unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+    expect(checklist.warnings).toContain(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+    expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  }
+}), 300_000);
 
 // SCRUM-858 R11 (both seats, MEDIUM): sharing the whole-ledger read saved only 16 documents. With 1,024 reversed pairs
 // on EACH of the advances and supplier-recoverables controls, each journal balanced against cash, the checklist read
