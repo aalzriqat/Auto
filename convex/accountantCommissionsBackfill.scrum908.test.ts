@@ -2,16 +2,18 @@ import { expect, test } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
-import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
 
 const modules = import.meta.glob("./**/*.ts");
 const backfill = internal.migrateRoles.backfillAccountantCommissionsAccess;
 const marker = "accountant-commissions-2026-11-04";
-const legacyPermissions = () => {
-  const template = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "ACCOUNTANT");
-  if (!template) throw new Error("ACCOUNTANT template is missing");
-  return template.permissions.filter((permission) => permission !== PERMISSIONS.VIEW_COMMISSIONS);
-};
+// Frozen pre-grant fixture: a future template change must not change this cohort.
+const legacyPermissions = () => [
+  "view:org", "view:users", "view:vehicles", "view:vehicle_info", "view:vehicle_expenses",
+  "view:customers", "view:sales", "view:expenses", "create:expenses", "edit:expenses",
+  "view:reports", "view:finance", "manage:finance", "view:finance_applications",
+  "confirm:finance_disbursement", "manage:supplier_settlement", "view:cost_price",
+  "view:payroll", "manage:payroll",
+];
 
 test("SCRUM-908: exact production-shaped ACCOUNTANT receives commissions and a marker once", async () => {
   const t = convexTestWithComponents(schema, modules);
@@ -85,6 +87,69 @@ test("SCRUM-908: commission backfill respects an owner's public rename, recreati
   await owner.mutation(api.roles.update, { orgId, roleId: seeded._id, permissions: customPermissions });
   expect((await t.mutation(backfill, {})).updatedCount).toBe(0);
   expect((await owner.query(api.roles.get, { orgId, roleId: seeded._id })).permissions).toEqual(customPermissions);
+});
+
+test("SCRUM-908: a completed migration never widens an exact-19 ACCOUNTANT recreated by its owner", async () => {
+  const t = convexTestWithComponents(schema, modules);
+  const owner = t.withIdentity({ subject: "recreated_accountant_owner" });
+  const orgId = await owner.mutation(api.organizations.create, { name: "Recreated Dealer" });
+  const seeded = (await owner.query(api.roles.list, { orgId })).find((role) => role.name === "ACCOUNTANT");
+  if (!seeded) throw new Error("ACCOUNTANT was not seeded");
+  expect((await t.mutation(backfill, {})).isDone).toBe(true);
+  await owner.mutation(api.roles.update, { orgId, roleId: seeded._id, name: "Former Accountant" });
+  const roleId = await owner.mutation(api.roles.create, { orgId, name: "ACCOUNTANT", permissions: legacyPermissions() });
+  const before = await owner.query(api.roles.get, { orgId, roleId });
+  expect(before.permissions).toHaveLength(19);
+
+  expect((await t.mutation(backfill, {})).updatedCount).toBe(0);
+  const after = await owner.query(api.roles.get, { orgId, roleId });
+  expect(after.permissions).not.toContain("view:commissions");
+  expect(after).toEqual(before);
+});
+
+test("SCRUM-908: a completed migration never widens an exact-19 Bookkeeper renamed accountant by its owner", async () => {
+  const t = convexTestWithComponents(schema, modules);
+  const owner = t.withIdentity({ subject: "renamed_bookkeeper_owner" });
+  const orgId = await owner.mutation(api.organizations.create, { name: "Renamed Dealer" });
+  const seeded = (await owner.query(api.roles.list, { orgId })).find((role) => role.name === "ACCOUNTANT");
+  if (!seeded) throw new Error("ACCOUNTANT was not seeded");
+  expect((await t.mutation(backfill, {})).isDone).toBe(true);
+  await owner.mutation(api.roles.update, { orgId, roleId: seeded._id, name: "Former Accountant" });
+  const roleId = await owner.mutation(api.roles.create, { orgId, name: "Bookkeeper", permissions: legacyPermissions() });
+  await owner.mutation(api.roles.update, { orgId, roleId, name: "accountant" });
+  const before = await owner.query(api.roles.get, { orgId, roleId });
+  expect(before.permissions).toHaveLength(19);
+
+  expect((await t.mutation(backfill, {})).updatedCount).toBe(0);
+  const after = await owner.query(api.roles.get, { orgId, roleId });
+  expect(after.permissions).not.toContain("view:commissions");
+  expect(after).toEqual(before);
+});
+
+test("SCRUM-908: only the final commission page records completion and later runs leave roles unchanged", async () => {
+  const t = convexTestWithComponents(schema, modules);
+  const ids = await t.run(async (ctx) => {
+    const orgId = await ctx.db.insert("organizations", { name: "One Shot Dealer", createdAt: 1 });
+    return Promise.all(["ACCOUNTANT", "accountant"].map((name) =>
+      ctx.db.insert("roles", { orgId, name, permissions: legacyPermissions() })));
+  });
+  const first = await t.mutation(backfill, { numItems: 1 });
+  expect(first).toMatchObject({ updatedCount: 1, isDone: false });
+  expect(await t.run((ctx) => ctx.db.query("roleMigrationRuns").collect())).toEqual([]);
+  const last = await t.mutation(backfill, { numItems: 1, cursor: first.continueCursor });
+  expect(last).toMatchObject({ updatedCount: 1, isDone: true });
+  const completed = await t.run((ctx) => ctx.db.query("roleMigrationRuns").collect());
+  expect(completed).toEqual([expect.objectContaining({ migration: "accountant-commissions-2026-11-04", completedAt: expect.any(Number) })]);
+  await t.run((ctx) => Promise.all(ids.map((id) => ctx.db.patch(id, { permissions: legacyPermissions(), appliedRoleMigrations: undefined }))));
+  const before = await t.run((ctx) => ctx.db.query("roles").collect());
+
+  expect(await t.mutation(backfill, {})).toEqual({ updatedCount: 0, updates: [], isDone: true, continueCursor: "" });
+  // A completed run must not paginate roles, even with an unusable role cursor.
+  expect(await t.mutation(backfill, { cursor: "not-a-role-cursor" })).toEqual({
+    updatedCount: 0, updates: [], isDone: true, continueCursor: "not-a-role-cursor",
+  });
+  expect(await t.run((ctx) => ctx.db.query("roles").collect())).toEqual(before);
+  expect(await t.run((ctx) => ctx.db.query("roleMigrationRuns").collect())).toEqual(completed);
 });
 
 test("SCRUM-908: one-role commission pages resume through both tenants without changing their role ownership", async () => {
