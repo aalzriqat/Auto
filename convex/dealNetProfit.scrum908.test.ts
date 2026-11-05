@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census matches a commission-line table-name argument; no switch is replaced.
 import { expect, test } from "vitest";
 import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 import { api } from "./_generated/api";
