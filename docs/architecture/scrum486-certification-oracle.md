@@ -783,6 +783,24 @@ and tenancy only; the registry itself is certified under SCRUM-868.
 Not certified by these rows: relationship navigation to payables, receivables and
 recoveries (slice B), and the registry initialisation in production (SCRUM-888).
 
+### SCRUM-808 per-organization deal number
+
+Every deal gets a shareable number (`D-000123`) allocated in the transaction that
+creates it. The number is an identifier: it moves no money, posts no journal and
+changes no amount. These rows certify uniqueness, scope and authority. ADR:
+`docs/adr/2026-11-04-per-organization-deal-number.md`.
+
+| Row | Obligation | Executable check |
+| --- | --- | --- |
+| `SCRUM808-deal-number-allocation` | Cash drafts and finance applications share one sequence per organization, in creation order. A sale finalized from an application carries the application's number and takes none. A refused creation consumes no number. A counter that fell behind refuses instead of issuing a duplicate. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-tenancy` | Two organizations number independently, and a lookup for another organization is refused, never answered with that organization's deal. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-permission` | `dealNumbers.find` needs VIEW_SALES, and `search.globalSearch` returns no deal to a caller without it. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-backfill` | `dealNumberBackfill:runPage` numbers existing deals per organization in creation order across both tables, a finalized sale sharing its application's number; a re-run reads no row and changes nothing. | `convex/dealNumber.scrum808.test.ts` |
+
+Not proven: concurrency (serial `convex-test`; two creations racing for one
+number rest on Convex's documented serializable OCC), the real Convex runtime,
+and production data.
+
 ## SCRUM-486 pilot route cells: SOURCED deposit endings and SOURCED financed deposit with contribution
 
 Three harness cells in `convex/scrum486Certification.test.ts` close matrix rows that the ledger listed as Required for the SOURCED routes. Each figure is derived from the owner ruling SCRUM-407 c21031 and ACC-1 (SOURCED is consignment, never salePrice minus cost), not read from code. Each has a regression record under `regression/scenarios/money/`.

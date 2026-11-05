@@ -523,10 +523,13 @@ const dealRailMessages = defineBilingualMessages({
 
   /**
    * The Deal's identity strip and vehicle card (SCRUM-372). The reference is
-   * the record's own opaque id — labelled for the record it is, never a
-   * formatted "deal number" the system does not issue.
+   * the record's own opaque id, labelled for the record it is. The deal number
+   * beside it is the one the server issues per organization (SCRUM-808,
+   * `formatDealNumber`), never one formatted on the screen from the id.
    */
   DealTypeLabel: ["Deal type", "نوع الصفقة"],
+  DealNumberLabel: ["Deal number", "رقم الصفقة"],
+  DealNumberSearchResult: ["Deal", "صفقة"],
   DealReferenceApplication: ["Application ID", "مرجع الطلب"],
   DealReferenceSale: ["Sale ID", "مرجع البيع"],
   CopyDealReference: ["Copy reference", "نسخ المرجع"],

@@ -280,6 +280,8 @@ export const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "supplierAliases", index: "by_org_and_supplierId" },
   { kind: "orgRows", table: "suppliers", index: "by_org_and_status" },
   { kind: "orgRows", table: "supplierRegistryState", index: "by_org" },
+  // SCRUM-808: the organization's deal-number counter. Appended (the order is frozen); by now its deals are gone.
+  { kind: "orgRows", table: "dealNumberCounters", index: "by_org" },
   // Explicit retention marker, not a deletion step: the owner requires task
   // alarm delivery history to survive org deletion, so taskAlarmDeliveries is
   // never purged here. Keep it last; never turn it into a delete.

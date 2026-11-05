@@ -6,6 +6,7 @@ import {
 } from "./supplierRegistry";
 import { ConvexError } from "convex/values";
 import { isManualFinanceApplication } from "./manualFinancePayer";
+import { dealNumberForNewSale } from "./dealNumber";
 import { assertOpeningVehicleBasis } from "./openingVehicleBasis";
 import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
@@ -1033,8 +1034,11 @@ async function insertSaleRecord(
   status: "PENDING" | "COMPLETED",
   commissionAmount?: number
 ) {
+  // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
+  const dealNumber = await dealNumberForNewSale(ctx, { orgId: args.orgId, applicationId: args.applicationId });
   return await ctx.db.insert("sales", {
     orgId: args.orgId,
+    dealNumber,
     branchId: prepared.vehicle.branchId,
     vehicleId: args.vehicleId,
     customerId: args.customerId,

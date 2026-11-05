@@ -407,6 +407,8 @@ async function writeCountsOf(s: Seeded) {
     payables: (await ctx.db.query("vehicleSupplierPayables").take(1000)).length,
     applications: (await ctx.db.query("depositApplications").take(1000)).length,
     vehicles: (await ctx.db.query("vehicles").take(1000)).map((v) => [v._id, v.status]),
+    // SCRUM-808: the organization's last issued deal number (0 before its first deal).
+    lastDealNumber: (await ctx.db.query("dealNumberCounters").take(10)).find((c) => c.orgId === s.orgId)?.lastNumber ?? 0,
   }));
 }
 
@@ -428,8 +430,10 @@ describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
       const saleId = await saveDraft(s, "nonReader", car, price);
       const after = await writeCountsOf(s);
       const row = await s.t.run(async (ctx) => {
-        const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, ...rest } = (await ctx.db.get(saleId))!;
+        // The deal number is the draft's position in the organization's sequence, like its id; it is checked below.
+        const { _id, _creationTime, salePrice, vehicleId, idempotencyKey, dealNumber, ...rest } = (await ctx.db.get(saleId))!;
         void _id; void _creationTime; void salePrice; void vehicleId; void idempotencyKey;
+        expect(dealNumber, `the draft at ${price} takes the next deal number`).toBe(after.lastDealNumber);
         return rest as Record<string, unknown>;
       });
       expect(typeof saleId, `the response at ${price} is one sale id`).toBe("string");
@@ -440,12 +444,13 @@ describe("SCRUM-886 round 13 rule 2: a draft is not a completion", () => {
           sales: after.sales - before.sales, commands: after.commands - before.commands, queued: after.queued - before.queued,
           payments: after.payments - before.payments, payables: after.payables - before.payables,
           applications: after.applications - before.applications,
+          dealNumbers: after.lastDealNumber - before.lastDealNumber,
         },
         row,
       });
     }
     expect(outcomes[0].deltas, "one sale row and the idempotency claim, nothing else").toEqual({
-      sales: 1, commands: 1, queued: 0, payments: 0, payables: 0, applications: 0,
+      sales: 1, commands: 1, queued: 0, payments: 0, payables: 0, applications: 0, dealNumbers: 1,
     });
     expect(outcomes[1].deltas, "the same writes at the entitlement").toEqual(outcomes[0].deltas);
     expect(outcomes[1].row, "the same stored draft (apart from id, price and car)").toEqual(outcomes[0].row);

@@ -1588,6 +1588,83 @@ function parseRolePermissionBackfillPage(
   return { ...cursor, updatedCount };
 }
 
+// ─── Deal number backfill (SCRUM-808) ───────────────────────────────────────
+
+/** SCRUM-808: number the deals created before deal numbers existed (docs/adr/2026-11-04-per-organization-deal-number.md). */
+export const DEAL_NUMBER_BACKFILL_FN = "dealNumberBackfill:runPage";
+/** Rows of EACH deal table per call; the backend clamps a page to 1..200 and defaults to 100. */
+export const DEAL_NUMBER_PAGE_SIZE = 100;
+/** Up to 200 rows per page (100 of each table), so this bounds one deployment at 2,000,000 deal rows. */
+export const MAX_DEAL_NUMBER_PAGES = 10_000;
+
+/**
+ * SCRUM-808: pages `dealNumberBackfill:runPage` until the backend reports `isDone`. The mutation reads only rows that
+ * have no number yet and allocates from each organization's counter, so a re-run resumes and a finished walk answers in
+ * one empty page. Counts only: the page carries no organization or deal identifier, and none is ever printed.
+ */
+export function backfillDealNumbersRollout(input: {
+  runPage: (cursor: string | null) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  /** The `numItems` the script asks for; a page reads at most this many rows of each of the two tables. */
+  pageSize: number;
+}): { ok: true; pages: number; numbered: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+  let pages = 0;
+  let numbered = 0;
+  const walk = walkCursorPages(
+    limits,
+    "Production is DEPLOYED, but the deal number backfill",
+    input.runPage,
+    (value) => parseDealNumberPage(value, input.pageSize),
+    (page) => {
+      pages += 1;
+      numbered += page.numberedCount;
+    },
+  );
+  return walk.ok ? { ok: true, pages, numbered } : walk;
+}
+
+/**
+ * SCRUM-808: the whole deal number phase of the rollout, minus the CLI, for the same reason as
+ * `runAccountantCostPricePhase`: the script cannot be executed under coverage, so the function name, page size, page cap,
+ * summary text and refusal branch live here. `fail` is the script's own; it is called once on a refusal.
+ */
+export function runDealNumberBackfillPhase(input: {
+  convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const walk = backfillDealNumbersRollout({
+    runPage: (cursor) =>
+      input.convex(["run", DEAL_NUMBER_BACKFILL_FN, JSON.stringify({ cursor, numItems: DEAL_NUMBER_PAGE_SIZE })]),
+    now: input.now,
+    startedAt: input.startedAt,
+    timeoutMs: input.timeoutMs,
+    maxPages: MAX_DEAL_NUMBER_PAGES,
+    pageSize: DEAL_NUMBER_PAGE_SIZE,
+  });
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The deal number phase refused and its fail handler returned.");
+  }
+  return `${walk.numbered} existing deal rows given a deal number in ${walk.pages} page call(s). Rows that already had one are untouched.`;
+}
+
+function parseDealNumberPage(value: unknown, pageSize: number): (CursorPage & { numberedCount: number }) | null {
+  const cursor = parseCursorPage(value);
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const { numberedCount, checkedCount } = value as { numberedCount?: unknown; checkedCount?: unknown };
+  // Two tables, at most `pageSize` rows of each.
+  if (!isCount(checkedCount) || checkedCount > 2 * pageSize) return null;
+  if (!isCount(numberedCount) || numberedCount > checkedCount) return null;
+  return { ...cursor, numberedCount };
+}
+
 // ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────
 
 /** The row kinds the repair walks, in order. Each is one paginated scan per organization. */

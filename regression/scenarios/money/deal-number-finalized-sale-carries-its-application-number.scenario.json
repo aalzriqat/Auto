@@ -1,0 +1,63 @@
+{
+  "id": "deal-number-finalized-sale-carries-its-application-number",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.createDraft",
+      "input": {
+        "vehicle": "V1"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "applications.finalizeDeal",
+      "input": {
+        "vehicle": "V2"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.dealNumber",
+      "value": 2
+    },
+    {
+      "observable": "sale.dealNumber",
+      "value": 2
+    },
+    {
+      "observable": "counter.lastNumber",
+      "value": 2
+    },
+    {
+      "observable": "find.kind",
+      "value": "application"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "a sale finalized from an application carries the application's number and takes no new one"
+  },
+  "matrixRow": "SCRUM808-deal-number-allocation",
+  "fingerprint": "6a70c5a2b24280e94e29c854980b0f65577776ff066b0fd0a47e91c0c008f6e1"
+}

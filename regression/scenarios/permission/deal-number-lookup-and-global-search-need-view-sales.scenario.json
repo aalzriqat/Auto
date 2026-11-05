@@ -1,0 +1,55 @@
+{
+  "id": "deal-number-lookup-and-global-search-need-view-sales",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "NO_VIEW_SALES",
+        "org": "A"
+      },
+      "action": "dealNumbers.find",
+      "input": {
+        "query": "1"
+      }
+    },
+    {
+      "actor": {
+        "role": "NO_VIEW_SALES",
+        "org": "A"
+      },
+      "action": "search.globalSearch",
+      "input": {
+        "query": "1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "find.refusal",
+      "value": "present"
+    },
+    {
+      "observable": "globalSearch.deals",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "lookup and global search need view:sales; an unknown or non-numeric query finds nothing"
+  },
+  "matrixRow": "SCRUM808-deal-number-permission",
+  "fingerprint": "bec1fe0bfdbe37c778638b405b0291fd5d1723acca0667426492b92c330b3585"
+}

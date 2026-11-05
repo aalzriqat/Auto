@@ -1,0 +1,59 @@
+{
+  "id": "deal-number-backfill-rerun-reads-nothing",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "dealNumberBackfill.runPage",
+      "input": {
+        "numItems": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "SYSTEM",
+        "org": "A"
+      },
+      "action": "dealNumberBackfill.runPage",
+      "input": {
+        "numItems": 100
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rerun.checkedCount",
+      "value": 0
+    },
+    {
+      "observable": "rerun.numberedCount",
+      "value": 0
+    },
+    {
+      "observable": "nextDeal.dealNumber",
+      "value": 4
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "a re-run reads nothing and changes nothing; a new deal continues the sequence"
+  },
+  "matrixRow": "SCRUM808-deal-number-backfill",
+  "fingerprint": "c83af9851a11c434e42a6d224eb4fc1d25712e187c41c454219e7189d88667fe"
+}

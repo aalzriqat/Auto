@@ -105,6 +105,8 @@ const FIELD_VISIBILITY: Record<
 > = {
   // --- Identity, tenancy and the lifecycle the workflow is made of ----------
   orgId: "OPEN",
+  // SCRUM-808: the readable deal number; it carries no money.
+  dealNumber: "OPEN",
   quoteId: "OPEN",
   customerId: "OPEN",
   vehicleId: "OPEN",

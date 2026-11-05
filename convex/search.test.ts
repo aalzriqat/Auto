@@ -104,15 +104,18 @@ describe("search.globalSearch", () => {
   test("returns empty results for blank/short query", async () => {
     const { orgId, asUser } = await setup();
 
+    // SCRUM-808: `deals` is the deal-number match, empty for a query that is not a deal number.
     await expect(asUser.query(globalSearchQuery, { orgId, query: "" })).resolves.toEqual({
       vehicles: [],
       customers: [],
       leads: [],
+      deals: [],
     });
     await expect(asUser.query(globalSearchQuery, { orgId, query: "h" })).resolves.toEqual({
       vehicles: [],
       customers: [],
       leads: [],
+      deals: [],
     });
   });
 
@@ -202,7 +205,7 @@ describe("search.globalSearch", () => {
       orgId: leadOnly.orgId,
       query: "Alpha",
     });
-    expect(leadOnlyResults).toEqual({ vehicles: [], customers: [], leads: [] });
+    expect(leadOnlyResults).toEqual({ vehicles: [], customers: [], leads: [], deals: [] });
 
     const leadAndCustomer = await setup(["view:leads", "view:customers"]);
     await seedSearchCorpus(leadAndCustomer.t, leadAndCustomer.orgId);

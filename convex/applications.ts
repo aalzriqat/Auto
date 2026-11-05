@@ -43,6 +43,7 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { assertActorMayCompleteConsignedSale, completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
+import { allocateDealNumber } from "./utils/dealNumber";
 import {
   isForwardPlan,
   isForwardPlanVersion,
@@ -2356,6 +2357,8 @@ export const dealCockpit = query({
       dealKind: "FINANCED" as const,
       /** The id whose tail the header shows — the application on this side. */
       dealRef: app._id as string,
+      /** SCRUM-808: the shareable per-organization number, absent until the deploy backfill reaches an older deal. */
+      ...(app.dealNumber === undefined ? {} : { dealNumber: app.dealNumber }),
       applicationId: app._id,
       /** The sale this became, once it has one. Absent before finalization. */
       saleId: app.finalizedSaleId ?? null,
@@ -3002,8 +3005,11 @@ export const createFromQuote = mutation({
       });
     }
 
+    // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
+    const dealNumber = await allocateDealNumber(ctx, args.orgId);
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
+      dealNumber,
       quoteId: quote._id,
       customerId: quote.customerId,
       vehicleId: quote.vehicleId,
