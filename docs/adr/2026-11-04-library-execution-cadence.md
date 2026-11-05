@@ -37,6 +37,14 @@ cannot be counted as unrelated to a PR. The 38 mappings added after seat review 
 No active browser record remains without a derivable mapping. Broad navigation walks intentionally have broader mappings
 than fixed-screen records. Mappings describe impact selection, not proof that a replay executed.
 
+The 12 `g8-explorer-*` records and the opted-in cross-screen oracle share `formExplorer/attestedPreview.ts`. For the exact
+`http://127.0.0.1:3210` backend, `AUTOFLOW_LOCAL_CONVEX_CI=1` permits an attestation attempt without a cloud preview name.
+It never substitutes for proof: `assertExistingE2EPreview` still checks the self-hosted credential pair, rejects cloud
+credentials, and asks the backend to attest its disposable marker, identity and seeded Clerk/QA organization. Cloud
+previews still need their name and the same bootstrap proof. Each browser must observe the matching Convex websocket,
+stay on the local app and open that QA organization. The random explorer now uses this shared guard instead of a second,
+cloud-only implementation. Attestation failures expose a code, not subprocess diagnostics.
+
 Browser verdicts: PASS only when every execution of the bound title (one per project that collects the file) has status
 `expected`. No execution is `BROWSER_REPLAY_NOT_EXECUTED`; `skipped` is `TEST_SKIPPED`; `unexpected` is `TEST_FAILED`; `flaky`
 (passed only on a retry) is `TEST_FLAKY`, so a first-attempt failure is never hidden by the CI retry. A missing or
@@ -59,6 +67,10 @@ an omitted status condition defaults to `success()`; `!cancelled()` permits inde
 - **Never run in CI yet.** `workflow_dispatch` from a branch is refused by the main-only guard, so the first real run is
   after merge. Until it has run, treat the nightly's pass/fail as unproven. The five Playwright commands are copied from
   `trusted-main-e2e.yml`, `deal-scenarios-e2e.yml` and the opening proof; running them on one shared backend is untested.
+- **Explorer/oracle local runtime remains unverified.** The prior guaranteed refusal on a local backend is fixed at the
+  shared guard and covered by unit controls plus the existing bootstrap-target tests. No browser was run locally during
+  remediation. The first full CI run must demonstrate all 12 explorer records and `CROSS_SCREEN_ORACLE=1` executing on
+  the shared local backend; unit tests do not establish that browser result.
 - **Role-fixture records fail by design.** Records bound to `playwright/tests/audit-role-access.spec.ts` need the attested
   exact-role runner (`pilot-role-audit.yml`, encrypted evidence). They have no report here and fail
   `ROLE_AUDIT_EVIDENCE_NOT_JOINED` (7 records today) until that evidence is joined or those specs are folded into this
