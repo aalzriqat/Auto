@@ -1,5 +1,29 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-760-DECISION-B-BLOCKED-DOORS
+
+Owner rulings SCRUM-795 c22479 (2026-10-08, Q2 selective containment: do not activate a new retained-credit
+payout authority) and SCRUM-795 c23829 (2026-10-28), under SCRUM-760 decision B (2026-10-19).
+These are expected-refusal cells for the pilot, not activation certificates.
+Every refusal below is a public-mutation call in `convex/pilotBlockedDoors.scrum795.test.ts`, with the shipped
+switches and no mocks. Its helper requires the exact code, matching English text and an Arabic dictionary entry,
+and identical contents of every application schema table and the scheduler. That proves a coded refusal and that
+nothing was committed. It does not prove where the guard sits; the position is read from the cited handler lines
+(`docs/pilot/blocked-server-side-doors.md`, "How a block is built").
+
+| Door | Pilot refusal code | Bound test |
+| --- | --- | --- |
+| `retainedCreditRefunds.requestRetainedCreditRefund` | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `requestRetainedCreditRefund refuses the customer-credit payout without writes` |
+| `retainedCreditRefunds.respondToRetainedCreditRefund`, APPROVED | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `respondToRetainedCreditRefund APPROVED refuses the customer-credit payout without writes` |
+| `retainedCreditRefunds.executeRetainedCreditRefund` | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `executeRetainedCreditRefund refuses the customer-credit payout without writes` |
+| `collections.registerSaleInvoiceCheque` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `registerSaleInvoiceCheque refuses the sale-invoice receipt without writes` |
+| `collections.reserveSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `reserveSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
+| `collections.activateSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `activateSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
+| `collections.recordPayment` with `invoiceSaleId` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `recordPayment bound to a sale invoice refuses the receipt without writes` |
+
+The shipped-switch pin is `the shipped switches for the excluded payout and receipt doors are ON` in the same file.
+The finishDealUnwind payout branch is the separate expected-refusal cell U-REFUND below.
+
 ## SCRUM908-cockpit-cost-projection
 
 Bound check: `convex/dealNetProfit.scrum908.test.ts`, `SCRUM-908 complete cockpit responses withhold every cost projection` (bounded CASH/FINANCED × STOCK/SOURCED matrix). Under SCRUM-902 c24475 and SCRUM-908's cost-gate requirement, a non-owner with sales, finance and commission grants receives exact `CostAccessRequired` profit objects, no supplier amount, and no cost keys or sentinel acquisition amount anywhere in either complete cockpit API response. Other finance facts are preserved. Adding cost access and the owner-without-explicit-grants control restore the existing calculations; verified financed sales retain `money: null` on the sale reader. Serial harness evidence only; independent seats, authenticated browser hunters and real backend certification remain pending.
