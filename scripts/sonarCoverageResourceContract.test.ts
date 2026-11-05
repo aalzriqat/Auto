@@ -25,6 +25,14 @@ function namedWorkflowStep(workflow: string, name: string): string {
 }
 
 describe("Sonar coverage resource contract", () => {
+  test("SCRUM-915: JS/TS analysis has an 8192 MB heap ceiling on the 16 GB runner", () => {
+    const properties = source(path.join(ROOT, "sonar-project.properties"));
+
+    expect(properties.match(/^sonar\.javascript\.node\.maxspace=.*$/gm)).toEqual([
+      "sonar.javascript.node.maxspace=8192",
+    ]);
+  });
+
   test("NEGATIVE CONTROL: an unverified coverage artifact cannot bypass validator step", () => {
     const misleadingWorkflow = `
       - name: Download coverage report from Tests
