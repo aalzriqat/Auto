@@ -1,3 +1,4 @@
+import { openingDatabase, type OpeningReadCtx } from "../utils/openingSourceIdentity";
 /**
  * GL Phase 18 — running account balance snapshots.
  *
@@ -112,7 +113,7 @@ export type BoundedCumulativeBalances =
  * Keep the original cumulative API unchanged for existing reports. No partial balance escapes a refusal.
  */
 export async function getCumulativeBalancesAsOfBounded(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
 ): Promise<BoundedCumulativeBalances> {
@@ -125,7 +126,7 @@ export async function getCumulativeBalancesAsOfBounded(
   }
 }
 
-function cumulativeReadBudget(ctx: QueryCtx): VerificationBudget {
+function cumulativeReadBudget(ctx: OpeningReadCtx): VerificationBudget {
   // Each standalone GL reproduction fits these caps. Live headroom must also account for prior reads.
   return new VerificationBudget(ctx, { accountIds: [], readLimit: 30_000, readBytesLimit: 14 * 1024 * 1024 });
 }
@@ -190,7 +191,7 @@ export type CheckedCumulativeBalances =
  * still exhaust the limit, as it could without this pass.
  */
 export async function getCumulativeBalancesAsOfChecked(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
@@ -368,14 +369,14 @@ async function readBalanceProbe<T extends object>(query: DocumentQuery<T>, budge
 }
 
 async function addPeriodSnapshots(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   periodId: Id<"accountingPeriods">,
   addTo: BalanceAdder,
   budget?: VerificationBudget,
 ): Promise<void> {
   const snapshots = await readBalanceDocuments(
-    ctx.db
+    openingDatabase(ctx)
       .query("accountBalanceSnapshots")
       .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", periodId)),
     budget,
@@ -387,7 +388,7 @@ async function addPeriodSnapshots(
 
 /** Adds every line of `entries`. With `checkLineOrg`, returns false at the first line that carries another organization's id. */
 async function addEntryLines(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   entries: ReadonlyArray<{ _id: Id<"journalEntries"> }>,
   addTo: BalanceAdder,
@@ -396,7 +397,7 @@ async function addEntryLines(
 ): Promise<boolean> {
   for (const entry of entries) {
     const lines = await readBalanceDocuments(
-      ctx.db
+      openingDatabase(ctx)
         .query("journalLines")
         .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)),
       budget,
@@ -421,7 +422,7 @@ async function addEntryLines(
  * headroom is checked before the line AND before the parent, so a parent the transaction cannot take is not fetched.
  */
 async function verifyControlLineParents(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{
     orgId: Id<"organizations">;
     periodStartDate: number;
@@ -442,7 +443,7 @@ async function verifyControlLineParents(
 
 /** One checked account's lines in the period's range, streamed one document at a time, each admitted, charged and resolved. */
 async function verifyAccountLines(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{
     orgId: Id<"organizations">;
     accountId: Id<"chartOfAccounts">;
@@ -454,7 +455,7 @@ async function verifyAccountLines(
   }>
 ): Promise<ReadOutcome> {
   const { orgId, accountId, periodStartDate, asOfDate, knownEntryIds, resolvedElsewhere, budget } = request;
-  const lines = ctx.db
+  const lines = openingDatabase(ctx)
     .query("journalLines")
     .withIndex("by_org_account_date", (q) =>
       q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", periodStartDate).lte("accountingDate", asOfDate)
@@ -477,13 +478,13 @@ async function verifyAccountLines(
  * date is outside this sum (as before); a missing or foreign one is an inconsistency.
  */
 async function resolveParentEntry(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   entryId: Id<"journalEntries">,
   budget: VerificationBudget
 ): Promise<ReadOutcome> {
   if (!(await budget.hasHeadroom()) || !budget.chargeParentFetch()) return "OVER_LIMIT";
-  const parent = await ctx.db.get(entryId);
+  const parent = await openingDatabase(ctx).get(entryId);
   if (!parent || parent.orgId !== orgId) return "INCONSISTENT_REFERENCE";
   return budget.chargeParentBytes(parent) ? "OK" : "OVER_LIMIT";
 }
@@ -499,7 +500,7 @@ function balanceAdder(totals: Map<string, CumulativeBalance>): BalanceAdder {
 }
 
 async function readCumulativeBalances(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   asOfDate: number,
   /** When given, the journal-line path verifies line and parent ownership within document and byte caps and the transaction's read headroom (see getCumulativeBalancesAsOfChecked). */
@@ -507,7 +508,7 @@ async function readCumulativeBalances(
   budget?: VerificationBudget,
 ): Promise<{ balances: CumulativeBalance[]; outcome: ReadOutcome }> {
   const periods = await readBalanceDocuments(
-    ctx.db
+    openingDatabase(ctx)
       .query("accountingPeriods")
       .withIndex("by_org", (q) => q.eq("orgId", orgId)),
     budget,
@@ -532,7 +533,7 @@ async function readCumulativeBalances(
       // The indexed probe reads at most one entry. A future-dated posting
       // requires the original date-bounded journal-line calculation.
       const futureEntry = await readBalanceProbe(
-        ctx.db
+        openingDatabase(ctx)
           .query("journalEntries")
           .withIndex("by_org_period_date", (q) =>
             q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
@@ -549,7 +550,7 @@ async function readCumulativeBalances(
     // loading entries. Include REVERSED entries too: their original lines
     // remain postings, offset by a separately posted reversal.
     const allEntriesInPeriod = await readBalanceDocuments(
-      ctx.db
+      openingDatabase(ctx)
         .query("journalEntries")
         .withIndex("by_org_period_date", (q) =>
           q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
@@ -590,7 +591,7 @@ export type BoundedControlBalances =
   | { status: "OVER_LIMIT" }
   /**
    * A line's `journalEntryId` names an entry that is missing or belongs to another organization (SCRUM-889).
-   * `ctx.db.get` does not scope by tenant, and skipping the line could report an unreconciled ledger as
+   * `openingDatabase(ctx).get` does not scope by tenant, and skipping the line could report an unreconciled ledger as
    * reconciled, so no balance is returned.
    */
   | { status: "INCONSISTENT_REFERENCE" };
@@ -614,7 +615,7 @@ export type BoundedControlBalances =
  * reported in `accountsWithLaterLines` (one indexed read each, charged only when it finds one).
  */
 export async function getControlAccountBalancesAsOf(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
   asOfDate: number,
@@ -631,7 +632,7 @@ export async function getControlAccountBalancesAsOf(
 }
 
 async function readControlAccountBalancesAsOf(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
   asOfDate: number,
@@ -648,7 +649,7 @@ async function readControlAccountBalancesAsOf(
   };
 
   const periods = await readControlDocuments(
-    ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    openingDatabase(ctx).query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)),
     remaining + 1,
     budget,
   );
@@ -670,7 +671,7 @@ async function readControlAccountBalancesAsOf(
 }
 
 type ControlBalanceReader = {
-  ctx: QueryCtx;
+  ctx: OpeningReadCtx;
   orgId: Id<"organizations">;
   asOfDate: number;
   budget?: VerificationBudget;
@@ -684,7 +685,7 @@ type ControlBalanceReader = {
 };
 
 async function selectControlReadPeriods(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Pick<ControlBalanceReader, "orgId" | "asOfDate" | "budget" | "charge"> & {
     periods: Array<{ _id: Id<"accountingPeriods">; startDate: number; endDate: number; snapshotFastPathEligible?: boolean }>;
   },
@@ -694,7 +695,7 @@ async function selectControlReadPeriods(
   const containing = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
   if (!containing) return { snapshotPeriods };
   if (!containing.snapshotFastPathEligible) return { snapshotPeriods, journalPeriod: containing };
-  const future = await readBalanceProbe(ctx.db.query("journalEntries").withIndex("by_org_period_date", (q) =>
+  const future = await readBalanceProbe(openingDatabase(ctx).query("journalEntries").withIndex("by_org_period_date", (q) =>
     q.eq("orgId", orgId).eq("periodId", containing._id).gt("accountingDate", asOfDate)), budget);
   if (!charge(future ? 1 : 0)) return "OVER_LIMIT";
   if (future) return { snapshotPeriods, journalPeriod: containing };
@@ -704,20 +705,20 @@ async function selectControlReadPeriods(
 
 async function addControlAccountBalance(reader: ControlBalanceReader, accountId: Id<"chartOfAccounts">): Promise<ReadOutcome> {
   const { ctx, orgId, asOfDate, budget, charge, snapshotPeriods, journalPeriod, addTo } = reader;
-  const later = await readBalanceProbe(ctx.db.query("journalLines").withIndex("by_org_account_date", (q) =>
+  const later = await readBalanceProbe(openingDatabase(ctx).query("journalLines").withIndex("by_org_account_date", (q) =>
     q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", asOfDate)), budget);
   if (later) {
     if (!charge(1)) return "OVER_LIMIT";
     reader.accountsWithLaterLines.push(accountId);
   }
-  const snapshots = await readControlDocuments(ctx.db.query("accountBalanceSnapshots")
+  const snapshots = await readControlDocuments(openingDatabase(ctx).query("accountBalanceSnapshots")
     .withIndex("by_org_account_currency_period_shard", (q) => q.eq("orgId", orgId).eq("accountId", accountId)), reader.remaining() + 1, budget);
   if (!charge(snapshots.length)) return "OVER_LIMIT";
   for (const snapshot of snapshots) {
     if (snapshotPeriods.has(snapshot.periodId)) addTo(snapshot.accountId, snapshot.currency, snapshot.runningDebitMinor, snapshot.runningCreditMinor);
   }
   if (!journalPeriod) return "OK";
-  const lines = await readControlDocuments(ctx.db.query("journalLines").withIndex("by_org_account_date", (q) =>
+  const lines = await readControlDocuments(openingDatabase(ctx).query("journalLines").withIndex("by_org_account_date", (q) =>
     q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", journalPeriod.startDate).lte("accountingDate", asOfDate)), reader.remaining() + 1, budget);
   if (!charge(lines.length)) return "OVER_LIMIT";
   return addControlJournalLines(reader, lines);
@@ -741,7 +742,7 @@ async function controlEntryCounts(reader: ControlBalanceReader, entryId: Id<"jou
   if (cached !== undefined) return cached;
   if (!reader.charge(1)) return "OVER_LIMIT";
   if (budget && !(await budget.hasHeadroom())) return "OVER_LIMIT";
-  const entry = await ctx.db.get(entryId);
+  const entry = await openingDatabase(ctx).get(entryId);
   if (budget && entry && !budget.chargeLine(entry)) return "OVER_LIMIT";
   if (!entry || entry.orgId !== orgId) return "INCONSISTENT_REFERENCE";
   const counts = entry.periodId === journalPeriod?._id && (entry.status === "POSTED" || entry.status === "REVERSED");

@@ -1,8 +1,9 @@
+import { openingDatabase, type OpeningReadCtx } from "./openingSourceIdentity";
 import { toMinorUnits } from "./money";
 import { ConvexError } from "convex/values";
 import { openingVerificationSource } from "./openingSourceIdentity";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx, MutationCtx } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import {
   requireOpeningSettlementBasis,
   type OpeningSettlementReader,
@@ -11,11 +12,11 @@ const refuse = () =>
   new ConvexError(
     "The opening obligation cannot be verified. Ask finance to review it before settlement.",
   );
-type Ctx = QueryCtx | MutationCtx;
+type Ctx = OpeningReadCtx | MutationCtx;
 /** The result rows of every POSTED opening draft; refuses when there are too many to read in full. */
 async function postedOpeningResults(ctx: Ctx, orgId: Id<"organizations">) {
   const source = openingVerificationSource(ctx, orgId);
-  const drafts = source ? (await source).headers : await ctx.db
+  const drafts = source ? (await source).headers : await openingDatabase(ctx)
     .query("openingBalanceDrafts")
     .withIndex("by_org_status", (q) =>
       q.eq("orgId", orgId).eq("status", "POSTED"),

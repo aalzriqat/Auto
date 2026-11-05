@@ -1,4 +1,5 @@
-import type { Doc, Id } from "../_generated/dataModel";
+import type { Doc, Id, DataModel, TableNames } from "../_generated/dataModel";
+import type { GenericTableInfo, DocumentByInfo, QueryInitializer, Query, OrderedQuery, IndexNames, IndexRangeBuilder, NamedIndex, IndexRange } from "convex/server";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import { ReadHeadroomExhausted, VerificationBudget } from "../accounting/accountSnapshots";
 
@@ -12,18 +13,18 @@ class OpeningVerificationScope {
   private tail: Promise<unknown> = Promise.resolve();
   private readonly budget: VerificationBudget;
 
-  constructor(ctx: QueryCtx) {
+  constructor(ctx: Pick<QueryCtx, "meta">) {
     this.budget = new VerificationBudget(ctx, { accountIds: [], readLimit: 30_000, readBytesLimit: 14 * 1024 * 1024 });
   }
 
-  private serial<T>(read: () => Promise<T>): Promise<T> {
+  serial<T>(read: () => Promise<T>): Promise<T> {
     const result = this.tail.then(read);
     this.tail = result.catch(() => undefined);
     return result;
   }
 
-  private stream(source: AsyncIterable<object>): AsyncIterableIterator<object> {
-    let iterator: AsyncIterator<object> | undefined;
+  stream<T extends object>(source: AsyncIterable<T>): AsyncIterableIterator<T> {
+    let iterator: AsyncIterator<T> | undefined;
     return {
       [Symbol.asyncIterator]() { return this; },
       next: () => {
@@ -39,79 +40,91 @@ class OpeningVerificationScope {
     };
   }
 
-  private query<T extends object & AsyncIterable<object>>(source: T): T {
-    return new Proxy(source, {
-      get: (target, key) => {
-        if (key === Symbol.asyncIterator) return () => this.stream(source);
-        if (key === "collect") return () => this.serial(() => this.budget.read(source));
-        if (key === "take") return (count: number) => this.serial(() => this.budget.read(source, count));
-        if (key === "first") return async () => (await this.serial(() => this.budget.read(source, 1)))[0] ?? null;
-        if (key === "unique") return async () => {
-          const docs = await this.serial(() => this.budget.read(source, 2));
-          if (docs.length > 1) throw new Error("Opening verification expected a unique record");
-          return docs[0] ?? null;
-        };
-        // No pagination or filters beneath this boundary: their hidden scans cannot
-        // be charged one document at a time. Refuse instead of bypassing admission.
-        if (["paginate", "filter", "count"].includes(String(key))) return () => { throw new ReadHeadroomExhausted(); };
-        const member: unknown = Reflect.get(target, key);
-        if (typeof member !== "function") return member;
-        if (!["withIndex", "order", "fullTableScan"].includes(String(key))) return () => { throw new ReadHeadroomExhausted(); };
-        return (...args: unknown[]) => {
-          const next: unknown = Reflect.apply(member, target, args);
-          if (!isDocumentStream(next)) throw new ReadHeadroomExhausted();
-          return this.query(next);
-        };
-      },
-    });
+  read<T extends object>(source: AsyncIterable<T>, count?: number): Promise<T[]> {
+    return this.serial(() => this.budget.read(source, count));
   }
 
-  database(db: QueryCtx["db"]): QueryCtx["db"] {
-    return new Proxy(db, {
-      get: (target, key) => {
-        const member: unknown = Reflect.get(target, key);
-        if (key === "get" && typeof member === "function") return (...args: unknown[]) => this.serial(() =>
-          this.budget.point(async () => {
-            const doc: unknown = await Reflect.apply(member, target, args);
-            if (doc === null || typeof doc === "object") return doc;
-            throw new ReadHeadroomExhausted();
-          }));
-        if (key === "query" && typeof member === "function") return (...args: unknown[]) => {
-          const source: unknown = Reflect.apply(member, target, args);
-          if (!isDocumentStream(source)) throw new ReadHeadroomExhausted();
-          return this.query(source);
-        };
-        if (key === "normalizeId" && typeof member === "function") return member.bind(target);
-        // This context deliberately has no write or system-table escape hatch.
-        throw new ReadHeadroomExhausted();
-      },
-    });
+  point<T extends object>(read: () => Promise<T | null>): Promise<T | null> {
+    return this.serial(() => this.budget.point(read));
   }
 }
 
-function isDocumentStream(value: unknown): value is object & AsyncIterable<object> {
-  return value !== null && typeof value === "object" && Symbol.asyncIterator in value && typeof value[Symbol.asyncIterator] === "function";
+/** Only the read operations used by opening verification are available. Native
+ * query stages retain Convex's index and ordering types; terminals share admission. */
+class OpeningOrderedQuery<T extends GenericTableInfo> implements AsyncIterable<DocumentByInfo<T>> {
+  constructor(protected readonly source: OrderedQuery<T>, protected readonly scope?: OpeningVerificationScope) {}
+
+  collect(): Promise<DocumentByInfo<T>[]> { return this.scope ? this.scope.read(this.source) : this.source.collect(); }
+  take(count: number): Promise<DocumentByInfo<T>[]> { return this.scope ? this.scope.read(this.source, count) : this.source.take(count); }
+  async first(): Promise<DocumentByInfo<T> | null> { return this.scope ? (await this.take(1))[0] ?? null : this.source.first(); }
+  async unique(): Promise<DocumentByInfo<T> | null> {
+    if (!this.scope) return this.source.unique();
+    const docs = await this.take(2);
+    if (docs.length > 1) throw new Error("Opening verification expected a unique record");
+    return docs[0] ?? null;
+  }
+  [Symbol.asyncIterator](): AsyncIterator<DocumentByInfo<T>> { return this.scope ? this.scope.stream(this.source) : this.source[Symbol.asyncIterator](); }
 }
 
-const scopes = new WeakMap<QueryCtx, OpeningVerificationScope>();
+class OpeningQuery<T extends GenericTableInfo> extends OpeningOrderedQuery<T> {
+  constructor(private readonly querySource: Query<T>, scope?: OpeningVerificationScope) { super(querySource, scope); }
+  order(order: "asc" | "desc"): OpeningOrderedQuery<T> {
+    return new OpeningOrderedQuery(this.querySource.order(order), this.scope);
+  }
+}
+
+class OpeningQueryInitializer<T extends GenericTableInfo> extends OpeningQuery<T> {
+  constructor(private readonly initializer: QueryInitializer<T>, scope?: OpeningVerificationScope) { super(initializer, scope); }
+  withIndex<I extends IndexNames<T>>(name: I, range?: (q: IndexRangeBuilder<DocumentByInfo<T>, NamedIndex<T, I>>) => IndexRange): OpeningQuery<T> {
+    return new OpeningQuery(this.initializer.withIndex(name, range), this.scope);
+  }
+}
+
+// Registry master tables have no role in the opening read census. Keeping this
+// explicit also prevents a generic table accessor from hiding registry access.
+type OpeningTable = Exclude<TableNames, "suppliers" | "supplierAliases" | "supplierRegistryState">;
+class OpeningDatabaseReader {
+  constructor(private readonly db: QueryCtx["db"], private readonly scope?: OpeningVerificationScope) {}
+
+  get<T extends OpeningTable>(id: Id<T>): Promise<Doc<T> | null> {
+    return this.scope ? this.scope.point(() => this.db.get(id)) : this.db.get(id);
+  }
+  query<T extends OpeningTable>(table: T): OpeningQueryInitializer<DataModel[T]> {
+    return new OpeningQueryInitializer(this.db.query(table), this.scope);
+  }
+  normalizeId<T extends OpeningTable>(table: T, id: string): Id<T> | null {
+    return this.db.normalizeId(table, id);
+  }
+}
+
+type OpeningVerificationCtx = Omit<QueryCtx, "db"> & { reader: OpeningDatabaseReader };
+export type OpeningReadCtx = QueryCtx | OpeningVerificationCtx;
+
+/** Legacy contexts use native terminals; guarded contexts reuse their admitted reader. */
+export function openingDatabase(ctx: OpeningReadCtx | Pick<QueryCtx, "db">): OpeningDatabaseReader {
+  return "reader" in ctx ? ctx.reader : new OpeningDatabaseReader(ctx.db);
+}
+
+const scopes = new WeakMap<OpeningReadCtx, OpeningVerificationScope>();
 
 /** Optional only for existing consumers: a guarded reader reuses its complete
  * source inventory; legacy mutation and report paths retain their original I/O. */
-export function openingVerificationSource(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<OpeningSourceIdentity> | undefined {
+export function openingVerificationSource(ctx: OpeningReadCtx | MutationCtx, orgId: Id<"organizations">): Promise<OpeningSourceIdentity> | undefined {
   return scopes.has(ctx) ? loadOpeningSourceIdentity(ctx, orgId) : undefined;
 }
 
-export function openingVerificationContext(ctx: QueryCtx): QueryCtx {
-  if (scopes.has(ctx)) return ctx;
+export function openingVerificationContext(ctx: OpeningReadCtx): OpeningVerificationCtx {
+  if ("reader" in ctx) return ctx;
   const scope = new OpeningVerificationScope(ctx);
-  const guarded = { ...ctx, db: scope.database(ctx.db) };
+  const { db, ...context } = ctx;
+  const guarded = { ...context, reader: new OpeningDatabaseReader(db, scope) };
   scopes.set(guarded, scope);
   return guarded;
 }
 
 /** Only typed resource refusal becomes unavailable. Programming errors still reach
  * the existing server logger. No partial accumulator escapes this boundary. */
-export async function verifyOpeningRead<T>(ctx: QueryCtx, read: (guarded: QueryCtx) => Promise<T>, unavailable: () => T): Promise<T> {
+export async function verifyOpeningRead<T>(ctx: OpeningReadCtx, read: (guarded: OpeningVerificationCtx) => Promise<T>, unavailable: () => T): Promise<T> {
   try {
     return await read(openingVerificationContext(ctx));
   } catch (error) {
@@ -132,7 +145,7 @@ export type OpeningSourceIdentity = {
 /** Retained history proves references, never current authority. Enumerate one
  * beyond each bound so an incomplete inventory cannot prove ordinary origin. */
 export async function loadOpeningSourceIdentity(
-  ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+  ctx: OpeningReadCtx | MutationCtx, orgId: Id<"organizations">,
 ): Promise<OpeningSourceIdentity> {
   const scope = scopes.get(ctx);
   if (!scope) return readOpeningSourceIdentity(ctx, orgId);
@@ -144,12 +157,12 @@ export async function loadOpeningSourceIdentity(
   return source;
 }
 
-async function readOpeningSourceIdentity(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<OpeningSourceIdentity> {
+async function readOpeningSourceIdentity(ctx: OpeningReadCtx | MutationCtx, orgId: Id<"organizations">): Promise<OpeningSourceIdentity> {
   const limit = 100;
   const [headers, journals] = await Promise.all([
-    ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q =>
+    openingDatabase(ctx).query("openingBalanceDrafts").withIndex("by_org_status", q =>
       q.eq("orgId", orgId).eq("status", "POSTED")).take(limit + 1),
-    ctx.db.query("journalEntries").withIndex("by_org_source", q =>
+    openingDatabase(ctx).query("journalEntries").withIndex("by_org_source", q =>
       q.eq("orgId", orgId).eq("sourceType", "cutover").eq("sourceId", String(orgId))).take(limit + 1),
   ]);
   const unavailable = (): OpeningSourceIdentity => ({ headers, status: "UNAVAILABLE", parent: null, journal: null });

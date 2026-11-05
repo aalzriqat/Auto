@@ -1,3 +1,4 @@
+import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
@@ -77,8 +78,8 @@ function translateMinor(amountMinor: number, rate: number, fromCurrency: string,
 }
 
 /** Resolve the organization's display currency (defaults to JOD). */
-async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
-  const settings = await ctx.db
+async function getOrgCurrencyForReports(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<string> {
+  const settings = await openingDatabase(ctx)
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
@@ -1138,7 +1139,7 @@ export async function pendingAffectingPostingState(
 }
 
 export async function hasPendingAffectingPosting(
-  ctx: Pick<QueryCtx, "db">,
+  ctx: Pick<QueryCtx, "db"> | OpeningReadCtx,
   events: Array<Doc<"pendingAccountingEvents">>,
   affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {
@@ -1157,7 +1158,7 @@ export async function hasPendingAffectingPosting(
     if (!event.originalEventId) return true;
     originalOrgs.set(event.originalEventId, event.orgId);
   }
-  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await ctx.db.get(id) })));
+  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await openingDatabase(ctx).get(id) })));
   return originals.some(({ orgId, original }) => !original || original.orgId !== orgId || affectingEventTypes.has(original.eventType));
 }
 
@@ -1166,22 +1167,22 @@ export async function hasPendingAffectingPosting(
  * will move the GL when approved, so the comparison is not final. "over" = could not read them all.
  */
 async function pendingControlAccountDraftState(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   readLimit: number,
   controlAccountKey: SystemKey,
   additionalAccounts: ReadonlySet<Id<"chartOfAccounts">> = new Set(),
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
   const [apAccount, manual, opening] = await Promise.all([
-    ctx.db
+    openingDatabase(ctx)
       .query("chartOfAccounts")
       .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", controlAccountKey))
       .unique(),
-    ctx.db
+    openingDatabase(ctx)
       .query("manualJournalDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
-    ctx.db
+    openingDatabase(ctx)
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
@@ -1194,7 +1195,7 @@ async function pendingControlAccountDraftState(
 }
 
 async function supplierPayableOpenBalanceAsOf(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{ orgId: Id<"organizations">; payable: Doc<"vehicleSupplierPayables">; cutoff: number }>,
 ): Promise<
   | { status: "AVAILABLE"; openMinor: number | null; accountId?: Id<"chartOfAccounts"> }
@@ -1211,7 +1212,7 @@ async function supplierPayableOpenBalanceAsOf(
   }
   if (basis) {
     if (basis.asOfDate > cutoff) return { status: "AVAILABLE", openMinor: null, accountId: basis.accountId };
-    const payments = await ctx.db
+    const payments = await openingDatabase(ctx)
       .query("openingPayablePayments")
       .withIndex("by_payable", (q) => q.eq("payableId", p._id))
       .take(101);
@@ -1280,7 +1281,7 @@ function cancelledNativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables"
  * `lineLimit` bounds the later lines attributed (one entry read each). More than that is OVER_LIMIT, never assumed explained.
  */
 async function laterApControlActivity(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{
     orgId: Id<"organizations">;
     accountId: Id<"chartOfAccounts">;
@@ -1291,7 +1292,7 @@ async function laterApControlActivity(
   }>,
 ): Promise<"NONE" | "UNEXPLAINED" | "OVER_LIMIT"> {
   const { orgId, accountId, cutoff, hasNativeRow, datedOpeningPayableIds, lineLimit } = request;
-  const lines = await ctx.db
+  const lines = await openingDatabase(ctx)
     .query("journalLines")
     .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", cutoff))
     .take(hasNativeRow ? 1 : lineLimit + 1);
@@ -1299,7 +1300,7 @@ async function laterApControlActivity(
   if (hasNativeRow) return "UNEXPLAINED";
   if (lines.length > lineLimit) return "OVER_LIMIT";
   for (const entryId of new Set(lines.map((line) => line.journalEntryId))) {
-    const entry = await ctx.db.get(entryId);
+    const entry = await openingDatabase(ctx).get(entryId);
     if (!entry || entry.orgId !== orgId) return "UNEXPLAINED";
     if (entry.category === "OPENING_BALANCE") continue;
     if (entry.sourceType === "vehicleSupplierPayables" && datedOpeningPayableIds.has(entry.sourceId)) continue;
@@ -1309,7 +1310,7 @@ async function laterApControlActivity(
 }
 
 export async function computeSupplierPayablesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   opts: {
@@ -1326,7 +1327,7 @@ export async function computeSupplierPayablesReconciliation(
 }
 
 async function readSupplierPayablesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   opts: {
@@ -1358,7 +1359,7 @@ async function readSupplierPayablesReconciliation(
   const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
     const [queued, failed] = await Promise.all(
       (["PENDING", "FAILED"] as const).map((status) =>
-        ctx.db
+        openingDatabase(ctx)
           .query("pendingAccountingEvents")
           .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
           .take(readLimit + 1)
@@ -1382,7 +1383,7 @@ async function readSupplierPayablesReconciliation(
   const rows: Array<Doc<"vehicleSupplierPayables">> = [];
   for (const status of SUPPLIER_PAYABLE_RECON_READ_STATUSES) {
     const budget = readLimit - rows.length;
-    const batch = await ctx.db
+    const batch = await openingDatabase(ctx)
       .query("vehicleSupplierPayables")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
       .take(budget + 1);
@@ -1396,7 +1397,7 @@ async function readSupplierPayablesReconciliation(
   // liability does not go away with the car.
   const subByCurrency = new Map<string, number>();
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
-  const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
+  const canonical = await openingDatabase(ctx).query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
   let hasNativeRow = false;
   // Opening-basis payables whose balance was rebuilt AS OF the cutoff from their dated payments.
@@ -1501,7 +1502,7 @@ export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
 export type OpeningCheckState = "OPEN" | "CLEAR" | "UNAVAILABLE";
 
 /** History exists, is absent, or could not be verified. Refusal proves neither side. */
-export async function orgHasOpeningHistory(ctx: QueryCtx, orgId: Id<"organizations">): Promise<OpeningCheckState> {
+export async function orgHasOpeningHistory(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<OpeningCheckState> {
   return verifyOpeningRead(ctx, async guarded => {
     const source = await loadOpeningSourceIdentity(guarded, orgId);
     return source.headers.length > 0 || source.status !== "ABSENT" ? "OPEN" : "CLEAR";
@@ -1513,7 +1514,7 @@ export async function orgHasOpeningHistory(ctx: QueryCtx, orgId: Id<"organizatio
  * difference is still reported in `byCurrency`, but it is not an opening-balance difference.
  */
 async function withOpeningDifferenceReport<T extends GlVsSubledgerResult>(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   result: T
 ): Promise<T & { unexplainedOpeningDifference: OpeningDifferenceReport }> {
@@ -1556,9 +1557,9 @@ function unavailableFamilyResult(
 }
 
 /** Any queued or failed posting means the GL side is about to move; a comparison now is not the truth. */
-async function hasQueuedPosting(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+async function hasQueuedPosting(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<boolean> {
   for (const status of ["PENDING", "FAILED"] as const) {
-    const row = await ctx.db
+    const row = await openingDatabase(ctx)
       .query("pendingAccountingEvents")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
       .first();
@@ -1568,9 +1569,9 @@ async function hasQueuedPosting(ctx: QueryCtx, orgId: Id<"organizations">): Prom
 }
 
 async function openingJournalAccountTotals(
-  ctx: QueryCtx, orgId: Id<"organizations">, journal: Doc<"journalEntries">,
+  ctx: OpeningReadCtx, orgId: Id<"organizations">, journal: Doc<"journalEntries">,
 ): Promise<Map<Id<"chartOfAccounts">, number> | null> {
-  const lines = await ctx.db.query("journalLines")
+  const lines = await openingDatabase(ctx).query("journalLines")
     .withIndex("by_journal_entry", q => q.eq("journalEntryId", journal._id)).take(101);
   if (lines.length === 0 || lines.length > 100) return null;
   const totals = new Map<Id<"chartOfAccounts">, number>();
@@ -1590,7 +1591,7 @@ type OpeningControlAllocationContext = {
   results: NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>;
 };
 
-async function openingAccountAllocationsSupported(ctx: QueryCtx, {
+async function openingAccountAllocationsSupported(ctx: OpeningReadCtx, {
   orgId, currency, account, allocations, results,
 }: OpeningControlAllocationContext): Promise<boolean> {
   const policy = openingPolicyForAccount(account, true);
@@ -1608,7 +1609,7 @@ async function openingAccountAllocationsSupported(ctx: QueryCtx, {
   return !allocations.some(row => isRemainingOpeningKind(row.kind)) || openingDeclaredFamilyRefusal(allocations) === null;
 }
 
-async function openingControlCoverage(ctx: QueryCtx, {
+async function openingControlCoverage(ctx: OpeningReadCtx, {
   orgId, currency, account, allocations: openingAllocations, results, kinds, netMinor,
 }: OpeningControlAllocationContext & { kinds: ReadonlySet<string>; netMinor: number }): Promise<"INCLUDED" | "OUTSIDE" | null> {
   // Custom equity remains potential capital when its allocation declaration is lost.
@@ -1631,7 +1632,7 @@ async function openingControlCoverage(ctx: QueryCtx, {
  * declared family before selecting the payable subset. Null means classification is unverifiable.
  */
 async function openingAllocationAccounts(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   kinds: ReadonlySet<string>
 ): Promise<Set<Id<"chartOfAccounts">> | null> {
@@ -1645,7 +1646,7 @@ async function openingAllocationAccounts(
   const totals = await openingJournalAccountTotals(ctx, orgId, source.journal);
   if (!totals) return null;
   for (const [accountId, netMinor] of totals) {
-    const account = await ctx.db.get(accountId);
+    const account = await openingDatabase(ctx).get(accountId);
     if (!account || account.orgId !== orgId) return null;
     const coverage = await openingControlCoverage(ctx, { orgId, currency: source.journal.currency, account,
       allocations: source.parent.allocations ?? [], results: source.parent.allocationResults ?? [], kinds, netMinor });
@@ -1658,9 +1659,9 @@ async function openingAllocationAccounts(
 /** Current mutable subledgers cannot be restated. Future effective activity is just as unsafe as
  * a past request: the GL excludes it while the current subledger already includes it. This indexed
  * probe conservatively refuses even future drafts; it is not a scan of the whole ledger. */
-async function reconciliationDateUnsupported(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number, now: number): Promise<boolean> {
+async function reconciliationDateUnsupported(ctx: OpeningReadCtx, orgId: Id<"organizations">, cutoff: number, now: number): Promise<boolean> {
   if (!Number.isFinite(cutoff) || cutoff < now) return true;
-  return (await ctx.db.query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
+  return (await openingDatabase(ctx).query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
 }
 
 type ReconciliationControlFamily = "SUPPLIER_RECOVERABLE" | "EMPLOYEE_ADVANCE";
@@ -1770,7 +1771,7 @@ function eventConfirmsOriginal(
  * OVER_LIMIT beyond it. Worst case per call: control lines <= SUPPLIER_PAYABLES_RECON_READ_LIMIT documents,
  * then either <= PROVENANCE_RANGE_BUDGET ranges or <= PROVENANCE_BATCH_DOC_BUDGET documents in <= 6 ranges. */
 async function controlSourceFamilyRefusal(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   controls: ReadonlySet<Id<"chartOfAccounts">>,
   family: ReconciliationControlFamily,
@@ -1791,13 +1792,13 @@ async function controlSourceFamilyRefusal(
         async (id) => {
           if (!journals.has(id)) {
             await requireHeadroom();
-            journals.set(id, await ctx.db.get(id));
+            journals.set(id, await openingDatabase(ctx).get(id));
           }
           return journals.get(id) ?? null;
         },
         async (id) => {
           await requireHeadroom();
-          return ctx.db.get(id);
+          return openingDatabase(ctx).get(id);
         },
       );
     } catch (error) {
@@ -1809,11 +1810,11 @@ async function controlSourceFamilyRefusal(
   const config = SUPPORTED_SOURCE_FAMILIES[family];
   let docsLeft = PROVENANCE_BATCH_DOC_BUDGET;
   const journalBatches = await readSourceBatches(ctx, config.journalSourceTypes, docsLeft, (sourceType) =>
-    ctx.db.query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
+    openingDatabase(ctx).query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
   if (journalBatches === "OVER_LIMIT") return "OVER_LIMIT";
   docsLeft -= journalBatches.size;
   const eventBatches = await readSourceBatches(ctx, config.eventSourceTypes, docsLeft, (sourceType) =>
-    ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
+    openingDatabase(ctx).query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
   if (eventBatches === "OVER_LIMIT") return "OVER_LIMIT";
   return evaluateControlProvenance(
     orgId, distinctJournalIds, family,
@@ -1824,7 +1825,7 @@ async function controlSourceFamilyRefusal(
 
 /** Distinct journal ids on the control accounts, or OVER_LIMIT past the shared control-line read limit. */
 async function readControlJournalIds(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   controls: ReadonlySet<Id<"chartOfAccounts">>,
 ): Promise<Set<Id<"journalEntries">> | "OVER_LIMIT"> {
@@ -1833,7 +1834,7 @@ async function readControlJournalIds(
   for (const accountId of controls) {
     const lines = await readBoundedDocuments(
       ctx,
-      ctx.db.query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId)),
+      openingDatabase(ctx).query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId)),
       remaining,
     );
     if (lines === "OVER_LIMIT") return "OVER_LIMIT";
@@ -1845,7 +1846,7 @@ async function readControlJournalIds(
 
 /** Every row of `table` for the given indexed source types, or OVER_LIMIT once `budget` documents are exceeded. */
 async function readSourceBatches<Row extends { _id: Id<"journalEntries"> | Id<"accountingEvents"> }>(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   sourceTypes: readonly string[],
   budget: number,
   readBatch: (sourceType: string) => AsyncIterable<Row>,
@@ -1861,12 +1862,12 @@ async function readSourceBatches<Row extends { _id: Id<"journalEntries"> | Id<"a
   return byId;
 }
 async function addSystemAccount(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   accounts: Set<Id<"chartOfAccounts">>,
   systemKey: SystemKey
 ): Promise<void> {
-  const account = await ctx.db
+  const account = await openingDatabase(ctx)
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
     .unique();
@@ -1879,7 +1880,7 @@ async function addSystemAccount(
 export type SharedGlBalances = (cutoff: number) => ReturnType<typeof getCumulativeBalancesAsOfBounded>;
 
 async function glNetByAccounts(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   cutoff: number,
   accounts: ReadonlySet<Id<"chartOfAccounts">>,
@@ -1901,9 +1902,9 @@ async function glNetByAccounts(
 const OPENING_SUSPENSE_READ_LIMIT = 2000;
 
 /** A statement about suspense requires a complete balance. Unknown remains a separate warning. */
-export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number): Promise<OpeningCheckState> {
+export async function openingSuspenseIsOpen(ctx: OpeningReadCtx, orgId: Id<"organizations">, cutoff: number): Promise<OpeningCheckState> {
   return verifyOpeningRead(ctx, async guarded => {
-    const account = await guarded.db.query("chartOfAccounts")
+    const account = await openingDatabase(guarded).query("chartOfAccounts")
       .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE)).first();
     if (!account) return "CLEAR";
     const gl = await getControlAccountBalancesAsOf(guarded, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT, true);
@@ -1914,7 +1915,7 @@ export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizati
 
 /** Employee Advances asset (GL, debit-normal) vs the unrecovered remainder of every live advance. */
 export async function computeEmployeeAdvancesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -1923,7 +1924,7 @@ export async function computeEmployeeAdvancesReconciliation(
 }
 
 async function readEmployeeAdvancesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -1934,7 +1935,7 @@ async function readEmployeeAdvancesReconciliation(
   if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
   const rows = await readBoundedDocuments(
     ctx,
-    ctx.db.query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    openingDatabase(ctx).query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", orgId)),
     SUPPLIER_PAYABLES_RECON_READ_LIMIT,
   );
   if (rows === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
@@ -1978,7 +1979,7 @@ export const employeeAdvancesReconciliation = query({
 
 /** Receivable from Suppliers (system and declared opening controls) vs the unrecovered supplier claims. */
 export async function computeSupplierRecoverablesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -1987,7 +1988,7 @@ export async function computeSupplierRecoverablesReconciliation(
 }
 
 async function readSupplierRecoverablesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -2001,7 +2002,7 @@ async function readSupplierRecoverablesReconciliation(
   for (const status of ["OPEN", "PARTIALLY_RECOVERED", "RECOVERED"] as const) {
     const batch = await readBoundedDocuments(
       ctx,
-      ctx.db.query("supplierCostRecoveries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)),
+      openingDatabase(ctx).query("supplierCostRecoveries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)),
       SUPPLIER_PAYABLES_RECON_READ_LIMIT - rows.length,
     );
     if (batch === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
@@ -2059,7 +2060,7 @@ function addDatedPartnerMovements(
  * difference here, not turn the whole comparison into "unavailable".
  */
 export async function computePartnerCapitalReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -2068,7 +2069,7 @@ export async function computePartnerCapitalReconciliation(
 }
 
 async function readPartnerCapitalReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   shared?: SharedGlBalances,
@@ -2080,7 +2081,7 @@ async function readPartnerCapitalReconciliation(
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const partners = await readBoundedDocuments(
     ctx,
-    ctx.db.query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    openingDatabase(ctx).query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)),
     SUPPLIER_PAYABLES_RECON_READ_LIMIT,
   );
   if (partners === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
@@ -2091,7 +2092,7 @@ async function readPartnerCapitalReconciliation(
     add(orgCurrency, partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency));
     const movements = await readBoundedDocuments(
       ctx,
-      ctx.db
+      openingDatabase(ctx)
         .query("partnerEquityTransactions")
         .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id)),
       SUPPLIER_PAYABLES_RECON_READ_LIMIT,

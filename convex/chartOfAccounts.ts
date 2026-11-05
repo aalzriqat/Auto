@@ -1,3 +1,4 @@
+import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -24,7 +25,7 @@ const accountTypeValidator = v.union(
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 export async function resolveSystemAccount(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Id<"organizations">,
   systemKey: SystemKey
 ): Promise<Id<"chartOfAccounts">> {
@@ -37,7 +38,7 @@ export async function resolveSystemAccount(
   // instead of failing or picking randomly. The duplicate itself still needs
   // a one-time cleanup, but that's a data-hygiene task, not a reason to block
   // every future posting until someone gets to it.
-  const accounts = await ctx.db
+  const accounts = await openingDatabase(ctx)
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
     .collect();

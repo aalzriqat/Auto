@@ -330,3 +330,68 @@ The 22-header fixture was also run with all eight affected production modules re
 | Requested mutants a/b/c | Each one selected failure, zero passes; original/restored SHA-256 match in every case |
 
 The unchanged-file Vite/shebang parse failure is recorded in SCRUM-879 comment c24609 under the owner's test-only MEDIUM follow-up rule. No suite was disabled or skipped. The original broad run's failure remains in its receipt; the corrected scenario validator's pass is a separate receipt. The final commit-specific evidence CLI result is in the handoff, because its reviewed SHA does not exist until commit.
+
+
+## R15g: typed opening reader
+
+This section replaces R15f's dynamic-adapter description and source line locations. At pinned head `c931eef71b370a445dde5405b9a73c4786dc6cb7`, the unchanged supplier registry guard reproduced seven `db-indirect-call` violations: the database crossed `Reflect.get`, `Reflect.apply` and `.bind` in `OpeningVerificationScope.database`. The guard passed 46 assertions and failed its real-tree census. Its rules and allowlists remain unchanged.
+
+`OpeningDatabaseReader` holds the native database as `QueryCtx["db"]`. Its `get`, `query` and `normalizeId` methods call that database directly. `OpeningQueryInitializer`, `OpeningQuery` and `OpeningOrderedQuery` preserve Convex's table/index/document types and query-stage ordering. Their supported terminals are `collect`, `take`, `first`, `unique` and async iteration. The types omit pagination, filters, counts, search and system-table access. The table type excludes the three registry master tables.
+
+Guarded contexts carry `reader` and omit `db`. Replacing the declared native `db` with a structural adapter would lose the Convex declaration at context handovers, which the same guard correctly rejects. `openingDatabase` selects the admitted reader, or creates a scope-free adapter for a legacy native context. The latter calls native terminal methods and native iteration, preserving the legacy read strategy. The existing ID-only `get` overload is retained because these callers use it; the installed Convex API supports it for compatibility.
+
+The scope retains the 30,000-document / 14 MiB budget, serialized admission queue, pre-`next` headroom check, per-document stream charge and WeakMap source-proof reuse. `VerificationBudget` itself is byte-identical after LF normalization to the pinned head. Resource exhaustion still refuses the complete result. OPEN, CLEAR and UNAVAILABLE, warning texts, snapshots, organization checks and financial switches retain their existing behavior.
+
+### Changed declarations and callers
+
+The following census comes from parsed top-level declarations against the pinned head. It includes type aliases whose consumers acquire the new context type. Unchanged public legacy report declarations remain on their original source paths.
+
+| File | Changed declarations |
+| --- | --- |
+| `convex/accounting/accountSnapshots.ts` | `getCumulativeBalancesAsOfBounded`, `cumulativeReadBudget`, `getCumulativeBalancesAsOfChecked`, `addPeriodSnapshots`, `addEntryLines`, `verifyControlLineParents`, `verifyAccountLines`, `resolveParentEntry`, `readCumulativeBalances`, `BoundedControlBalances`, `getControlAccountBalancesAsOf`, `readControlAccountBalancesAsOf`, `ControlBalanceReader`, `selectControlReadPeriods`, `addControlAccountBalance`, `controlEntryCounts` |
+| `convex/accountingPeriods.ts` | `openingFamilyWarnings` |
+| `convex/accountingReports.ts` | `getOrgCurrencyForReports`, `hasPendingAffectingPosting`, `pendingControlAccountDraftState`, `supplierPayableOpenBalanceAsOf`, `laterApControlActivity`, `computeSupplierPayablesReconciliation`, `readSupplierPayablesReconciliation`, `orgHasOpeningHistory`, `withOpeningDifferenceReport`, `hasQueuedPosting`, `openingJournalAccountTotals`, `openingAccountAllocationsSupported`, `openingControlCoverage`, `openingAllocationAccounts`, `reconciliationDateUnsupported`, `controlSourceFamilyRefusal`, `readControlJournalIds`, `readSourceBatches`, `addSystemAccount`, `glNetByAccounts`, `openingSuspenseIsOpen`, `computeEmployeeAdvancesReconciliation`, `readEmployeeAdvancesReconciliation`, `computeSupplierRecoverablesReconciliation`, `readSupplierRecoverablesReconciliation`, `computePartnerCapitalReconciliation`, `readPartnerCapitalReconciliation` |
+| `convex/chartOfAccounts.ts` | `resolveSystemAccount` |
+| `convex/utils/openingAccountPolicy.ts` | `openingAccountAllowsFamily` |
+| `convex/utils/openingSettlementBasis.ts` | `ReadCtx`, `createOpeningSettlementReader`, `hasCurrentOpeningJournal`, `resolveOpeningSettlementBasis`, `requireOpeningSettlementBasis` |
+| `convex/utils/openingSourceIdentity.ts` | `OpeningVerificationScope`, `scopes`, `openingVerificationSource`, `openingVerificationContext`, `verifyOpeningRead`, `loadOpeningSourceIdentity`, `readOpeningSourceIdentity` |
+| `convex/utils/openingSupplierBasis.ts` | `Ctx`, `postedOpeningResults` |
+| `convex/utils/openingUnallocatedLiabilities.ts` | `readOpeningUnallocatedLiabilities` |
+
+The source-identity module also adds the typed reader/query classes, `OpeningReadCtx`, `OpeningVerificationCtx` and `openingDatabase`, and removes `isDocumentStream`. `openingSupplierBasis` consumers of its `Ctx` alias include `openingRecoveryReferenceCounts`, `parentReference`, `openingRecoveryBasis` and `openingPayableBasis`. `OpeningSettlementReader` and `addControlJournalLines` consume the widened read-only context through their existing aliases.
+
+The inspected main declarations are byte-identical after LF normalization: `trialBalance`, `incomeStatement`, `computeIncomeStatement`, `balanceSheet`, both public deposit/commission reconciliation queries, supplier-receivables reconciliation, their three compute functions, `computeRecognizedCommissionAsOf`, `computeCommissionRecognitionDivergence` and `accountingPeriods.create`. The complete `accountingLedger.ts` and `vatReport.ts` files also match main. The snapshot writer and legacy cumulative-balance entry point match the pinned head.
+
+### Design and verification boundary
+
+The [Convex reading guide](https://docs.convex.dev/database/reading-data) documents indexed, lazy query chains and incremental iteration. The [Convex limits](https://docs.convex.dev/production/state/limits) apply to the complete transaction. An explicit adapter preserves those native operations while exposing the smaller verification interface. The narrowed methods and stage types also follow the installed Convex 1.42.1 declarations in `server/database.ts` and `server/query.ts`. There is no departure from those API contracts; the adapter adds the existing application budget policy.
+
+A compile probe accepts the supported index/order/terminal/get/normalizeId calls and reports exactly eight expected missing-property errors for pagination, filtering, counting, insert, patch, delete, system access and raw `db`. The unchanged registry suite passes 47/47. The opening-reader suite passes 88/88. Separate frontend and Convex typechecks and changed-file ESLint pass. Local Sonar equivalents report zero new findings for cognitive complexity, nested conditionals, identical functions and awaits in ordinary loops, compared with the pinned source. This is not a fresh SonarCloud analysis.
+
+All three requested 15f mutants are killed by their intended single-test failures. Each original/restored file SHA-256 matches. The restored five-case 15f selection passes. Exact commands, source comparison, per-file counts and mutation/restoration hashes are retained in `E:/tmp/auto710-r15g-evidence/` for the coordinator. The final handoff distinguishes assertion passes from collection failures and records the complete scripts-folder result.
+
+The inspected Playwright run 42097847076 records the unexpected role capture-failure JSON and a failed 48-frame inventory. Its downloaded diagnostic says CAPTURE_FAILED while the page is open, visible and connected, without a page crash or browser disconnect. The run log also records Chromium empty-image retries. No evidence connects this capture failure to the opening-reader refactor. Playwright source is unchanged.
+
+These are source, compiler and serial harness checks. Native backend metering/read-ahead, cloud scheduling/OCC, rendered role/device hunters, fresh SonarCloud analysis and final independent seats remain separate evidence. The coordinator owns push and certification. No deployment or production mutation is part of this lane.
+
+
+### R15g final measured controls
+
+| Command / scope | Result |
+| --- | --- |
+| Registry guard at pinned c931 | 46 passed, one failed; seven indirect calls |
+| Final unchanged registry guard | 47 passed, zero violations |
+| Requested/discovered selection | 1,490 passed, zero failed/skipped assertions across 60 files; refreshRulings failed before collection |
+| Additional direct-consumer suites | 1,113 passed across 28 files, zero failures/skips |
+| Complete scripts folder, one worker | 6,583 passed, 22 failed, five skipped; seven additional collection failures; 185 files. RED |
+| Ten failed script files with all nine production modules restored to c931 | 50 passed, the same 22 failed and seven collection failures. All nine fixed modules restored byte-identically |
+| Restored R15f selection | Five passed, 83 unselected |
+| Admission stages | Exactly 224, proven by a temporary stronger equality assertion; original test SHA-256 restored to 4eda16f4643be528d2a982ddc721f2926c542ec5e31b37cfb5038274b27d6c9b |
+| Mutants a/b/c | Each exits one with one selected failure, zero passes. Original/restored production hashes match |
+| Convex and root TypeScript | Both pass separately, zero errors |
+| ESLint on all nine changed TS files | Zero errors/warnings |
+| Local Sonar equivalents | Zero new inspected-rule diagnostics across nine files; cloud analysis remains unverified |
+
+The 22 script assertion failures comprise 20 Windows symlink EPERM cases, one tab-filename ENOENT case and one CRLF-sensitive release source matcher. The real rollout fail function exists and exits nonzero; its matcher works after LF normalization. Five collection failures show shebang/import-hoisting parser errors, and two contract-skew CLI suites report an invalid/unexpected token with no precise loader cause established. The five existing skipped cases remain unverified. SCRUM-879 c24612 records the full census and pinned-source control. No assertion, threshold, skip or gate was changed. Registry, tenant-write and protected-source guards pass 47, 13 and three assertions respectively.
+
+The Playwright artifact contains all 48 role PNGs, including the named expenses image. The run reports 562 passing Playwright tests and then refuses the extra capture-failure JSON. This refines the earlier capture diagnosis; it does not make the red inventory gate pass or establish the exact capture failure cause.

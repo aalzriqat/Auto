@@ -1,5 +1,5 @@
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
-import { openingVerificationContext, verifyOpeningRead } from "./utils/openingSourceIdentity";
+import { openingVerificationContext, verifyOpeningRead, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { v, ConvexError } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -53,7 +53,7 @@ type OpeningFamilyKey = keyof typeof OPENING_SOURCE_FAMILY_WARNINGS;
 /** Close warnings for the opening-family readers. An "unavailable" reading only warrants a warning where an
  * opening balance exists to reconcile; elsewhere these families are ordinary current-state subledgers. */
 async function openingFamilyWarnings(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   families: ReadonlyArray<readonly [OpeningFamilyKey, OpeningFamilyReconciliationResult]>,
 ): Promise<string[]> {

@@ -1,5 +1,6 @@
+import { type OpeningReadCtx } from "./openingSourceIdentity";
 import type { Doc } from "../_generated/dataModel";
-import type { QueryCtx, MutationCtx } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { DEFAULT_CHART, SYSTEM_KEYS, type SystemKey } from "./defaultChart";
 import { isOpeningPartnerAccount } from "../accounting/openingPartnerAllocations";
@@ -128,7 +129,7 @@ export function openingDeclaredFamilyRefusal(
 }
 
 export async function openingAccountAllowsFamily(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Doc<"organizations">["_id"],
   account: Doc<"chartOfAccounts">,
   currency: string,
