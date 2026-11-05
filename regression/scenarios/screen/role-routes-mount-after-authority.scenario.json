@@ -48,5 +48,16 @@
   "impl": {
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "protected role routes render actual authority across audited pages"
-  }
+  },
+  "sourceGlobs": [
+    "app/**",
+    "components/**",
+    "lib/navigation.ts",
+    "playwright/fixtures/screenAuditRoutes.ts",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts"
+  ]
 }

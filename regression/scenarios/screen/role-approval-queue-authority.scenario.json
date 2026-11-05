@@ -36,5 +36,15 @@
   "impl": {
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "approval screen renders authorized queue or explicit role refusal"
-  }
+  },
+  "sourceGlobs": [
+    "app/**/approvals/**",
+    "components/deposits/**",
+    "components/accounting/RetainedCreditRefundApprovalQueue.tsx",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts"
+  ]
 }

@@ -40,5 +40,11 @@
     "file": "playwright/scenarios/jev-explorer.spec.ts",
     "testName": "pilot explorer deals en desktop"
   },
-  "fingerprint": "5baf2ab332f9ebceb839de803dae7760c683c5c630a7f1649da7ba401af4826d"
+  "fingerprint": "5baf2ab332f9ebceb839de803dae7760c683c5c630a7f1649da7ba401af4826d",
+  "sourceGlobs": [
+    "app/**",
+    "components/**",
+    "lib/navigation.ts",
+    "playwright/fixtures/pilotHunt.ts"
+  ]
 }
