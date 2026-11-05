@@ -140,7 +140,9 @@ test("SCRUM-908: only the final commission page records completion and later run
   expect(last).toMatchObject({ updatedCount: 1, isDone: true });
   const completed = await t.run((ctx) => ctx.db.query("roleMigrationRuns").collect());
   expect(completed).toEqual([expect.objectContaining({ migration: "accountant-commissions-2026-11-04", completedAt: expect.any(Number) })]);
-  await t.run((ctx) => Promise.all(ids.map((id) => ctx.db.patch(id, { permissions: legacyPermissions(), appliedRoleMigrations: undefined }))));
+  await t.run(async (ctx) => {
+    await Promise.all(ids.map((id) => ctx.db.patch(id, { permissions: legacyPermissions(), appliedRoleMigrations: undefined })));
+  });
   const before = await t.run((ctx) => ctx.db.query("roles").collect());
 
   expect(await t.mutation(backfill, {})).toEqual({ updatedCount: 0, updates: [], isDone: true, continueCursor: "" });

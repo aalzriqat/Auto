@@ -21,14 +21,16 @@ describe("cancelAuthorityFor", () => {
 });
 
 describe("RBAC Permissions Configuration", () => {
-  it("frozen pre-commission ACCOUNTANT set equals the current template minus commission viewing", () => {
-    const accountant = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "ACCOUNTANT");
-    expect(accountant).toBeDefined();
-    const withoutCommissions = accountant!.permissions.filter((permission) => permission !== PERMISSIONS.VIEW_COMMISSIONS);
+  it("frozen pre-commission ACCOUNTANT set matches the 19-permission snapshot at 644d785d", () => {
     expect(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS).toHaveLength(19);
     expect(new Set(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS).size).toBe(19);
     expect(Object.isFrozen(ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS)).toBe(true);
-    expect([...ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS].sort()).toEqual([...withoutCommissions].sort());
+    expect([...ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS].sort()).toEqual([
+      "confirm:finance_disbursement", "create:expenses", "edit:expenses", "manage:finance",
+      "manage:payroll", "manage:supplier_settlement", "view:cost_price", "view:customers",
+      "view:expenses", "view:finance", "view:finance_applications", "view:org", "view:payroll",
+      "view:reports", "view:sales", "view:users", "view:vehicle_expenses", "view:vehicle_info", "view:vehicles",
+    ]);
   });
   it.each(["ACCOUNTANT", "SENIOR_ACCOUNTANT"])("%s sees commissions under SCRUM-908 c24538", (name) => {
     const role = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === name);

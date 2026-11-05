@@ -465,6 +465,13 @@ export default defineSchema({
     updatedAt: v.number(),
   }),
 
+  // Deployment-wide completion history, not tenant data. Internal role migrations
+  // record completion with their final page so later rollouts preserve owner choices.
+  roleMigrationRuns: defineTable({
+    migration: v.string(),
+    completedAt: v.number(),
+  }).index("by_migration", ["migration"]),
+
   // Durable outbox for accounting events that could not post at the time of the
   // domain operation (no chart of accounts or no open period). Instead of
   // silently dropping the GL entry, the hook enqueues it here; the events are

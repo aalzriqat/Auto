@@ -328,13 +328,20 @@ export const backfillAccountantCostPriceAccess = internalMutation({
 
 /**
  * SCRUM-908 c24538: repair only the exact pre-change default ACCOUNTANT set, including cost access.
- * Grant and provenance commit together. Later owner restrictions cannot be undone by a repeated rollout.
+ * Grant and provenance commit together; the final page also records deployment-wide completion.
+ * Completed migrations skip roles entirely, preserving later owner creations, renames and restrictions.
  * Same bounded cursor contract as the cost-price repair. `updates` contains tenant identifiers and must not reach public logs.
  */
 export const backfillAccountantCommissionsAccess = internalMutation({
   args: { ...accountantBackfillArgs },
   returns: accountantBackfillResult,
   handler: async (ctx, args) => {
+    const completed = await ctx.db.query("roleMigrationRuns")
+      .withIndex("by_migration", (q) => q.eq("migration", ACCOUNTANT_COMMISSIONS_MIGRATION))
+      .unique();
+    if (completed) {
+      return { updatedCount: 0, updates: [], isDone: true, continueCursor: args.cursor ?? "" };
+    }
     const { page, accountants } = await readAccountantRolePage(ctx, args);
     const targets = accountants.filter((role) => {
       if (isSystemOwnerRole(role) || role.appliedRoleMigrations?.includes(ACCOUNTANT_COMMISSIONS_MIGRATION)) return false;
@@ -349,6 +356,10 @@ export const backfillAccountantCommissionsAccess = internalMutation({
       });
       return `${role.name} (${role.orgId}): +${PERMISSIONS.VIEW_COMMISSIONS}`;
     }));
+
+    if (page.isDone) {
+      await ctx.db.insert("roleMigrationRuns", { migration: ACCOUNTANT_COMMISSIONS_MIGRATION, completedAt: Date.now() });
+    }
 
     return { updatedCount: updates.length, updates, isDone: page.isDone, continueCursor: page.continueCursor };
   },

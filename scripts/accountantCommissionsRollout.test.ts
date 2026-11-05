@@ -26,7 +26,9 @@ test("SCRUM-908: commission phase sends the exact cursor contract and publishes 
   expect(summary).not.toContain(SECRET);
   expect(logs).toEqual(["Granting view:commissions to unmarked default ACCOUNTANT roles…", `  ${summary}`]);
   expect(logs.join()).not.toContain(SECRET);
-  expect(run(() => ({ ok: true, value: page() }))).toContain("0 stored ACCOUNTANT roles");
+  // The completed migration returns an empty string cursor without reading roles.
+  const completed = run(() => ({ ok: true, value: page(0, true, "") }));
+  expect(completed).toBe("0 stored ACCOUNTANT roles granted view:commissions in 1 page call(s). Only unmarked roles matching the exact pre-change ACCOUNTANT template were changed.");
 });
 
 test.each([

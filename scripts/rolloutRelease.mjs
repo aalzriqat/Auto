@@ -393,7 +393,8 @@ console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
 
 // SCRUM-908 c24538: grant view:commissions to unmarked roles that hold exactly the pre-change ACCOUNTANT template,
-// view:cost_price included, so the result does not depend on running before or after the cost-price phase below.
+// which already includes view:cost_price, so phase order does not matter for that cohort. An older 18-permission
+// role would match one rollout later under a recurring scan; this migration's completion record prevents that scan.
 // The tested helper owns all paging, refusal and public-summary behavior.
 accountantCommissionsSummary = runAccountantCommissionsPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail, log: console.log });
 
