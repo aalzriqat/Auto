@@ -40,5 +40,11 @@
     "file": "playwright/scenarios/jev-explorer.spec.ts",
     "testName": "pilot explorer accounting en phone"
   },
-  "fingerprint": "01de8925d6dc48c7e638e0ab8a1a46fc46097fea7d328a781c5fc77a4930c385"
+  "fingerprint": "01de8925d6dc48c7e638e0ab8a1a46fc46097fea7d328a781c5fc77a4930c385",
+  "sourceGlobs": [
+    "app/**",
+    "components/**",
+    "lib/navigation.ts",
+    "playwright/fixtures/pilotHunt.ts"
+  ]
 }

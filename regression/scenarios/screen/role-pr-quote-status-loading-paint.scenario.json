@@ -40,5 +40,15 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "9c7a4b0b05699ad72edb22ae876e4639b52f858d6b013335dc1df8318e521c19"
+  "fingerprint": "9c7a4b0b05699ad72edb22ae876e4639b52f858d6b013335dc1df8318e521c19",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "components/auth/RoleAccessVisualFixture.test.tsx"
+  ]
 }

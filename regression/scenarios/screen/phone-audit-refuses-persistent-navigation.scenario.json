@@ -64,5 +64,8 @@
   "impl": {
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture refuses navigation that remains open after Escape"
-  }
+  },
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts"
+  ]
 }

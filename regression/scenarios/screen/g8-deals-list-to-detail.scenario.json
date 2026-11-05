@@ -40,5 +40,21 @@
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "pilot Deals opens owned and SOURCED cash and configured financed detail screens"
   },
-  "fingerprint": "5e42e755e16547923e372eb9cb65004873af12d1e301fe8f7f6be0d0e1aa4d3a"
+  "fingerprint": "5e42e755e16547923e372eb9cb65004873af12d1e301fe8f7f6be0d0e1aa4d3a",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "app/**/applications/**",
+    "app/**/settings/finance/**",
+    "components/settings/FinanceCompanyDialog.tsx"
+  ]
 }
