@@ -41,6 +41,7 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runAccountantCommissionsPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
 
@@ -95,6 +96,7 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let accountantCommissionsSummary = null;
 
 function writeSummary(extra) {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -119,6 +121,7 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (accountantCommissionsSummary) body += `\n### ACCOUNTANT commissions backfill\n\n${accountantCommissionsSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
 }
@@ -388,6 +391,12 @@ const supplierIdentity = repairAndVerifySupplierIdentity({
 supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
+
+// SCRUM-908 c24538: grant view:commissions to unmarked roles that hold exactly the pre-change ACCOUNTANT template,
+// which already includes view:cost_price, so phase order does not matter for that cohort. An older 18-permission
+// role would match one rollout later under a recurring scan; this migration's completion record prevents that scan.
+// The tested helper owns all paging, refusal and public-summary behavior.
+accountantCommissionsSummary = runAccountantCommissionsPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail, log: console.log });
 
 // ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
 

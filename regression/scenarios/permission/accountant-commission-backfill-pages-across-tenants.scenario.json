@@ -1,0 +1,55 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-accountant-commissions",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-04"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-backfill-pages-across-tenants",
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "GLOBAL"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "numItems": 1,
+        "tenants": "A+B",
+        "cursor": "CONTINUED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "total.updatedCount",
+      "value": 2
+    },
+    {
+      "observable": "page.maxUpdates",
+      "value": 1
+    },
+    {
+      "observable": "role.ownership",
+      "value": "UNCHANGED"
+    },
+    {
+      "observable": "foreignCustom.permissions",
+      "value": "UNCHANGED"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: one-role commission pages resume through both tenants without changing their role ownership"
+  },
+  "fingerprint": "0b45ba22dff4d8a8c5dc16758329ee114cebd0dd317141c20959fd44cc373e83"
+}

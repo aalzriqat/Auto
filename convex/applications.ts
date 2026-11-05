@@ -23,7 +23,7 @@ import {
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
-import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
+import { canReadVehicleCost, projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
@@ -2655,11 +2655,25 @@ export const dealCockpit = query({
       firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
     }
 
+    // SCRUM-902: both profit aliases and the supplier balance disclose the cost basis.
+    const mayReadCost = canReadVehicleCost(role);
+    const costWithheld = { available: false, reason: "CostAccessRequired" } as const;
+    const cockpitMoney = await buildCockpitMoney(ctx, app, quote, settlementFacts);
+
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: {
-        ...(await buildCockpitMoney(ctx, app, quote, settlementFacts)),
+        ...cockpitMoney,
+        ...(mayReadCost
+          ? {}
+          : {
+              profit: costWithheld,
+              managementProfit: costWithheld,
+              parties: cockpitMoney.parties.map((party) =>
+                party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party
+              ),
+            }),
         // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
         forward: {
           dueMinor: forwardProof.dueMinor,
