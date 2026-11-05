@@ -36,5 +36,14 @@
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
     }
   ],
-  "fingerprint": "0e8342523c6bc1ff601f42ddaab46041f807053b1d8a7de20229c71bfbd0ad33"
+  "fingerprint": "0e8342523c6bc1ff601f42ddaab46041f807053b1d8a7de20229c71bfbd0ad33",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts"
+  ]
 }

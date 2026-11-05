@@ -63,7 +63,7 @@ export type ExpectedCostsReason = "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_A
 export type ServedParty = Readonly<{
   party: "CUSTOMER" | "SUPPLIER" | "FINANCIER";
   position: "UNKNOWN" | "DEALERSHIP_HOLDS" | "NOT_INVOLVED" | "SETTLED" | "OWED_TO_DEALERSHIP" | "DEALERSHIP_OWES";
-  amountMinor: number;
+  amountMinor: number | null;
   currency: string;
 }>;
 

@@ -315,17 +315,15 @@ describe("the headline figure", () => {
  * One screen now shows two genuinely different kinds of money. A financed
  * deal's headline is a MANAGEMENT figure built on a spread that appears on no
  * invoice — it must always carry its qualifier and must never be posted. A cash
- * deal's is an ordinary accounting result that reconciles to the GL — stamping
- * "estimated, never posted" on it would be a false statement about a real
- * accounting figure, and it is the failure this whole polymorphic design exists
- * to prevent.
+ * deal's management net deducts showroom expenses and commissions from the
+ * accounting margin. It is not an estimate and does not claim GL reconciliation.
  *
  * These assert the qualifier's PRESENCE on one and its ABSENCE on the other, in
  * both directions, because a test that only checked the financed side would pass
  * happily against a screen that badged everything.
  */
 function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitData {
-  return dealFixture({
+  const fixture = dealFixture({
     dealKind: "CASH",
     dealRef: "sale_7731",
     applicationId: null,
@@ -378,6 +376,32 @@ function cashDealFixture(overrides: Record<string, unknown> = {}): DealCockpitDa
     },
     ...overrides,
   });
+  if (fixture.money !== null) {
+    const profit = fixture.money.profit;
+    if (profit.available && profit.basis !== "ACCOUNTING_RESULT") {
+      throw new Error("Cash fixture requires an accounting margin");
+    }
+    // These scenarios have recorded zero showroom expenses and commissions.
+    // Keep each override's lines and refusal reason in the new server field.
+    fixture.money = {
+      ...fixture.money,
+      managementNetProfit: profit.available
+        ? {
+            available: true,
+            basis: "MANAGEMENT_NET",
+            amountMinor: profit.amountMinor,
+            currency: profit.currency,
+            postable: false,
+            lines: [
+              ...profit.lines,
+              { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 0 },
+              { key: "COMMISSIONS", sign: -1, amountMinor: 0 },
+            ],
+          }
+        : profit,
+    };
+  }
+  return fixture;
 }
 
 describe("a cash headline and a financed headline cannot be confused", () => {
@@ -387,7 +411,7 @@ describe("a cash headline and a financed headline cannot be confused", () => {
     expect(screen.getByText("ManagementFigureNote")).toBeTruthy();
   });
 
-  test("the CASH headline carries NO estimate badge and NO management-figure note", () => {
+  test("the CASH management net carries NO estimate badge and does carry its management-figure note", () => {
     renderCockpit(cashDealFixture());
 
     // The amount is still shown — this is not "the figure is withheld".
@@ -395,11 +419,10 @@ describe("a cash headline and a financed headline cannot be confused", () => {
     // fixture, and the point here is that the headline renders at all.
     expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
 
-    // ...but nothing on the screen may describe it as an estimate or as a
-    // number that is never posted. It is a real accounting result.
+    // Cash net is a management figure without a financing estimate badge.
     expect(screen.queryByText("ProfitEstimatedAwaitingSettlement")).toBeNull();
     expect(screen.queryByText("ProfitActualUnpostable")).toBeNull();
-    expect(screen.queryByText("ManagementFigureNote")).toBeNull();
+    expect(screen.getByText("ManagementFigureNote")).toBeTruthy();
   });
 
   test("a cash deal whose earnings were never recorded refuses rather than showing zero", () => {
@@ -714,17 +737,22 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
     expect(screen.getByRole("heading", { name: "DealPartiesHeading" })).toBeTruthy();
   });
 
-  test("an available accounting result with NO lines says the breakdown is unavailable, never 'not recorded'", () => {
+  test("an available management net with NO lines says the breakdown is unavailable, never 'not recorded'", () => {
     // The headline is real and served; only its working is absent. "Not
     // recorded" would claim the sale price was never entered.
-    renderCockpit(
-      cashDealFixture({
-        money: {
-          ...cashDealFixture().money,
-          profit: { ...cashDealFixture().money!.profit, lines: [] },
-        },
-      })
-    );
+    const deal = cashDealFixture();
+    if (deal.money === null || !("managementNetProfit" in deal.money)) {
+      throw new Error("Cash fixture requires management net");
+    }
+    deal.money.managementNetProfit = {
+      available: true,
+      basis: "MANAGEMENT_NET",
+      amountMinor: 3_000 * SCALE,
+      currency: "JOD",
+      postable: false,
+      lines: [],
+    };
+    renderCockpit(deal);
     expect(screen.getAllByText(/3,000/).length).toBeGreaterThan(0);
     expect(screen.getAllByText("ProfitBreakdownUnavailable").length).toBeGreaterThan(0);
     expect(screen.queryByText("NotRecorded")).toBeNull();
@@ -822,8 +850,10 @@ describe("the six-fact summary reads server facts, never dealKind", () => {
       expect(summaryTile("LineSalePrice")).toMatch(/LineSalePrice20,000 د\.أ/);
       expect(screen.queryByText("ProfitBreakdownUnavailable")).toBeNull();
       // The tile selector the unavailable cases assert EMPTY does find tiles
-      // when there are some: three line tiles and the supplier's party tile.
-      expect(moneyTiles(container)).toHaveLength(4);
+      // when there are some: five line tiles and the supplier's party tile.
+      expect(moneyTiles(container)).toHaveLength(6);
+      expect(summaryTile("LinePreparationExpenses")).toMatch(/− 0 د\.أ/);
+      expect(summaryTile("DealCommissionsTotal")).toMatch(/− 0 د\.أ/);
     });
   });
 

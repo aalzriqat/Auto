@@ -200,7 +200,9 @@ import type * as utils_dealCommissionLines from "../utils/dealCommissionLines.js
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
+import type * as utils_dealManagementNet from "../utils/dealManagementNet.js";
 import type * as utils_dealModes from "../utils/dealModes.js";
+import type * as utils_dealProfitReads from "../utils/dealProfitReads.js";
 import type * as utils_dealUnwindGuard from "../utils/dealUnwindGuard.js";
 import type * as utils_dealUnwindMessages from "../utils/dealUnwindMessages.js";
 import type * as utils_dealVehicleProfile from "../utils/dealVehicleProfile.js";
@@ -556,7 +558,9 @@ declare const fullApi: ApiFromModules<{
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;
+  "utils/dealManagementNet": typeof utils_dealManagementNet;
   "utils/dealModes": typeof utils_dealModes;
+  "utils/dealProfitReads": typeof utils_dealProfitReads;
   "utils/dealUnwindGuard": typeof utils_dealUnwindGuard;
   "utils/dealUnwindMessages": typeof utils_dealUnwindMessages;
   "utils/dealVehicleProfile": typeof utils_dealVehicleProfile;

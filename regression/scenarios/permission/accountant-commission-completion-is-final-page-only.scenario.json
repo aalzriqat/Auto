@@ -1,0 +1,116 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-r2-review",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-05"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-completion-is-final-page-only",
+  "steps": [
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "roles.seed",
+      "input": {
+        "count": 2,
+        "permissions": "PRE_CHANGE_EXACT_19"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "numItems": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "numItems": 1,
+        "cursor": "FIRST_PAGE_CURSOR"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "roles.patch",
+      "input": {
+        "permissions": "PRE_CHANGE_EXACT_19",
+        "marker": "REMOVED_FOR_REPLAY_CONTROL"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "cursor": "not-a-role-cursor"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "first.completionRows",
+      "value": 0
+    },
+    {
+      "observable": "final.completionRows",
+      "value": 1
+    },
+    {
+      "observable": "later.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "later.rolesUnchanged",
+      "value": true
+    },
+    {
+      "observable": "later.completionUnchanged",
+      "value": true
+    },
+    {
+      "observable": "invalidCursor.isDone",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: only the final commission page records completion and later runs leave roles unchanged"
+  },
+  "bugRef": {
+    "key": "SCRUM-908",
+    "failingFirst": "bc5c19cd0ffc34741d0e7c916ec5b82a904a2dfb"
+  },
+  "fingerprint": "a5e852e3bc472f9b41df203cc9de8e3d2c75006f94eeb046fe0ac7c449f6ba43"
+}

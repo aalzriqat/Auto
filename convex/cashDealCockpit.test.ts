@@ -30,7 +30,7 @@ const FULL_PERMS = [
   "view:sales", "create:sales", "edit:sales",
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "view:customers", "create:customers",
-  "manage:finance", "view:finance", "view:reports",
+  "manage:finance", "view:finance", "view:reports", "view:cost_price",
 ];
 
 /** Everything except `view:finance` — the salesperson who may not see margins. */

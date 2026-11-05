@@ -77,6 +77,8 @@ import { projectDealVehicleProfile } from "./utils/dealVehicleProfile";
 import { planSaleInvoiceReceiptReversal } from "./accounting/invoiceReceiptActivation";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { disposeActiveSaleInvoiceReceipts } from "./accounting/invoiceReceiptDisposition";
+import { withDealManagementCosts } from "./utils/dealManagementNet";
+import { loadProfitCommissions, loadShowroomExpenses } from "./utils/dealProfitReads";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -3219,6 +3221,14 @@ export const dealCockpit = query({
     if (!canSeeMoney || financingApplicationId) return { ...base, money: null };
 
     const capitalizedCost = vehicle ? await computeVehicleCapitalizedCost(ctx, vehicle) : 0;
+    const showroomExpenses = await loadShowroomExpenses(ctx, {
+      vehicle: vehicle?.orgId === args.orgId ? vehicle : null,
+      currency, orgCurrency: await getOrgCurrency(ctx, args.orgId),
+    });
+    const commissions = await loadProfitCommissions(ctx, {
+      orgId: args.orgId, saleId: sale._id, currency,
+      mayReadCommissions: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS),
+    });
     // The SAME call the sales report makes, with the same recorded inputs. Not a
     // re-derivation: `salePrice - cost` is the wrong answer on a consigned direct
     // row, and this is the one function that already knows that.
@@ -3268,13 +3278,44 @@ export const dealCockpit = query({
               // margin back on the other.
               collectsGross ? "DEALERSHIP_OWES" : "OWED_TO_DEALERSHIP"
             ),
-            amountMinor: supplierOutstandingMinor ?? 0,
+            amountMinor: canReadVehicleCost(role) ? (supplierOutstandingMinor ?? 0) : null,
             currency,
             reference: supplierReference,
             receivableId: supplierReceivableId,
           },
         ]
       : [];
+
+    // Preserve the ledger-reconciling result; the headline is management net below.
+    const accountingProfit = deriveAccountingProfit({
+      dealCancelled,
+      // A PENDING draft has posted nothing, so it has no journal to call
+      // this figure postable against.
+      saleCompleted: sale.status === "COMPLETED",
+      /**
+       * The financed DIRECT route with no application behind it.
+       *
+       * Reached only by rows that predate the write-path guard, and their
+       * frozen margin may be the sale-price spread — a figure that reaches
+       * no party on this route. Nothing on the row can prove what the
+       * financier approved, so the headline is withheld rather than guessed.
+       * A row WITH an application never gets here: `money` is already null
+       * for those, because its deal screen is the application-keyed one.
+       */
+      financedDirectWithoutApproval:
+        consigned && externallyFinanced && !collectsGross && !financingApplicationId,
+      dealershipMarginMinor: marginMinor,
+      // `?? null`, never `?? 0`. An amount that could not be READ is not an
+      // amount of nought, and these two used to be `?? 0` — which printed
+      // "Sale price: 0.000" beside a valid headline whenever a corrupt price
+      // sat on a sale whose margin was frozen independently.
+      salePriceMinor:
+        toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? null,
+      recognizedCostMinor:
+        toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? null,
+      supplierEntitlementMinor: consigned ? entitlementMinor : null,
+      currency,
+    });
 
     return {
       ...base,
@@ -3288,41 +3329,16 @@ export const dealCockpit = query({
          * about.
          */
         routeKnown: true,
-        profit: deriveAccountingProfit({
-          dealCancelled,
-          // A PENDING draft has posted nothing, so it has no journal to call
-          // this figure postable against.
-          saleCompleted: sale.status === "COMPLETED",
-          /**
-           * The financed DIRECT route with no application behind it.
-           *
-           * Reached only by rows that predate the write-path guard, and their
-           * frozen margin may be the sale-price spread — a figure that reaches
-           * no party on this route. Nothing on the row can prove what the
-           * financier approved, so the headline is withheld rather than guessed.
-           * A row WITH an application never gets here: `money` is already null
-           * for those, because its deal screen is the application-keyed one.
-           */
-          financedDirectWithoutApproval:
-            consigned && externallyFinanced && !collectsGross && !financingApplicationId,
-          dealershipMarginMinor: marginMinor,
-          // `?? null`, never `?? 0`. An amount that could not be READ is not an
-          // amount of nought, and these two used to be `?? 0` — which printed
-          // "Sale price: 0.000" beside a valid headline whenever a corrupt price
-          // sat on a sale whose margin was frozen independently.
-          salePriceMinor:
-            toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? null,
-          recognizedCostMinor:
-            toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? null,
-          supplierEntitlementMinor: consigned ? entitlementMinor : null,
-          currency,
-        }),
+        profit: canReadVehicleCost(role)
+          ? accountingProfit
+          : { available: false as const, reason: "CostAccessRequired" as const },
+        managementNetProfit: canReadVehicleCost(role)
+          ? withDealManagementCosts({ profit: accountingProfit, showroomExpenses, commissions })
+          : { available: false as const, reason: "CostAccessRequired" as const },
         /**
-         * Empty, and honestly so. Vehicle expenses are already inside
-         * `capitalizedCost` and therefore already inside the margin above;
-         * listing them again as a separate deduction would show the owner a cost
-         * subtracted twice. The financed screen's expense lines are FEE records
-         * on the application, which a cash sale does not have.
+         * Cash has no financed fee records. Car expenses appear as their own
+         * deduction in managementNetProfit; capitalized costs remain in the
+         * accounting margin's basis and are not subtracted twice.
          */
         expenses: {
           lines: [] as Array<{

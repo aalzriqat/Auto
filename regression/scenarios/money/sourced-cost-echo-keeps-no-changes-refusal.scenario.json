@@ -1,0 +1,59 @@
+{
+  "id": "sourced-cost-echo-keeps-no-changes-refusal",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum907-postmerge",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "cost_requester",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "sourceCost": 7100005
+      }
+    },
+    {
+      "actor": {
+        "role": "cost_requester",
+        "org": "A"
+      },
+      "action": "vehicleEdits.requestUpdate",
+      "input": {
+        "sourceCost": 7100004
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "changedRequest.payload.purchasePrice",
+      "value": 7100005
+    },
+    {
+      "observable": "unchangedRequest.error",
+      "value": "NO_CHANGES"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-907#description",
+      "digest": "639d49f5bd394578ff3399b3376897d27fa8cf6654734d6673bd05ee95067497"
+    }
+  ],
+  "impl": {
+    "file": "convex/vehicleCostDisclosureWrites.scrum886.test.ts",
+    "testName": "control: a requester who may read cost can still request a cost change"
+  },
+  "matrixRow": "SCRUM907-echo",
+  "bugRef": {
+    "key": "SCRUM-907",
+    "failingFirst": "8ee127e6488988e076a713693e2949269c92eef5"
+  },
+  "fingerprint": "afb45c514d1d98f93973fddac99c6fb8f619b30405e45d696858726f3653a03c"
+}

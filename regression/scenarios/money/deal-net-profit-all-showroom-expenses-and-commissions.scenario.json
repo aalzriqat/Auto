@@ -1,0 +1,94 @@
+{
+  "id": "deal-net-profit-all-showroom-expenses-and-commissions",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum908-synthetic-net-profit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "approvedMinor": 12100000,
+        "supplierMinor": 9900000,
+        "contributionMinor": 315000,
+        "executionFeeMinor": 451300,
+        "carExpenseMinor": [
+          200000,
+          87500,
+          15000,
+          12000
+        ],
+        "commissionMinor": [
+          85000,
+          25000
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "financialSummary.profit.amountMinor",
+      "value": 1009200
+    },
+    {
+      "observable": "financialSummary.profit.lines",
+      "value": [
+        {
+          "key": "APPROVED_PURCHASE",
+          "sign": 1,
+          "amountMinor": 12100000
+        },
+        {
+          "key": "CUSTOMER_PLANNED_TO_DEALER",
+          "sign": 1,
+          "amountMinor": 0
+        },
+        {
+          "key": "SUPPLIER_SETTLEMENT",
+          "sign": -1,
+          "amountMinor": 9900000
+        },
+        {
+          "key": "DEALER_CONTRIBUTION",
+          "sign": -1,
+          "amountMinor": 315000
+        },
+        {
+          "key": "ACTUAL_EXPENSES",
+          "sign": -1,
+          "amountMinor": 451300
+        },
+        {
+          "key": "PREPARATION_EXPENSES",
+          "sign": -1,
+          "amountMinor": 314500
+        },
+        {
+          "key": "COMMISSIONS",
+          "sign": -1,
+          "amountMinor": 110000
+        }
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-908#description",
+      "digest": "6b3a93db0ab9e19f453ae8382a7e253a2740593791ca46e983416914a30be5cd"
+    }
+  ],
+  "impl": {
+    "file": "convex/scrum486Certification.test.ts",
+    "testName": "SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions"
+  },
+  "matrixRow": "SCRUM908-net-profit",
+  "fingerprint": "759ecf2a3b838a216a5f1adc76884b434724216f794e39ff989ae8e1e6238a51"
+}

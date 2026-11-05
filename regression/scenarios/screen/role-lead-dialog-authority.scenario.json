@@ -36,5 +36,15 @@
   "impl": {
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "lead screen and create dialog respect actual audited role authority"
-  }
+  },
+  "sourceGlobs": [
+    "app/**/leads/**",
+    "components/leads/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "components/custom-fields/**"
+  ]
 }

@@ -63,5 +63,24 @@
     "file": "playwright/scenarios/pilot-sourced.spec.ts",
     "testName": "pilot SOURCED direct finance reaches delivery and records external supplier advice without a bank receipt"
   },
-  "fingerprint": "e93cca52e5e1cd55777e1faf96b8321156311782b50b51e578a6642fe1c06905"
+  "fingerprint": "e93cca52e5e1cd55777e1faf96b8321156311782b50b51e578a6642fe1c06905",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "components/vehicles/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "app/**/applications/**",
+    "app/**/customers/**",
+    "app/**/settings/finance/**",
+    "components/customers/**",
+    "components/settings/FinanceCompanyDialog.tsx"
+  ]
 }

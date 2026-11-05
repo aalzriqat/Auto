@@ -229,6 +229,7 @@ function cashDirectDeal(): CashDealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: true,
       routeKnown: true,
+      managementNetProfit: { available: false, reason: "CommissionsUnreadable" },
       profit: {
         available: true,
         basis: "ACCOUNTING_RESULT",
