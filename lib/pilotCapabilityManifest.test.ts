@@ -61,6 +61,11 @@ function declaredSwitches(): string[] {
   return declaredCache;
 }
 
+function unregisteredSwitches(names: readonly string[]): string[] {
+  const registered = new Set(Object.keys(PILOT_SWITCHES));
+  return names.filter((name) => !registered.has(name));
+}
+
 /** The value each switch ships with. Flipping one in source must change this table in the same change. */
 const EXPECTED_SHIPPED: Record<PilotSwitchKey, boolean> = {
   PAYMENT_LINKS_PILOT_DISABLED: true,
@@ -146,9 +151,22 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
   });
 
   test("discovery: every declared pilot switch is registered", () => {
-    const registered = new Set(Object.keys(PILOT_SWITCHES));
-    const missing = declaredSwitches().filter((name) => !registered.has(name));
+    const missing = unregisteredSwitches(declaredSwitches());
     expect(missing, `register these in lib/pilotCapabilityManifest.ts: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  test.each([
+    ["shorthand", "const REVIEW_PILOT_DISABLED = true;", "REVIEW_PILOT_DISABLED"],
+    ["computed string", "", '["REVIEW_PILOT_DISABLED"]: true'],
+    ["computed const", 'const key = "REVIEW_PILOT_DISABLED";', "[key]: true"],
+  ])("discovery: registration census rejects a new RT11 %s key", (_shape, binding, property) => {
+    const file = "convex/utils/rt11DoorContainment.ts";
+    const original = read(file);
+    const source = binding + original.replace(/(export const RT11_DOORS_PILOT_DISABLED = \{)/, `$1\n  ${property},`);
+    expect(source).not.toBe(binding + original);
+    const names = discoverPilotSources(new Map([[file, source]]), new Set()).declarations.map(({ name }) => name);
+    expect(unregisteredSwitches(names)).toEqual(["REVIEW_PILOT_DISABLED"]);
+    expect(names).toHaveLength(11);
   });
 
   test("discovery: finds typed, multi-line and door-map declarations (negative controls)", () => {

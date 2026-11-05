@@ -43,6 +43,68 @@ describe("SCRUM-810 bounded compiler work", () => {
 
 describe("pilot source discovery controls", () => {
   test.each([
+    ["shorthand", "const REVIEW_PILOT_DISABLED = true; export const doors = { REVIEW_PILOT_DISABLED };", true],
+    ["computed string", 'export const doors = { ["REVIEW_PILOT_DISABLED"]: false };', false],
+    ["computed template", 'export const doors = { [`REVIEW_PILOT_DISABLED`]: true };', true],
+    ["computed const", 'const key = "REVIEW_PILOT_DISABLED"; export const doors = { [key]: true };', true],
+  ] as const)("door maps discover %s properties", (_shape, source, value) => {
+    const discovery = discoverPilotSources(new Map([["flags.ts", source]]), new Set());
+    expect(discovery.declarations.map(({ name, kind, value }) => ({ name, kind, value }))).toEqual([
+      { name: "REVIEW_PILOT_DISABLED", kind: "doorMap", value },
+    ]);
+    expect([...discovery.exportedBy.get("REVIEW_PILOT_DISABLED") ?? []]).toEqual(["flags"]);
+  });
+
+  test.each([
+    ["unresolvable computed key", 'REVIEW_PILOT_DISABLED: true, [runtimeKey()]: true', "computed key"],
+    ["spread", 'REVIEW_PILOT_DISABLED: true, ...extra', "spread"],
+    ["unresolvable value", 'REVIEW_PILOT_DISABLED: runtimeFlag()', "REVIEW_PILOT_DISABLED"],
+    ["nonboolean value", 'REVIEW_PILOT_DISABLED: true, OTHER_PILOT_DISABLED: "true"', "OTHER_PILOT_DISABLED"],
+  ])("door maps fail closed on %s", (_shape, properties, detail) => {
+    const source = `export const doors = { ${properties} };`;
+    expect(() => discoverPilotSources(new Map([["flags.ts", source]]), new Set()))
+      .toThrow(new RegExp(`PILOT_SOURCE_DISCOVERY.*flags.ts.*doors.*${detail}`));
+  });
+
+  test.each([
+    ["computed key without a known sibling", 'export const doors = { [runtimeKey()]: true };'],
+    ["unresolved key and value", 'export const doors = { [runtimeKey()]: runtimeFlag() };'],
+    ["spread containing the only pilot key", 'const extra = { REVIEW_PILOT_DISABLED: true }; export const doors = { ...extra };'],
+    ["unresolved spread without a known sibling", 'export const doors = { ...extra };'],
+    ["typed spread containing the only pilot key", 'const extra: Record<string, boolean> = { REVIEW_PILOT_DISABLED: true }; export const doors = { ...extra };'],
+    ["boolean index-signature spread", 'declare const extra: { [key: string]: boolean }; export const doors = { ...extra };'],
+    ["unresolved spread in a pilot-named map", 'export const doors_PILOT_DISABLED = { ...extra };'],
+    ["mutable computed key", 'let key = "REVIEW_PILOT_DISABLED"; export const doors = { [key]: true };'],
+    ["mutable shorthand value", 'let REVIEW_PILOT_DISABLED = true; export const doors = { REVIEW_PILOT_DISABLED };'],
+    ["unresolved shorthand value", 'const REVIEW_PILOT_DISABLED = runtimeFlag(); export const doors = { REVIEW_PILOT_DISABLED };'],
+    ["cyclic const value", 'const a = b; const b = a; export const doors = { REVIEW_PILOT_DISABLED: a };'],
+  ])("door maps fail closed on %s", (_shape, source) => {
+    expect(() => discoverPilotSources(new Map([["flags.ts", source]]), new Set()))
+      .toThrow(/PILOT_SOURCE_DISCOVERY.*flags.ts.*doors/);
+  });
+
+  test("door maps retain every key and resolve imported shorthand bindings through aliases", () => {
+    const sources = new Map([
+      ["bindings.ts", 'const flag = (false) as const; export { flag as REVIEW_PILOT_DISABLED };'],
+      ["flags.ts", 'import { REVIEW_PILOT_DISABLED } from "./bindings"; export const doors = { REVIEW_PILOT_DISABLED, other: true };'],
+    ]);
+    const discovery = discoverPilotSources(sources, new Set());
+    expect(discovery.declarations.filter(({ kind }) => kind === "doorMap").map(({ name, value }) => ({ name, value }))).toEqual([
+      { name: "REVIEW_PILOT_DISABLED", value: false }, { name: "other", value: true },
+    ]);
+  });
+
+  test("nonboolean refusal-copy and reader registries remain outside the boolean map census", () => {
+    const source = `
+      const copy: { REVIEW_PILOT_DISABLED: "off" | "blocked" } = { REVIEW_PILOT_DISABLED: "off" };
+      export const copies = { ...copy };
+      export const readers = { REVIEW_PILOT_DISABLED: () => true };
+      export const metadata = { REVIEW_PILOT_DISABLED: ["off"] };
+    `;
+    expect(discoverPilotSources(new Map([["metadata.ts", source]]), new Set()).declarations).toEqual([]);
+  });
+
+  test.each([
     'export { missing as REVIEW_PILOT_DISABLED } from "external";',
     'export const REVIEW_PILOT_DISABLED = { nested: true };',
     'export function REVIEW_PILOT_DISABLED() { return true; }',

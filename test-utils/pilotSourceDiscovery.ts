@@ -38,7 +38,87 @@ function literalBoolean(expr: ts.Expression | undefined): boolean | null {
   return null;
 }
 
-function variableSwitches(decl: ts.VariableDeclaration): SwitchDeclaration[] {
+/** Resolve const bindings, including imports, without trusting asserted types or executing code. */
+function literalInitializer(expr: ts.Expression | undefined, checker: ts.TypeChecker): ts.Expression | undefined {
+  let current = unwrap(expr);
+  const visited = new Set<ts.Symbol>();
+  while (current && ts.isIdentifier(current)) {
+    const symbol = checker.getSymbolAtLocation(current);
+    if (!symbol) return undefined;
+    const original = originalSymbol(symbol, checker);
+    if (visited.has(original)) return undefined;
+    visited.add(original);
+    const declaration = original.valueDeclaration;
+    if (!declaration || !ts.isVariableDeclaration(declaration) ||
+      !ts.isVariableDeclarationList(declaration.parent) || !(declaration.parent.flags & ts.NodeFlags.Const)) return undefined;
+    current = unwrap(declaration.initializer);
+  }
+  return current;
+}
+
+function doorPropertyName(prop: ts.ObjectLiteralElementLike, checker: ts.TypeChecker): string | undefined {
+  const name = prop.name;
+  if (!name) return undefined;
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+  if (!ts.isComputedPropertyName(name)) return undefined;
+  const literal = literalInitializer(name.expression, checker);
+  return literal && (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal)) ? literal.text : undefined;
+}
+
+function doorPropertyValue(prop: ts.ObjectLiteralElementLike, checker: ts.TypeChecker): ts.Expression | undefined {
+  if (ts.isPropertyAssignment(prop)) return literalInitializer(prop.initializer, checker);
+  if (!ts.isShorthandPropertyAssignment(prop)) return undefined;
+  const symbol = checker.getShorthandAssignmentValueSymbol(prop);
+  const declaration = symbol && originalSymbol(symbol, checker).valueDeclaration;
+  // Resolve the referenced binding, not the property's own symbol.
+  if (!declaration || !ts.isVariableDeclaration(declaration) ||
+    !ts.isVariableDeclarationList(declaration.parent) || !(declaration.parent.flags & ts.NodeFlags.Const)) return undefined;
+  return literalInitializer(declaration.initializer, checker);
+}
+
+function couldBeBoolean(type: ts.Type): boolean {
+  if (type.isUnion()) return type.types.some(couldBeBoolean);
+  return !(type.flags & (ts.TypeFlags.StringLike | ts.TypeFlags.NumberLike | ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike | ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never | ts.TypeFlags.Object));
+}
+
+function spreadCouldContainDoor(prop: ts.SpreadAssignment, checker: ts.TypeChecker): boolean {
+  const initializer = literalInitializer(prop.expression, checker);
+  if (initializer && ts.isObjectLiteralExpression(initializer) && initializer.properties.some((entry) =>
+    !ts.isSpreadAssignment(entry) && isDoorMapProperty(entry, checker))) return true;
+  const type = checker.getTypeAtLocation(prop.expression);
+  const indexed = checker.getIndexTypeOfType(type, ts.IndexKind.String);
+  if (indexed && couldBeBoolean(indexed)) return true;
+  const properties = checker.getPropertiesOfType(type);
+  if (properties.length === 0 && prop.parent.properties.every(ts.isSpreadAssignment)) return true;
+  return properties.some((symbol) => SWITCH_NAME.test(symbol.name) && couldBeBoolean(checker.getTypeOfSymbolAtLocation(symbol, prop)));
+}
+
+function isDoorMapProperty(prop: ts.ObjectLiteralElementLike, checker: ts.TypeChecker): boolean {
+  if (ts.isSpreadAssignment(prop)) return spreadCouldContainDoor(prop, checker);
+  const name = doorPropertyName(prop, checker);
+  const value = doorPropertyValue(prop, checker);
+  if (name === undefined) return !(value && NON_BOOLEAN_INITIALIZERS.has(value.kind));
+  // Refusal-copy, reader and metadata registries are not boolean door maps.
+  return SWITCH_NAME.test(name) && !(value && NON_BOOLEAN_INITIALIZERS.has(value.kind));
+}
+
+function doorMapSwitches(decl: ts.VariableDeclaration, map: ts.ObjectLiteralExpression, checker: ts.TypeChecker): SwitchDeclaration[] {
+  const namedMap = SWITCH_NAME.test(decl.name.getText()) && map.properties.some((prop) => ts.isSpreadAssignment(prop));
+  if (!namedMap && !map.properties.some((prop) => isDoorMapProperty(prop, checker))) return [];
+  const moduleId = moduleName(decl.getSourceFile().fileName);
+  return map.properties.map((prop) => {
+    const name = doorPropertyName(prop, checker);
+    const context = `PILOT_SOURCE_DISCOVERY: ${decl.getSourceFile().fileName} ${decl.name.getText()}`;
+    if (ts.isSpreadAssignment(prop)) throw new Error(`${context}: unresolved spread`);
+    if (name === undefined) throw new Error(`${context}: unresolved computed key ${prop.name?.getText()}`);
+    const value = literalBoolean(doorPropertyValue(prop, checker));
+    if (value === null) throw new Error(`${context}: unresolved boolean value for ${name}`);
+    return { name, kind: "doorMap", module: moduleId, value, sourceId: `${moduleId}:${prop.pos}` };
+  });
+}
+
+function variableSwitches(decl: ts.VariableDeclaration, checker: ts.TypeChecker): SwitchDeclaration[] {
   if (!ts.isIdentifier(decl.name)) return [];
   const moduleId = moduleName(decl.getSourceFile().fileName);
   const initializer = unwrap(decl.initializer);
@@ -46,13 +126,7 @@ function variableSwitches(decl: ts.VariableDeclaration): SwitchDeclaration[] {
     ? [{ name: decl.name.text, kind: "constant", module: moduleId, value: literalBoolean(initializer), sourceId: `${moduleId}:${decl.pos}` }]
     : [];
   if (!initializer || !ts.isObjectLiteralExpression(initializer)) return constant;
-  const doorMap = initializer.properties.flatMap((prop) => {
-    if (!ts.isPropertyAssignment(prop)) return [];
-    if (!(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) || !SWITCH_NAME.test(prop.name.text)) return [];
-    const value = unwrap(prop.initializer);
-    if (value && NON_BOOLEAN_INITIALIZERS.has(value.kind)) return [];
-    return [{ name: prop.name.text, kind: "doorMap" as const, module: moduleId, value: literalBoolean(prop.initializer), sourceId: `${moduleId}:${prop.pos}` }];
-  });
+  const doorMap = doorMapSwitches(decl, initializer, checker);
   return doorMap.length > 0 ? doorMap : constant;
 }
 
@@ -127,7 +201,7 @@ function variableExports(symbol: ts.Symbol, original: ts.Symbol, checker: ts.Typ
   const target = initializer && checker.getSymbolAtLocation(initializer);
   const referenced = target ? switchesBehind(target, checker, visited) : [];
   const aliases = symbol.name !== original.name ? exportedBinding(symbol, declaration, literalBoolean(initializer)) : [];
-  return [...aliases, ...referenced, ...variableSwitches(declaration)];
+  return [...aliases, ...referenced, ...variableSwitches(declaration, checker)];
 }
 
 /** Follow compiler-resolved aliases and enumerate exported binding elements without evaluating code. */
