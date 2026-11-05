@@ -26,11 +26,26 @@ const UNKNOWN_WARNING = "Some future warning the dialog has never heard of.";
 const mocks = vi.hoisted(() => ({
   checklist: undefined as unknown,
   close: vi.fn(),
+  query: vi.fn(),
+  permissions: ["view:finance", "view:cost_price"],
+  permissionsLoading: false,
+  owner: false,
 }));
 
 vi.mock("convex/react", () => ({
-  useQuery: () => mocks.checklist,
+  useQuery: (...args: unknown[]) => {
+    mocks.query(...args);
+    return args[1] === "skip" ? undefined : mocks.checklist;
+  },
   useMutation: () => mocks.close,
+}));
+
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({
+    isOwner: mocks.owner,
+    isLoading: mocks.permissionsLoading,
+    hasAllPermissions: (required: string[]) => required.every((p) => mocks.permissions.includes(p)),
+  }),
 }));
 
 // DialogContent reads the language context for its close-button label.
@@ -86,6 +101,50 @@ function renderDialog(locale: "en" | "ar") {
     />,
   );
 }
+
+describe("SCRUM-902 close checklist access", () => {
+  beforeEach(() => {
+    mocks.query.mockClear();
+    mocks.close.mockReset();
+    mocks.checklist = { canClose: true, blockers: [], warnings: [] };
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.permissions = ["view:finance", "view:cost_price"];
+    mocks.permissionsLoading = false;
+    mocks.owner = false;
+  });
+
+  test.each(["en", "ar"] as const)("%s withholds the checklist without both finance and cost access", (locale) => {
+    for (const permissions of [["view:finance"], ["view:cost_price"]]) {
+      mocks.permissions = permissions;
+      renderDialog(locale);
+      expect(mocks.query.mock.lastCall?.[1]).toBe("skip");
+      expect(screen.getByRole("status").textContent).toBe(translator(locale)("FinancialStatementCostAccessRequired"));
+      expect(screen.queryByText(translator(locale)("ClosePeriodNoIssues"))).toBeNull();
+      expect((screen.getByRole("button", { name: translator(locale)("ClosePeriod") }) as HTMLButtonElement).disabled).toBe(true);
+      cleanup();
+    }
+    expect(mocks.close).not.toHaveBeenCalled();
+  });
+
+  test("permission loading skips the query and renders loading without an access denial", () => {
+    mocks.permissionsLoading = true;
+    renderDialog("en");
+    expect(mocks.query.mock.lastCall?.[1]).toBe("skip");
+    expect(screen.getByText(translator("en")("Loading"))).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test.each([false, true])("finance and cost access or owner authority reads the checklist (owner: %s)", (owner) => {
+    mocks.owner = owner;
+    mocks.permissions = owner ? [] : ["view:finance", "view:cost_price"];
+    renderDialog("en");
+    expect(mocks.query.mock.lastCall?.[1]).toEqual({ orgId: "org1", periodId: "period1" });
+    expect(screen.getByText(translator("en")("ClosePeriodNoIssues"))).toBeTruthy();
+    expect((screen.getByRole("button", { name: translator("en")("ClosePeriod") }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
 
 describe("ClosePeriodReviewDialog supplier payables warnings", () => {
   beforeEach(() => {

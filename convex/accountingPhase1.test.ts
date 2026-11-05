@@ -34,6 +34,7 @@ async function seedPhase1Dealer() {
         "view:sales",
         "manage:finance",
         "view:finance",
+        "view:cost_price",
       ],
     })
   );

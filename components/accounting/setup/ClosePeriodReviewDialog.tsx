@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import { PERMISSIONS } from "@/convex/utils/permissions";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Dialog,
@@ -18,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
+import { CostAccessNote } from "../CostAccessNote";
 import {
   SUPPLIER_PAYABLES_RECON_DATE_WARNING,
   SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
@@ -96,9 +99,12 @@ export function ClosePeriodReviewDialog({
   onClosed,
   t,
 }: Readonly<ClosePeriodReviewDialogProps>) {
+  const { hasAllPermissions, isOwner: isOrgOwner, isLoading: permissionsLoading } = usePermissions();
+  const canReadChecklist = isOrgOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+  const checklistEnabled = !permissionsLoading && canReadChecklist;
   const checklist = useQuery(
     api.accountingPeriods.closeChecklist,
-    open && period ? { orgId, periodId: period._id } : "skip"
+    open && period && checklistEnabled ? { orgId, periodId: period._id } : "skip"
   );
   const closePeriod = useMutation(api.accountingPeriods.close);
 
@@ -119,12 +125,13 @@ export function ClosePeriodReviewDialog({
   const blockers = checklist?.blockers ?? [];
   const allWarningsAcknowledged = warnings.every((w) => acknowledged.has(w));
   const canSubmit =
+    checklistEnabled &&
     checklist !== undefined &&
     allWarningsAcknowledged &&
     (checklist.canClose || (isOwner && overrideReason.trim().length > 0));
 
   async function handleConfirm() {
-    if (!checklist) return;
+    if (!checklistEnabled || !checklist) return;
     setSubmitting(true);
     try {
       await closePeriod({
@@ -151,7 +158,9 @@ export function ClosePeriodReviewDialog({
           <DialogDescription>{t("ClosePeriodReviewDesc")}</DialogDescription>
         </DialogHeader>
 
-        {checklist === undefined ? (
+        {!permissionsLoading && !canReadChecklist ? (
+          <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote>
+        ) : checklist === undefined ? (
           <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>
         ) : (
           <div className="space-y-4">
