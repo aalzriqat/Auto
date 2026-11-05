@@ -302,6 +302,17 @@ function scriptKindFor(file: string): ts.ScriptKind {
   return ts.ScriptKind.TS;
 }
 
+function sourceGlobProblems(r: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  if (r.sourceGlobs !== undefined && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.some((v) => !GLOB.test(String(v))))) {
+    problems.push("sourceGlobs must be path globs without spaces");
+  }
+  if (r.status === "active" && r.level === "browser" && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.length === 0)) {
+    problems.push("active browser records need non-empty sourceGlobs");
+  }
+  return problems;
+}
+
 /**
  * Shape problems only; returns an empty list when the record is safe to hand to
  * the semantic rules. Never throws on a malformed record.
@@ -375,12 +386,7 @@ function schemaProblems(r: unknown): string[] {
   if (r.invariantIds !== undefined && (!Array.isArray(r.invariantIds) || r.invariantIds.some((v) => !INVARIANT_ID.test(String(v))))) {
     out.push("invariantIds must be invariant ids such as ECON-1");
   }
-  if (r.sourceGlobs !== undefined && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.some((v) => !GLOB.test(String(v))))) {
-    out.push("sourceGlobs must be path globs without spaces");
-  }
-  if (r.status === "active" && r.level === "browser" && (!Array.isArray(r.sourceGlobs) || r.sourceGlobs.length === 0)) {
-    out.push("active browser records need non-empty sourceGlobs");
-  }
+  out.push(...sourceGlobProblems(r));
   // Metadata formats hold whatever the status: a malformed value must not wait for a status flip to be seen.
   if (r.matrixRow !== undefined && (typeof r.matrixRow !== "string" || !MATRIX_ROW.test(r.matrixRow))) out.push("matrixRow has an invalid format");
   if (r.candidateIssue !== undefined && (typeof r.candidateIssue !== "string" || !SCRUM_KEY.test(r.candidateIssue))) out.push("candidateIssue must be a SCRUM key");

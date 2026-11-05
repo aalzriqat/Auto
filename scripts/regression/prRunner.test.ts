@@ -329,7 +329,7 @@ describe("PR scenario runner", () => {
       expect(record).toBeDefined();
       for (const route of routes) {
         const changed = `app/(dashboard)/[orgId]/${route}`;
-        expect(selectForPr([record], [changed]).browserSelected.map(record => record.id), changed).toEqual([id]);
+        expect(selectForPr([record], [changed]).browserSelected.map((record: { id: string }) => record.id), changed).toEqual([id]);
       }
     });
 
