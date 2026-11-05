@@ -1,5 +1,6 @@
 import type { QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+import { openingVerificationSource } from "./openingSourceIdentity";
 import {
   resolveOpeningSettlementBasis,
   createOpeningSettlementReader,
@@ -9,7 +10,8 @@ export async function readOpeningUnallocatedLiabilities(
   orgId: Id<"organizations">,
   cutoff: number,
 ) {
-  const parents = await ctx.db
+  const source = openingVerificationSource(ctx, orgId);
+  const parents = source ? (await source).headers : await ctx.db
     .query("openingBalanceDrafts")
     .withIndex("by_org_status", (q) =>
       q.eq("orgId", orgId).eq("status", "POSTED"),

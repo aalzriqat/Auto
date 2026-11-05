@@ -1,5 +1,6 @@
 import { toMinorUnits } from "./money";
 import { ConvexError } from "convex/values";
+import { openingVerificationSource } from "./openingSourceIdentity";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import {
@@ -13,7 +14,8 @@ const refuse = () =>
 type Ctx = QueryCtx | MutationCtx;
 /** The result rows of every POSTED opening draft; refuses when there are too many to read in full. */
 async function postedOpeningResults(ctx: Ctx, orgId: Id<"organizations">) {
-  const drafts = await ctx.db
+  const source = openingVerificationSource(ctx, orgId);
+  const drafts = source ? (await source).headers : await ctx.db
     .query("openingBalanceDrafts")
     .withIndex("by_org_status", (q) =>
       q.eq("orgId", orgId).eq("status", "POSTED"),

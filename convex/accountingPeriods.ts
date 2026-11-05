@@ -1,4 +1,5 @@
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
+import { openingVerificationContext, verifyOpeningRead } from "./utils/openingSourceIdentity";
 import { v, ConvexError } from "convex/values";
 import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
@@ -16,6 +17,7 @@ import {
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
   OPENING_SUSPENSE_OPEN_WARNING,
+  OPENING_SUSPENSE_UNAVAILABLE_WARNING,
   supplierPayablesUnavailableWarning,
 } from "./utils/closeWarnings";
 import {
@@ -58,11 +60,11 @@ async function openingFamilyWarnings(
   const out: string[] = [];
   const hasOpeningHistory = families.some(([, recon]) => recon.status === "UNAVAILABLE")
     ? await orgHasOpeningHistory(ctx, orgId)
-    : false;
+    : "CLEAR";
   for (const [family, recon] of families) {
     if (recon.status === "UNAVAILABLE") {
       if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") out.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
-      else if (hasOpeningHistory) out.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+      else if (hasOpeningHistory !== "CLEAR") out.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
     } else if (recon.unexplainedOpeningDifference) out.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
   }
   return out;
@@ -564,13 +566,10 @@ export async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
+  const [arReconciliation, vehicleInventoryRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate, true),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate, true),
-      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate, {
-        outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
-      }),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
@@ -583,9 +582,13 @@ export async function computeCloseChecklist(
   // transaction's remaining read headroom (readBoundedDocuments, measured as they stream), and that headroom is only true once the earlier
   // readers have finished reading: run beside them, every reader would be admitted against the same untouched budget
   // and together overrun it (SCRUM-858 PR #710 R11: the readers above already take ~24.6k of the 32,000 documents).
-  const employeeAdvancesRecon = await computeEmployeeAdvancesReconciliation(ctx, orgId, period.endDate, sharedGl);
-  const supplierRecoverablesRecon = await computeSupplierRecoverablesReconciliation(ctx, orgId, period.endDate, sharedGl);
-  const partnerCapitalRecon = await computePartnerCapitalReconciliation(ctx, orgId, period.endDate, sharedGl);
+  const openingCtx = openingVerificationContext(ctx);
+  const supplierPayablesRecon = await computeSupplierPayablesReconciliation(openingCtx, orgId, period.endDate, {
+    outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
+  });
+  const employeeAdvancesRecon = await computeEmployeeAdvancesReconciliation(openingCtx, orgId, period.endDate, sharedGl);
+  const supplierRecoverablesRecon = await computeSupplierRecoverablesReconciliation(openingCtx, orgId, period.endDate, sharedGl);
+  const partnerCapitalRecon = await computePartnerCapitalReconciliation(openingCtx, orgId, period.endDate, sharedGl);
 
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -634,12 +637,16 @@ export async function computeCloseChecklist(
     warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
   }
   // Owner ruling 2026-11-04: the opening difference sits in suspense as an open item until classified.
-  if (await openingSuspenseIsOpen(ctx, orgId, period.endDate)) warnings.push(OPENING_SUSPENSE_OPEN_WARNING);
-  const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
+  const suspense = await openingSuspenseIsOpen(openingCtx, orgId, period.endDate);
+  if (suspense === "OPEN") warnings.push(OPENING_SUSPENSE_OPEN_WARNING);
+  if (suspense === "UNAVAILABLE") warnings.push(OPENING_SUSPENSE_UNAVAILABLE_WARNING);
+  const heldOpeningLiabilities = await verifyOpeningRead(openingCtx,
+    guarded => readOpeningUnallocatedLiabilities(guarded, orgId, period.endDate),
+    () => ({ status: "UNAVAILABLE" as const, rows: [] }));
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
   warnings.push(
-    ...(await openingFamilyWarnings(ctx, orgId, [
+    ...(await openingFamilyWarnings(openingCtx, orgId, [
       ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
       ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
       ["PARTNER_CAPITAL", partnerCapitalRecon],

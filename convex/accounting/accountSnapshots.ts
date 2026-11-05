@@ -285,7 +285,7 @@ function documentSize(doc: object): number {
  * `hasHeadroom` is asked before every read; the `charge*` methods account for a document after it arrives, and
  * return false once a cap is passed.
  */
-class VerificationBudget {
+export class VerificationBudget {
   private remainingDocs: number;
   private remainingBytes: number;
 
@@ -345,6 +345,14 @@ class VerificationBudget {
     }
     if (docs.length === count) return docs;
     throw new ReadHeadroomExhausted();
+  }
+
+  /** A point read is admitted and charged by the same policy as a streamed row. */
+  async point<T extends object>(read: () => Promise<T | null>): Promise<T | null> {
+    if (!(await this.hasHeadroom())) throw new ReadHeadroomExhausted();
+    const doc = await read();
+    if (doc && !this.chargeLine(doc)) throw new ReadHeadroomExhausted();
+    return doc;
   }
 }
 
@@ -480,6 +488,16 @@ async function resolveParentEntry(
   return budget.chargeParentBytes(parent) ? "OK" : "OVER_LIMIT";
 }
 
+function balanceAdder(totals: Map<string, CumulativeBalance>): BalanceAdder {
+  return (accountId, currency, debitMinor, creditMinor) => {
+    const key = `${accountId}__${currency}`;
+    const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
+    existing.debitMinor += debitMinor;
+    existing.creditMinor += creditMinor;
+    totals.set(key, existing);
+  };
+}
+
 async function readCumulativeBalances(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
@@ -499,15 +517,9 @@ async function readCumulativeBalances(
   const containingPeriod = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
 
   const totals = new Map<string, CumulativeBalance>();
-  const addTo: BalanceAdder = (accountId, currency, debitMinor, creditMinor) => {
-    const key = `${accountId}__${currency}`;
-    const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
-    existing.debitMinor += debitMinor;
-    existing.creditMinor += creditMinor;
-    totals.set(key, existing);
-  };
+  const addTo = balanceAdder(totals);
 
-  for (const period of fullyElapsedPeriods) {
+  for await (const period of fullyElapsedPeriods) {
     await addPeriodSnapshots(ctx, orgId, period._id, addTo, budget);
   }
 
@@ -645,13 +657,7 @@ async function readControlAccountBalancesAsOf(
   const selected = await selectControlReadPeriods(ctx, { orgId, asOfDate, periods, budget, charge });
   if (selected === "OVER_LIMIT") return over;
   const totals = new Map<string, CumulativeBalance>();
-  const addTo: BalanceAdder = (accountId, currency, debitMinor, creditMinor) => {
-    const key = `${accountId}__${currency}`;
-    const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
-    existing.debitMinor += debitMinor;
-    existing.creditMinor += creditMinor;
-    totals.set(key, existing);
-  };
+  const addTo = balanceAdder(totals);
   const reader: ControlBalanceReader = {
     ctx, orgId, asOfDate, budget, charge, addTo, ...selected,
     remaining: () => remaining, entryStatusCache: new Map(), accountsWithLaterLines: [],

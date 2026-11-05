@@ -1,0 +1,69 @@
+{
+  "id": "opening-history-eleven-headers-complete-reuse",
+  "fingerprint": "ca74a5993ce1d0d358217573874849c51efeb28d5725d0bbcd659452924dc919",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15f",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedOpeningHistory",
+      "input": {
+        "historicalHeaders": 11,
+        "memoBytes": 800000,
+        "missingHistoricalJournals": true,
+        "discrepancyMinor": -1,
+        "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierRecoverablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.glBalanceMinor",
+      "value": 70000
+    },
+    {
+      "observable": "reconciliation.subledgerBalanceMinor",
+      "value": 70001
+    },
+    {
+      "observable": "reconciliation.discrepancyMinor",
+      "value": -1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "R15f eleven retained headers reuse source proof and preserve the complete one-unit discrepancy"
+  },
+  "matrixRow": "SCRUM-858-opening-read-headroom-class",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "66bb1825b7949ee517fb4ed384144e0fcc11b2ba"
+  }
+}

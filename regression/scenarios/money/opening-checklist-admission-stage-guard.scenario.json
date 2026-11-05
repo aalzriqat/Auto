@@ -1,0 +1,67 @@
+{
+  "id": "opening-checklist-admission-stage-guard",
+  "fingerprint": "fa229beab88a9444eb12a9d0dfcfb5eaa0e9392763aefbf0909af9d4ac846c3e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15f",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedOpeningHistory",
+      "input": {
+        "admissionStages": "ALL_MEASURED_ADMISSIONS",
+        "remainingBytesAfterStage": 0,
+        "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.computeCloseChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "checklist.throws",
+      "value": false
+    },
+    {
+      "observable": "checklist.canClose",
+      "value": true
+    },
+    {
+      "observable": "refusedReaders.partialResults",
+      "value": false
+    },
+    {
+      "observable": "refusedReaders.statementOfFactWarning",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "R15f checklist refuses truthfully after admission stage %s"
+  },
+  "matrixRow": "SCRUM-858-opening-read-headroom-class",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "66bb1825b7949ee517fb4ed384144e0fcc11b2ba"
+  }
+}

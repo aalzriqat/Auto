@@ -1,4 +1,5 @@
 import { orgResetState } from "./orgResetGeneration";
+import { openingVerificationSource } from "./openingSourceIdentity";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
@@ -56,6 +57,7 @@ export function createOpeningSettlementReader(
   ctx: ReadCtx,
   orgId: Id<"organizations">,
 ): OpeningSettlementReader {
+  const source = openingVerificationSource(ctx, orgId);
   const parents = new Map<
     Id<"openingBalanceDrafts">,
     Promise<Doc<"openingBalanceDrafts"> | null>
@@ -68,7 +70,7 @@ export function createOpeningSettlementReader(
     parent(id) {
       let value = parents.get(id);
       if (!value) {
-        value = ctx.db.get(id);
+        value = source ? source.then(identity => identity.headers.find(header => header._id === id) ?? null) : ctx.db.get(id);
         parents.set(id, value);
       }
       return value;
@@ -88,6 +90,11 @@ export function createOpeningSettlementReader(
 }
 async function hasCurrentOpeningJournal(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
   journalId: Id<"journalEntries"> | undefined): Promise<boolean> {
+  const source = openingVerificationSource(ctx, orgId);
+  if (source) {
+    const identity = await source;
+    return identity.status === "AVAILABLE" && identity.journal._id === journalId;
+  }
   const postedJournals = await ctx.db.query("journalEntries")
     .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover").eq("sourceId", String(orgId)))
     .take(101);

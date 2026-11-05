@@ -1,7 +1,7 @@
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
-import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { loadOpeningSourceIdentity, verifyOpeningRead } from "./utils/openingSourceIdentity";
 import { hasReadHeadroom, type HeadroomCtx } from "./utils/transactionReadHeadroom";
 import { openingPolicyForAccount, openingAccountAllowsFamily, isRemainingOpeningKind, openingDeclaredFamilyRefusal } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
@@ -202,7 +202,7 @@ async function getPostedControlLines(
     .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
   const parents = eligibility?.phase === "READY" ? null : await postedControlParentIds(ctx, orgId);
   const included: Doc<"journalLines">[] = [];
-  for (const accountId of accounts) {
+  for await (const accountId of accounts) {
     const lines = ctx.db.query("journalLines").withIndex("by_org_account_date", (q) => {
       const scoped = q.eq("orgId", orgId).eq("accountId", accountId);
       return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
@@ -1205,7 +1205,8 @@ async function supplierPayableOpenBalanceAsOf(
   let basis;
   try {
     basis = await openingPayableBasis(ctx, orgId, p);
-  } catch {
+  } catch (error) {
+    if (error instanceof ReadHeadroomExhausted) throw error;
     return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
   }
   if (basis) {
@@ -1308,6 +1309,23 @@ async function laterApControlActivity(
 }
 
 export async function computeSupplierPayablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  opts: {
+    readLimit?: number;
+    /** Byte cap (`getDocumentSize`) of the checked GL read's verification pass (tests); defaults to SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT. */
+    readBytesLimit?: number;
+    /** PENDING + FAILED outbox rows the caller already read (period close shares them); read here if omitted. */
+    outboxEvents?: Array<Doc<"pendingAccountingEvents">>;
+  } = {}
+): Promise<SupplierPayablesReconciliationResult> {
+  return verifyOpeningRead<SupplierPayablesReconciliationResult>(ctx, guarded => readSupplierPayablesReconciliation(guarded, orgId, toDate, opts), () => ({
+    status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, isReconciled: false,
+  }));
+}
+
+async function readSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
@@ -1480,10 +1498,14 @@ export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
   unexplainedOpeningDifference: OpeningDifferenceReport;
 };
 
-/** True when the organization has any opening-balance draft or journal (even an unreadable one). */
-export async function orgHasOpeningHistory(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
-  const source = await loadOpeningSourceIdentity(ctx, orgId);
-  return source.headers.length > 0 || source.status !== "ABSENT";
+export type OpeningCheckState = "OPEN" | "CLEAR" | "UNAVAILABLE";
+
+/** History exists, is absent, or could not be verified. Refusal proves neither side. */
+export async function orgHasOpeningHistory(ctx: QueryCtx, orgId: Id<"organizations">): Promise<OpeningCheckState> {
+  return verifyOpeningRead(ctx, async guarded => {
+    const source = await loadOpeningSourceIdentity(guarded, orgId);
+    return source.headers.length > 0 || source.status !== "ABSENT" ? "OPEN" : "CLEAR";
+  }, () => "UNAVAILABLE");
 }
 
 /**
@@ -1497,10 +1519,11 @@ async function withOpeningDifferenceReport<T extends GlVsSubledgerResult>(
 ): Promise<T & { unexplainedOpeningDifference: OpeningDifferenceReport }> {
   const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
   if (currencies.length === 0) return { ...result, unexplainedOpeningDifference: null };
-  const hasOpeningHistory = await orgHasOpeningHistory(ctx, orgId);
+  const history = await orgHasOpeningHistory(ctx, orgId);
+  if (history === "UNAVAILABLE") throw new ReadHeadroomExhausted();
   return {
     ...result,
-    unexplainedOpeningDifference: hasOpeningHistory
+    unexplainedOpeningDifference: history === "OPEN"
       ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
       : null,
   };
@@ -1877,22 +1900,29 @@ async function glNetByAccounts(
 /** Documents the suspense balance read may scan: one snapshot per period plus the open period's lines. */
 const OPENING_SUSPENSE_READ_LIMIT = 2000;
 
-/** True while the opening-balance suspense account carries a balance as of `cutoff`, or when that balance
- * cannot be read in full: an unproven zero is never reported as cleared. An org that never used suspense
- * has no such account and no open item. */
-export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number): Promise<boolean> {
-  const account = await ctx.db
-    .query("chartOfAccounts")
-    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE))
-    .first();
-  if (!account) return false;
-  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT, true);
-  if (gl.status !== "OK") return true;
-  return gl.balances.some((balance) => balance.debitMinor !== balance.creditMinor);
+/** A statement about suspense requires a complete balance. Unknown remains a separate warning. */
+export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizations">, cutoff: number): Promise<OpeningCheckState> {
+  return verifyOpeningRead(ctx, async guarded => {
+    const account = await guarded.db.query("chartOfAccounts")
+      .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE)).first();
+    if (!account) return "CLEAR";
+    const gl = await getControlAccountBalancesAsOf(guarded, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT, true);
+    if (gl.status !== "OK") return "UNAVAILABLE";
+    return gl.balances.some(balance => balance.debitMinor !== balance.creditMinor) ? "OPEN" : "CLEAR";
+  }, () => "UNAVAILABLE");
 }
 
 /** Employee Advances asset (GL, debit-normal) vs the unrecovered remainder of every live advance. */
 export async function computeEmployeeAdvancesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readEmployeeAdvancesReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readEmployeeAdvancesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
@@ -1948,6 +1978,15 @@ export const employeeAdvancesReconciliation = query({
 
 /** Receivable from Suppliers (system and declared opening controls) vs the unrecovered supplier claims. */
 export async function computeSupplierRecoverablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readSupplierRecoverablesReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readSupplierRecoverablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
@@ -2020,6 +2059,15 @@ function addDatedPartnerMovements(
  * difference here, not turn the whole comparison into "unavailable".
  */
 export async function computePartnerCapitalReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readPartnerCapitalReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readPartnerCapitalReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,

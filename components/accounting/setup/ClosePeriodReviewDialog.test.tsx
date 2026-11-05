@@ -18,6 +18,7 @@ import {
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING,
   UNEXPLAINED_OPENING_DIFFERENCE_LABEL,
+  OPENING_SUSPENSE_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING,
 } from "@/convex/utils/closeWarnings";
 
@@ -311,6 +312,11 @@ describe("ClosePeriodReviewDialog customer deposits warning (SCRUM-858 F2)", () 
  * renders as the "too many records" message.
  */
 describe.each([
+  {
+    name: "opening suspense balance unverified",
+    warning: OPENING_SUSPENSE_UNAVAILABLE_WARNING,
+    key: "ClosePeriodWarnOpeningSuspenseUnavailable",
+  },
   {
     name: "inconsistent journal reference",
     warning: SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,

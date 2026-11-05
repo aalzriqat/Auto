@@ -92,9 +92,14 @@ export const OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY = {
 
 /**
  * SCRUM-858/852 (owner ruling 2026-11-04): the opening-balance difference was posted to the suspense account
- * and nobody has classified it yet. Emitted while that account carries a balance (or its balance cannot be
- * read in full), so the open item is seen at every close. Server text is the acknowledgement key; the close
+ * and nobody has classified it yet. Emitted only after a complete balance read proves it is nonzero.
+ * Server text is the acknowledgement key; the close
  * dialog translates it at display time only.
  */
 export const OPENING_SUSPENSE_OPEN_WARNING =
   "The opening-balance suspense account still carries a balance. Clearing it to its real accounts needs a manual journal, and manual journals are turned off during the pilot, so it stays open for now; it is never moved to equity automatically.";
+
+export const OPENING_SUSPENSE_UNAVAILABLE_WARNING =
+  "[OPENING_SUSPENSE_UNAVAILABLE] The opening-balance suspense balance could not be verified. Review the opening source and ledger, then re-check.";
+export const OPENING_SUSPENSE_UNAVAILABLE_WARNING_AR =
+  "[OPENING_SUSPENSE_UNAVAILABLE] تعذر التحقق من رصيد حساب فروقات الأرصدة الافتتاحية. راجع مصدر الأرصدة الافتتاحية ودفتر الأستاذ، ثم أعد التحقق.";

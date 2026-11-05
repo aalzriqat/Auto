@@ -41,7 +41,7 @@ The corrected byte run used `-t 'cumulative GL.*bytes|cumulative GL small'`: one
 
 The tests require `UNAVAILABLE`, reason `OVER_LIMIT`, `isReconciled: false`, empty currencies and balance map, and no opening difference. They do not assert a throw.
 
-## Census
+## Historical R15d census (superseded below by R15f)
 
 Scope: the PR diff against fetched `origin/main`, its opening readers and the earlier readers composed by `computeCloseChecklist`; expanded with graft call edges and source occurrences. Locations below name the resulting source, not the original finding's offsets.
 
@@ -194,3 +194,139 @@ Full regression file counts follow. The final 67-file run includes all literal s
 | `scripts/tenantWriteGuard.test.ts` | 13 |
 
 No deployment, environment-variable listing, push, release waiver change, or review-evidence write. Independent final-head seats, CI/SonarCloud, screen hunters and real-backend execution remain outside this implementer run. Local convex-test results do not prove OCC, cloud runtime limits/read-ahead, metric-check cost, or production-data prevalence.
+
+
+## R15f: close the read-headroom class
+
+The original census left source-proof reads outside admission and treated unverified suspense as open. The same class had already escaped R11/R13 provenance admission and R15d cumulative admission. Both R15e findings were reproduced at `df063de1982433159f1dd92e62ef3cb84e48d35e` before production edits. The initial failing-first commit is `66bb1825b7949ee517fb4ed384144e0fcc11b2ba`. The refined mid-stream fixture and exhaustive guard are committed separately at `c5eb559b694ac0a3f49aab69843c40fd62dfbb89`, before the production fix.
+
+| Finding | Baseline result | Required result |
+| --- | --- | --- |
+| Empty suspense after mixed-control byte exhaustion | `OPENING_SUSPENSE_OPEN_WARNING` despite zero suspense lines | A coded unavailable warning, with no claim of a balance |
+| Eleven retained headers, each with an 800,000-byte memo, missing historical journals, and a one-unit recoverable discrepancy | Public reader throws generic `ConvexError`; public checklist throws 16 MiB read error in a concurrently running legacy deposit GL read | Complete evidence or typed refusal, never partial amounts or a generic limit exception |
+
+The initial focused red run had three failures. The expanded red run also exercised nine admission stages and the eleven-header control. Receipts: `E:/tmp/auto710-r15f-red.json`, `E:/tmp/auto710-r15f-red-tests.json`.
+
+### Admission boundary and three states
+
+`openingVerificationContext` supplies a read-only database adapter to the three opening-family readers, supplier payables, suspense, source labelling and the checklist's held-liability proof. Its stream, `take`, `collect`, `first`, `unique` and point reads use the existing `VerificationBudget` policy: 30,000 documents, 14 MiB, and live reserve of 2 MiB, 2,000 documents and 256 ranges. Admission requires another worst-case 1 MiB document. It checks before starting a stream and before every `next`. Each returned document is charged with Convex's size measurement. A serialized queue holds admission and its I/O together, so parallel helper calls cannot spend the same observed room.
+
+The adapter allowlists query builders before invoking them. Unknown terminal methods, database writes, system reads, filters, counts and pagination refuse rather than escaping admission. These readers use indexed, unfiltered streams. Only `ReadHeadroomExhausted` is converted to `UNAVAILABLE/OVER_LIMIT`; other errors retain their server error path. A refused source promise is retained as a refusal, not an empty inventory. The entire reader result is discarded on refusal.
+
+The outer boundaries are explicit at each exported compute reader, including direct `computeCloseChecklist` callers. The shared GL closure keeps its existing bounded cumulative implementation and live admission. Supplier payables now runs after the legacy checklist group, followed by the three opening families, so its budget sees the group's completed I/O. This changes scheduling, not the legacy collectors' queries or payloads.
+
+`openingSuspenseIsOpen` and `orgHasOpeningHistory` return `OPEN | CLEAR | UNAVAILABLE`. Callers compare the literal state. Unavailable history causes an unavailable reconciliation or its acknowledgeable warning. No boolean maps a read refusal to a statement about a balance. Existing statement-of-fact and acknowledgment strings are unchanged.
+
+One transaction-local scope caches the full source identity, including its header inventory and live-journal proof. Allocation discovery, discrepancy labelling, payable references, held-liability discovery and current-journal proof reuse it. Settlement parent reads reuse that inventory. Current org/reset and account state still get admitted reads. Existing callers that do not request the verification context follow their original database paths.
+
+The eleven-header standalone case now fits because it no longer rereads 8.8 MB to label a discrepancy. It truthfully reports GL 70,000, subledger 70,001, discrepancy -1. Requiring OVER_LIMIT for that complete read would reject evidence already available. A 22-header case instead exhausts headroom part-way through a single header stream and must return `UNAVAILABLE/OVER_LIMIT`, with empty currencies/map and no opening difference. Eleven headers in the composite checklist still exhaust its shared transaction and produce an acknowledgeable unavailable warning.
+
+### Complete read census for the PR-owned path
+
+Enumerated with `graft callers computeCloseChecklist --direction out --depth all`, the supplier-payables and held-liability callee graphs, the opening-source caller graph, and an AST inventory of `db.query` and `db.get` sites in the listed modules. Locations identify the production read expressions after this change. Every row below uses measured admission; no small fixed `take(n)` is asserted to be a byte bound. At Convex's 1 MiB document maximum, even `take(101)` can request 101 MiB and `take(201)` can request 201 MiB.
+
+| Read location | Reader/helper and population | Admission and refusal |
+| --- | --- | --- |
+| `convex/accountingReports.ts:81` | `getOrgCurrencyForReports`: `ctx.db .query("orgSettings")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1160` | `hasPendingAffectingPosting`: `ctx.db.get(id)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1176` | `pendingControlAccountDraftState`: `ctx.db .query("chartOfAccounts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1180` | `pendingControlAccountDraftState`: `ctx.db .query("manualJournalDrafts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1184` | `pendingControlAccountDraftState`: `ctx.db .query("openingBalanceDrafts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1214` | `supplierPayableOpenBalanceAsOf`: `ctx.db .query("openingPayablePayments")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1294` | `laterApControlActivity`: `ctx.db .query("journalLines")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1302` | `laterApControlActivity`: `ctx.db.get(entryId)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1361` | `readSupplierPayablesReconciliation`: `ctx.db .query("pendingAccountingEvents")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1385` | `readSupplierPayablesReconciliation`: `ctx.db .query("vehicleSupplierPayables")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1399` | `readSupplierPayablesReconciliation`: `ctx.db.query("chartOfAccounts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1561` | `hasQueuedPosting`: `ctx.db .query("pendingAccountingEvents")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1573` | `openingJournalAccountTotals`: `ctx.db.query("journalLines")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1648` | `openingAllocationAccounts`: `ctx.db.get(accountId)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1663` | `reconciliationDateUnsupported`: `ctx.db.query("journalEntries")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1794` | `controlSourceFamilyRefusal`: `ctx.db.get(id)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1800` | `controlSourceFamilyRefusal`: `ctx.db.get(id)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1812` | `controlSourceFamilyRefusal`: `ctx.db.query("journalEntries")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1816` | `controlSourceFamilyRefusal`: `ctx.db.query("accountingEvents")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1836` | `readControlJournalIds`: `ctx.db.query("journalLines")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1869` | `addSystemAccount`: `ctx.db .query("chartOfAccounts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:1906` | `openingSuspenseIsOpen`: `guarded.db.query("chartOfAccounts")` | Guarded scope + bounded GL; UNAVAILABLE, never OPEN on refusal |
+| `convex/accountingReports.ts:1937` | `readEmployeeAdvancesReconciliation`: `ctx.db.query("employeeAdvances")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:2004` | `readSupplierRecoverablesReconciliation`: `ctx.db.query("supplierCostRecoveries")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:2083` | `readPartnerCapitalReconciliation`: `ctx.db.query("partnerEquity")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accountingReports.ts:2094` | `readPartnerCapitalReconciliation`: `ctx.db .query("partnerEquityTransactions")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/accounting/accountSnapshots.ts:378` | `addPeriodSnapshots`: `ctx.db .query("accountBalanceSnapshots")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:399` | `addEntryLines`: `ctx.db .query("journalLines")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:457` | `verifyAccountLines`: `ctx.db .query("journalLines")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:486` | `resolveParentEntry`: `ctx.db.get(entryId)` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:510` | `readCumulativeBalances`: `ctx.db .query("accountingPeriods")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:535` | `readCumulativeBalances`: `ctx.db .query("journalEntries")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:552` | `readCumulativeBalances`: `ctx.db .query("journalEntries")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:651` | `readControlAccountBalancesAsOf`: `ctx.db.query("accountingPeriods")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:697` | `selectControlReadPeriods`: `ctx.db.query("journalEntries")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:707` | `addControlAccountBalance`: `ctx.db.query("journalLines")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:713` | `addControlAccountBalance`: `ctx.db.query("accountBalanceSnapshots")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:720` | `addControlAccountBalance`: `ctx.db.query("journalLines")` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/accounting/accountSnapshots.ts:744` | `controlEntryCounts`: `ctx.db.get(entryId)` | Bounded GL budget; OVER_LIMIT, no balances |
+| `convex/utils/openingSourceIdentity.ts:150` | `readOpeningSourceIdentity`: `ctx.db.query("openingBalanceDrafts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSourceIdentity.ts:152` | `readOpeningSourceIdentity`: `ctx.db.query("journalEntries")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSupplierBasis.ts:18` | `postedOpeningResults`: `ctx.db .query("openingBalanceDrafts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:73` | `createOpeningSettlementReader`: `ctx.db.get(id)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:81` | `createOpeningSettlementReader`: `ctx.db .query("journalLines")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:98` | `hasCurrentOpeningJournal`: `ctx.db.query("journalEntries")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:119` | `resolveOpeningSettlementBasis`: `ctx.db.get(orgId)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:164` | `resolveOpeningSettlementBasis`: `ctx.db.get(allocation.accountId)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingSettlementBasis.ts:179` | `resolveOpeningSettlementBasis`: `ctx.db.get(draft.journalEntryId)` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/utils/openingUnallocatedLiabilities.ts:14` | `readOpeningUnallocatedLiabilities`: `ctx.db .query("openingBalanceDrafts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+| `convex/chartOfAccounts.ts:40` | `resolveSystemAccount`: `ctx.db .query("chartOfAccounts")` | Guarded scope or cached complete source; typed refusal to reader OVER_LIMIT |
+
+`getOrgCurrencyForReports` reads `orgSettings` through the same scope when called by partner capital. `openingAccountAllowsFamily` delegates its database lookup to the listed `resolveSystemAccount`. `withOpeningDifferenceReport` and `orgHasOpeningHistory` use the listed, cached `loadOpeningSourceIdentity` inventory. Provenance maps evaluate cached journal/event documents without additional database reads. The AST inventory does not claim to enumerate dynamic methods; the adapter intercepts those at the database boundary.
+
+### Explicit legacy boundary
+
+These pre-existing checklist reads stay outside this PR's admission guarantee and keep their original collectors: pending/failed outbox, sales, manual drafts, unmatched bank lines; AR and vehicle-inventory control projection including their bulk parent reads; prepaid schedule/source reads; customer-deposit subledger/source/cumulative GL reads; commission-payable and commission-recognition source/cumulative GL reads. Their populations can still exceed a transaction's platform limits. Moving supplier payables after this group prevents the new guarded reader from racing them, but does not certify an arbitrarily large legacy group. The guarded checklist's later held-liability read is covered above; the legacy customer-deposit reader's own call keeps its original path.
+
+### Guidance and design choices
+
+Checked the official [Convex limits](https://docs.convex.dev/production/state/limits), [transaction headroom documentation](https://docs.convex.dev/database/writing-data), and [Convex custom-context pattern](https://stack.convex.dev/custom-functions). The native transaction-limit option bounds nested calls but refuses by throwing, and the documentation states that actual consumption can exceed the bound by an overage. These read-only helpers need typed, acknowledgeable results in the same transaction. Streaming admission with the existing reserve policy preserves that contract without new remote functions, pagination or aggregates. The database adapter applies the documented context-customization pattern locally to this PR's readers. It is not an alternative transaction engine.
+
+[AS 2810](https://pcaobus.org/oversight/standards/auditing-standards/details/AS2810) separates a detected misstatement from inability to obtain sufficient evidence. That distinction supports separate discrepancy, suspense-open and unavailable states here. It does not certify this implementation or turn this product into an audit opinion.
+
+The duplicate balance adder is shared. The two reported sequential await loops now use async iteration. Their reads must remain sequential: the next period/account is admitted after the previous read spends its budget. Parallelizing them to satisfy a style rule would violate admission. No NOSONAR or rule suppression was added.
+
+Five failure predictions: an inner catch hides the typed refusal; a new database terminal bypasses the adapter; parallel readers see the same unspent headroom; cached refusal becomes empty source history; mid-stream partial headers become a complete proof. The stage guard, two reproductions, complete-history control and three source mutants address these cases. An advisory source review found the unknown-terminal forwarding gap; the adapter now refuses unknown methods before invocation. This review is not a required independent seat.
+
+### New warning
+
+- EN: `[OPENING_SUSPENSE_UNAVAILABLE] The opening-balance suspense balance could not be verified. Review the opening source and ledger, then re-check.`
+- AR: `[OPENING_SUSPENSE_UNAVAILABLE] تعذر التحقق من رصيد حساب فروقات الأرصدة الافتتاحية. راجع مصدر الأرصدة الافتتاحية ودفتر الأستاذ، ثم أعد التحقق.`
+
+The dialog maps the raw EN server text to `ClosePeriodWarnOpeningSuspenseUnavailable`. EN/AR component tests verify display and verbatim acknowledgment. No existing warning text changed.
+
+### Regression library and evidence boundary
+
+Five new money records bind the reproductions, complete-history reuse and exhaustive admission-stage guard to `SCRUM-858#c23884`. The seven `opening-cumulative-*` records now use that ruling's existing snapshot digest `9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d`; scenario fingerprints remain unchanged because the scenarios themselves did not change. The validator accepts the new references. The new single-stream record uses 22 headers so removal of its admission exceeds the real harness byte ceiling before a later guard can conceal it.
+
+Local commands, test counts, mutant source/restoration hashes and final baseline evidence are recorded in the implementation handoff and `E:/tmp/auto710-r15f-*` receipts. The SonarCloud API initially reports three unresolved issues; the local counterparts are repaired, but a fresh cloud analysis requires the coordinator's push. Harness limits, component renders and source review do not establish native read-ahead behavior, cloud scheduling/OCC, actual UI role/device hunters, or production correctness. No push, deployment or environment listing was performed.
+
+The 22-header fixture was also run with all eight affected production modules restored temporarily to df063de19: one selected failure, zero passes, then byte-identical restoration of all eight modules. The initial 18-header variant reached a later existing GL refusal and was therefore a passing preventive control; it was increased to 22 headers to expose missing source-stream admission itself. No passing control is claimed as a red reproduction.
+
+
+### R15f final local validation
+
+| Check | Result |
+| --- | --- |
+| Initial three finding reproductions at df063de19 | 0 passed, 3 failed, 83 unselected |
+| Expanded initial red run | 1 passed, 12 failed, 83 unselected; includes nine stage variants |
+| Refined 22-header stream against all eight original production modules | 0 passed, 1 failed, 87 unselected; all source bytes restored |
+| Full requested/discovered selection, 59 files | 1,442 passed, 1 failed; additionally refreshRulings failed before collection. The assertion failure was the new scenario's prose input token, corrected to ALL_MEASURED_ADMISSIONS |
+| Final validator rerun | scenarioRecord: 70 passed against 1,013 records (1,009 active, four retired). Extra refreshRulings utility still fails before collection |
+| Supplement, six files | 261 passed, 0 failed/skipped; includes all 27 close-dialog tests, 70 validator tests and four supplier suites |
+| Final R15f public-seam cases | Five passed, 83 intentionally unselected. Exhaustive guard executes all 224 measured admission stages |
+| Distinct assertions from full selection plus corrected/supplemental receipts | 1,605 passed across 62 executed test files, 0 failed/skipped assertions. The extra 63rd file, refreshRulings, has a parse failure and is not certified |
+| Both TypeScript configurations | Passed separately; root excludes Convex/apps/packages/dealer-worker/test-utils entry roots, Convex includes convex/test-utils and excludes generated entry roots; imports can pull excluded paths into either program |
+| ESLint on all 12 changed TS/TSX files | Zero errors; one unchanged react-hooks/set-state-in-effect warning in the dialog |
+| Local Sonar counterparts plus complexity/nested-conditional checks | Duplicate adder removed; each reported await loop removed from ordinary-loop diagnostics; no new diagnostics. Other baseline findings remain. This is not SonarCloud analysis |
+| SonarCloud unresolved API before/after local work | Three OPEN issues both times: S4144 and two S9382. Coordinator push and fresh analysis remain required |
+| Baseline identity and metadata | 945 identities match; seven appended evidence-blobs segments in three shards, one safe 137-to-139 call relocation; zero other metadata changes |
+| Requested mutants a/b/c | Each one selected failure, zero passes; original/restored SHA-256 match in every case |
+
+The unchanged-file Vite/shebang parse failure is recorded in SCRUM-879 comment c24609 under the owner's test-only MEDIUM follow-up rule. No suite was disabled or skipped. The original broad run's failure remains in its receipt; the corrected scenario validator's pass is a separate receipt. The final commit-specific evidence CLI result is in the handoff, because its reviewed SHA does not exist until commit.
