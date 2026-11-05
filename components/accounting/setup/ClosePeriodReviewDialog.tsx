@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -150,6 +150,85 @@ export function ClosePeriodReviewDialog({
     }
   }
 
+  let body: ReactNode;
+  if (!permissionsLoading && !canReadChecklist) {
+    body = <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote>;
+  } else if (checklist === undefined) {
+    body = <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>;
+  } else {
+    body = (
+      <div className="space-y-4">
+        {blockers.length > 0 && (
+          <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40">
+            <div className="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              {t("ClosePeriodBlockersLabel")}
+            </div>
+            <ul className="space-y-1.5">
+              {blockers.map((blocker) => (
+                <li key={blocker} className="text-sm leading-snug text-red-800 dark:text-red-200">
+                  {blocker}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+            <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {t("ClosePeriodWarningsLabel")}
+            </div>
+            <ul className="space-y-2">
+              {warnings.map((warning) => (
+                <li key={warning} className="flex items-start gap-2">
+                  <Checkbox
+                    checked={acknowledged.has(warning)}
+                    onCheckedChange={(checked) => {
+                      setAcknowledged((prev) => {
+                        const next = new Set(prev);
+                        if (checked === true) next.add(warning);
+                        else next.delete(warning);
+                        return next;
+                      });
+                    }}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{displayWarning(warning, t)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {blockers.length === 0 && warnings.length === 0 && (
+          <p className="text-sm text-emerald-700 dark:text-emerald-300">{t("ClosePeriodNoIssues")}</p>
+        )}
+
+        {!checklist.canClose && isOwner && (
+          <div className="space-y-1.5">
+            <Label>{t("ClosePeriodOverrideReasonLabel")}</Label>
+            <Textarea
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              placeholder={t("ClosePeriodOverrideReasonPlaceholder")}
+            />
+            <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
+          </div>
+        )}
+
+        {/* The backend restricts blocker overrides to the org owner
+            (accountingPeriods.close) — showing the reason input to a
+            MANAGE_FINANCE user who isn't the owner would only let them
+            type a reason and submit, then get rejected server-side. */}
+        {!checklist.canClose && !isOwner && (
+          <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85dvh] overflow-y-auto">
@@ -158,81 +237,7 @@ export function ClosePeriodReviewDialog({
           <DialogDescription>{t("ClosePeriodReviewDesc")}</DialogDescription>
         </DialogHeader>
 
-        {!permissionsLoading && !canReadChecklist ? (
-          <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote>
-        ) : checklist === undefined ? (
-          <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>
-        ) : (
-          <div className="space-y-4">
-            {blockers.length > 0 && (
-              <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40">
-                <div className="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
-                  <ShieldAlert className="h-4 w-4 shrink-0" />
-                  {t("ClosePeriodBlockersLabel")}
-                </div>
-                <ul className="space-y-1.5">
-                  {blockers.map((blocker) => (
-                    <li key={blocker} className="text-sm leading-snug text-red-800 dark:text-red-200">
-                      {blocker}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {warnings.length > 0 && (
-              <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
-                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  {t("ClosePeriodWarningsLabel")}
-                </div>
-                <ul className="space-y-2">
-                  {warnings.map((warning) => (
-                    <li key={warning} className="flex items-start gap-2">
-                      <Checkbox
-                        checked={acknowledged.has(warning)}
-                        onCheckedChange={(checked) => {
-                          setAcknowledged((prev) => {
-                            const next = new Set(prev);
-                            if (checked === true) next.add(warning);
-                            else next.delete(warning);
-                            return next;
-                          });
-                        }}
-                        className="mt-0.5"
-                      />
-                      <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{displayWarning(warning, t)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {blockers.length === 0 && warnings.length === 0 && (
-              <p className="text-sm text-emerald-700 dark:text-emerald-300">{t("ClosePeriodNoIssues")}</p>
-            )}
-
-            {!checklist.canClose && isOwner && (
-              <div className="space-y-1.5">
-                <Label>{t("ClosePeriodOverrideReasonLabel")}</Label>
-                <Textarea
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  placeholder={t("ClosePeriodOverrideReasonPlaceholder")}
-                />
-                <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
-              </div>
-            )}
-
-            {/* The backend restricts blocker overrides to the org owner
-                (accountingPeriods.close) — showing the reason input to a
-                MANAGE_FINANCE user who isn't the owner would only let them
-                type a reason and submit, then get rejected server-side. */}
-            {!checklist.canClose && !isOwner && (
-              <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
-            )}
-          </div>
-        )}
+        {body}
 
         <DialogFooter>
           <DialogFooterActions
