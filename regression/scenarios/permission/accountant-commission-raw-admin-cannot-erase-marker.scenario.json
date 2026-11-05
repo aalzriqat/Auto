@@ -1,0 +1,73 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-accountant-commissions",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-04"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-raw-admin-cannot-erase-marker",
+  "steps": [
+    {
+      "actor": {
+        "role": "superadmin",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "patch": "UNCHANGED_MARKERS"
+      }
+    },
+    {
+      "actor": {
+        "role": "superadmin",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "patch": "ERASE_OR_FORGE_MARKERS"
+      }
+    },
+    {
+      "actor": {
+        "role": "superadmin",
+        "org": "A"
+      },
+      "action": "adminData.adminUpdateRecord",
+      "input": {
+        "patch": "PERMISSIONS_ONLY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "role.marker",
+      "value": "PRESERVED"
+    },
+    {
+      "observable": "markerChange",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "permissionEdit",
+      "value": "ACCEPTED"
+    }
+  ],
+  "impl": {
+    "file": "convex/adminData.test.ts",
+    "testName": "SCRUM-908: raw role saves preserve migration provenance and refuse marker changes"
+  },
+  "bugRef": {
+    "key": "SCRUM-908",
+    "failingFirst": "a59e3afdf198c00c67aa1450a84cb37552bc65d0"
+  },
+  "fingerprint": "1b66b731ba7c39d3c0ce0c87146d8aa3b1d65385d517863fe3ab25af5807b2c8"
+}

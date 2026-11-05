@@ -104,20 +104,6 @@ function exactMinorOrUndefined(major: number, scale: CurrencyScale): number | un
 /** How many expense rows one vehicle's basis read is allowed to carry. */
 export const MAX_COST_BASIS_EXPENSES = 200;
 
-/**
- * The expense categories that are PREPARING a car for sale — the same set
- * `CAPITALIZABLE_EXPENSE_CATEGORIES` in `vehicleCost.ts` names. On the
- * dealership's own car these capitalize; on a consigned car the writer books
- * them as PERIOD_EXPENSE, and they are still the dealership's money spent on
- * the deal.
- */
-const PREPARATION_CATEGORIES: ReadonlySet<Doc<"expenses">["category"]> = new Set([
-  "REPAIR",
-  "MAINTENANCE",
-  "DETAILING",
-  "TRANSPORT",
-]);
-
 export type DealerPreparationExpense = Readonly<{
   id: Doc<"expenses">["_id"];
   title: string;
@@ -128,24 +114,10 @@ export type DealerPreparationExpense = Readonly<{
 }>;
 
 /**
- * What the DEALERSHIP spent preparing a CONSIGNED car before this deal —
- * shown separately from the supplier's entitlement and subtracted exactly once
- * from the consignment management profit. Never capitalized: a consigned car
- * is not the dealership's inventory, and the supplier's entitlement is not
- * touched by what the dealership chose to spend.
- *
- * Evidence is admitted only when it is safely distinguishable:
- *   - a preparation category (repair, maintenance, detailing, transport);
- *   - PAID and posted: `accountingTreatment === "PERIOD_EXPENSE"` — the
- *     writer's own decision for a consigned car (`recordPaidExpenseSideEffects`
- *     never capitalizes onto SOURCED). A row that was CAPITALIZED on a car that
- *     is consigned NOW is a car that changed ownership after the fact; that
- *     history is not this deal's evidence and is refused as ambiguous;
- *   - not deleted and not reversed;
- *   - REGISTERED before the deal (`_creationTime`), like the cost basis.
- * PENDING rows are counted, never summed; an unreadable amount withholds the
- * whole figure. Net of VAT: `amount − taxAmount`, since input VAT is
- * recoverable and is not a cost of the car.
+ * SCRUM-908: paid, live showroom expenses on the car, in every category and
+ * regardless of registration date, net of recoverable VAT. STOCK capitalized
+ * rows are already in the full vehicle basis; SOURCED capitalized history is
+ * ambiguous. The legacy preparation names remain wire-compatible.
  */
 export type DealerPreparationExpenses =
   | Readonly<{
@@ -161,11 +133,34 @@ export type DealerPreparationExpenses =
       currency: string;
     }>;
 
+type ExpenseDisposition = "reversedCount" | "otherCount" | "pendingCount" |
+  "AMBIGUOUS_OWNERSHIP_HISTORY" | "UNREADABLE_AMOUNT" | null;
+
+function showroomExpenseDisposition(row: Doc<"expenses">, consigned: boolean): ExpenseDisposition {
+  if (row.isDeleted === true || row.reversedAt !== undefined) return "reversedCount";
+  if (!isShowroomBorne(row)) return "otherCount";
+  if (row.status === "PENDING") return "pendingCount";
+  if (row.accountingTreatment === "CAPITALIZED_INVENTORY") {
+    return consigned ? "AMBIGUOUS_OWNERSHIP_HISTORY" : "otherCount";
+  }
+  return row.accountingTreatment === undefined ? "UNREADABLE_AMOUNT" : null;
+}
+
+function showroomExpenseNetMinor(row: Doc<"expenses">, scale: CurrencyScale): number | undefined {
+  const amountMinor = exactMinorOrUndefined(row.amount, scale);
+  const taxMinor = exactMinorOrUndefined(row.taxAmount ?? 0, scale);
+  if (amountMinor === undefined || taxMinor === undefined) return undefined;
+  const netMinor = amountMinor - taxMinor;
+  return netMinor < 0 ? undefined : netMinor;
+}
+
 export function deriveDealerPreparationExpenses(args: {
   expenses: ReadonlyArray<Doc<"expenses">>;
   cutoffCreationTime: number | null;
   dealCurrency: string;
   orgCurrency: string;
+  /** Defaults to the original consigned use. STOCK costs are already in its basis. */
+  consigned?: boolean;
 }): DealerPreparationExpenses {
   const currency = args.dealCurrency;
   if (args.orgCurrency !== currency) return { available: false, reason: "MIXED_DENOMINATION", currency };
@@ -179,41 +174,16 @@ export function deriveDealerPreparationExpenses(args: {
   const excluded = { pendingCount: 0, reversedCount: 0, otherCount: 0, afterCutoffCount: 0 };
   const rows: DealerPreparationExpense[] = [];
   for (const row of args.expenses) {
-    if (row.isDeleted === true || row.reversedAt !== undefined) {
-      excluded.reversedCount += 1;
+    const disposition = showroomExpenseDisposition(row, args.consigned !== false);
+    if (disposition === "UNREADABLE_AMOUNT" || disposition === "AMBIGUOUS_OWNERSHIP_HISTORY") {
+      return { available: false, reason: disposition, currency };
+    }
+    if (disposition !== null) {
+      excluded[disposition] += 1;
       continue;
     }
-    // SCRUM-389: a supplier-borne cost is recovered from the supplier and is
-    // never the dealership's preparation spend.
-    if (!PREPARATION_CATEGORIES.has(row.category) || !isShowroomBorne(row)) {
-      excluded.otherCount += 1;
-      continue;
-    }
-    if (row.accountingTreatment === "CAPITALIZED_INVENTORY") {
-      return { available: false, reason: "AMBIGUOUS_OWNERSHIP_HISTORY", currency };
-    }
-    // PENDING is not spent, whatever treatment the row carries; a non-pending
-    // row with no posting decision is unreadable legacy evidence, not zero.
-    if (row.status === "PENDING") {
-      excluded.pendingCount += 1;
-      continue;
-    }
-    if (row.accountingTreatment === undefined) {
-      return { available: false, reason: "UNREADABLE_AMOUNT", currency };
-    }
-    if (args.cutoffCreationTime !== null && row._creationTime >= args.cutoffCreationTime) {
-      excluded.afterCutoffCount += 1;
-      continue;
-    }
-    // Both operands must be exact in the minor unit so that net = amount − tax
-    // is exact too; a fractional-minor operand is refused, never rounded.
-    const amountMinor = exactMinorOrUndefined(row.amount, denomination.scale);
-    const taxMinor = exactMinorOrUndefined(row.taxAmount ?? 0, denomination.scale);
-    if (amountMinor === undefined || taxMinor === undefined) {
-      return { available: false, reason: "UNREADABLE_AMOUNT", currency };
-    }
-    const netMinor = amountMinor - taxMinor;
-    if (netMinor < 0) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
+    const netMinor = showroomExpenseNetMinor(row, denomination.scale);
+    if (netMinor === undefined) return { available: false, reason: "UNREADABLE_AMOUNT", currency };
     rows.push({ id: row._id, title: row.title, category: row.category, date: row.date, netMinor });
   }
   rows.sort((a, b) => a.date - b.date);

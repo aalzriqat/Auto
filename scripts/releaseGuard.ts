@@ -1445,7 +1445,7 @@ export function backfillAccountantCostPriceAccessRollout(input: {
     limits,
     "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill",
     input.runPage,
-    (value) => parseAccountantCostPricePage(value, input.pageSize),
+    (value) => parseRolePermissionBackfillPage(value, input.pageSize),
     (page) => {
       pages += 1;
       updated += page.updatedCount;
@@ -1548,7 +1548,33 @@ export function runAccountantCostPricePhase(input: {
     `Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.`
   );
 }
-function parseAccountantCostPricePage(
+/** SCRUM-908: same bounded, private-detail page contract as the cost-price repair. */
+export function runAccountantCommissionsPhase(input: Parameters<typeof runAccountantCostPricePhase>[0] & {
+  log: (message: string) => void;
+}): string {
+  input.log("Granting view:commissions to unmarked default ACCOUNTANT roles…");
+  let pages = 0;
+  let updated = 0;
+  const walk = walkCursorPages(
+    { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES },
+    "Production is DEPLOYED, but the ACCOUNTANT commissions backfill",
+    (cursor) => input.convex(["run", "migrateRoles:backfillAccountantCommissionsAccess", JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE })]),
+    (value) => parseRolePermissionBackfillPage(value, ACCOUNTANT_COST_PRICE_PAGE_SIZE),
+    (page) => {
+      pages += 1;
+      updated += page.updatedCount;
+    },
+  );
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The ACCOUNTANT commissions phase refused and its fail handler returned.");
+  }
+  const summary = `${updated} stored ACCOUNTANT roles granted view:commissions in ${pages} page call(s). Only unmarked roles matching the exact pre-change ACCOUNTANT template were changed.`;
+  input.log(`  ${summary}`);
+  return summary;
+}
+
+function parseRolePermissionBackfillPage(
   value: unknown,
   pageSize: number,
 ): (CursorPage & { updatedCount: number }) | null {
