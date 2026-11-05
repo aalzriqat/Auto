@@ -117,19 +117,6 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
         ].join("\n"),
         env: { GH_TOKEN: "${{ github.token }}", REQUESTED_SHA: "${{ github.event.client_payload.commit_sha }}" },
       },
-      {
-        name: "Run the static visual projects",
-        run: [
-          "set -uo pipefail",
-          "status=0",
-          "mkdir -p regression-reports",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1",
-          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1",
-          'exit "$status"',
-          "",
-        ].join("\n"),
-        env: { CI: true },
-      },
       { name: "Start the local Convex backend", run: `${LOCAL_BACKEND} start` },
       { name: "Set and verify the local backend environment allowlist", run: `${LOCAL_BACKEND} env`, env: backendEnv },
       { name: "Deploy main to the local Convex backend", run: "pnpm exec convex deploy --typecheck enable --yes", env: selfHosted },
@@ -177,6 +164,20 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
           OPENING_PROOF_RUN_ID: "gh-${{ github.run_id }}-${{ github.run_attempt }}",
           CI: true,
         },
+      },
+      {
+        name: "Run the static visual projects",
+        if: "${{ !cancelled() }}",
+        run: [
+          "set -uo pipefail",
+          "status=0",
+          "mkdir -p regression-reports",
+          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1",
+          "PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1",
+          'exit "$status"',
+          "",
+        ].join("\n"),
+        env: { CI: true },
       },
       { name: "Verify the local backend was not changed during the run", if: "always()", run: `${LOCAL_BACKEND} verify`, env: backendEnv },
       { name: "Stop the local Convex backend", if: "always()", run: `${LOCAL_BACKEND} stop` },
@@ -231,6 +232,14 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
     expect(judge?.run).toContain("> regression-library-summary.json");
   });
 
+
+  test("red static visuals cannot suppress backend browser execution and still run after a red browser config", () => {
+    const steps = workflow.jobs["regression-library"]?.steps ?? [];
+    const browser = steps.findIndex(step => step.id === "browser");
+    const visual = steps.findIndex(step => step.name === "Run the static visual projects");
+    expect(visual).toBeGreaterThan(browser);
+    expect(steps[visual]?.if).toBe("${{ !cancelled() }}");
+  });
 
 });
 

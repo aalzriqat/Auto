@@ -47,8 +47,12 @@ The job is named `regression-library`; it is not yet in `.github/release-waivers
 
 The tripwire is guarded the way `reference_tripwire_test_pin_whole_span_not_keys` requires: `scripts/regressionLibraryWorkflow.test.ts`
 deep-equals every step of the job (so count, order and env are pinned), pins workflow- and job-level env to nothing, uses strict
-schemas, and requires `verify` to run exactly `if: always()`. The browser steps tolerate a red config (`|| status=1`, then
-`exit`) inside one step instead of `continue-on-error`, which the test forbids.
+schemas, and requires `verify`, `stop` and the judge to run exactly `if: always()`. Each browser command group accumulates
+red configs (`|| status=1`, then `exit`) instead of `continue-on-error`, which the test forbids. Static visuals run after
+the backend-backed projects under `if: ${{ !cancelled() }}`. A red snapshot cannot suppress those earlier browser runs,
+and a red backend-backed config cannot suppress the later static visuals. This follows
+[GitHub's status-function guidance](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions):
+an omitted status condition defaults to `success()`; `!cancelled()` permits independent work after failure.
 
 ## Not done, stated plainly
 

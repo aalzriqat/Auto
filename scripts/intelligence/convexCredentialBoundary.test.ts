@@ -333,8 +333,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // SCRUM-761 R3: nightly and release full-library run on the runner-local backend
   // (start, env, deploy, mark, seed, browser projects, verify, stop). No preview and
   // no Convex cloud credential; pinned in regressionLibraryWorkflow.test.ts.
+  // F3/F4 review remediation: publish only the counts/codes/ids summary; move
+  // static visuals after the browser under !cancelled(). Credential steps,
+  // grants and exact always() verify/stop/judge are unchanged and deep-equal pinned.
   "regression-library.yml":
-    "1b766a0a7512ffe18fda972ed097066faddff73937cd187d5cd200a746bf2de7",
+    "c6989ed491fab89dadff3772496bf56cd8ae88905be9754125dd5b3c98c9726a",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":

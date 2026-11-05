@@ -76,19 +76,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_SHA: ${{ github.event.client_payload.commit_sha }}
 
-      # Static projects: no app server and no backend. Failures are judged per record by the runner,
-      # so this step keeps going and fails at the end.
-      - name: Run the static visual projects
-        run: |
-          set -uo pipefail
-          status=0
-          mkdir -p regression-reports
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1
-          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1
-          exit "$status"
-        env:
-          CI: true
-
       - name: Start the local Convex backend
         run: node scripts/localConvexBackend.mjs start
 
@@ -155,6 +142,20 @@ jobs:
           TESTED_SHA: ${{ github.sha }}
           CONTROLLER_SHA: ${{ github.workflow_sha }}
           OPENING_PROOF_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+          CI: true
+
+      # Static projects: no app server and no backend. Failures are judged per record by the runner,
+      # so a red visual result must not prevent the backend-backed projects from running.
+      - name: Run the static visual projects
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          status=0
+          mkdir -p regression-reports
+          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/visual.json pnpm run test:visual:deal-cockpit --reporter=json || status=1
+          PLAYWRIGHT_JSON_OUTPUT_NAME=regression-reports/opening-visual.json pnpm exec playwright test -c playwright.opening.visual.config.ts --reporter=json || status=1
+          exit "$status"
+        env:
           CI: true
 
       # Trusted tripwire: fails the job unless the backend still equals what
