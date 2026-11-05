@@ -526,6 +526,30 @@ export const markPaid = mutation({
   },
 });
 
+function assertSupplierPaymentWithinBalance(
+  projectedMinor: number,
+  dueMinor: number,
+  currency: string,
+  role: Parameters<typeof canReadVehicleCost>[0],
+): void {
+  if (projectedMinor > dueMinor) {
+    if (!canReadVehicleCost(role)) {
+      throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED,
+        "This supplier payment cannot be recorded. Check the payment details and try again.");
+    }
+    // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
+    // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
+    const projectedMajor = fromMinorUnits(projectedMinor, currency);
+    const dueMajor = fromMinorUnits(dueMinor, currency);
+    throw new ConvexError({
+      code: AppErrorCode.SUPPLIER_PAYMENT_EXCEEDS_BALANCE,
+      message: supplierPaymentExceedsBalanceMessage(projectedMajor, dueMajor),
+      projected: projectedMajor,
+      due: dueMajor,
+    });
+  }
+}
+
 /**
  * Records part of what a supplier is owed, without closing the payable.
  *
@@ -617,22 +641,7 @@ export const recordPartialPayment = mutation({
         // Paying a supplier more than he is owed is a real error with real
         // money behind it, and netting it into the next payable hides which
         // deal it happened on.
-        if (projectedMinor > dueMinor) {
-          if (!canReadVehicleCost(role)) {
-            throwAppError(AppErrorCode.SUPPLIER_PAYMENT_REFUSED,
-              "This supplier payment cannot be recorded. Check the payment details and try again.");
-          }
-          // Coded so the Arabic user reads Arabic. Payable correction is pilot-disabled
-          // (SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED), so the one action offered is reducing the amount.
-          const projectedMajor = fromMinorUnits(projectedMinor, payable.currency);
-          const dueMajor = fromMinorUnits(dueMinor, payable.currency);
-          throw new ConvexError({
-            code: AppErrorCode.SUPPLIER_PAYMENT_EXCEEDS_BALANCE,
-            message: supplierPaymentExceedsBalanceMessage(projectedMajor, dueMajor),
-            projected: projectedMajor,
-            due: dueMajor,
-          });
-        }
+        assertSupplierPaymentWithinBalance(projectedMinor, dueMinor, payable.currency, role);
         const projected = requireSupplierAmountMajor(projectedMinor, payable.currency);
 
         const opening = await openingPayableBasis(ctx,args.orgId,payable);

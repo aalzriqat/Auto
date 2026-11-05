@@ -5,7 +5,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/modules/reports.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:30:26",
+      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:64:26",
       "functionId": "reports:getSalesAndProfitReport",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/modules/reports.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:31:30",
+      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:65:30",
       "functionId": "reports:getInventoryReport",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -35,7 +35,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/modules/reports.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:32:29",
+      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:66:29",
       "functionId": "reports:getExpensesReport",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -50,7 +50,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/modules/reports.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:33:32",
+      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:67:32",
       "functionId": "reports:getSalespersonPerformance",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",
@@ -65,7 +65,7 @@
     {
       "surface": "mobile",
       "file": "apps/mobile/src/features/workspace/modules/reports.tsx",
-      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:34:26",
+      "callSiteId": "apps/mobile/src/features/workspace/modules/reports.tsx:68:26",
       "functionId": "reports:getLeadConversionReport",
       "contractPath": "orgId",
       "kind": "TYPE_UNKNOWN",

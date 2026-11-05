@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:65:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:58:5",
       "functionId": "accountingReports:trialBalance",
       "contractPath": "toDate",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:69:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:62:5",
       "functionId": "accountingReports:incomeStatement",
       "contractPath": "fromDate",
       "kind": "TYPE_UNKNOWN",
@@ -35,7 +35,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:69:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:62:5",
       "functionId": "accountingReports:incomeStatement",
       "contractPath": "toDate",
       "kind": "TYPE_UNKNOWN",
@@ -50,7 +50,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:73:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:66:5",
       "functionId": "accountingReports:balanceSheet",
       "contractPath": "asOfDate",
       "kind": "TYPE_UNKNOWN",
@@ -65,7 +65,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:77:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:70:5",
       "functionId": "vatReport:generateVatSummary",
       "contractPath": "fromDate",
       "kind": "TYPE_UNKNOWN",
@@ -80,7 +80,7 @@
     {
       "surface": "web",
       "file": "components/accounting/FinancialReportsTab.tsx",
-      "callSiteId": "components/accounting/FinancialReportsTab.tsx:77:5",
+      "callSiteId": "components/accounting/FinancialReportsTab.tsx:70:5",
       "functionId": "vatReport:generateVatSummary",
       "contractPath": "toDate",
       "kind": "TYPE_UNKNOWN",

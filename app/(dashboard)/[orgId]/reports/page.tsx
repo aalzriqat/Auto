@@ -1,5 +1,6 @@
 "use client";
 
+import { CostAccessNote } from "@/components/accounting/CostAccessNote";
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
@@ -191,19 +192,7 @@ export default function ReportsPage() {
   return <RoleGuard permissions={["view:reports"]}><ReportsContent /></RoleGuard>;
 }
 
-/**
- * SCRUM-902: the sales and inventory reports carry acquisition cost and profit, so the server returns null to a role
- * without view:cost_price. This note replaces them; the other tabs are unaffected.
- */
-function CostAccessNote({ t }: Readonly<{ t: (k: string) => string }>) {
-  return (
-    <div role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-      {t("ReportsCostAccessRequired")}
-    </div>
-  );
-}
-
-function ReportsContent() {
+function useReportsViewModel() {
   const { activeOrgId } = useOrg();
   const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
   const canSeeCost = isOwner || hasPermission(PERMISSIONS.VIEW_COST_PRICE);
@@ -263,43 +252,57 @@ function ReportsContent() {
   const handlePrint = () => window.print();
   const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
 
+  return {
+    activeOrgId,
+    t,
+    format,
+    formatCompact,
+    permissionsLoading,
+    canSeeCost,
+    startDate,
+    endDate,
+    selectedSalesperson,
+    salesReport,
+    inventoryReport,
+    expensesReport,
+    performanceReport,
+    leadsReport,
+    filteredSales,
+    filteredRevenue,
+    filteredCost,
+    filteredProfit,
+    filteredUnknownMargin,
+    performanceUnknownMargin,
+    showCommissions,
+    showPerformanceCommissions,
+    handlePrint,
+    dateFilterProps,
+  };
+}
+
+type ReportsViewModel = ReturnType<typeof useReportsViewModel>;
+
+function SalesReportTab({
+  t,
+  format,
+  permissionsLoading,
+  canSeeCost,
+  startDate,
+  endDate,
+  selectedSalesperson,
+  salesReport,
+  filteredSales,
+  filteredRevenue,
+  filteredCost,
+  filteredProfit,
+  filteredUnknownMargin,
+  showCommissions,
+  handlePrint,
+  dateFilterProps,
+}: Readonly<ReportsViewModel>) {
   return (
-      <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-        <style dangerouslySetInnerHTML={{
-          __html: `
-          @media print {
-            .no-print { display: none !important; }
-            body { padding: 0; margin: 0; }
-            .print-full-width { width: 100% !important; max-width: 100% !important; }
-            .print-shadow-none { box-shadow: none !important; border: none !important; }
-            header { display: none !important; }
-          }
-        `}} />
-
-        <Tabs defaultValue="sales" className="space-y-4 print-full-width">
-          <div className="overflow-x-auto no-print">
-            <TabsList className="w-max">
-              <TabsTrigger value="sales" className="gap-2">
-                <LineChart className="h-4 w-4" /> {t("SalesProfit") || "Sales & Profit"}
-              </TabsTrigger>
-              <TabsTrigger value="inventory" className="gap-2">
-                <Car className="h-4 w-4" /> {t("Inventory") || "Inventory"}
-              </TabsTrigger>
-              <TabsTrigger value="expenses" className="gap-2">
-                <Receipt className="h-4 w-4" /> {t("Expenses") || "Expenses"}
-              </TabsTrigger>
-              <TabsTrigger value="performance" className="gap-2">
-                <Users className="h-4 w-4" /> {t("Performance")}
-              </TabsTrigger>
-              <TabsTrigger value="leads" className="gap-2">
-                <Target className="h-4 w-4" /> {t("LeadConversion") || "Lead Conversion"}
-              </TabsTrigger>
-            </TabsList>
-          </div>
-
-          {/* SALES REPORT */}
           <TabsContent value="sales" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -434,10 +437,20 @@ function ReportsContent() {
             </Card>
             </>)}
           </TabsContent>
+  );
+}
 
-          {/* INVENTORY REPORT */}
+function InventoryReportTab({
+  t,
+  format,
+  permissionsLoading,
+  canSeeCost,
+  inventoryReport,
+  handlePrint,
+}: Readonly<ReportsViewModel>) {
+  return (
           <TabsContent value="inventory" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : (<>
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("InventoryValuation")}</h3>
@@ -564,10 +577,24 @@ function ReportsContent() {
             </Card>
             </>)}
           </TabsContent>
+  );
+}
 
-          {/* EXPENSES REPORT */}
+function ExpensesReportTab({
+  activeOrgId,
+  t,
+  format,
+  permissionsLoading,
+  canSeeCost,
+  startDate,
+  endDate,
+  expensesReport,
+  handlePrint,
+  dateFilterProps,
+}: Readonly<ReportsViewModel>) {
+  return (
           <TabsContent value="expenses" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -697,10 +724,25 @@ function ReportsContent() {
             </Card>
             </>)}
           </TabsContent>
+  );
+}
 
-          {/* PERFORMANCE REPORT */}
+function PerformanceReportTab({
+  t,
+  format,
+  permissionsLoading,
+  canSeeCost,
+  startDate,
+  endDate,
+  performanceReport,
+  performanceUnknownMargin,
+  showPerformanceCommissions,
+  handlePrint,
+  dateFilterProps,
+}: Readonly<ReportsViewModel>) {
+  return (
           <TabsContent value="performance" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote t={t} /> : (<>
+            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -819,8 +861,18 @@ function ReportsContent() {
             </Card>
             </>)}
           </TabsContent>
+  );
+}
 
-          {/* LEADS REPORT */}
+function LeadsReportTab({
+  t,
+  startDate,
+  endDate,
+  leadsReport,
+  handlePrint,
+  dateFilterProps,
+}: Readonly<ReportsViewModel>) {
+  return (
           <TabsContent value="leads" className="space-y-4 m-0">
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
@@ -897,6 +949,60 @@ function ReportsContent() {
               </Table>
             </Card>
           </TabsContent>
+  );
+}
+
+function ReportsContent() {
+  const report = useReportsViewModel();
+  const { t } = report;
+  return (
+      <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+        <style dangerouslySetInnerHTML={{
+          __html: `
+          @media print {
+            .no-print { display: none !important; }
+            body { padding: 0; margin: 0; }
+            .print-full-width { width: 100% !important; max-width: 100% !important; }
+            .print-shadow-none { box-shadow: none !important; border: none !important; }
+            header { display: none !important; }
+          }
+        `}} />
+
+        <Tabs defaultValue="sales" className="space-y-4 print-full-width">
+          <div className="overflow-x-auto no-print">
+            <TabsList className="w-max">
+              <TabsTrigger value="sales" className="gap-2">
+                <LineChart className="h-4 w-4" /> {t("SalesProfit") || "Sales & Profit"}
+              </TabsTrigger>
+              <TabsTrigger value="inventory" className="gap-2">
+                <Car className="h-4 w-4" /> {t("Inventory") || "Inventory"}
+              </TabsTrigger>
+              <TabsTrigger value="expenses" className="gap-2">
+                <Receipt className="h-4 w-4" /> {t("Expenses") || "Expenses"}
+              </TabsTrigger>
+              <TabsTrigger value="performance" className="gap-2">
+                <Users className="h-4 w-4" /> {t("Performance")}
+              </TabsTrigger>
+              <TabsTrigger value="leads" className="gap-2">
+                <Target className="h-4 w-4" /> {t("LeadConversion") || "Lead Conversion"}
+              </TabsTrigger>
+            </TabsList>
+          </div>
+
+          {/* SALES REPORT */}
+          <SalesReportTab {...report} />
+
+          {/* INVENTORY REPORT */}
+          <InventoryReportTab {...report} />
+
+          {/* EXPENSES REPORT */}
+          <ExpensesReportTab {...report} />
+
+          {/* PERFORMANCE REPORT */}
+          <PerformanceReportTab {...report} />
+
+          {/* LEADS REPORT */}
+          <LeadsReportTab {...report} />
         </Tabs>
       </div>
   );

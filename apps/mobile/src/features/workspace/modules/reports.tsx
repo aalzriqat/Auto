@@ -11,11 +11,45 @@ export const REPORTS_COST_ACCESS_NOTE = {
   ar: "يعرض هذا التقرير تكلفة كل مركبة وما حققته من ربح. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية التقارير. اطلب من المسؤول تحديث دورك.",
 } as const;
 
-export function ReportsModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
+const LABELS = {
+  en: {
+    month: "Month",
+    year: "Year",
+    revenue: "Revenue",
+    sales: "Sales",
+    profit: "Profit",
+    net: "Net",
+    inventory: "Inventory",
+    expenses: "Expenses",
+    period: "Period",
+    leads: "Leads",
+    teamSales: "Team sales",
+    vehicles: "Vehicles",
+    topPerformance: "Top performance",
+  },
+  ar: {
+    month: "الشهر",
+    year: "السنة",
+    revenue: "الإيراد",
+    sales: "المبيعات",
+    profit: "الربح",
+    net: "صافي",
+    inventory: "المخزون",
+    expenses: "المصاريف",
+    period: "للفترة",
+    leads: "الفرص",
+    teamSales: "مبيعات الفريق",
+    vehicles: "سيارات",
+    topPerformance: "أفضل الأداء",
+  },
+} as const;
+
+export function ReportsModule({ orgId, permissions }: Readonly<{ orgId: string; permissions: readonly string[] }>) {
   const styles = useStyles();
   // SCRUM-902: the sales and inventory reports carry cost and profit; the server returns null without view:cost_price.
   const canSeeCost = permissions.includes("view:cost_price");
   const { locale } = useLocale();
+  const labels = LABELS[locale];
   const [period, setPeriod] = useState<"MONTH" | "YEAR">("MONTH");
   const range = useMemo(() => {
     const now = new Date();
@@ -37,8 +71,8 @@ export function ReportsModule({ orgId, permissions }: { orgId: string; permissio
     <ModuleScroll>
       <SegmentedControl
         options={[
-          { label: locale === "ar" ? "الشهر" : "Month", value: "MONTH" },
-          { label: locale === "ar" ? "السنة" : "Year", value: "YEAR" },
+          { label: labels.month, value: "MONTH" },
+          { label: labels.year, value: "YEAR" },
         ]}
         value={period}
         onChange={setPeriod}
@@ -49,14 +83,14 @@ export function ReportsModule({ orgId, permissions }: { orgId: string; permissio
         </Text>
       ) : null}
       <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "الإيراد" : "Revenue"} value={canSeeCost ? money(sales?.totalRevenue, locale) : "—"} caption={locale === "ar" ? "المبيعات" : "Sales"} />
-        <MetricCard title={locale === "ar" ? "الربح" : "Profit"} value={canSeeCost ? money(sales?.totalProfit, locale) : "—"} caption={locale === "ar" ? "صافي" : "Net"} />
-        <MetricCard title={locale === "ar" ? "المخزون" : "Inventory"} value={canSeeCost ? compactNumber(inventory?.availableCount ?? 0, locale) : "—"} caption={canSeeCost ? money(inventory?.totalValue, locale) : "—"} />
-        <MetricCard title={locale === "ar" ? "المصاريف" : "Expenses"} value={canSeeCost ? money(expenses?.totalExpenses, locale) : "—"} caption={locale === "ar" ? "للفترة" : "Period"} />
-        <MetricCard title={locale === "ar" ? "الفرص" : "Leads"} value={compactNumber(leads?.totalLeads ?? 0, locale)} caption={`${(leads?.overallConversionRate ?? 0).toFixed(1)}%`} />
-        <MetricCard title={locale === "ar" ? "مبيعات الفريق" : "Team sales"} value={canSeeCost ? compactNumber(performance?.reduce((sum, row) => sum + row.vehiclesSold, 0) ?? 0, locale) : "—"} caption={locale === "ar" ? "سيارات" : "Vehicles"} />
+        <MetricCard title={labels.revenue} value={canSeeCost ? money(sales?.totalRevenue, locale) : "—"} caption={labels.sales} />
+        <MetricCard title={labels.profit} value={canSeeCost ? money(sales?.totalProfit, locale) : "—"} caption={labels.net} />
+        <MetricCard title={labels.inventory} value={canSeeCost ? compactNumber(inventory?.availableCount ?? 0, locale) : "—"} caption={canSeeCost ? money(inventory?.totalValue, locale) : "—"} />
+        <MetricCard title={labels.expenses} value={canSeeCost ? money(expenses?.totalExpenses, locale) : "—"} caption={labels.period} />
+        <MetricCard title={labels.leads} value={compactNumber(leads?.totalLeads ?? 0, locale)} caption={`${(leads?.overallConversionRate ?? 0).toFixed(1)}%`} />
+        <MetricCard title={labels.teamSales} value={canSeeCost ? compactNumber(performance?.reduce((sum, row) => sum + row.vehiclesSold, 0) ?? 0, locale) : "—"} caption={labels.vehicles} />
       </View>
-      <Text style={styles.sectionTitle}>{locale === "ar" ? "أفضل الأداء" : "Top performance"}</Text>
+      <Text style={styles.sectionTitle}>{labels.topPerformance}</Text>
       {(performance ?? []).slice(0, 5).map((row) => (
         <RecordCard key={row.userId}>
           <Text style={styles.recordTitle}>{row.userName}</Text>

@@ -82,6 +82,32 @@ function pipelineStageKey(row: { hasArrived: boolean; isHeld: boolean }): keyof 
   return row.isHeld ? "HELD" : "ON_ORDER";
 }
 
+function useSourcingData(activeOrgId: Id<"organizations"> | null, queryOrgId: Id<"organizations"> | null, statusFilter: StatusFilter, payDialogPayable: SourcingPayable | null) {
+  // allPayables for summary cards (unfiltered); payables for the table (filtered by statusFilter).
+  const allPayables = useQuery(
+    api.sourcingPayables.list,
+    queryOrgId ? { orgId: queryOrgId } : "skip"
+  );
+  const payables = useQuery(
+    api.sourcingPayables.list,
+    queryOrgId ? { orgId: queryOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
+  );
+  const paymentBanks = useQuery(
+    api.sourcingPayables.listPaymentBankOptions,
+    activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
+  );
+
+  // The live special-order pipeline — cars on order for a customer that have
+  // not sold yet. Payables below only exist once the sale completes, so without
+  // this the page was empty for the entire life of an order.
+  const pipeline = useQuery(
+    api.sourcingPayables.listPipeline,
+    queryOrgId ? { orgId: queryOrgId } : "skip"
+  );
+
+  return { allPayables, payables, paymentBanks, pipeline };
+}
+
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
@@ -101,28 +127,8 @@ export function SourcingClient() {
     !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
   const queryOrgId = canViewSupplierCost ? activeOrgId : null;
 
-  // allPayables for summary cards (unfiltered); payables for the table (filtered by statusFilter).
-  const allPayables = useQuery(
-    api.sourcingPayables.list,
-    queryOrgId ? { orgId: queryOrgId } : "skip"
-  );
-  const payables = useQuery(
-    api.sourcingPayables.list,
-    queryOrgId ? { orgId: queryOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
-  );
-  const paymentBanks = useQuery(
-    api.sourcingPayables.listPaymentBankOptions,
-    activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
-  );
+  const { allPayables, payables, paymentBanks, pipeline } = useSourcingData(activeOrgId, queryOrgId, statusFilter, payDialogPayable);
   const bankMethod = paymentMethod === "BANK_TRANSFER";
-
-  // The live special-order pipeline — cars on order for a customer that have
-  // not sold yet. Payables below only exist once the sale completes, so without
-  // this the page was empty for the entire life of an order.
-  const pipeline = useQuery(
-    api.sourcingPayables.listPipeline,
-    queryOrgId ? { orgId: queryOrgId } : "skip"
-  );
 
   const markPaid = useMutation(api.sourcingPayables.markPaid);
   const markArrived = useMutation(api.vehicles.markSourcedVehicleArrived);

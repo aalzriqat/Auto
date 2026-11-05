@@ -5,7 +5,7 @@
     {
       "surface": "web",
       "file": "components/accounting/GeneralLedgerTab.tsx",
-      "callSiteId": "components/accounting/GeneralLedgerTab.tsx:191:5",
+      "callSiteId": "components/accounting/GeneralLedgerTab.tsx:192:5",
       "functionId": "transactions:list",
       "contractPath": "endDate",
       "kind": "TYPE_UNKNOWN",
@@ -20,7 +20,7 @@
     {
       "surface": "web",
       "file": "components/accounting/GeneralLedgerTab.tsx",
-      "callSiteId": "components/accounting/GeneralLedgerTab.tsx:191:5",
+      "callSiteId": "components/accounting/GeneralLedgerTab.tsx:192:5",
       "functionId": "transactions:list",
       "contractPath": "startDate",
       "kind": "TYPE_UNKNOWN",

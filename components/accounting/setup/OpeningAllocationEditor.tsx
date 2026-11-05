@@ -1,5 +1,6 @@
 "use client";
 
+import { CostAccessNote } from "../CostAccessNote";
 import { useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { Plus, Trash2 } from "lucide-react";
@@ -173,7 +174,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
       </div>
       {selectionError && <p role="alert" className="text-xs text-amber-700">{selectionError}</p>}
       {needsVehicles && !canReadOpeningStockCost && (
-        <p role="status" className="text-xs text-amber-700">{t("OpeningAllocationStockCostAccessNeeded" as any)}</p>
+        <CostAccessNote className="text-xs text-amber-700">{t("OpeningAllocationStockCostAccessNeeded" as any)}</CostAccessNote>
       )}
       {groups.map((group) => {
         const groupRows = rows.filter((row) => row.accountId === group.accountId);

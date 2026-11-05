@@ -1,5 +1,6 @@
 "use client";
 
+import { CostAccessNote } from "./CostAccessNote";
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -127,7 +128,7 @@ function ManagementReport({ orgId, planId }: Readonly<{ orgId: Id<"organizations
   const [throughDate] = useState(() => Date.now());
   const canRead = hasPermission(PERMISSIONS.VIEW_COST_PRICE);
   const report = useQuery(api.openingManagementSettlement.report, canRead ? { orgId, planId, throughDate } : "skip");
-  if (!canRead) return <p role="status" className="text-sm text-muted-foreground">{t("FinancialStatementCostAccessRequired")}</p>;
+  if (!canRead) return <CostAccessNote className="text-sm text-muted-foreground">{t("FinancialStatementCostAccessRequired")}</CostAccessNote>;
   if (!report) return <p role="status">{text.loading}</p>;
   const factor = 10 ** scaleForCurrency(report.currency);
   const money = (minor: number) => new Intl.NumberFormat(locale, { style: "currency", currency: report.currency }).format(minor / factor);
