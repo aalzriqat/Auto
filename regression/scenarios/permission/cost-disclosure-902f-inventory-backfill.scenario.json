@@ -1,0 +1,71 @@
+{
+  "id": "cost-disclosure-902f-inventory-backfill",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "accountingMigration.backfillVehicleInventoryOpeningBalances",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "inventory-backfill",
+        "dryRun": true,
+        "purchasePrice": 9000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "accountingMigration.backfillVehicleInventoryOpeningBalances",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "inventory-backfill",
+        "dryRun": true,
+        "purchasePrice": 9000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "action": "WOULD_POST",
+        "amountMinor": "absent"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "action": "WOULD_POST",
+        "amountMinor": 9000000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "sweep inventory backfill response withholds vehicle cost but keeps migration results"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "281ae22d73e53c6ddf47fb8783abc15de15874f2680ea50bec3d23f2daa401e3"
+}

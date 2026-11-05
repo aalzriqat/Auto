@@ -1,0 +1,51 @@
+{
+  "id": "expenses-total-by-vehicle-refuses-expenses-without-cost-price",
+  "fingerprint": "f1f0dc5c94d4ccb373f711ee1c3f949c12d72ae6abe0e3be0107f38880df626a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-expenses-only",
+        "org": "A"
+      },
+      "action": "expenses.totalByVehicle",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "expenses.totalByVehicle: a role with view:expenses but without view:cost_price is refused (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "c0505485f45b7a71ed514edf2f9ff5c46d83a504"
+  }
+}

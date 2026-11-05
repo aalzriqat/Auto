@@ -25,6 +25,8 @@ export type ApplicationListRow = {
   companyId?: string;
   disbursedAt?: number;
   supplierSettlementRoute?: string;
+  /** SCRUM-808: absent until the deploy backfill reaches an older deal. */
+  dealNumber?: number;
 };
 
 /** The sale row as `sales.list` serves it (the fields read here). */
@@ -41,6 +43,8 @@ export type SaleListRow = {
   financingType?: "CASH" | "FINANCED" | "LEASE";
   /** The linked application's queue facts, served with the sale (Codex SCRUM-603-1). */
   linkedApplication?: ApplicationQueueFacts;
+  /** SCRUM-808: absent until the deploy backfill reaches an older deal. */
+  dealNumber?: number;
 };
 
 /** What `applicationReason` reads — all of it, and only it. */
@@ -113,6 +117,7 @@ export function applicationRow(
     since: app.updatedAt ?? app.createdAt,
     salespersonName: app.salespersonName ?? "",
     amountLabel: app.financedAmount > 0 ? formatAmount(app.financedAmount) : null,
+    dealNumber: app.dealNumber,
   };
 }
 
@@ -158,6 +163,7 @@ export function saleRow(
     since: sale.saleDate,
     salespersonName: sale.salespersonName,
     amountLabel: formatAmount(sale.salePrice),
+    dealNumber: sale.dealNumber,
   };
 }
 

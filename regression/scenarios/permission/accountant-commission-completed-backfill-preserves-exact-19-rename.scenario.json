@@ -1,0 +1,104 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-r2-review",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-05"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-completed-backfill-preserves-exact-19-rename",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "organizations.create",
+      "input": {
+        "name": "RenamedDealer"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT",
+        "rename": "FormerAccountant"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "name": "Bookkeeper",
+        "permissions": "PRE_CHANGE_EXACT_19"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "Bookkeeper",
+        "rename": "accountant"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "run": "NEXT_DEPLOY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "later.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "renamed.viewCommissions",
+      "value": false
+    },
+    {
+      "observable": "renamed.unchanged",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: a completed migration never widens an exact-19 Bookkeeper renamed accountant by its owner"
+  },
+  "bugRef": {
+    "key": "SCRUM-908",
+    "failingFirst": "bc5c19cd0ffc34741d0e7c916ec5b82a904a2dfb"
+  },
+  "fingerprint": "f5c5915652dd5fa95f1ff22f789b7f3f42aace719f06b474dd8df19bb4639a44"
+}

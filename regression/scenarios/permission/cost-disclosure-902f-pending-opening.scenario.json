@@ -1,0 +1,66 @@
+{
+  "id": "cost-disclosure-902f-pending-opening",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.listPendingOpeningBalanceDrafts",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "pending-opening",
+        "allocationAmountMinor": 9000000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.listPendingOpeningBalanceDrafts",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "pending-opening",
+        "allocationAmountMinor": 9000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": []
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "rawAllocation": 9000000,
+        "enrichedAllocation": 9000000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F2 pending drafts withhold raw allocations, enriched allocations and balancing cost lines"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "d3c8bc742463067d250fb1203eb1b2d5b45fb04d06ca43b3743eb1f6f4103579"
+}

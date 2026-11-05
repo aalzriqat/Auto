@@ -1,0 +1,53 @@
+{
+  "id": "shipped-payout-execute-door-refuses-customer-credit-payout-with-nothing-changed",
+  "fingerprint": "a8db8b6b4dc544d26fb5dcd367b38f035fbcc4e831da641a62dfc8c730c04447",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum795-blocked-server-side-doors",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "retainedCreditRefunds.executeRetainedCreditRefund",
+      "input": {
+        "method": "BANK_TRANSFER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusalCode",
+      "value": "CUSTOMER_CREDIT_PAYOUT_DISABLED"
+    },
+    {
+      "observable": "step1.writes.rowCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-795#c22479",
+      "digest": "c26f074f3f743f0f334862f7e1b296c22c8921c58b4a04ba18ed5e7867628b40"
+    },
+    {
+      "id": "SCRUM-795#c23829",
+      "digest": "8eb91bebed24a69f9700fd5987f218c9ffde4662410d8b3dfa9f25fb93631d28"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/pilotBlockedDoors.scrum795.test.ts",
+    "testName": "executeRetainedCreditRefund refuses the customer-credit payout without writes"
+  },
+  "matrixRow": "SCRUM-760-DECISION-B-BLOCKED-DOORS"
+}

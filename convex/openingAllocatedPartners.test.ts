@@ -20,7 +20,8 @@ async function fixture() {
     const ownerId = await ctx.db.insert("users", { clerkId: "partner-opening-owner", email: "owner@example.test" });
     const approverId = await ctx.db.insert("users", { clerkId: "partner-opening-approver", email: "approver@example.test" });
     const ownerRole = await ctx.db.insert("roles", { orgId, name: "OWNER", isSystemOwnerRole: true, permissions: [] });
-    const financeRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance", "approve:requests"] });
+    // SCRUM-886: the real ACCOUNTANT role can read cost-bearing opening reviews.
+    const financeRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance", "approve:requests", "view:cost_price"] });
     await ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRole });
     await ctx.db.insert("memberships", { orgId, userId: approverId, roleId: financeRole });
     await ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() });

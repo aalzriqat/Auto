@@ -23,7 +23,7 @@ import {
   projectFinanceApplication,
 } from "./utils/financeApplicationProjection";
 import { PERMISSIONS, cancelAuthorityFor, isSystemOwnerRole, type Permission } from "./utils/permissions";
-import { projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
+import { canReadVehicleCost, projectOptionalVehicleForRole } from "./utils/vehicleCostVisibility";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { assertNoActiveDealUnwind, paidDealReversalRoute } from "./utils/dealUnwindGuard";
 import { DEAL_UNWIND_MESSAGES } from "./utils/dealUnwindMessages";
@@ -43,6 +43,7 @@ import { assertOperatedDealMode } from "./utils/dealModes";
 import { assertQuoteEconomicsMatchFrozen } from "./utils/quoteEconomicsAnchor";
 import { assertActorMayCompleteConsignedSale, completeSale } from "./utils/saleCompletion";
 import { requireCommercialVehicle } from "./utils/vehicleLiveness";
+import { allocateDealNumber } from "./utils/dealNumber";
 import {
   isForwardPlan,
   isForwardPlanVersion,
@@ -2356,6 +2357,8 @@ export const dealCockpit = query({
       dealKind: "FINANCED" as const,
       /** The id whose tail the header shows — the application on this side. */
       dealRef: app._id as string,
+      /** SCRUM-808: the shareable per-organization number, absent until the deploy backfill reaches an older deal. */
+      ...(app.dealNumber === undefined ? {} : { dealNumber: app.dealNumber }),
       applicationId: app._id,
       /** The sale this became, once it has one. Absent before finalization. */
       saleId: app.finalizedSaleId ?? null,
@@ -2655,11 +2658,26 @@ export const dealCockpit = query({
       firstPaymentBlock = firstPaymentCorrectionBlock(firstPaymentInput);
     }
 
+    // SCRUM-902: both profit aliases and the supplier balance disclose the cost basis.
+    const mayReadCost = canReadVehicleCost(role);
+    const costWithheld = { available: false, reason: "CostAccessRequired" } as const;
+    const cockpitMoney = await buildCockpitMoney(ctx, app, quote, settlementFacts);
+
     return {
       ...base,
       settlementAdviceDiscrepancy: settlementAdviceEvidence,
       money: {
-        ...(await buildCockpitMoney(ctx, app, quote, settlementFacts)),
+        ...cockpitMoney,
+        ...(mayReadCost
+          ? {}
+          : {
+              profit: costWithheld,
+              managementProfit: costWithheld,
+              // The supplier balance is the purchase cost (or the margin it leaves): absent, not zero.
+              parties: cockpitMoney.parties.map((party) =>
+                party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party
+              ),
+            }),
         // SCRUM-435 FINANCE tier: what is owed onward, and what it is made of.
         forward: {
           dueMinor: forwardProof.dueMinor,
@@ -2988,8 +3006,11 @@ export const createFromQuote = mutation({
       });
     }
 
+    // SCRUM-808: allocated in this transaction, so a creation that rolls back hands out no number.
+    const dealNumber = await allocateDealNumber(ctx, args.orgId);
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
+      dealNumber,
       quoteId: quote._id,
       customerId: quote.customerId,
       vehicleId: quote.vehicleId,

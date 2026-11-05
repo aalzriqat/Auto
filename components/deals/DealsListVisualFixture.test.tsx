@@ -41,6 +41,7 @@ function rows(t: (key: string) => string): DealRow[] {
       since: base,
       salespersonName: "Sales Agent One",
       amountLabel: "10,850.000 JOD",
+      dealNumber: 1042,
     },
     {
       key: "app_2",
@@ -56,6 +57,7 @@ function rows(t: (key: string) => string): DealRow[] {
       since: base - day,
       salespersonName: "سامي خليل",
       amountLabel: "15,000.000 JOD",
+      dealNumber: 1043,
     },
     {
       key: "sale_1",
@@ -71,6 +73,7 @@ function rows(t: (key: string) => string): DealRow[] {
       since: base - 2 * day,
       salespersonName: "Sales Agent One",
       amountLabel: "9,800.000 JOD",
+      dealNumber: 1044,
     },
     {
       key: "app_3",

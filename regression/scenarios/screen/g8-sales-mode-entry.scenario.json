@@ -39,5 +39,14 @@
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "pilot Sales opens CASH and configured FINANCED entry panels for each audited role"
   },
-  "fingerprint": "b2e1f4b7f10f755aa438934bfc1cc66d0a3992b9a24b940a360cb9b68fa8db8e"
+  "fingerprint": "b2e1f4b7f10f755aa438934bfc1cc66d0a3992b9a24b940a360cb9b68fa8db8e",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts"
+  ]
 }

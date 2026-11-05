@@ -1445,7 +1445,7 @@ export function backfillAccountantCostPriceAccessRollout(input: {
     limits,
     "Production is DEPLOYED, but the ACCOUNTANT cost-price backfill",
     input.runPage,
-    (value) => parseAccountantCostPricePage(value, input.pageSize),
+    (value) => parseRolePermissionBackfillPage(value, input.pageSize),
     (page) => {
       pages += 1;
       updated += page.updatedCount;
@@ -1460,6 +1460,53 @@ export const ACCOUNTANT_COST_PRICE_BACKFILL_FN = "migrateRoles:backfillAccountan
 export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
 /** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
 export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
+
+const SOURCED_MIRROR_DEPLOYED = "Production is DEPLOYED, but the SOURCED cost mirror repair";
+const SOURCED_MIRROR_PAGE_SIZE = 25;
+type SourcedMirrorCounts = { scanned: number; updated: number; skippedLocked: number; skippedInvalid: number };
+
+function parseSourcedMirrorPage(value: unknown): (CursorPage & SourcedMirrorCounts) | null {
+  const cursor = parseCursorPage(value);
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const counts = value as Partial<SourcedMirrorCounts>;
+  const { scanned, updated, skippedLocked, skippedInvalid } = counts;
+  if (!isCount(scanned) || scanned > SOURCED_MIRROR_PAGE_SIZE ||
+      !isCount(updated) || !isCount(skippedLocked) || !isCount(skippedInvalid)) return null;
+  if (updated + skippedLocked + skippedInvalid > scanned) return null;
+  return { ...cursor, scanned, updated, skippedLocked, skippedInvalid };
+}
+
+/** SCRUM-907: use the shared deadline/cursor checks and never echo backend text. */
+export function backfillSourcedCostMirrorRollout(input: WalkLimits & {
+  runPage: (cursor: string | null) => RegistryStep;
+}): ({ ok: true; pages: number } & SourcedMirrorCounts) | Refusal {
+  const totals = { pages: 0, scanned: 0, updated: 0, skippedLocked: 0, skippedInvalid: 0 };
+  const walk = walkCursorPages(input, SOURCED_MIRROR_DEPLOYED, input.runPage, parseSourcedMirrorPage, page => {
+    totals.pages += 1;
+    totals.scanned += page.scanned;
+    totals.updated += page.updated;
+    totals.skippedLocked += page.skippedLocked;
+    totals.skippedInvalid += page.skippedInvalid;
+  });
+  if (!walk.ok) return walk;
+  return { ok: true, ...totals };
+}
+
+/** Keep the CLI arguments and public summary in tested TypeScript, as in phase 2e. */
+export function runSourcedCostMirrorPhase(input: {
+  convex: (args: string[]) => RegistryStep;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+}): { ok: true; summary: string } | Refusal {
+  const result = backfillSourcedCostMirrorRollout({
+    ...input,
+    maxPages: 10_000,
+    runPage: cursor => input.convex(["run", "vehicles:backfillSourcedCostMirror", JSON.stringify({ cursor, numItems: SOURCED_MIRROR_PAGE_SIZE })]),
+  });
+  if (!result.ok) return result;
+  return { ok: true, summary: `Checked ${result.scanned} vehicles in ${result.pages} page call(s); repaired ${result.updated} SOURCED cost mirrors; locked ${result.skippedLocked}; invalid ${result.skippedInvalid}.` };
+}
 
 /**
  * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script
@@ -1501,7 +1548,33 @@ export function runAccountantCostPricePhase(input: {
     `Only roles named ACCOUNTANT that could complete a sale without view:cost_price were changed; every other role is untouched.`
   );
 }
-function parseAccountantCostPricePage(
+/** SCRUM-908: same bounded, private-detail page contract as the cost-price repair. */
+export function runAccountantCommissionsPhase(input: Parameters<typeof runAccountantCostPricePhase>[0] & {
+  log: (message: string) => void;
+}): string {
+  input.log("Granting view:commissions to unmarked default ACCOUNTANT roles…");
+  let pages = 0;
+  let updated = 0;
+  const walk = walkCursorPages(
+    { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: MAX_ACCOUNTANT_COST_PRICE_PAGES },
+    "Production is DEPLOYED, but the ACCOUNTANT commissions backfill",
+    (cursor) => input.convex(["run", "migrateRoles:backfillAccountantCommissionsAccess", JSON.stringify({ cursor, numItems: ACCOUNTANT_COST_PRICE_PAGE_SIZE })]),
+    (value) => parseRolePermissionBackfillPage(value, ACCOUNTANT_COST_PRICE_PAGE_SIZE),
+    (page) => {
+      pages += 1;
+      updated += page.updatedCount;
+    },
+  );
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The ACCOUNTANT commissions phase refused and its fail handler returned.");
+  }
+  const summary = `${updated} stored ACCOUNTANT roles granted view:commissions in ${pages} page call(s). Only unmarked roles matching the exact pre-change ACCOUNTANT template were changed.`;
+  input.log(`  ${summary}`);
+  return summary;
+}
+
+function parseRolePermissionBackfillPage(
   value: unknown,
   pageSize: number,
 ): (CursorPage & { updatedCount: number }) | null {
@@ -1513,6 +1586,83 @@ function parseAccountantCostPricePage(
   // One `updates` line per patched role (patchRoleIfNeeded pushes exactly when it returns true), so the two agree.
   if (!Array.isArray(updates) || updates.length !== updatedCount) return null;
   return { ...cursor, updatedCount };
+}
+
+// ─── Deal number backfill (SCRUM-808) ───────────────────────────────────────
+
+/** SCRUM-808: number the deals created before deal numbers existed (docs/adr/2026-11-04-per-organization-deal-number.md). */
+export const DEAL_NUMBER_BACKFILL_FN = "dealNumberBackfill:runPage";
+/** Rows of EACH deal table per call; the backend clamps a page to 1..200 and defaults to 100. */
+export const DEAL_NUMBER_PAGE_SIZE = 100;
+/** Up to 200 rows per page (100 of each table), so this bounds one deployment at 2,000,000 deal rows. */
+export const MAX_DEAL_NUMBER_PAGES = 10_000;
+
+/**
+ * SCRUM-808: pages `dealNumberBackfill:runPage` until the backend reports `isDone`. The mutation reads only rows that
+ * have no number yet and allocates from each organization's counter, so a re-run resumes and a finished walk answers in
+ * one empty page. Counts only: the page carries no organization or deal identifier, and none is ever printed.
+ */
+export function backfillDealNumbersRollout(input: {
+  runPage: (cursor: string | null) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  maxPages: number;
+  /** The `numItems` the script asks for; a page reads at most this many rows of each of the two tables. */
+  pageSize: number;
+}): { ok: true; pages: number; numbered: number } | Refusal {
+  const limits: WalkLimits = { now: input.now, startedAt: input.startedAt, timeoutMs: input.timeoutMs, maxPages: input.maxPages };
+  let pages = 0;
+  let numbered = 0;
+  const walk = walkCursorPages(
+    limits,
+    "Production is DEPLOYED, but the deal number backfill",
+    input.runPage,
+    (value) => parseDealNumberPage(value, input.pageSize),
+    (page) => {
+      pages += 1;
+      numbered += page.numberedCount;
+    },
+  );
+  return walk.ok ? { ok: true, pages, numbered } : walk;
+}
+
+/**
+ * SCRUM-808: the whole deal number phase of the rollout, minus the CLI, for the same reason as
+ * `runAccountantCostPricePhase`: the script cannot be executed under coverage, so the function name, page size, page cap,
+ * summary text and refusal branch live here. `fail` is the script's own; it is called once on a refusal.
+ */
+export function runDealNumberBackfillPhase(input: {
+  convex: (args: string[]) => { ok: true; value: unknown } | Refusal;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const walk = backfillDealNumbersRollout({
+    runPage: (cursor) =>
+      input.convex(["run", DEAL_NUMBER_BACKFILL_FN, JSON.stringify({ cursor, numItems: DEAL_NUMBER_PAGE_SIZE })]),
+    now: input.now,
+    startedAt: input.startedAt,
+    timeoutMs: input.timeoutMs,
+    maxPages: MAX_DEAL_NUMBER_PAGES,
+    pageSize: DEAL_NUMBER_PAGE_SIZE,
+  });
+  if (!walk.ok) {
+    input.fail(walk.reason);
+    throw new Error("The deal number phase refused and its fail handler returned.");
+  }
+  return `${walk.numbered} existing deal rows given a deal number in ${walk.pages} page call(s). Rows that already had one are untouched.`;
+}
+
+function parseDealNumberPage(value: unknown, pageSize: number): (CursorPage & { numberedCount: number }) | null {
+  const cursor = parseCursorPage(value);
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const { numberedCount, checkedCount } = value as { numberedCount?: unknown; checkedCount?: unknown };
+  // Two tables, at most `pageSize` rows of each.
+  if (!isCount(checkedCount) || checkedCount > 2 * pageSize) return null;
+  if (!isCount(numberedCount) || numberedCount > checkedCount) return null;
+  return { ...cursor, numberedCount };
 }
 
 // ─── Supplier identity repair and counts-only check (SCRUM-868 P3) ──────────

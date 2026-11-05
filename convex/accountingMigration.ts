@@ -1,3 +1,4 @@
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 /**
  * Phase 6 — Migration audit tooling
  *
@@ -477,7 +478,7 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     cursor: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const dryRun = args.dryRun !== false;
@@ -698,9 +699,12 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     const needsReview = results.filter((r) => r.action === "NEEDS_REVIEW").length;
     const skipped = results.filter((r) => r.action === "SKIP").length;
     const failed = results.filter((r) => r.action === "FAILED").length;
+    const visibleResults: typeof results = canReadVehicleCost(role)
+      ? results
+      : results.map(({ amountMinor: _cost, reason: _reason, ...visible }) => visible);
 
     return {
-      dryRun, posted, wouldPost, needsReview, skipped, failed, results,
+      dryRun, posted, wouldPost, needsReview, skipped, failed, results: visibleResults,
       nextCursor: page.continueCursor,
       isDone: page.isDone,
     };

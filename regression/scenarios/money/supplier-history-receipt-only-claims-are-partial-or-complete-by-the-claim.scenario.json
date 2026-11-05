@@ -1,0 +1,114 @@
+{
+  "id": "supplier-history-receipt-only-claims-are-partial-or-complete-by-the-claim",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum869-pr764-seat-review-r2",
+    "hunter": "audit",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openSupplierReceivable",
+      "input": {
+        "marginJod": 3000,
+        "depositAppliedJod": 0,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amountJod": 750,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "database.openSupplierReceivable",
+      "input": {
+        "marginJod": 3000,
+        "depositAppliedJod": 0,
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amountJod": 1800,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierReceivables.recordReceipt",
+      "input": {
+        "amountJod": 1200,
+        "method": "CASH"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "supplier": "S1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "receivable.partialClaim.settlement",
+      "value": "PARTIAL"
+    },
+    {
+      "observable": "receivable.partialClaim.settledJod",
+      "value": 750
+    },
+    {
+      "observable": "receivable.fullClaim.settlement",
+      "value": "COMPLETE"
+    },
+    {
+      "observable": "receivable.fullClaim.settledJod",
+      "value": 3000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23881",
+      "digest": "c6f6b721e02f5f5cca48729536a5a9db28132123773862210dcf41ca1f9a9145"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSettledProvenance.scrum869.test.ts",
+    "testName": "receipt-only controls: 750 of 3,000 is PARTIAL; the same claim paid to 3,000 in two receipts is COMPLETE with cash 3,000"
+  },
+  "matrixRow": "SCRUM869-supplier-settled-provenance",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "c94a39db33cc550c7b4d3c848716d90088cf9d64"
+  },
+  "fingerprint": "bbe87112ae5cf0fad94d01204647915982982b08d10e75632b7c1db1a6697d26"
+}

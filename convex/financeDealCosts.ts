@@ -1588,7 +1588,7 @@ export const listDealCosts = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS, PERMISSIONS.VIEW_COST_PRICE]);
     const app = await requireOwnedRow(
       ctx,
       args.orgId,

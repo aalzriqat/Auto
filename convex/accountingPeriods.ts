@@ -5,6 +5,7 @@ import { mutation } from "./functions";
 import { Id, Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
@@ -704,7 +705,7 @@ export const closeChecklist = query({
     periodId: v.id("accountingPeriods"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);

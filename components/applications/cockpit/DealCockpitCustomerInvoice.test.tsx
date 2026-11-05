@@ -113,6 +113,7 @@ function ownedCashDeal(invoice: Invoice, withMoney = true): CashDealCockpitData 
           currency: "JOD",
           settlesDirectToSupplier: false,
           routeKnown: true,
+          managementNetProfit: { available: false, reason: "CommissionsUnreadable" },
           profit: {
             available: true,
             basis: "ACCOUNTING_RESULT",

@@ -9,6 +9,14 @@ public snapshot of the owner rulings they cite: comment id, digest, date only.
 Never put ruling text or customer data here. Format, validators and rules live in
 `scripts/regression/scenarioRecord.ts`; run `pnpm test:regression-library`.
 
+## PR-time runner (SCRUM-761 R3)
+
+`node scripts/regression/prRunner.mjs [--base <40-hex-commit-sha>]` runs every active backend record at its bound test and fails on any record that cannot be shown to have run and passed. An explicit base must be reachable from a local Git ref or HEAD; omitting it uses `origin/main`. It also fails when the PR touches the screen of an active browser record (`sourceGlobs`), because that replay cannot be executed there. Design, failure codes and limits: `docs/adr/2026-11-03-pr-time-scenario-runner.md`.
+
+### Nightly and release (full tier)
+
+`node scripts/regression/prRunner.mjs --tier full --playwright-report <json>...` requires every active record: backend records under Vitest, browser records from the Playwright JSON reports of the same run (a missing, skipped, failed or flaky execution fails; so does a candidate record). `.github/workflows/regression-library.yml` runs it nightly and on the `autoflow-release-regression-library` dispatch, on a runner-local Convex backend through the `mark`/`verify` tripwire. Cadence, what is not wired yet and why: `docs/adr/2026-11-04-library-execution-cadence.md`.
+
 ## Supplier payment amount display (SCRUM-880)
 
 Four `supplier-payment-currency-scale-*` screen records bind the EN/AR JOD/USD

@@ -330,6 +330,17 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
     "cd526cad1f393adedc440a324e436b67e18804a7846df626f37c27b91f02f0ee",
   "prune-convex-previews.yml":
     "a47a5289bc35c018cbb378d68d7b0d389f3f78774272d4ada03f64eb4197f54d",
+  // SCRUM-761 R3: nightly and release full-library run on the runner-local backend
+  // (start, env, deploy, mark, seed, browser projects, verify, stop). No preview and
+  // no Convex cloud credential; pinned in regressionLibraryWorkflow.test.ts.
+  // F3/F4 review remediation: publish only the counts/codes/ids summary; move
+  // static visuals after the browser under !cancelled(). Credential steps,
+  // grants and exact always() verify/stop/judge are unchanged and deep-equal pinned.
+  // Restore only the credential-free static config's outputDir upload under
+  // always(), with 14-day retention. Raw backend-backed reports stay private to
+  // the runner; no credential step, grant or tripwire change.
+  "regression-library.yml":
+    "ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":

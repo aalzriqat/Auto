@@ -1,0 +1,46 @@
+{
+  "id": "deal-number-lookup-never-answers-for-another-organization",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum808-deal-number",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "dealNumbers.find",
+      "input": {
+        "orgId": "ORG_B",
+        "query": "1"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal",
+      "value": "present"
+    },
+    {
+      "observable": "rows.fromOtherOrganization",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNumber.scrum808.test.ts",
+    "testName": "two organizations number independently, and the same number resolves only inside its own organization"
+  },
+  "matrixRow": "SCRUM808-deal-number-tenancy",
+  "fingerprint": "e1604a43adec11499c10cbd6f41a3624152922503a36d77716c80562a231c04d"
+}

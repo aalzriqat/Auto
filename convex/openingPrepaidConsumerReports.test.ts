@@ -61,6 +61,7 @@ test("opening recognition without an expense appears once in operational and GL 
   const seed = await fixture();
   expect(await seed.t.run((ctx) => ctx.db.query("expenses").collect())).toEqual([]);
   const report = await seed.owner.query(api.reports.getExpensesReport, { orgId: seed.orgId, startDate: seed.openingDate, endDate: seed.endDate });
+  if (!report) throw new Error("report withheld");
   const gl = await seed.owner.query(api.accountingReports.incomeStatement, { orgId: seed.orgId, fromDate: seed.openingDate, toDate: seed.endDate });
   expect(report.totalExpenses).toBe(40);
   expect(report.totalPosted).toBe(40);
@@ -69,6 +70,7 @@ test("opening recognition without an expense appears once in operational and GL 
   expect(gl.totalExpenses).toBe(40_000);
   const profit = await seed.owner.query(api.reports.getProfitAndLoss, { orgId: seed.orgId,
     startDate: seed.openingDate, endDate: seed.endDate });
+  if (!profit) throw new Error("report withheld");
   expect(profit.operatingExpenses).toBe(40);
   expect(profit.netProfit).toBe(-40);
   const diagnostic = await seed.t.query(internal.diagnosePrepaidLedgerIntegrity.surveyPrepaidLedgerIntegrity, {});

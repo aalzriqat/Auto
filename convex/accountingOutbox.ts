@@ -2337,7 +2337,7 @@ export const listPending = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
     await requireFeature(ctx, args.orgId, "accounting");
     const limit = Math.min(args.limit ?? 50, 200);
     if (args.status) {

@@ -38,5 +38,28 @@
     "file": "playwright/tests/financed-deal-economics.spec.ts",
     "testName": "a salesperson quotes it, a manager approves it, and the deal finalizes"
   },
-  "fingerprint": "cb811f7b6bf8912b9b1bee5ac54df91a1ee7ef98f028a0051cef33f33ca75df0"
+  "fingerprint": "cb811f7b6bf8912b9b1bee5ac54df91a1ee7ef98f028a0051cef33f33ca75df0",
+  "sourceGlobs": [
+    "app/**/sales/**",
+    "components/sales/**",
+    "app/**/deals/**",
+    "app/**/sales/**/deal/**",
+    "components/applications/**",
+    "components/deposits/**",
+    "app/**/approvals/**",
+    "components/vehicles/**",
+    "components/customers/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts",
+    "app/**/applications/**",
+    "app/**/vehicles/**",
+    "app/**/customers/**",
+    "app/**/settings/finance/**",
+    "app/**/accounting/**",
+    "components/settings/FinanceCompanyDialog.tsx",
+    "components/accounting/**"
+  ]
 }

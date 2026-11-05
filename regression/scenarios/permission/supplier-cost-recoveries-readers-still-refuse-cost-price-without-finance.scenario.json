@@ -1,0 +1,47 @@
+{
+  "id": "supplier-cost-recoveries-readers-still-refuse-cost-price-without-finance",
+  "fingerprint": "71756e21b0abc51af537beb8ae369c87507a7f59624710d4c470556f9f755fa2",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:finance"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902.test.ts",
+    "testName": "supplierCostRecoveries readers: view:cost_price without view:finance is still refused (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

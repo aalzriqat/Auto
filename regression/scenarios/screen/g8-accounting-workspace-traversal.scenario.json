@@ -61,5 +61,16 @@
     "file": "playwright/tests/audit-role-access.spec.ts",
     "testName": "pilot Accounting traversal paints every section and nested reader"
   },
-  "fingerprint": "c8165af3f054156a0c0dc23ab2b4b9c6d645cafb83986b4fb58cc2dcb7f263ac"
+  "fingerprint": "c8165af3f054156a0c0dc23ab2b4b9c6d645cafb83986b4fb58cc2dcb7f263ac",
+  "sourceGlobs": [
+    "app/**/accounting/**",
+    "components/accounting/**",
+    "components/collections/**",
+    "components/deposits/**",
+    "app/globals.css",
+    "components/ui/**",
+    "components/auth/**",
+    "components/providers/**",
+    "hooks/use-permissions.ts"
+  ]
 }

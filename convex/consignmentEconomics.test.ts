@@ -304,6 +304,7 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalProfit).toBe(0);
     expect(report.totalProfit).not.toBe(MARGIN);
@@ -338,6 +339,7 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const dash = (await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId,
       timeRange: "ALL_TIME",
@@ -367,6 +369,7 @@ describe("SCRUM-41 — a frozen margin nothing can substantiate", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     // Two screens, one deal, one answer. They disagreed before: the report
     // published the overstated margin while the dashboard had its own rule.
@@ -472,6 +475,7 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const dash = (await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId,
       timeRange: "ALL_TIME",
@@ -511,6 +515,7 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const dash = (await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId,
       timeRange: "ALL_TIME",
@@ -551,6 +556,7 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const dash = (await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId,
       timeRange: "ALL_TIME",
@@ -1200,8 +1206,11 @@ describe("CX-C — an id that references nothing is not provenance", () => {
     });
   }
 
-  const profitOf = async (s: Seeded) =>
-    await s.asUser.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+  const profitOf = async (s: Seeded) => {
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
+    return report;
+  };
 
   test("a DANGLING applicationId does not release the frozen margin", async () => {
     const s = await seedDealer("cxcDangling");

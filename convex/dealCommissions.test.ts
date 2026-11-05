@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census matches commission-line table-name arguments; no switch is replaced.
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
@@ -160,12 +161,12 @@ describe("dealCommissions: several lines on one deal", () => {
   test("with a chart ready a line posts exactly one accrual debiting Commission Expense and crediting Commission Payable in exact fils", async () => {
     vi.useFakeTimers();
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
-    const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance"]);
+    const s = await seed(t, "ledger", [...ADMIN, "view:finance", "manage:finance", "view:cost_price"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await openChartAndPeriod(t, s);
     // A second organization with its own books and its own commission activity,
     // including a line posted between the two snapshots.
-    const other = await seed(t, "ledgerother", [...ADMIN, "view:finance", "manage:finance"]);
+    const other = await seed(t, "ledgerother", [...ADMIN, "view:finance", "manage:finance", "view:cost_price"]);
     await other.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: other.orgId, saleId: other.saleId, commissionAmount: 70 });
     await openChartAndPeriod(t, other);
     await settle(t);
@@ -447,12 +448,13 @@ describe("reports show the margin after commissions (display only)", () => {
   }
 
   test("net after commissions is margin minus sale commission and lines and the margin itself is unchanged", async () => {
-    const { s } = await costedSale("rep1", [...ADMIN, "view:reports"]);
+    const { s } = await costedSale("rep1", [...ADMIN, "view:reports", "view:cost_price"]);
     await s.asAdmin.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 50 });
     await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.buyerAgent, amount: 50 });
     await s.asAdmin.mutation(api.dealCommissions.addLine, { orgId: s.orgId, saleId: s.saleId, kind: "EXECUTION", employeeId: s.executor, amount: 25 });
 
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     const row = report.sales[0];
     expect(row.netProfit).toBe(5000);
     expect(row.commissionsTotal).toBe(125);
@@ -463,13 +465,15 @@ describe("reports show the margin after commissions (display only)", () => {
     expect(report.commissionIncompleteSaleCount).toBe(0);
 
     const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    if (!perf) throw new Error("report withheld");
     expect(perf[0].totalProfit).toBe(5000);
     expect(perf[0].totalNetProfitAfterCommissions).toBe(4875);
   });
 
   test("an undecided salesperson commission gives no net figure and is counted, not zeroed", async () => {
-    const { s } = await costedSale("rep2", [...ADMIN, "view:reports"]);
+    const { s } = await costedSale("rep2", [...ADMIN, "view:reports", "view:cost_price"]);
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].commissionPending).toBe(true);
     expect(report.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report.totalNetProfitAfterCommissions).toBe(0);
@@ -477,12 +481,14 @@ describe("reports show the margin after commissions (display only)", () => {
   });
 
   test("a caller without view:commissions gets no commission figures", async () => {
-    const { s } = await costedSale("rep3", ["view:reports", "create:sales", "view:sales", "view:vehicles"]);
+    const { s } = await costedSale("rep3", ["view:reports", "view:cost_price", "create:sales", "view:sales", "view:vehicles"]);
     const report = await s.asAdmin.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...range() });
+    if (!report) throw new Error("report withheld");
     expect(report.sales[0].commissionsTotal).toBeNull();
     expect(report.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report.totalCommissions).toBeNull();
     const perf = await s.asAdmin.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...range() });
+    if (!perf) throw new Error("report withheld");
     expect(perf[0].totalCommissions).toBeNull();
   });
 });

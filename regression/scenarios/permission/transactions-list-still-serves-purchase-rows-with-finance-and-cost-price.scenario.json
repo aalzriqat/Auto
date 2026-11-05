@@ -1,0 +1,43 @@
+{
+  "id": "transactions-list-still-serves-purchase-rows-with-finance-and-cost-price",
+  "fingerprint": "729aee783f2a0d15bd79a8a8b94619364c6cd8e17c6d1fca64eab4a146adca6a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-and-cost",
+        "org": "A"
+      },
+      "action": "transactions.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vehiclePurchaseRows",
+      "value": "present"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/transactions.test.ts",
+    "testName": "a role with view:finance and view:cost_price still gets the purchase-cost row"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

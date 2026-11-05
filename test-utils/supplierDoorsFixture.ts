@@ -49,10 +49,10 @@ export async function addSupplierOrg(t: SupplierT, tag: string, permissions: str
   return { orgId, userId, as, periodId: period._id };
 }
 
-/** A second user of the same org who may only view finance. */
+/** A second user of the same org who may only view finance (and cost, which the supplier readers need too: SCRUM-902). */
 export async function addViewOnlyUser(t: SupplierT, orgId: Id<"organizations">, tag: string) {
   const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `${tag}_viewer`, email: `${tag}v@example.test` }));
-  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Viewer", permissions: ["view:finance"] }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Viewer", permissions: ["view:finance", "view:cost_price"] }));
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   return t.withIdentity({ subject: `${tag}_viewer`, clerkId: `${tag}_viewer` });
 }

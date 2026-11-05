@@ -1,0 +1,93 @@
+{
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "runId": "scrum908-r2-review",
+    "hunter": "scripted",
+    "firstSeen": "2026-11-05"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-908#c24538",
+      "digest": "0102db7c3ed2438064496c0817c879efd8a5ad44957f9f90acf51cab25e1e2a9"
+    }
+  ],
+  "matrixRow": "SCRUM908-accountant-commission-visibility",
+  "id": "accountant-commission-completed-backfill-preserves-exact-19-recreation",
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "organizations.create",
+      "input": {
+        "name": "RecreatedDealer"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.update",
+      "input": {
+        "role": "ACCOUNTANT",
+        "rename": "FormerAccountant"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "roles.create",
+      "input": {
+        "name": "ACCOUNTANT",
+        "permissions": "PRE_CHANGE_EXACT_19"
+      }
+    },
+    {
+      "actor": {
+        "role": "internal",
+        "org": "A"
+      },
+      "action": "migrateRoles.backfillAccountantCommissionsAccess",
+      "input": {
+        "run": "NEXT_DEPLOY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "later.updatedCount",
+      "value": 0
+    },
+    {
+      "observable": "recreated.viewCommissions",
+      "value": false
+    },
+    {
+      "observable": "recreated.unchanged",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+    "testName": "SCRUM-908: a completed migration never widens an exact-19 ACCOUNTANT recreated by its owner"
+  },
+  "bugRef": {
+    "key": "SCRUM-908",
+    "failingFirst": "bc5c19cd0ffc34741d0e7c916ec5b82a904a2dfb"
+  },
+  "fingerprint": "3b9780ad437b8cece08e8d5f19475c3364a68dd3640db41b09f3aeb454f5068e"
+}

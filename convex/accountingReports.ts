@@ -2,6 +2,7 @@ import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { hasReadHeadroom, type HeadroomCtx } from "./utils/transactionReadHeadroom";
 import { openingPolicyForAccount, openingAccountAllowsFamily, isRemainingOpeningKind, openingDeclaredFamilyRefusal } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
@@ -16,6 +17,8 @@ import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, type QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+// SCRUM-902: supplier and inventory totals are acquisition cost; they need the supplier statement's pair.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
@@ -193,7 +196,8 @@ export const trialBalance = query({
     reportingCurrency: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the trial balance carries the vehicle inventory and COGS accounts, so it needs the cost permission too.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     // Include all accounts (active and inactive) so historical postings on
@@ -402,7 +406,8 @@ export const incomeStatement = query({
     toDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the income statement shows cost of goods sold and gross margin.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeIncomeStatement(ctx, args);
   },
@@ -416,7 +421,8 @@ export const balanceSheet = query({
     asOfDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the balance sheet carries the vehicle inventory line.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const accounts = await ctx.db
@@ -865,7 +871,7 @@ export async function computeVehicleInventoryReconciliation(
 export const vehicleInventoryReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeVehicleInventoryReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1046,14 +1052,43 @@ const SUPPLIER_PAYABLE_RECON_READ_STATUSES: ReadonlyArray<Doc<"vehicleSupplierPa
 ];
 
 /** Posting event types whose rule touches ACCOUNTS_PAYABLE_SUPPLIERS (classified in postingRules.ts). */
-const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
+export const AP_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
   Object.entries(AP_AFFECTING_BY_EVENT_TYPE)
     .filter(([, affectsAp]) => affectsAp)
     .map(([eventType]) => eventType)
 );
 
-async function hasPendingAffectingPosting(
-  ctx: QueryCtx,
+/**
+ * Whether a queued posting could move the GL, with the original-event lookups held to the transaction's read budget
+ * (transactionReadHeadroom.ts): each queued reversal's original is an `accountingEvents` document with an unbounded `payload`, so
+ * the lookups are read one at a time, each after a headroom check. `OVER_LIMIT` means the budget ran out before the answer was
+ * known; the caller must not read that as "nothing pending" (#764 round 5).
+ */
+export async function pendingAffectingPostingState(
+  ctx: Pick<QueryCtx, "db"> & HeadroomCtx,
+  events: Array<Doc<"pendingAccountingEvents">>,
+  affectingEventTypes: ReadonlySet<string>
+): Promise<"NONE" | "AFFECTING" | "OVER_LIMIT"> {
+  const reversals: Array<Doc<"pendingAccountingEvents">> = [];
+  for (const event of events) {
+    if (event.kind === "REVERSE") reversals.push(event);
+    else if (!event.eventType || affectingEventTypes.has(event.eventType)) return "AFFECTING";
+  }
+  const originalOrgs = new Map<NonNullable<Doc<"pendingAccountingEvents">["originalEventId"]>, Id<"organizations">>();
+  for (const event of reversals) {
+    if (!event.originalEventId) return "AFFECTING";
+    originalOrgs.set(event.originalEventId, event.orgId);
+  }
+  for (const [id, orgId] of originalOrgs) {
+    if (!(await hasReadHeadroom(ctx))) return "OVER_LIMIT";
+    const original = await ctx.db.get(id);
+    if (!original || original.orgId !== orgId || affectingEventTypes.has(original.eventType)) return "AFFECTING";
+  }
+  return "NONE";
+}
+
+export async function hasPendingAffectingPosting(
+  ctx: Pick<QueryCtx, "db">,
   events: Array<Doc<"pendingAccountingEvents">>,
   affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {
@@ -1367,7 +1402,7 @@ export async function computeSupplierPayablesReconciliation(
 export const supplierPayablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeSupplierPayablesReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1906,7 +1941,7 @@ export const supplierRecoverablesReconciliation = query({
   returns: openingFamilyReconciliationValidator,
   handler: async (ctx, args) => {
     try {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
       await requireFeature(ctx, args.orgId, "accounting");
       return await computeSupplierRecoverablesReconciliation(ctx, args.orgId, args.toDate);
     } catch (error) {
@@ -2545,7 +2580,7 @@ export const supplierReceivablesReconciliation = query({
   }),
   handler: async (ctx, args) => {
     try {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
       await requireFeature(ctx, args.orgId, "accounting");
       return await computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
     } catch (error) {

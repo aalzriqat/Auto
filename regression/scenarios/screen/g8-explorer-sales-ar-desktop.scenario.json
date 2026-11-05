@@ -40,5 +40,11 @@
     "file": "playwright/scenarios/jev-explorer.spec.ts",
     "testName": "pilot explorer sales ar desktop"
   },
-  "fingerprint": "28c9c74475a7098fe85af6ff19815ea825def4a17d462b607d8511fda76cd143"
+  "fingerprint": "28c9c74475a7098fe85af6ff19815ea825def4a17d462b607d8511fda76cd143",
+  "sourceGlobs": [
+    "app/**",
+    "components/**",
+    "lib/navigation.ts",
+    "playwright/fixtures/pilotHunt.ts"
+  ]
 }

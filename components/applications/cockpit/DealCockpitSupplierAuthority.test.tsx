@@ -48,6 +48,7 @@ vi.mock("@/components/accounting/AccountingTabShared", () => ({
 
 const stubs = vi.hoisted(() => ({
   queryResults: new Map<string, unknown>(),
+  queryArgs: new Map<string, unknown>(),
   /**
    * The membership as the real `usePermissions` reads it: `undefined` while the
    * query is in flight, otherwise a role name and a flat permission list.
@@ -65,8 +66,9 @@ vi.mock("convex/react", async () => {
         Object.entries(queries).map(([key, { query }]) => [key, stubs.queryResults.get(getFunctionName(query))])
       ),
     useConvexAuth: () => ({ isAuthenticated: true }),
-    useQuery: (reference: never) => {
+    useQuery: (reference: never, args: unknown) => {
       const name = getFunctionName(reference);
+      stubs.queryArgs.set(name, args);
       if (name === "organizations:listMine") return [{ _id: "org1" }];
       return name === "memberships:getMyMembership" ? stubs.membership : stubs.queryResults.get(name);
     },
@@ -81,6 +83,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { DealCockpit, SaleDealCockpit } from "./DealCockpit";
+
+test.each([false, true])("SCRUM-902 financed cost query requires cost grant=%s", granted => {
+  stubs.membership = { roleName: "Custom", permissions: ["view:sales", "view:finance_applications", "view:finance",
+    ...(granted ? ["view:cost_price"] : [])] };
+  stubs.queryResults.set("dealWorkspace:financedDealCockpit", financedDirectDeal());
+  render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  expect(stubs.queryArgs.get("financeDealCosts:listDealCosts"))
+    .toEqual(granted ? { orgId: ORG, applicationId: APP } : "skip");
+});
 
 type FinancedDealCockpitData = Extract<DealCockpitData, { dealKind: "FINANCED" }>;
 type CashDealCockpitData = NonNullable<(typeof api.sales.dealCockpit)["_returnType"]>;
@@ -229,6 +240,7 @@ function cashDirectDeal(): CashDealCockpitData {
       currency: "JOD",
       settlesDirectToSupplier: true,
       routeKnown: true,
+      managementNetProfit: { available: false, reason: "CommissionsUnreadable" },
       profit: {
         available: true,
         basis: "ACCOUNTING_RESULT",
@@ -280,7 +292,22 @@ function settleButton() {
 afterEach(() => {
   cleanup();
   stubs.queryResults.clear();
+  stubs.queryArgs.clear();
   stubs.membership = undefined;
+});
+
+test("supplier concession query is skipped without cost access and mounted with it (SCRUM-902)", () => {
+  const deal = financedDirectDeal();
+  stubs.queryResults.set("dealWorkspace:financedDealCockpit", {
+    ...deal, money: { ...deal.money, shortfall: { method: "NET", totalMinor: 850000, valuationMinor: 0, termsMinor: 850000 } },
+  });
+  stubs.membership = { roleName: "Custom", permissions: ["view:sales", "view:finance_applications", "view:finance"] };
+  const { rerender } = render(<DealCockpit orgId={ORG} applicationId={APP} />);
+  expect(stubs.queryArgs.get("financingEconomics:supplierConcessionBasis")).toBe("skip");
+  expect(screen.queryByTestId("gap-supplier-entitlement")).toBeNull();
+  stubs.membership.permissions.push("view:cost_price");
+  rerender(<DealCockpit orgId={ORG} applicationId={APP} />);
+  expect(stubs.queryArgs.get("financingEconomics:supplierConcessionBasis")).toEqual({ orgId: ORG, applicationId: APP });
 });
 
 /** A supplier the dealership OWES (gross route): the state that offers no settlement. */

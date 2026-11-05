@@ -1,0 +1,43 @@
+{
+  "id": "gl-statements-still-refuse-cost-price-without-finance",
+  "fingerprint": "7dd547c52b74e0b9a84e53625c0302e966543e56412b90b11b90c567c5d3da25",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "accountingReports.trialBalance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:finance"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "GL statements and account activity: view:cost_price without view:finance is still refused (SCRUM-902 negative control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

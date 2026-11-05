@@ -19,7 +19,7 @@ import { interpolate } from "@/lib/i18n/interpolate";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { busyCloseGuard } from "@/components/ui/busyCloseGuard";
-import { PAYMENT_LINKS_PILOT_DISABLED } from "@/lib/pilotCapabilities";
+import { isPilotSwitchOn } from "@/lib/pilotCapabilityManifest";
 import {
   AccountingEmptyRow,
   AccountingTableFrame,
@@ -89,6 +89,9 @@ export function PaymentLinksPanel() {
   const [createOpen, setCreateOpen] = useState(false);
   const [settleIntent, setSettleIntent] = useState<PaymentIntentRow | null>(null);
   const [expireIntent, setExpireIntent] = useState<PaymentIntentRow | null>(null);
+  // SCRUM-810: create and staff "mark settled" are both refused by the server while this is on.
+  // Expiring an existing link and the held-funds review stay available.
+  const linksOff = isPilotSwitchOn("PAYMENT_LINKS_PILOT_DISABLED");
 
   const { results: paymentLinks, status: paymentLinkLoadStatus, loadMore: loadMorePaymentLinks } = usePaginatedQuery(
     api.paymentIntents.list,
@@ -101,11 +104,11 @@ export function PaymentLinksPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-col items-end gap-1">
-        <Button disabled={PAYMENT_LINKS_PILOT_DISABLED} onClick={() => setCreateOpen(true)}>
+        <Button disabled={linksOff} onClick={() => setCreateOpen(true)}>
           <Plus className="me-2 h-4 w-4" />
           {t("NewPaymentLink" as any)}
         </Button>
-        {PAYMENT_LINKS_PILOT_DISABLED && (
+        {linksOff && (
           <p className="text-sm text-muted-foreground" role="status">
             {t("ServerError_PAYMENT_LINKS_DISABLED" as any)}
           </p>
@@ -149,7 +152,13 @@ export function PaymentLinksPanel() {
                           </a>
                         </Button>
                       )}
-                      <Button size="sm" variant="outline" disabled={intent.status !== "PENDING"} onClick={() => setSettleIntent(intent)}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={linksOff || intent.status !== "PENDING"}
+                        title={linksOff ? t("ServerError_PAYMENT_LINKS_DISABLED") : undefined}
+                        onClick={() => setSettleIntent(intent)}
+                      >
                         {t("MarkSettled" as any)}
                       </Button>
                       <Button size="sm" variant="outline" disabled={intent.status !== "PENDING"} onClick={() => setExpireIntent(intent)}>

@@ -20,10 +20,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
+async function seed(
+  tag: string,
+  permissions: string[] = ["view:finance", "view:cost_price"],
+  options: { transactionLimits?: boolean } = {},
+) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
-  const t = convexTestWithComponents(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES, options);
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `ST ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -79,6 +83,41 @@ const addReceivable = async (s: Seed, fields: Record<string, unknown> = {}) => {
   );
 };
 
+/**
+ * A supplier receipt as the ledger holds it: the SUPPLIER_RECEIVABLE_COLLECTED entry (Dr cash, Cr 1240) sourced by the claim,
+ * and the recorded-receipt counter. Settled history takes supplier cash from this posting, not from `amountReceived`.
+ */
+const addReceipt = (s: Seed, receivableId: Id<"vehicleSupplierReceivables">, amountMinor: number, currency = "JOD") =>
+  s.t.run(async (ctx) => {
+    const account = async (code: string, systemKey: string, type: "ASSET", normalBalance: "DEBIT") => {
+      const found = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", s.orgId).eq("systemKey", systemKey))
+        .unique();
+      return (
+        found?._id ??
+        (await ctx.db.insert("chartOfAccounts", {
+          orgId: s.orgId, code, name: systemKey, type, normalBalance, isControlAccount: false, allowManualPosting: false,
+          active: true, systemKey, createdAt: NOW, updatedAt: NOW,
+        }))
+      );
+    };
+    const cash = await account("1110", "CASH", "ASSET", "DEBIT");
+    const control = await account("1240", "RECEIVABLE_FROM_SUPPLIERS", "ASSET", "DEBIT");
+    const claim = (await ctx.db.get(receivableId))!;
+    const entryId = await ctx.db.insert("journalEntries", {
+      orgId: s.orgId, journalNumber: `JE-${receivableId}-${claim.receiptSeq ?? 0}`, accountingDate: NOW, sourceType: "vehicleSupplierReceivables",
+      sourceId: receivableId, category: "SYSTEM", memo: "Supplier commission received", status: "POSTED", currency,
+      postedBy: s.userId, postedAt: NOW, createdAt: NOW,
+    });
+    const line = (lineNumber: number, accountId: Id<"chartOfAccounts">, debitMinor: number, creditMinor: number) =>
+      ctx.db.insert("journalLines", {
+        orgId: s.orgId, journalEntryId: entryId, lineNumber, accountId, debitMinor, creditMinor, currency, scale: 1000, accountingDate: NOW,
+      });
+    await line(1, cash, amountMinor, 0);
+    await line(2, control, 0, amountMinor);
+    await ctx.db.patch(receivableId, { receiptSeq: (claim.receiptSeq ?? 0) + 1 });
+  });
 const addRecovery = (s: Seed, fields: Record<string, unknown> = {}) =>
   s.t.run(async (ctx) => {
     const expenseId = await ctx.db.insert("expenses", {
@@ -152,6 +191,72 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.receivable.complete).toBe(true);
   });
 
+  // #764 round 4 (LOW-1). A row cap bounds documents, not bytes: 20 open payables with ~0.9 MB `paymentNotes` pass the 100-row cap and
+  // read ~18 MB, past the 16 MiB per-function read limit (https://docs.convex.dev/production/state/limits). `transactionLimits: true`
+  // makes convex-test enforce that ceiling (evidence boundary: the emulation, not the Convex backend).
+  test("CONTROL: 20 small open payables are read in full with the limits enforced", async () => {
+    const s = await seed("olimsmall", undefined, { transactionLimits: true });
+    for (let i = 0; i < 20; i += 1) await addPayable(s, { amountDue: 1 });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.rows).toHaveLength(20);
+  });
+
+  test("20 open payables of ~0.9 MB each: the section is incomplete with no totals, never a thrown read error", async () => {
+    const s = await seed("olimheavy", undefined, { transactionLimits: true });
+    for (let i = 0; i < 20; i += 1) await addPayable(s, { amountDue: 1, paymentNotes: "n".repeat(900_000) });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    // The budget is one for the whole transaction, so the receivable side may be withheld too; it must not claim a total either way.
+    expect(r.receivable.complete ? r.receivable.totals.length : 0).toBe(0);
+    // #764 round 5 (M3): the server says WHY, so a screen never reads an unread section as empty.
+    expect(r.payable.incompleteReason).toBe("READ_BUDGET");
+    expect(r.receivable.complete).toBe(false);
+    expect(r.receivable.incompleteReason).toBe("READ_BUDGET");
+  });
+
+  // #764 round 5 (M1). Each row's enrichment reads its sale (and finance application) with a plain `db.get`, after the family was
+  // streamed. A sale's `commissionPaymentIdempotencyKey` is an unbounded string, so 20 small payables linked to 20 such sales read ~18 MB
+  // through reads that never asked the transaction for room.
+  async function payablesWithSales(s: Seed, count: number, keyChars: number) {
+    for (let i = 0; i < count; i += 1) {
+      const saleId = await s.t.run((ctx) =>
+        ctx.db.insert("sales", {
+          orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId, salePrice: 12_500,
+          saleDate: NOW - 40 * DAY, status: "COMPLETED", commissionPaymentIdempotencyKey: "k".repeat(keyChars),
+        } as never)
+      );
+      await addPayable(s, { amountDue: 1, saleId });
+    }
+  }
+
+  test("CONTROL: 20 small payables linked to small sales are read in full with the limits enforced", async () => {
+    const s = await seed("o2small", undefined, { transactionLimits: true });
+    await payablesWithSales(s, 20, 10);
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(true);
+    expect(r.payable.rows).toHaveLength(20);
+  });
+
+  test("20 payables whose linked sales are ~0.9 MB each: the section is incomplete (READ_BUDGET), never a thrown read error", async () => {
+    const s = await seed("o2heavy", undefined, { transactionLimits: true });
+    await payablesWithSales(s, 20, 900_000);
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    expect(r.payable.incompleteReason).toBe("READ_BUDGET");
+  });
+
+  test("a section over the row bound withholds its totals too (W14), as settled history does", async () => {
+    const s = await seed("obound");
+    for (let i = 0; i < 101; i += 1) await addPayable(s, { amountDue: 1 });
+    const r = await statement(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.totals).toEqual([]);
+    expect(r.payable.incompleteReason).toBe("ROW_LIMIT");
+  });
+
   test("tenancy and permission: foreign supplier, other org, missing view:finance and a stale clock all refuse", async () => {
     const a = await seed("ta");
     // Same harness instance on purpose: two convexTest instances hand out identical ids.
@@ -164,7 +269,7 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     await expect(
       a.asUser.query(api.supplierStatement.outstanding, { orgId: orgB, supplierId: supplierB, nowMs: NOW } as never),
       "other org"
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not a member of this organization/);
     const noFinance = await seed("tc", ["view:vehicles", "view:cost_price"]);
     await expect(statement(noFinance), "no finance").rejects.toThrow(/view:finance/);
     // SCRUM-886 / ACC-10: a SOURCED car's supplier entitlement is its acquisition cost, so finance access alone is not enough.
@@ -187,5 +292,125 @@ describe("SCRUM-869 supplier statement: outstanding A/P and A/R", () => {
     expect(r.payable.totals).toEqual([{ currency: "JOD", grossMinor: 700_000, disputedMinor: 0, overdueMinor: 700_000 }]);
     expect(r.receivable.complete).toBe(true);
     expect(r.receivable.rows).toEqual([]);
+  });
+});
+
+const settledOf = (s: Seed, supplierId: Id<"suppliers"> = s.supplierId) =>
+  s.asUser.query(api.supplierStatement.settled, { orgId: s.orgId, supplierId } as never);
+
+describe("SCRUM-869 supplier statement: settled history (cash actually paid or received)", () => {
+  test("shows what was paid and received per section and currency, never netted; open and cancelled rows are not history", async () => {
+    const s = await seed("sh1");
+    await addPayable(s, { status: "PAID", amountPaid: 9_500 }); // paid in full
+    await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 4_000 }); // 4,000 of 9,500 paid
+    await addPayable(s); // nothing paid yet: open, not history
+    await addPayable(s, { status: "CANCELLED" });
+    const paidClaim = await addReceivable(s, { status: "PAID", amountReceived: 3_000 });
+    await addReceipt(s, paidClaim, 3_000_000); // the supplier paid the whole claim
+    await addRecovery(s, { status: "PARTIALLY_RECOVERED", amountRecoveredMinor: 50_000 });
+    await addRecovery(s); // nothing recovered yet
+    const r = await settledOf(s);
+
+    expect(
+      r.payable.rows.map((x: { settledMinor: number }) => x.settledMinor).sort((a: number, b: number) => a - b),
+    ).toEqual([4_000_000, 9_500_000]);
+    expect(r.payable.rows.find((x: { status: string }) => x.status === "PARTIALLY_PAID")).toMatchObject({
+      dueMinor: 9_500_000,
+      settledMinor: 4_000_000,
+    });
+    expect(r.payable.totals).toEqual([{ currency: "JOD", settledMinor: 13_500_000 }]);
+    expect(r.receivable.rows.map((x: { kind: string }) => x.kind).sort()).toEqual(["RECEIVABLE", "RECOVERY"]);
+    expect(r.receivable.totals).toEqual([{ currency: "JOD", settledMinor: 3_050_000 }]);
+    expect(r.payable.complete && r.receivable.complete).toBe(true);
+    // No net, balance or difference anywhere.
+    expect(Object.keys(r).sort()).toEqual(["payable", "receivable", "supplierId"]);
+    const keys: string[] = [];
+    JSON.stringify(r, (k, v) => (keys.push(k), v));
+    expect(keys.filter((k) => /net|balance|diff|offset/i.test(k))).toEqual([]);
+  });
+
+  test("another supplier's rows are excluded and currencies are never blended", async () => {
+    const s = await seed("sh2");
+    const other = await addSupplier(s.t, s.orgId, "Other Importer", s.userId);
+    await addPayable(s, { supplierId: other, status: "PAID", amountPaid: 9_500 });
+    await addPayable(s, { status: "PAID", amountPaid: 100, amountDue: 100, currency: "USD" });
+    await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const r = await settledOf(s);
+    const byCurrency = Object.fromEntries(
+      r.payable.totals.map((t: { currency: string; settledMinor: number }) => [t.currency, t.settledMinor]),
+    );
+    expect(byCurrency).toEqual({ JOD: 9_500_000, USD: 10_000 });
+  });
+
+  test("rows come newest-created first, and a truncated family keeps the newest-created rows", async () => {
+    const s = await seed("sh3");
+    const first = await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const second = await addPayable(s, { status: "PARTIALLY_PAID", amountPaid: 1_000 });
+    const third = await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    const r = await settledOf(s);
+    expect(r.payable.rows.map((x: { id: string }) => x.id)).toEqual([third, second, first]);
+
+    const big = await seed("sh3b");
+    const ids: string[] = [];
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1)
+      ids.push(await addPayable(big, { status: "PAID", amountPaid: 9_500 }));
+    const truncated = await settledOf(big);
+    const kept = truncated.payable.rows.map((x: { id: string }) => x.id);
+    expect(kept).toHaveLength(STATEMENT_FAMILY_LIMIT);
+    expect(kept).not.toContain(ids[0]); // the oldest-created row is the one left out
+    expect(kept[0]).toBe(ids[ids.length - 1]);
+  });
+
+  test("a part-paid disputed payable or receivable still shows the cash already moved", async () => {
+    const s = await seed("sh3c");
+    await addPayable(s, { status: "DISPUTED", amountPaid: 2_000 });
+    const disputedClaim = await addReceivable(s, { status: "DISPUTED", amountReceived: 500 });
+    await addReceipt(s, disputedClaim, 500_000);
+    await addPayable(s, { status: "DISPUTED" }); // disputed with nothing paid: not history
+    const r = await settledOf(s);
+    expect(r.payable.rows.map((x: { settledMinor: number }) => x.settledMinor)).toEqual([2_000_000]);
+    expect(r.receivable.rows.map((x: { settledMinor: number }) => x.settledMinor)).toEqual([500_000]);
+  });
+
+  test("a family over the read bound reports complete=false; open rows never count against it", async () => {
+    const s = await seed("sh4");
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addPayable(s, { status: "PAID", amountPaid: 9_500 });
+    for (let i = 0; i < STATEMENT_FAMILY_LIMIT + 1; i += 1) await addReceivable(s); // open: not history
+    const r = await settledOf(s);
+    expect(r.payable.complete).toBe(false);
+    expect(r.payable.rows).toHaveLength(STATEMENT_FAMILY_LIMIT);
+    // W14: the server never sends a partial sum next to the flag.
+    expect(r.payable.totals).toEqual([]);
+    expect(r.receivable.complete).toBe(true);
+    expect(r.receivable.rows).toEqual([]);
+  });
+
+  test("tenancy and permission: foreign supplier, other org and missing view:finance all refuse", async () => {
+    const a = await seed("sh5");
+    const orgB = await a.t.run((ctx) => ctx.db.insert("organizations", { name: "SH other", createdAt: Date.now() }));
+    await a.t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId: orgB,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    );
+    const supplierB = await addSupplier(a.t, orgB, "Foreign Supplier", a.userId);
+    await expect(settledOf(a, supplierB), "foreign supplier in own org").rejects.toThrow(/Supplier not found\./);
+    await expect(
+      a.asUser.query(api.supplierStatement.settled, { orgId: orgB, supplierId: supplierB } as never),
+      "other org",
+    ).rejects.toThrow(/not a member of this organization/);
+    const noFinance = await seed("sh6", ["view:vehicles"]);
+    await expect(settledOf(noFinance), "no finance").rejects.toThrow(/Missing required permissions: view:finance/);
+    // SCRUM-886 / ACC-10: what was paid for a SOURCED car is its acquisition cost, so finance access alone is not enough.
+    const financeOnly = await seed("sh7", ["view:finance"]);
+    await addPayable(financeOnly, { status: "PAID", amountPaid: 9_500 });
+    await expect(settledOf(financeOnly), "finance without cost access").rejects.toThrow(/view:cost_price/);
+    const bothGrants = await seed("sh8");
+    await addPayable(bothGrants, { status: "PAID", amountPaid: 9_500 });
+    expect((await settledOf(bothGrants)).payable.totals[0]?.settledMinor).toBe(9_500_000);
   });
 });

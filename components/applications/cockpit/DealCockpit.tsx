@@ -1,5 +1,6 @@
 "use client";
 import { isRt11DoorDisabled } from "@/convex/utils/rt11DoorContainment";
+import { formatDealNumber } from "@/convex/utils/dealNumberFormat";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
@@ -413,11 +414,20 @@ const PROFIT_LINE_LABEL: Record<string, string> = {
   ACTUAL_EXPENSES: "LineActualExpenses",
   FORECAST_EXPENSES: "LineForecastExpenses",
   PREPARATION_EXPENSES: "LinePreparationExpenses",
+  COMMISSIONS: "DealCommissionsTotal",
+  ACCOUNTING_MARGIN: "LineAccountingMargin",
   /** CASH only. A different derivation, so deliberately different keys. */
   SALE_PRICE: "LineSalePrice",
   VEHICLE_COST: "LineVehicleCost",
   SUPPLIER_ENTITLEMENT: "LineSupplierEntitlement",
 };
+
+function profitLineLabel(key: string, profit: HeadlineProfit): string {
+  if (key === "COMMISSIONS" && profit.available && profit.basis === "MANAGEMENT_ESTIMATE") {
+    return "DealCommissionsRegisteredToDate";
+  }
+  return PROFIT_LINE_LABEL[key] ?? key;
+}
 
 /**
  * Keyed by the reason itself rather than tested with a ternary, which had two
@@ -434,6 +444,13 @@ const PROFIT_BLOCKED_REASON: Record<
   | "NoVehicleCost"
   /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
   | "PreparationExpensesUnreadable"
+  | "VehicleCostBasisUnreadable"
+  | "CommissionsUnreadable"
+  | "CommissionsReadBoundExceeded"
+  | "CommissionsPending"
+  | "CostAccessRequired"
+  | "CommissionAccessRequired"
+  | "ManagementNetUnavailable"
   /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
   | "ExpensesMixedDenomination"
   /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
@@ -455,6 +472,13 @@ const PROFIT_BLOCKED_REASON: Record<
   NoDealerContribution: "ProfitNeedsDealerContribution",
   NoVehicleCost: "ProfitNeedsVehicleCost",
   PreparationExpensesUnreadable: "ProfitPreparationUnreadable",
+  VehicleCostBasisUnreadable: "ProfitVehicleCostBasisUnreadable",
+  CommissionsUnreadable: "DealCommissionsUnreadable",
+  CommissionsReadBoundExceeded: "ProfitCommissionsReadBoundExceeded",
+  CommissionsPending: "ProfitCommissionsPending",
+  CostAccessRequired: "ProfitCostAccessRequired",
+  CommissionAccessRequired: "ProfitCommissionAccessRequired",
+  ManagementNetUnavailable: "ProfitOverviewWithheld",
   ExpensesMixedDenomination: "ProfitExpensesMixedDenomination",
   ExpensesUnreadable: "ProfitExpensesUnreadable",
   ExecutionFeeUnclassified: "ProfitExecutionFeeUnclassified",
@@ -761,7 +785,11 @@ function Money({ children }: Readonly<{ children: React.ReactNode }>) {
  * A clipboard the browser refuses is not an error worth a toast — the id is
  * still on screen to select by hand.
  */
-function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: string) => string }>) {
+function CopyableReference({
+  value,
+  t,
+  testId = "deal-reference-copy",
+}: Readonly<{ value: string; t: (key: string) => string; testId?: string }>) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -784,7 +812,7 @@ function CopyableReference({ value, t }: Readonly<{ value: string; t: (key: stri
         className="h-7 w-7 shrink-0"
         onClick={copy}
         aria-label={t(copied ? "DealReferenceCopied" : "CopyDealReference")}
-        data-testid="deal-reference-copy"
+        data-testid={testId}
       >
         {copied ? <Check className="h-3.5 w-3.5 text-profit-positive" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
       </Button>
@@ -916,6 +944,7 @@ export function DealCockpit({
     canViewApplications &&
       !permissionsLoading &&
       hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+      hasPermission(PERMISSIONS.VIEW_COST_PRICE) &&
       deal &&
       typeof deal.money?.shortfall?.totalMinor === "number"
       ? { orgId, applicationId }
@@ -1069,11 +1098,11 @@ export function DealCockpit({
     api.documents.getHistoryForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
-  // The deal's cost lines, same permission as the document rows; skipped rather
-  // than thrown for a caller without it.
+  const canViewDealCosts = canViewApplications && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  // The bundled cost read requires both grants, including while permissions load.
   const dealCosts = useQuery(
     api.financeDealCosts.listDealCosts,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    canViewDealCosts && deal ? { orgId, applicationId } : "skip"
   );
   // SCRUM-417 UX5 (S7). A step's success is held until the read model shows the
   // fact THAT action wrote (each call site names it: `reflectedWhen`), then shown
@@ -1530,7 +1559,7 @@ export function DealCockpit({
           // Undefined is "loading" until the permission has resolved AND, for a
           // caller who holds it, the query has answered; only a resolved caller
           // WITHOUT the permission is told the rows are not theirs to read.
-          loading: permissionsLoading || (canViewApplications && dealCosts === undefined),
+          loading: permissionsLoading || (canViewDealCosts && dealCosts === undefined),
           costs: dealCosts
             ? ({
                 lines: dealCosts.fees.map((fee) => ({
@@ -4376,6 +4405,7 @@ export function SaleDealCockpit({
  * because amount and classification travel in one object.
  */
 type DealMoney = NonNullable<DealCockpitData["money"]>;
+type HeadlineProfit = import("@/convex/utils/financingEconomics").DealProfit;
 
 /**
  * One fact of the six-fact summary. `value` is already formatted; `null`
@@ -4459,7 +4489,7 @@ function selectSummaryFacts({
   money,
   moneyIn,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   applicationId: string | null;
   evidence: ServedEvidence | undefined;
   money: (minor: number) => string;
@@ -4495,7 +4525,7 @@ function selectSummaryFacts({
   // tile exactly as it does in the breakdown, so the tiles never show the
   // magnitude of a cost as if it were an inflow.
   return profit.lines.map((line) => ({
-    labelKey: PROFIT_LINE_LABEL[line.key] ?? line.key,
+    labelKey: profitLineLabel(line.key, profit),
     value: signedMoney(line, money),
     unavailableKey: "NotRecorded",
   }));
@@ -4513,11 +4543,9 @@ function signedMoney(
  * The headline figure and its qualifier — the ONE branch this screen is not
  * allowed to get wrong.
  *
- * A financed deal's headline is a MANAGEMENT figure built on a spread that
- * appears on no invoice: it is `postable: false` and must never be shown
- * without its qualifier. A cash deal's is an ordinary accounting result that
- * reconciles to the GL, and stamping an "estimated / never postable" badge on
- * it would be just as false in the other direction.
+ * The headline is management net. Financing retains its settlement qualifier;
+ * cash is a separate MANAGEMENT_NET derived from an unchanged accounting
+ * margin. Neither management figure claims ledger reconciliation.
  *
  * Read off `basis` rather than from the presence of a `classification` field,
  * so the distinction is one the type system enforces: `AccountingProfit` has
@@ -4530,11 +4558,10 @@ function ProfitHeadline({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
-  const isManagementEstimate = profit.available && profit.basis === "MANAGEMENT_ESTIMATE";
   const isLoss = profit.available && profit.amountMinor < 0;
   const isEstimatedLoss =
     profit.available &&
@@ -4575,7 +4602,7 @@ function ProfitHeadline({
               </Badge>
             )}
           </div>
-          {isManagementEstimate && (
+          {profit.basis !== "ACCOUNTING_RESULT" && (
             <p className="text-xs text-muted-foreground">{t("ManagementFigureNote")}</p>
           )}
         </>
@@ -4616,7 +4643,7 @@ function DealSummaryFacts({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   summary: SummaryEvidence;
   money: (minor: number) => string;
   t: (key: string) => string;
@@ -4677,7 +4704,8 @@ function DealPartyFacts({
           <MoneyFact
             key={party.party}
             label={t(PARTY_FACT_LABEL[party.party] ?? PARTY_LABEL[party.party] ?? party.party)}
-            value={positioned ? money(party.amountMinor) : null}
+            value={positioned && party.amountMinor !== null ? money(party.amountMinor) : null}
+            unavailableKey={party.amountMinor === null ? "CostAmountWithheld" : "NotRecorded"}
             note={
               <>
                 <span>{t(POSITION_LABEL[party.position] ?? party.position)}</span>
@@ -4793,7 +4821,7 @@ function ProfitBreakdown({
   money,
   t,
 }: Readonly<{
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   money: (minor: number) => string;
   t: (key: string) => string;
 }>) {
@@ -4813,7 +4841,7 @@ function ProfitBreakdown({
       <dl className="max-w-xl space-y-1.5 pt-2 text-sm">
         {profit.lines.map((line) => (
           <div key={line.key} className="flex items-center justify-between gap-4">
-            <dt className="text-muted-foreground">{t(PROFIT_LINE_LABEL[line.key] ?? line.key)}</dt>
+            <dt className="text-muted-foreground">{t(profitLineLabel(line.key, profit))}</dt>
             <dd>
               <Money>{signedMoney(line, money)}</Money>
             </dd>
@@ -4841,7 +4869,7 @@ function MoneyPanel({
   money: (minor: number) => string;
   /** The employee commissions row, supplied by the container that holds the permissions. */
   renderCommissions?: DealCommissionsSlot;
-  profit: DealMoney["profit"];
+  profit: HeadlineProfit;
   summary: SummaryEvidence;
   /**
    * The server's overview, rendered between the headline and the served
@@ -4883,9 +4911,9 @@ function MoneyPanel({
    * card. Here the overview's profit drives the headline, the fact tiles and
    * the breakdown alike, and while the overview is still loading nothing is
    * painted from the legacy figure in its place. A cash deal has no overview
-   * and keeps the accounting result the sale cockpit serves.
+   * and reads the separate management net the sale cockpit serves.
    */
-  const canonicalProfit: DealMoney["profit"] | "LOADING" | "WITHHELD" = overview
+  const canonicalProfit: HeadlineProfit | "LOADING" | "WITHHELD" = overview
     ? overview.loading
       ? "LOADING"
       : (overview.data?.financialSummary?.profit ?? "WITHHELD")
@@ -4920,7 +4948,9 @@ function MoneyPanel({
         )}
         {renderCommissions?.({
           profitMinor:
-            typeof canonicalProfit !== "string" && canonicalProfit.available ? canonicalProfit.amountMinor : null,
+            typeof canonicalProfit !== "string" && canonicalProfit.available &&
+              canonicalProfit.lines.some((line) => line.key === "COMMISSIONS")
+              ? canonicalProfit.amountMinor : null,
           money,
           t,
         })}
@@ -5740,6 +5770,7 @@ export function DealCockpitView({
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
+    supplierRow.amountMinor !== null &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
   const supplierReceiptBankOptions = useQuery(
@@ -6304,6 +6335,10 @@ export function DealCockpitView({
   };
 
   const overviewProfit = financialOverview?.data?.financialSummary?.profit;
+  // An older backend's accounting margin is not a management net headline.
+  const cashHeadline: HeadlineProfit = deal.money && "managementNetProfit" in deal.money
+    ? deal.money.managementNetProfit
+    : { available: false, reason: "ManagementNetUnavailable" };
   const handoverManagementProfit = {
     managementProfitMinor: overviewProfit?.available ? overviewProfit.amountMinor : null,
     managementProfitClassification:
@@ -6366,7 +6401,7 @@ export function DealCockpitView({
                   payload. */}
               <MoneyPanel
                 money={money}
-                profit={deal.money.profit}
+                profit={deal.applicationId === null ? cashHeadline : deal.money.profit}
                 summary={{
                   applicationId: deal.applicationId,
                   evidence: handoverEvidence ?? undefined,
@@ -6981,6 +7016,8 @@ export function DealCockpitView({
   // phone copy is the last node of the document (where a phone paints it, after
   // the step). So Tab and a screen reader meet it in the order it is drawn, at
   // either width, with no CSS `order` to make the two disagree (SCRUM-417 UX5 R2-2).
+  // SCRUM-808: null for a deal the backfill has not reached yet.
+  const dealNumberLabel = formatDealNumber(deal.dealNumber);
   const identityStrip = (placement: "desktop" | "phone") => (
       <dl
         className={cn(
@@ -6996,6 +7033,14 @@ export function DealCockpitView({
             {t(deal.dealKind === "CASH" ? "DealKindCash" : "DealKindFinanced")}
           </dd>
         </div>
+        {dealNumberLabel !== null && (
+          <div className="min-w-0">
+            <dt className="text-xs text-muted-foreground">{t("DealNumberLabel")}</dt>
+            <dd className="flex min-w-0 items-center gap-1 font-medium" data-testid="deal-number">
+              <CopyableReference value={dealNumberLabel} t={t} testId="deal-number-copy" />
+            </dd>
+          </div>
+        )}
         <div className="min-w-0">
           <dt className="text-xs text-muted-foreground">
             {t(deal.applicationId === null ? "DealReferenceSale" : "DealReferenceApplication")}
@@ -7085,7 +7130,10 @@ export function DealCockpitView({
                 it. `dealRef` rather than the application id for the same
                 reason. Both queries supply both. */}
             {t(deal.applicationId === null ? "DealCockpitTitleCash" : "DealCockpitTitle")}{" "}
-            <bdi className="font-normal text-muted-foreground">#{String(deal.dealRef).slice(-4)}</bdi>
+            {/* SCRUM-808: the issued deal number; the id tail only for a deal the backfill has not reached. */}
+            <bdi dir="ltr" className="font-normal text-muted-foreground" data-testid="deal-title-number">
+              {dealNumberLabel ?? `#${String(deal.dealRef).slice(-4)}`}
+            </bdi>
           </h1>
           <Badge variant={deal.status === "APPROVED" || deal.status === "CLOSED" ? "default" : "secondary"}>
             {t(dealStatusBadgeKey(deal.status, deal.stages))}
@@ -7522,7 +7570,7 @@ export function DealCockpitView({
       {/* Mounted only while the action is offered: losing authority or the
           settle-able state UNMOUNTS an open dialog rather than leaving a form
           whose submit the server will refuse. */}
-      {supplierRow && canSettleSupplier && (
+      {supplierRow && supplierRow.amountMinor !== null && canSettleSupplier && (
         <SupplierSettlementDialog
           open={settlingSupplier}
           submitting={submitting}

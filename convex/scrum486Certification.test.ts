@@ -23,6 +23,7 @@ import schema from "./schema";
 // Setup only: the pilot-dark receipt-application doors have no public caller (see addActiveCustomerCredit).
 import { reservePendingInvoiceReceipt } from "./accounting/invoiceReceiptReservation";
 import { activatePendingInvoiceReceipt } from "./accounting/invoiceReceiptActivation";
+import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 
 // SCRUM-869#c23881: the supplier-payable rewrite is refused in the shipped pilot; these historical cases
 // keep exercising the deferred mechanics. The shipped-state refusal is convex/supplierObligationCorrections.test.ts.
@@ -70,6 +71,23 @@ vi.mock("./utils/depositCancellationPending", async (importOriginal) => {
 });
 
 const MODULES = import.meta.glob("./**/*.ts");
+
+test("SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions", async () => {
+  const s = await seedDealNetProfit(MODULES);
+  const result = await s.read();
+  expect(result).toMatchObject({ available: true, amountMinor: 1_009_200, postable: false });
+  if (!result?.available) throw new Error("Expected management net");
+  expect(result.lines).toEqual([
+    { key: "APPROVED_PURCHASE", sign: 1, amountMinor: 12_100_000 },
+    { key: "CUSTOMER_PLANNED_TO_DEALER", sign: 1, amountMinor: 0 },
+    { key: "SUPPLIER_SETTLEMENT", sign: -1, amountMinor: 9_900_000 },
+    { key: "DEALER_CONTRIBUTION", sign: -1, amountMinor: 315_000 },
+    { key: "ACTUAL_EXPENSES", sign: -1, amountMinor: 451_300 },
+    { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 314_500 },
+    { key: "COMMISSIONS", sign: -1, amountMinor: 110_000 },
+  ]);
+});
+
 const OWNER_PERMS = [
   "create:sales", "view:sales", "edit:sales",
   "view:vehicles", "create:vehicles", "edit:vehicles",
@@ -1909,6 +1927,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(s.fiscalYear, 0, 1),
       endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
     });
+    if (!beforeOperational) throw new Error("report withheld");
     const depositId = await s.owner.as.mutation(api.deposits.create, {
       orgId: s.orgId,
       quoteId,
@@ -1947,6 +1966,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         startDate: Date.UTC(s.fiscalYear, 0, 1),
         endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
       });
+      if (!operational) throw new Error("report withheld");
       expect(income.totalOtherIncome).toBe(200_000);
       expect(operational.totalRevenue).toBe(beforeOperational.totalRevenue);
       expect(operational.depositForfeitureIncome).toBe(200);
@@ -1968,6 +1988,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         startDate: Date.UTC(s.fiscalYear, 0, 1),
         endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
       });
+      if (!afterRemap) throw new Error("report withheld");
       expect(afterRemap.depositForfeitureIncome).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
 
@@ -1984,6 +2005,223 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         endDate: Date.UTC(s.fiscalYear, 11, 31, 23, 59, 59, 999),
       })).rejects.toThrow("Financial report is unavailable");
     }
+  });
+
+  // Matrix cell: SOURCED (consigned) × CASH × deposit refunded / forfeited before any sale.
+  // Independent derivation: the dealership only holds the customer's 200 (200,000 minor); it
+  // owns no vehicle and has sold nothing, so no 4100/5100/1400, no 2400 supplier payable and
+  // no 4170 agency revenue may appear. Refund: Dr 2100 / Cr 1100. Forfeit: Dr 2100 / Cr 4200.
+  async function sourcedHeldDepositEnding(ending: "REFUNDED" | "FORFEITED", creditAccount: string, otherIncome: number) {
+    const { s, quoteId } = await sourcedCashQuote(`s486src${ending.toLowerCase()}`);
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 200, method: "CASH",
+      idempotencyKey: `scrum486-src-${ending}-deposit`,
+    });
+    expectLiteralRows(await journalRows(s), [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+    ]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({ "1100|JOD": 200_000, "2100|JOD": 200_000 });
+
+    await s.approver.as.mutation(api.deposits.release, {
+      orgId: s.orgId,
+      depositId,
+      resolution: ending,
+      ...(ending === "REFUNDED" ? { refundMethod: "CASH" as const } : {}),
+      idempotencyKey: `scrum486-src-${ending}-release`,
+    });
+    const after = await s.t.run(async (ctx) => ({
+      deposit: await ctx.db.get(depositId),
+      sales: (await ctx.db.query("sales").collect()).length,
+      supplierPayables: (await ctx.db.query("vehicleSupplierPayables").collect()).length,
+    }));
+    expect(after.deposit?.status).toBe(ending);
+    expect(after.sales).toBe(0);
+    expect(after.supplierPayables).toBe(0);
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: creditAccount, currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual(
+      ending === "REFUNDED" ? {} : { "1100|JOD": 200_000, "4200|JOD": 200_000 },
+    );
+    expect(await publicIncomeStatement(s)).toMatchObject({
+      totalRevenue: 0, totalCogs: 0, totalOtherIncome: otherIncome, netIncome: otherIncome,
+    });
+  }
+
+  test("SOURCED CASH × held deposit × REFUNDED before sale: only customer money moves, no agency economics", async () => {
+    await sourcedHeldDepositEnding("REFUNDED", "1100", 0);
+  });
+
+  test("SOURCED CASH × held deposit × FORFEITED before sale: only customer money moves, no agency economics", async () => {
+    await sourcedHeldDepositEnding("FORFEITED", "4200", 200_000);
+  });
+
+  // Matrix cell: SOURCED configured financier × THROUGH_DEALERSHIP × held deposit + dealer contribution.
+  // Independent derivation (owner ruling SCRUM-407 c21031, ACC-1): the finance company approves
+  // 12,500,000 and the supplier is owed 10,000,000, so the sale posts the whole approved amount
+  // as company AR (Dr 1210 12,500,000), the supplier payable (Cr 2400 10,000,000) and agency
+  // revenue (Cr 4170 2,500,000). The 87.4% policy funds 10,925,000; with the customer's 200,000
+  // the dealer contributes 12,500,000 - 10,925,000 - 200,000 = 1,375,000, booked as contra-revenue
+  // (Dr 4180 / Cr 2220), never a cost. The held deposit is forwarded to the company (Dr 2100 / Cr 2220
+  // 200,000). Both are paid on (Dr 2220 / Cr 1110 1,575,000). Net agency revenue is
+  // 12,500,000 - 10,000,000 - 1,375,000 = 1,125,000, not salePrice minus cost.
+  test("SOURCED configured financier × through dealership × held 200 first payment: contribution is contra-revenue against agency margin, deposit forwarded", async () => {
+    const s = await seedFinancedDealership("s486srcfinheld", {
+      modules: MODULES,
+      ownerPerms: [...OWNER_PERMS, "manage:supplier_settlement"],
+      actors: {},
+      label: "Certification",
+      vinPrefix: "V486",
+      sourced: true,
+    });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.companyId, { defaultLtvPercent: 87.4 });
+      await ctx.db.patch(s.vehicleId, { sourceCost: 10_000 });
+    });
+    const quoteId = await s.owner.as.mutation(api.quotes.saveQuote, {
+      orgId: s.orgId, customerId: s.customerId, vehicleId: s.vehicleId,
+      mode: "CONFIGURED_FINANCE_COMPANY", companyId: s.companyId,
+      customerEligibilityStatusIds: [s.customerStatusId],
+      vehiclePrice: 12_500, downPayment: 200, totalFinancedAmount: 12_300, termMonths: 48,
+    });
+    const depositId = await s.owner.as.mutation(api.deposits.create, {
+      orgId: s.orgId, quoteId, amount: 200, method: "CASH", idempotencyKey: "s486-srcfin-held-deposit",
+    });
+    const applicationId = await s.owner.as.mutation(api.applications.createFromQuote, { orgId: s.orgId, quoteId });
+    await s.owner.as.mutation(api.financingEconomics.recordSubmittedQuotation, {
+      orgId: s.orgId, applicationId, submittedQuotationMinor: 12_500_000, source: "MANUAL_ENTRY",
+    });
+    await s.approver.as.mutation(api.financingEconomics.approveDealerPurchaseAmount, {
+      orgId: s.orgId, applicationId, approvedAmountMinor: 12_500_000, basis: "MANUAL",
+      notes: "Independent sourced contribution example.",
+    });
+    const approved = await s.t.run((ctx) => ctx.db.get(applicationId));
+    expect(approved?.financeCompanyFundedPortionMinor).toBe(10_925_000);
+    expect(approved?.dealerContributionMinor).toBe(1_375_000);
+    await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "UNDER_REVIEW" });
+    await s.approver.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "APPROVED" });
+    await registerHandover(s.owner.as, api, s.orgId, applicationId);
+    await s.owner.as.mutation(api.applications.registerExpectedPayment, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", expectedDate: Date.now(),
+    });
+    const feeId = await s.owner.as.mutation(api.financeDealCosts.recordDealFee, {
+      expectedCurrency: "JOD", idempotencyKey: "s486-srcfin-held-zero-fee", orgId: s.orgId, applicationId,
+      feeType: "OTHER_CLOSING_EXPENSE", paidBy: "DEALER", paidTo: "OTHER",
+      accountingTreatment: "SELLING_EXPENSE", deductedFromSettlement: false,
+      actualAmountMinor: 0, description: "No closing costs.",
+    });
+    await s.owner.as.mutation(api.financeDealCosts.reconcileDealFee, {
+      orgId: s.orgId, feeId, notes: "No fee to settle.",
+      expectedActualAmountMinor: 0, expectedActualEvidenceRevision: 0,
+    });
+    await s.owner.as.mutation(api.applications.setSupplierSettlementRoute, {
+      orgId: s.orgId, applicationId, route: "THROUGH_DEALERSHIP",
+    });
+    await s.approver.as.mutation(api.financeCompanyForward.recordFinanceCompanyForward, {
+      orgId: s.orgId, applicationId, method: "BANK_TRANSFER", bankAccountId: await seedBank(s.t, s.orgId),
+      paidAt: Date.now(), expectedAmountMinor: 1_575_000, reference: "CERT-SRC-FORWARD",
+      idempotencyKey: "s486-srcfin-held-forward",
+    });
+    await s.owner.as.mutation(api.applications.finalizeDeal, {
+      idempotencyKey: "s486-srcfin-held-finalize", orgId: s.orgId, applicationId,
+    });
+
+    const state = await s.t.run(async (ctx) => {
+      const application = await ctx.db.get(applicationId);
+      return {
+        application,
+        deposit: await ctx.db.get(depositId),
+        payables: await ctx.db.query("vehicleSupplierPayables")
+          .withIndex("by_sale", (q) => q.eq("saleId", application!.finalizedSaleId!)).collect(),
+        receivable: await ctx.db.query("receivableDocuments")
+          .withIndex("by_org_source", (q) => q.eq("orgId", s.orgId)
+            .eq("sourceType", "finance_application").eq("sourceId", applicationId)).unique(),
+      };
+    });
+    expect(state.application?.status).toBe("CLOSED");
+    expect(state.deposit?.status).toBe("APPLIED");
+    expect(state.payables).toHaveLength(1);
+    expect(state.payables[0]).toMatchObject({ amountDue: 10_000, currency: "JOD", status: "PENDING", supplierId: s.supplierId });
+    expect(state.receivable).toMatchObject({
+      payerType: "FINANCE_COMPANY", financeCompanyId: s.companyId, originalAmountMinor: 12_500_000, status: "OPEN",
+    });
+    const rows = await journalRows(s);
+    expectLiteralRows(rows, [
+      { account: "1100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2400", currency: "JOD", debit: 0, credit: 10_000_000, entryStatus: "POSTED" },
+      { account: "4170", currency: "JOD", debit: 0, credit: 2_500_000, entryStatus: "POSTED" },
+      { account: "4180", currency: "JOD", debit: 1_375_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2220", currency: "JOD", debit: 0, credit: 1_375_000, entryStatus: "POSTED" },
+      { account: "2100", currency: "JOD", debit: 200_000, credit: 0, entryStatus: "POSTED" },
+      { account: "2220", currency: "JOD", debit: 0, credit: 200_000, entryStatus: "POSTED" },
+      { account: "2220", currency: "JOD", debit: 1_575_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1110", currency: "JOD", debit: 0, credit: 1_575_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(rows);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1100|JOD": 200_000,
+      "1110|JOD": -1_575_000,
+      "1210|JOD": 12_500_000,
+      "2400|JOD": 10_000_000,
+      "4170|JOD": 2_500_000,
+      "4180|JOD": -1_375_000,
+    });
+    const income = await publicIncomeStatement(s);
+    expect(income).toMatchObject({ currency: "JOD", totalRevenue: 1_125_000, totalCogs: 0, netIncome: 1_125_000 });
+    expect(income.revenueRows.map((row) => [row.code, row.netMinor])).toEqual([["4170", 2_500_000], ["4180", -1_375_000]]);
+    expect(income.cogsRows).toEqual([]);
+
+    // The company pays its full approved amount; the supplier liability and the margin do not move.
+    await s.approver.as.mutation(api.applications.confirmDisbursement, {
+      orgId: s.orgId, applicationId, disbursedAmountMinor: 12_500_000,
+      idempotencyKey: "s486-srcfin-held-receipt", bankAccountId: await insertReceiptBank(s),
+    });
+    const receiptRows = await journalRows(s);
+    expectAdditionalRows(rows, receiptRows, [
+      { account: "1110", currency: "JOD", debit: 12_500_000, credit: 0, entryStatus: "POSTED" },
+      { account: "1210", currency: "JOD", debit: 0, credit: 12_500_000, entryStatus: "POSTED" },
+    ]);
+    expectBalanced(receiptRows);
+    // Both 1210 lines carry the financier. The supplier is carried by the payable row (asserted above).
+    const receivableLines = await s.t.run(async (ctx) => {
+      const lines = await ctx.db.query("journalLines").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect();
+      const out: Array<{ debit: number; credit: number; financeCompanyId?: string }> = [];
+      for (const line of lines) {
+        if ((await ctx.db.get(line.accountId))?.code === "1210") {
+          out.push({ debit: line.debitMinor, credit: line.creditMinor, financeCompanyId: line.financeCompanyId });
+        }
+      }
+      return out;
+    });
+    expect(receivableLines).toHaveLength(2);
+    expect(receivableLines).toEqual(expect.arrayContaining([
+      { debit: 12_500_000, credit: 0, financeCompanyId: s.companyId },
+      { debit: 0, credit: 12_500_000, financeCompanyId: s.companyId },
+    ]));
+    // The sub-ledger agrees with the GL: the whole 12,500,000 is allocated to the financier receivable.
+    const balance = await s.approver.as.query(api.subledger.getReceivableBalance, {
+      orgId: s.orgId, receivableDocumentId: state.receivable!._id,
+    });
+    expect(balance?.outstandingMinor).toBe(0);
+    expect(balance?.doc.status).toBe("PAID");
+    const allocations = await s.t.run((ctx) => ctx.db.query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", state.receivable!._id)).collect());
+    expect(allocations.filter((a) => a.status === "ACTIVE").map((a) => a.amountMinor)).toEqual([12_500_000]);
+    expect(await trialBalanceNormalBalance(s)).toEqual({
+      "1100|JOD": 200_000,
+      "1110|JOD": 10_925_000,
+      "2400|JOD": 10_000_000,
+      "4170|JOD": 2_500_000,
+      "4180|JOD": -1_375_000,
+    });
   });
 
   test("a later forfeiture corrects legacy receipt-month turnover without rewriting its journal", async () => {
@@ -2004,7 +2242,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       });
       const april = { orgId: s.orgId, startDate: Date.UTC(2025, 3, 1), endDate: Date.UTC(2025, 4, 1) - 1 };
       const may = { orgId: s.orgId, startDate: Date.UTC(2025, 4, 1), endDate: Date.UTC(2025, 5, 1) - 1 };
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april))?.totalRevenue).toBe(200);
       // SCRUM-815 c22806: the old receipt was posted to a liability. Only the
       // legacy report's mistaken turnover is corrected after forfeiture.
       const receiptPostingBefore = await s.t.run(async (ctx) => {
@@ -2039,7 +2277,9 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         idempotencyKey: "s486legacyforfeit-release",
       });
       const receiptMonth = await s.owner.as.query(api.reports.getProfitAndLoss, april);
+      if (!receiptMonth) throw new Error("report withheld");
       const forfeitureMonth = await s.owner.as.query(api.reports.getProfitAndLoss, may);
+      if (!forfeitureMonth) throw new Error("report withheld");
       expect(receiptMonth.totalRevenue).toBe(0);
       expect(receiptMonth.depositForfeitureIncome).toBe(0);
       expect(forfeitureMonth.totalRevenue).toBe(0);
@@ -2079,7 +2319,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
           payload: { ...(event.payload as Record<string, unknown>), holdId: holdId.toString() },
         });
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april)).totalRevenue).toBe(0);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, april))?.totalRevenue).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -2109,6 +2349,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalRevenue).toBe(0);
     expect(report.depositForfeitureIncome).toBe(0);
   });
@@ -2137,6 +2378,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalRevenue).toBe(129);
     expect(report.depositForfeitureIncome).toBe(0);
 
@@ -2160,7 +2402,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
       orgId: s.orgId,
       startDate: Date.UTC(year, 0, 1),
       endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
-    })).totalRevenue).toBe(512);
+    }))?.totalRevenue).toBe(512);
     await s.t.run(async (ctx) => {
       const creator = await ctx.db.query("users").first();
       if (!creator) throw new Error("Missing test user");
@@ -2233,7 +2475,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         endDate: Date.UTC(year, monthIndex + 1, 1) - 1,
       });
 
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3))).depositForfeitureIncome).toBe(0);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(3)))?.depositForfeitureIncome).toBe(0);
       vi.setSystemTime(Date.UTC(year, 4, 10));
       await s.approver.as.mutation(api.deposits.release, {
         orgId: s.orgId,
@@ -2248,7 +2490,7 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         if (!event) throw new Error("Missing forfeiture event fixture");
         return event._id;
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4)))?.depositForfeitureIncome).toBe(200);
 
       vi.setSystemTime(Date.UTC(year, 5, 10));
       const firstReversal = await s.owner.as.mutation(internal.accountingLedger.reverse, {
@@ -2258,8 +2500,8 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         reason: "Report month parity fixture",
         idempotencyKey: "s486forfeitdates-reverse-1",
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4))).depositForfeitureIncome).toBe(200);
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5))).depositForfeitureIncome).toBe(-200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(4)))?.depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(5)))?.depositForfeitureIncome).toBe(-200);
 
       vi.setSystemTime(Date.UTC(year, 6, 10));
       await s.owner.as.mutation(internal.accountingLedger.reverse, {
@@ -2269,12 +2511,13 @@ describe("SCRUM-486 literal certification matrix (harness only)", () => {
         reason: "Report reversal lineage fixture",
         idempotencyKey: "s486forfeitdates-reverse-2",
       });
-      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6))).depositForfeitureIncome).toBe(200);
+      expect((await s.owner.as.query(api.reports.getProfitAndLoss, month(6)))?.depositForfeitureIncome).toBe(200);
       const fullYear = await s.owner.as.query(api.reports.getProfitAndLoss, {
         orgId: s.orgId,
         startDate: Date.UTC(year, 0, 1),
         endDate: Date.UTC(year, 11, 31, 23, 59, 59, 999),
       });
+      if (!fullYear) throw new Error("report withheld");
       expect(fullYear.depositForfeitureIncome).toBe(200);
       expect((await publicIncomeStatement(s)).totalOtherIncome).toBe(200_000);
     } finally {

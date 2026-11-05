@@ -40,5 +40,11 @@
     "file": "playwright/scenarios/jev-explorer.spec.ts",
     "testName": "pilot explorer deals ar phone"
   },
-  "fingerprint": "2525758b4f6dd71312fe4ab9826c570ebbca459ccf5d269903028b90d6e3c51a"
+  "fingerprint": "2525758b4f6dd71312fe4ab9826c570ebbca459ccf5d269903028b90d6e3c51a",
+  "sourceGlobs": [
+    "app/**",
+    "components/**",
+    "lib/navigation.ts",
+    "playwright/fixtures/pilotHunt.ts"
+  ]
 }

@@ -1,0 +1,43 @@
+{
+  "id": "financed-deal-profit-still-served-with-finance-and-cost-price",
+  "fingerprint": "c3daab83b94107c487ef1a08dda5c1ee5dcaa547e448def4bdf08a5dbf4a5948",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-finance-and-cost",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "profit.available",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealOverview.test.ts",
+    "testName": "SCRUM-902 control: view:finance plus view:cost_price still reads the financed profit"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

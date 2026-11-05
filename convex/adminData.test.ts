@@ -37,6 +37,24 @@ async function seedOrgWithVehicle(t: ReturnType<typeof convexTestWithComponents>
   return { orgId, vehicleId, asAdmin: t.withIdentity({ subject: "dev_1" }), asMember: t.withIdentity({ subject: "member_1" }) };
 }
 
+test("SCRUM-908: raw role saves preserve migration provenance and refuse marker changes", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));
+  const { orgId, asAdmin } = await seedOrgWithVehicle(t);
+  const appliedRoleMigrations = ["other-migration", "accountant-commissions-2026-11-04"];
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance"], appliedRoleMigrations }));
+  await asAdmin.mutation(api.adminData.adminUpdateRecord, {
+    table: "roles", id: roleId, patch: { name: "Saved Accountant", appliedRoleMigrations },
+  });
+  expect(await t.run((ctx) => ctx.db.get(roleId))).toMatchObject({ name: "Saved Accountant", appliedRoleMigrations });
+  for (const attempted of [[], ["other-migration"], ["forged-migration"]]) {
+    await expect(asAdmin.mutation(api.adminData.adminUpdateRecord, {
+      table: "roles", id: roleId, patch: { appliedRoleMigrations: attempted },
+    })).rejects.toThrow(/migration history/i);
+  }
+  await asAdmin.mutation(api.adminData.adminUpdateRecord, { table: "roles", id: roleId, patch: { permissions: [] } });
+  expect(await t.run((ctx) => ctx.db.get(roleId))).toMatchObject({ permissions: [], appliedRoleMigrations });
+});
+
 describe("the raw editor may not forge vehicle sale-ownership authority", () => {
   test("changing a vehicle status or its owning sale is refused; other fields still edit", async () => {
     const t = convexTestWithComponents(schema, import.meta.glob("./**/*.*s"));

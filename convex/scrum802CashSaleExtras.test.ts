@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census includes importActual calls; these tests still use the shipped switch.
 /**
  * SCRUM-802 follow-up (owner rulings, 2026-10-19): two things the pilot does NOT offer are refused on the SERVER,
  * not merely left out of the screen.

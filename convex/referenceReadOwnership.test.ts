@@ -52,7 +52,8 @@ async function fixture() {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "QA TEST read reference A", createdAt: Date.now() }));
   const orgBId = await t.run((ctx) => ctx.db.insert("organizations", { name: "QA TEST read reference B", createdAt: Date.now() }));
   const roleA = await t.run((ctx) => ctx.db.insert("roles", {
-    orgId, name: "READER", permissions: ["view:customers", "view:sales", "view:expenses", "view:vehicles", "view:users"],
+    // Exercise reference ownership after passing the separate cost gate (SCRUM-902).
+    orgId, name: "READER", permissions: ["view:customers", "view:sales", "view:expenses", "view:vehicles", "view:users", "view:cost_price"],
   }));
   const roleB = await t.run((ctx) => ctx.db.insert("roles", { orgId: orgBId, name: "READER", permissions: ["view:customers"] }));
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: readerId, roleId: roleA }));
@@ -243,13 +244,16 @@ test("a customers-only reader never receives vehicle cost or finance fields thro
     if (allowed.vin !== "ORGA-COST-VIN") failures.push(`control: ${label} lost vehicle.vin`);
   }
 
-  // Sibling doors that name the same car: a view:expenses-only reader gets a one-line summary, never a cost figure.
+  // A vehicle-linked expense itself reveals landed cost, so the no-cost reader loses the row (SCRUM-902 c24475).
   const expensesOnly = asIdentity(await roleWith("EXPENSESONLY", ["view:expenses"]));
   await f.t.run((ctx) => ctx.db.insert("expenses", {
     orgId: f.orgId, title: "Cost-car expense", amount: 10, date: Date.now(), category: "OFFICE", status: "PAID", vehicleId: costVehicle,
   }));
   const expenses = await expensesOnly.query(api.expenses.list, { orgId: f.orgId, paginationOpts: { numItems: 50, cursor: null } });
-  if (!expenses.page.some((row) => row.title === "Cost-car expense" && row.vehicleSummary?.includes("ORGA-COST-VIN"))) failures.push("control: expenses.list lost the vehicle summary");
+  if (expenses.page.some((row) => row.title === "Cost-car expense")) failures.push("expenses.list disclosed a vehicle-linked cost row");
+  const expenseCostReader = asIdentity(await roleWith("EXPENSESCOST", ["view:expenses", "view:cost_price"]));
+  const costExpenses = await expenseCostReader.query(api.expenses.list, { orgId: f.orgId, paginationOpts: { numItems: 50, cursor: null } });
+  if (!costExpenses.page.some((row) => row.title === "Cost-car expense" && row.vehicleSummary?.includes("ORGA-COST-VIN"))) failures.push("control: cost-authorized expenses.list lost the vehicle summary");
   for (const marker of [...Object.values(COST).map(String), SUPPLIER]) {
     if (JSON.stringify(expenses).includes(marker)) failures.push(`expenses.list: cost marker ${marker} appears`);
   }

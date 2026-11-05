@@ -39,6 +39,7 @@ function base(over: Partial<ScenarioRecord> = {}): ScenarioRecord {
     rulings: [{ id: RULING, digest: DIGEST }],
     impl: IMPL,
     matrixRow: "ROW-1",
+    ...(over.level === "browser" ? { sourceGlobs: ["components/fixture/**"] } : {}),
     ...over,
   };
   r.fingerprint = over.fingerprint ?? scenarioFingerprint(r);
@@ -49,8 +50,26 @@ const rules = (records: ScenarioRecord[], rulings = RULINGS) =>
   validateLibrary(records, { rulings, repoRoot: REPO_ROOT }).map((p) => p.rule);
 
 describe("scenario record validators", () => {
+  test("SCRUM-908 ruling-driven net-profit scenario is preventive and bound to its certification test", () => {
+    const record = JSON.parse(fs.readFileSync(path.join(REPO_ROOT,
+      "regression/scenarios/money/deal-net-profit-all-showroom-expenses-and-commissions.scenario.json"), "utf8")) as ScenarioRecord;
+    expect(record.bugRef).toBeUndefined();
+    expect(record.impl).toEqual({
+      file: "convex/scrum486Certification.test.ts",
+      testName: "SCRUM908-net-profit: sourced financed headline deducts all showroom car expenses and commissions",
+    });
+    if (!record.impl) throw new Error("Expected scenario implementation");
+    expect(fs.readFileSync(path.join(REPO_ROOT, record.impl.file), "utf8")).toContain(record.impl.testName);
+  });
+
   test("a well-formed active scenario passes", () => {
     expect(rules([base()])).toEqual([]);
+  });
+
+  test.each([undefined, []])("an active browser record must declare its covered screens (%s)", sourceGlobs => {
+    const record = base({ domain: "screen", level: "browser", sourceGlobs });
+    const problems = validateLibrary([record], { rulings: RULINGS, repoRoot: REPO_ROOT });
+    expect(problems).toContainEqual(expect.objectContaining({ rule: "schema", message: "active browser records need non-empty sourceGlobs" }));
   });
 
   test("fingerprint ignores ids, timestamps and per-run suffixes but not amounts", () => {
@@ -164,7 +183,9 @@ describe("the committed library", () => {
     expect(validateLibrary([missingName], { rulings, repoRoot: REPO_ROOT }).map(problem => problem.rule)).toContain("skip");
   });
 
-  test("loads the committed library and it has no problems", () => {
+  // Reads and validates every committed scenario and the source of every bound test. Under
+  // coverage instrumentation that walk passes 5 s, so the budget is sized for the CI coverage run.
+  test("loads the committed library and it has no problems", { timeout: 60_000 }, () => {
     const { records, rulings, problems } = loadLibrary(REPO_ROOT);
     expect([...problems, ...validateLibrary(records, { rulings, repoRoot: REPO_ROOT })]).toEqual([]);
   });
@@ -585,7 +606,7 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
   });
 
   test("a rule is backend level and non-screen", () => {
-    expect(rules([rule({ level: "browser" })])).toContain("level");
+    expect(rules([rule({ level: "browser", sourceGlobs: ["components/fixture/**"] })])).toContain("level");
     expect(rules([rule({ domain: "screen" })])).toContain("level");
   });
 
@@ -625,4 +646,16 @@ describe("kind: rule (pure-function checks, SCRUM-761 S1.5)", () => {
     const s = base();
     expect(scenarioFingerprint({ domain: s.domain, steps: s.steps, expected: s.expected })).toBe(s.fingerprint);
   });
+});
+
+// SCRUM-907 Seat 2: preventive controls and new repair coverage are not reproduced bugs.
+test.each([
+  "sourced-posted-cost-still-refuses-update",
+  "sourced-cost-conflict-refuses-without-writes",
+  "sourced-mirror-repair-idempotent-stock-deleted-untouched",
+  "sourced-mirror-repair-refuses-sold-opening-missing-cost",
+  "sourced-mirror-repair-reports-posted-cost-lock",
+])("SCRUM-907 protective scenario %s claims no failing-first bug", id => {
+  const record = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "regression/scenarios/money", `${id}.scenario.json`), "utf8")) as ScenarioRecord;
+  expect(record.bugRef).toBeUndefined();
 });

@@ -46,11 +46,11 @@ describe("deriveDealerPreparationExpenses", () => {
     expect(p.expenses.map((r) => r.netMinor)).toEqual([100_000, 50_000]);
   });
 
-  test("a non-preparation category (marketing, fees) is not preparation, and is counted", () => {
+  test("paid showroom marketing and fees reduce management profit regardless of category", () => {
     const p = prep([expense({ category: "MARKETING" }), expense({ category: "FEES" })]);
     if (!p.available) throw new Error("expected available");
-    expect(p.totalMinor).toBe(0);
-    expect(p.excluded.otherCount).toBe(2);
+    expect(p.totalMinor).toBe(200_000);
+    expect(p.excluded.otherCount).toBe(0);
   });
 
   test("a PENDING row is not spent — counted, never summed, even carrying a treatment", () => {
@@ -76,11 +76,11 @@ describe("deriveDealerPreparationExpenses", () => {
     });
   });
 
-  test("reversed rows, rows registered after the deal, and a row past the cap", () => {
+  test("reversed rows are excluded, post-deal rows included, and a row past the cap refuses", () => {
     const p = prep([expense({ reversedAt: CUTOFF }), expense({ _creationTime: CUTOFF })]);
     if (!p.available) throw new Error("expected available");
-    expect(p.totalMinor).toBe(0);
-    expect(p.excluded).toEqual({ pendingCount: 0, reversedCount: 1, otherCount: 0, afterCutoffCount: 1 });
+    expect(p.totalMinor).toBe(100_000);
+    expect(p.excluded).toEqual({ pendingCount: 0, reversedCount: 1, otherCount: 0, afterCutoffCount: 0 });
     const many = Array.from({ length: MAX_COST_BASIS_EXPENSES + 1 }, () => expense({}));
     expect(prep(many)).toMatchObject({ available: false, reason: "TOO_MANY_ROWS" });
   });

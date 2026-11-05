@@ -465,6 +465,13 @@ export default defineSchema({
     updatedAt: v.number(),
   }),
 
+  // Deployment-wide completion history, not tenant data. Internal role migrations
+  // record completion with their final page so later rollouts preserve owner choices.
+  roleMigrationRuns: defineTable({
+    migration: v.string(),
+    completedAt: v.number(),
+  }).index("by_migration", ["migration"]),
+
   // Durable outbox for accounting events that could not post at the time of the
   // domain operation (no chart of accounts or no open period). Instead of
   // silently dropping the GL entry, the hook enqueues it here; the events are
@@ -1344,6 +1351,7 @@ export default defineSchema({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
     name: v.string(), // "OWNER", "SALES", etc.
     permissions: v.array(v.string()),
+    appliedRoleMigrations: v.optional(v.array(v.string())),
     isSystemOwnerRole: v.optional(v.boolean()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -2357,8 +2365,18 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     isDeleted: v.optional(v.literal(true)),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
+    /**
+     * SCRUM-808: the readable per-organization deal number (shown as D-000123). Allocated once at creation from
+     * `dealNumberCounters` in the same mutation (convex/utils/dealNumber.ts) and never changed. A sale finalized from a
+     * finance application carries that application's number: it is the same deal. Optional only until the deploy
+     * rollout backfill numbers the rows created before it. The `_id` stays the deal's identity.
+     */
+    dealNumber: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
+    .index("by_org_dealNumber", ["orgId", "dealNumber"])
+    // The deploy rollout backfill reads only rows whose number is unset (convex/dealNumberBackfill.ts).
+    .index("by_dealNumber", ["dealNumber"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
     // sales.list pages these natively: `.lt("isDeleted", true)` keeps the unset
     // (live) rows and skips soft-deleted ones inside the index range.
@@ -3070,6 +3088,15 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     .index("by_application", ["applicationId"])
     .index("by_org", ["orgId"]),
 
+  /**
+   * SCRUM-808: one row per organization, the last deal number handed out. Read and written only by
+   * `allocateDealNumber` (convex/utils/dealNumber.ts), inside the mutation that creates the deal.
+   */
+  dealNumberCounters: defineTable({
+    orgId: v.id("organizations"),
+    lastNumber: v.number(),
+  }).index("by_org", ["orgId"]),
+
   financeApplications: defineTable({
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
@@ -3564,8 +3591,12 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     // skipped forever — without its rule snapshot, its remaining dimensions,
     // or its reconciliation flag.
     financingBackfilledAt: v.optional(v.number()),
+    /** SCRUM-808: the readable per-organization deal number; see `sales.dealNumber`. */
+    dealNumber: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
+    .index("by_org_dealNumber", ["orgId", "dealNumber"])
+    .index("by_dealNumber", ["dealNumber"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
     .index("by_status", ["status"])

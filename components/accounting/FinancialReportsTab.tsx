@@ -1,10 +1,13 @@
 "use client";
 
+import { CostAccessNote } from "./CostAccessNote";
 import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -44,17 +47,24 @@ export function FinancialReportsTab() {
   const formatMoney = (amountMinor: number, currency: string) =>
     formatMinorAmount(amountMinor, currency, moneyLocale);
 
+  // SCRUM-902: the three GL statements carry vehicle inventory and cost of goods sold, so the backend refuses them
+  // without view:cost_price. Skip the queries and show a note instead of an error.
+  const { hasAllPermissions, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const canReadStatements = isOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+  const statementsEnabled = canReadStatements && !permissionsLoading;
+  const statementsWithheld = !permissionsLoading && !canReadStatements;
+
   const trialBalance = useQuery(
     api.accountingReports.trialBalance,
-    activeOrgId && activeReport === "trialBalance" ? { orgId: activeOrgId, toDate: toDateMs } : "skip"
+    activeOrgId && statementsEnabled && activeReport === "trialBalance" ? { orgId: activeOrgId, toDate: toDateMs } : "skip"
   );
   const incomeStatement = useQuery(
     api.accountingReports.incomeStatement,
-    activeOrgId && activeReport === "incomeStatement" ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
+    activeOrgId && statementsEnabled && activeReport === "incomeStatement" ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
   );
   const balanceSheet = useQuery(
     api.accountingReports.balanceSheet,
-    activeOrgId && activeReport === "balanceSheet" ? { orgId: activeOrgId, asOfDate: toDateMs } : "skip"
+    activeOrgId && statementsEnabled && activeReport === "balanceSheet" ? { orgId: activeOrgId, asOfDate: toDateMs } : "skip"
   );
   const vatReturn = useQuery(
     api.vatReport.generateVatSummary,
@@ -86,13 +96,19 @@ export function FinancialReportsTab() {
           </TabsList>
         </div>
         <TabsContent value="trialBalance" className="m-0">
-          <TrialBalanceReport report={trialBalance} locale={locale} t={t} formatMoney={formatMoney} />
+          {statementsWithheld ? <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote> : (
+            <TrialBalanceReport report={trialBalance} locale={locale} t={t} formatMoney={formatMoney} />
+          )}
         </TabsContent>
         <TabsContent value="incomeStatement" className="m-0">
-          <IncomeStatementReport report={incomeStatement} locale={locale} t={t} formatMoney={formatMoney} />
+          {statementsWithheld ? <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote> : (
+            <IncomeStatementReport report={incomeStatement} locale={locale} t={t} formatMoney={formatMoney} />
+          )}
         </TabsContent>
         <TabsContent value="balanceSheet" className="m-0">
-          <BalanceSheetReport report={balanceSheet} locale={locale} t={t} formatMoney={formatMoney} />
+          {statementsWithheld ? <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote> : (
+            <BalanceSheetReport report={balanceSheet} locale={locale} t={t} formatMoney={formatMoney} />
+          )}
         </TabsContent>
         <TabsContent value="vatReturn" className="m-0">
           <VatReturnReport report={vatReturn} locale={locale} t={t} formatMoney={formatMoney} />

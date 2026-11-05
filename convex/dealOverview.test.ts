@@ -311,7 +311,7 @@ describe("dealOverview.financedDealOverview", () => {
     expect(view!.vehicleCostBasis).toMatchObject({ available: false, reason: "UNREADABLE_AMOUNT" });
   });
 
-  test("SOURCED: the cockpit's consignment profit, less the dealership's pre-deal preparation spend, subtracted exactly once", async () => {
+  test("SOURCED: the cockpit's consignment profit less every paid showroom expense, before or after the deal", async () => {
     const s = await seed("13", { sourceType: "SOURCED" });
     // Period expenses on the supplier's car: 100 net paid before the deal, one after, one pending.
     await insertExpense(s, { accountingTreatment: "PERIOD_EXPENSE", capitalizedAmount: undefined });
@@ -341,16 +341,18 @@ describe("dealOverview.financedDealOverview", () => {
     if (!own.available || own.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected the cockpit's consignment estimate");
     expect(own.amountMinor).toBe(11_000_000 - 8_000_000 - 1_650_000);
     if (!served.available || served.basis !== "MANAGEMENT_ESTIMATE") throw new Error("expected a management estimate");
-    // Exactly the pre-deal preparation spend, subtracted once, as its own line; every other line untouched.
-    expect(served.amountMinor).toBe(own.amountMinor - 100_000);
-    expect(served.lines).toEqual([...own.lines, { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 100_000 }]);
+    expect(served.amountMinor).toBe(1_150_000);
+    expect(served.lines).toEqual([...own.lines,
+      { key: "PREPARATION_EXPENSES", sign: -1, amountMinor: 200_000 },
+      { key: "COMMISSIONS", sign: -1, amountMinor: 0 },
+    ]);
     expect(served.lines.find((l) => l.key === "SUPPLIER_SETTLEMENT")?.amountMinor).toBe(8_000_000);
     // The preparation figure itself is served beside the supplier's cost, never added to it.
     const prep = view!.dealerPreparation!;
     if (!prep.available) throw new Error("expected available");
-    expect(prep.totalMinor).toBe(100_000);
+    expect(prep.totalMinor).toBe(200_000);
     expect(prep.excluded.pendingCount).toBe(1);
-    expect(prep.excluded.afterCutoffCount).toBe(1);
+    expect(prep.excluded.afterCutoffCount).toBe(0);
     const basis = view!.vehicleCostBasis!;
     if (!basis.available) throw new Error("expected available");
     expect(basis.totalBeforeDealMinor).toBe(8_000_000);
@@ -978,6 +980,27 @@ describe("dealOverview.financedDealOverview", () => {
     const view = await finance.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
     expect(view!.financialSummary).not.toBeNull();
     expect(view!.vehicleCostBasis).toBeNull();
+  });
+
+  test("SCRUM-902: view:finance without view:cost_price gets the financed profit withheld as CostAccessRequired, in the overview and in the cockpit", async () => {
+    const s = await seed("902");
+    const applicationId = await insertApplication(s);
+    const finance = await callerWith(s, "finance902", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE]);
+    const view = await finance.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "CostAccessRequired" });
+    const cockpit = await finance.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(cockpit!.money!.profit).toEqual({ available: false, reason: "CostAccessRequired" });
+    expect(cockpit!.money!.managementProfit).toEqual({ available: false, reason: "CostAccessRequired" });
+    expect(JSON.stringify(view)).not.toContain("VEHICLE_COST");
+  });
+
+  test("SCRUM-902 control: view:finance plus view:cost_price still reads the financed profit", async () => {
+    const s = await seed("902b");
+    const applicationId = await insertApplication(s);
+    const both = await callerWith(s, "both902", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+    const view = await both.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    const profit = view!.financialSummary!.profit;
+    expect(profit.available === false && profit.reason === "CostAccessRequired").toBe(false);
   });
 
   test("view:cost_price reads the vehicle's cost but not the deal's economics", async () => {

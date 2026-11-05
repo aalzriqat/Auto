@@ -266,6 +266,15 @@ export const adminUpdateRecord = mutation({
     const before = await ctx.db.get(id);
     if (!before) throwAppError(AppErrorCode.VALIDATION_FAILED, "Record not found.");
 
+    // The raw editor may round-trip provenance, but cannot erase or forge it.
+    const rolePatch: unknown = args.patch;
+    if (table === "roles" && rolePatch && typeof rolePatch === "object" && "appliedRoleMigrations" in rolePatch) {
+      const stored = "appliedRoleMigrations" in before ? before.appliedRoleMigrations : undefined;
+      if (JSON.stringify(rolePatch.appliedRoleMigrations) !== JSON.stringify(stored)) {
+        throwAppError(AppErrorCode.VALIDATION_FAILED, "Role migration history cannot be changed through the admin data browser.");
+      }
+    }
+
     assertPatchDoesNotForgeVehicleLifecycle(
       args.table,
       args.patch,

@@ -416,6 +416,26 @@ const accountingWorkspaceMessages = defineBilingualMessages({
     "That would pay {projected} against {due} owed. Reduce the amount to the balance still owed.",
     "سيؤدي هذا إلى دفع {projected} مقابل {due} مستحق. خفّض المبلغ إلى الرصيد المتبقي المستحق.",
   ],
+  ServerError_SUPPLIER_PAYMENT_REFUSED: [
+    "This supplier payment cannot be recorded. Check the payment details and try again.",
+    "لا يمكن تسجيل دفعة المورد هذه. تحقق من تفاصيل الدفعة وحاول مرة أخرى.",
+  ],
+  ServerError_SUPPLIER_RECEIPT_REFUSED: [
+    "This supplier receipt cannot be recorded. Check the receipt details and try again.",
+    "لا يمكن تسجيل إيصال المورد هذا. تحقق من تفاصيل الإيصال وحاول مرة أخرى.",
+  ],
+  ServerError_SUPPLIER_DIRECT_SETTLEMENT_REFUSED: [
+    "The supplier cannot receive less than he is owed. Review the agreement or settle through the dealership.",
+    "التمويل المعتمد لا يغطي اتفاق المورد. راجع الاتفاق أو سوِّ الصفقة من خلال المعرض.",
+  ],
+  OpeningReadbackCostAccessNeeded: [
+    "Opening balances include vehicle costs. Your role needs cost-price access to view them.",
+    "تتضمن الأرصدة الافتتاحية تكاليف السيارات. يحتاج دورك إلى صلاحية عرض سعر التكلفة لعرضها.",
+  ],
+  VehicleExpensesCostAccessNote: [
+    "Vehicle-linked expenses are omitted when your role lacks cost-price access.",
+    "تُحجب مصاريف السيارات إذا لم يتضمن دورك صلاحية عرض سعر التكلفة.",
+  ],
   // SCRUM-760 ruling 11: convex/utils/legacyCollectionRefundContainment.ts.
   ServerError_LEGACY_COLLECTION_REFUND_PILOT_DISABLED: [
     "Recording a refund against a collection receivable is not available during the pilot. You can still reject a pending refund request. Nothing has been changed.",
@@ -677,6 +697,10 @@ const accountingWorkspaceMessages = defineBilingualMessages({
   ],
   // SCRUM-886. `vehicleEdits.requestUpdate` and `vehicles.update` refuse a cost field from a caller without
   // view:cost_price; `vehicles.upsertLandedCosts` and an opening-stock `vehicles.importBulk` refuse the call.
+  ServerError_VEHICLE_SOURCED_COST_CONFLICT: [
+    "For a consignment vehicle, purchase price must equal supplier cost. Submit the supplier cost only, or enter the same amount in both fields.",
+    "للمركبة برسم البيع، يجب أن يساوي سعر الشراء تكلفة المورد. أرسل تكلفة المورد فقط، أو أدخل المبلغ نفسه في الحقلين.",
+  ],
   ServerError_VEHICLE_COST_EDIT_NEEDS_COST_ACCESS: [
     "Changing a vehicle's cost, purchase details or minimum profit needs permission to view cost. Ask a manager to make this change.",
     "تغيير تكلفة المركبة أو تفاصيل شرائها أو الحد الأدنى للربح يتطلب صلاحية الاطلاع على التكلفة. اطلب من المدير إجراء هذا التغيير.",
@@ -1253,6 +1277,7 @@ export const commonEn = {
   OpeningAllocationHelp: "Identify each existing party, historical counterparty snapshot, or unexpired benefit for every operational control account. Unidentified liabilities stay unallocated. These rows do not create new cash or income.",
   OpeningAllocationAllocated: "Allocated",
   OpeningAllocationPermissionNeeded: "Your role needs the corresponding party-view permission before you can select a party.",
+  OpeningAllocationStockCostAccessNeeded: "Opening stock lists what each car cost. Your role needs cost-price access as well as finance access to allocate it. Ask an administrator to update your role.",
   OpeningAllocationNoEligibleParty: "No eligible existing party is available. Complete normal party onboarding before allocating this opening.",
   OpeningAllocationCustomer: "Customer",
   OpeningAllocationEmployee: "Employee",
@@ -2425,6 +2450,7 @@ export const commonAr = {
   OpeningAllocationHelp: "حدد كل طرف قائم أو اسم الطرف التاريخي أو المنفعة غير المنتهية لكل حساب رقابي تشغيلي. تبقى الالتزامات مجهولة الطرف غير موزعة. لا تنشئ هذه البنود نقدًا أو إيرادًا جديدًا.",
   OpeningAllocationAllocated: "الموزع",
   OpeningAllocationPermissionNeeded: "يحتاج دورك إلى صلاحية عرض الأطراف المعنية قبل اختيار طرف.",
+  OpeningAllocationStockCostAccessNeeded: "يعرض المخزون الافتتاحي تكلفة كل سيارة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافة إلى صلاحية المالية لتوزيعه. اطلب من المسؤول تحديث دورك.",
   OpeningAllocationNoEligibleParty: "لا يوجد طرف قائم مؤهل. أكمل إضافة الطرف بالطريقة المعتادة قبل توزيع الرصيد الافتتاحي.",
   OpeningAllocationCustomer: "العميل",
   OpeningAllocationEmployee: "الموظف",

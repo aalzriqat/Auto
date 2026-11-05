@@ -1,0 +1,47 @@
+{
+  "id": "account-activity-refuses-finance-without-cost-price",
+  "fingerprint": "67e80d1361215e0a1691f128f810318f533c40be2baeeb8905727c6fb428aae5",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "accountingLedger.getAccountActivity",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "accountingLedger.getAccountActivity: a role with view:finance but without view:cost_price is refused (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "2852274243f2f95a4df4c3d3a7d9b2ce9ca81900"
+  }
+}

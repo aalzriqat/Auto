@@ -95,6 +95,28 @@ describe("the Deals list is a needs-action queue first", () => {
     expect(screen.getAllByRole("row")).toHaveLength(5);
   });
 
+  test("shows each deal's number and finds a deal by it, typed any way staff say it (SCRUM-808)", () => {
+    renderList({
+      rows: [
+        row({ key: "app_1", customerName: "Numbered", dealNumber: 123 }),
+        row({ key: "app_2", customerName: "Other", dealNumber: 1234 }),
+        row({ key: "app_3", customerName: "Unnumbered" }),
+      ],
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /DealsAll/ }));
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByTestId("deal-row-number").map((el) => el.textContent)).toEqual(["D-000123", "D-001234"]);
+    expect(within(table).getAllByTestId("deal-row-number")[0].getAttribute("dir")).toBe("ltr");
+    const search = screen.getByRole("textbox", { name: "SearchDeals" });
+    // An exact number, not a substring: "123" is not deal 1234.
+    for (const typed of ["123", "D-000123", "d123", "#123", "١٢٣"]) {
+      fireEvent.change(search, { target: { value: typed } });
+      expect(within(screen.getByRole("table")).getByText("Numbered")).toBeTruthy();
+      expect(within(screen.getByRole("table")).queryByText("Other")).toBeNull();
+      expect(within(screen.getByRole("table")).queryByText("Unnumbered")).toBeNull();
+    }
+  });
+
   test("counts are labelled as counts of LOADED rows whenever more can be loaded", () => {
     renderList({ canLoadMore: true });
     expect(screen.getByRole("tab", { name: /DealsAll/ }).textContent).toContain("4+");

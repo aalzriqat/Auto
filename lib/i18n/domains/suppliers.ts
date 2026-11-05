@@ -265,6 +265,11 @@ const suppliersMessages = defineBilingualMessages({
     "The supplier statement is not included in your current plan.",
     "كشف حساب المورّد غير مشمول في خطتك الحالية.",
   ],
+  // SCRUM-902: shown instead of the sourcing lists to a role that holds view:finance without view:cost_price.
+  SourcingCostAccessRequired: [
+    "Supplier payables and special orders show what each sourced car cost. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+    "تعرض مستحقات الموردين والطلبات الخاصة تكلفة كل مركبة مورَّدة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+  ],
   SuppliersStmtLoading: ["Loading the statement…", "جارٍ تحميل كشف الحساب…"],
   SuppliersStmtLoadError: [
     "The statement could not be loaded. Reload the page and try again.",
@@ -274,6 +279,10 @@ const suppliersMessages = defineBilingualMessages({
     "More lines exist than can be shown here. The lines above are partial, so no total is shown.",
     "توجد بنود أكثر من المعروض هنا. البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
   ],
+  SuppliersStmtIncompleteBudget: [
+    "Not every line could be read in one request, so the lines above are partial and no total is shown. Narrow the supplier or try again.",
+    "تعذّرت قراءة كل البنود في طلب واحد، لذلك البنود أعلاه جزئية ولا يُعرض إجمالي. ضيّق نطاق المورّد أو حاول مرة أخرى.",
+  ],
   SuppliersStmtKindPayable: ["Supplier payable", "مستحق للمورّد"],
   SuppliersStmtKindReceivable: ["Margin receivable", "هامش مستحق على المورّد"],
   SuppliersStmtKindRecovery: ["Cost recovery", "استرداد تكلفة"],
@@ -282,7 +291,61 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersStmtDaysOverdue: ["{days} days overdue", "متأخر {days} يوماً"],
   SuppliersStmtDisputed: ["Disputed", "متنازع عليه"],
   SuppliersStmtOverdue: ["Overdue", "متأخر"],
-  SuppliersStmtTotal: ["Total outstanding", "إجمالي المستحق"],
+  SuppliersStmtTotal: ["Total outstanding on linked lines", "إجمالي المستحق على البنود المرتبطة"],
+  SuppliersStmtHistoryTitle: ["Settled history", "سجل التسويات"],
+  SuppliersStmtHistoryPaidTitle: ["Paid to this supplier (A/P)", "المدفوع للمورّد (ذمم دائنة)"],
+  SuppliersStmtHistoryReceivedTitle: ["Received from this supplier (A/R)", "المقبوض من المورّد (ذمم مدينة)"],
+  SuppliersStmtHistoryPaidEmpty: [
+    "No payments linked to this supplier are recorded yet.",
+    "لا توجد دفعات مرتبطة بهذا المورّد مسجّلة بعد.",
+  ],
+  SuppliersStmtHistoryReceivedEmpty: [
+    "No receipts linked to this supplier are recorded yet.",
+    "لا توجد مقبوضات مرتبطة بهذا المورّد مسجّلة بعد.",
+  ],
+  SuppliersStmtHistoryTotalPaid: ["Total paid", "إجمالي المدفوع"],
+  SuppliersStmtHistoryTotalReceived: ["Total received", "إجمالي المقبوض"],
+  SuppliersStmtHistoryOf: ["of", "من"],
+  SuppliersStmtHistorySettled: ["Settled in full", "مُسوّى بالكامل"],
+  SuppliersStmtHistoryPartly: ["Partly settled", "مُسوّى جزئياً"],
+  SuppliersStmtHistoryLastChange: ["Last change", "آخر تحديث"],
+  SuppliersStmtHistoryClaimTotal: ["Claim total", "إجمالي المطالبة"],
+  SuppliersStmtReconTitle: ["Payments check against the ledger", "مطابقة الدفعات مع دفتر الأستاذ"],
+  SuppliersStmtReconOk: [
+    "Payments recorded for this supplier match the ledger (account 2400).",
+    "الدفعات المسجلة لهذا المورد تطابق دفتر الأستاذ (حساب 2400).",
+  ],
+  SuppliersStmtReconDiffers: [
+    "Payments recorded for this supplier differ from the ledger (account 2400). Ask an accountant to review.",
+    "الدفعات المسجلة لهذا المورد تختلف عن دفتر الأستاذ (حساب 2400). اطلب مراجعة المحاسب.",
+  ],
+  SuppliersStmtReconUnavailable: ["Check unavailable", "المطابقة غير متاحة"],
+  SuppliersStmtReconReasonOverLimit: ["too many records to check at once", "عدد السجلات أكبر من أن يُفحص دفعة واحدة"],
+  SuppliersStmtReconReasonPending: ["postings are still being processed", "ما زالت القيود قيد المعالجة"],
+  SuppliersStmtReconReasonNoAccount: ["the ledger account is missing", "حساب دفتر الأستاذ غير موجود"],
+  SuppliersStmtReconReasonInconsistent: ["a ledger record is inconsistent", "سجل في دفتر الأستاذ غير متسق"],
+  SuppliersStmtReconSubledger: ["Paid (supplier record)", "المدفوع (سجل المورد)"],
+  SuppliersStmtReconLedger: ["Ledger", "دفتر الأستاذ"],
+  SuppliersStmtReconCreditNote: [
+    "Amounts owed to a supplier cannot be traced to one supplier in the ledger, so only payments are checked. This check does not flag an overpaid payable.",
+    "لا يمكن ربط المبالغ المستحقة للمورد بمورد محدد في دفتر الأستاذ، لذلك تُفحص الدفعات فقط. ولا يرصد هذا الفحص الدفعة الزائدة عن المستحق.",
+  ],
+  SuppliersStmtReconOpeningNote: [
+    "{count} opening-balance record(s) are not part of this check.",
+    "{count} سجل(ات) رصيد افتتاحي ليست ضمن هذه المطابقة.",
+  ],
+  SuppliersStmtHistoryInferred: [
+    "Amount taken from the paid status of an older record; no payment details were saved for it.",
+    "المبلغ مأخوذ من حالة السداد في سجل قديم؛ لم تُحفظ تفاصيل دفعة لهذا السجل.",
+  ],
+  SuppliersStmtHistoryUnverified: [
+    "{count} margin claim(s) have a receipt recorded that is not confirmed in the ledger yet, so the amount received from the supplier cannot be shown for them. The lines above may be partial, so no total is shown.",
+    "{count} مطالبة هامش لها مقبوض مسجّل لم يتأكد في دفتر الأستاذ بعد، لذلك لا يمكن عرض المبلغ المقبوض من المورّد لها. قد تكون البنود أعلاه جزئية، لذلك لا يُعرض إجمالي.",
+  ],
+  SuppliersStmtHistoryReceivedScope: [
+    "Only money the supplier paid is counted here. A customer deposit applied to the settlement is not a supplier payment and is not included.",
+    "يُحتسب هنا فقط ما دفعه المورّد. عربون العميل المطبّق على التسوية ليس دفعة من المورّد ولا يُدرج.",
+  ],
   SuppliersStmtTotalUnavailable: [
     "Total unavailable: this list is incomplete",
     "الإجمالي غير متاح: القائمة غير مكتملة",

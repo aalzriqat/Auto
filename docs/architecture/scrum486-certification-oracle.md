@@ -1,5 +1,33 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-760-DECISION-B-BLOCKED-DOORS
+
+Owner rulings SCRUM-795 c22479 (2026-10-08, Q2 selective containment: do not activate a new retained-credit
+payout authority) and SCRUM-795 c23829 (2026-10-28), under SCRUM-760 decision B (2026-10-19).
+These are expected-refusal cells for the pilot, not activation certificates.
+Every refusal below is a public-mutation call in `convex/pilotBlockedDoors.scrum795.test.ts`, with the shipped
+switches and no mocks. Its helper requires the exact code, matching English text and an Arabic dictionary entry,
+and identical contents of every application schema table and the scheduler. That proves a coded refusal and that
+nothing was committed. It does not prove where the guard sits; the position is read from the cited handler lines
+(`docs/pilot/blocked-server-side-doors.md`, "How a block is built").
+
+| Door | Pilot refusal code | Bound test |
+| --- | --- | --- |
+| `retainedCreditRefunds.requestRetainedCreditRefund` | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `requestRetainedCreditRefund refuses the customer-credit payout without writes` |
+| `retainedCreditRefunds.respondToRetainedCreditRefund`, APPROVED | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `respondToRetainedCreditRefund APPROVED refuses the customer-credit payout without writes` |
+| `retainedCreditRefunds.executeRetainedCreditRefund` | `CUSTOMER_CREDIT_PAYOUT_DISABLED` | `executeRetainedCreditRefund refuses the customer-credit payout without writes` |
+| `collections.registerSaleInvoiceCheque` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `registerSaleInvoiceCheque refuses the sale-invoice receipt without writes` |
+| `collections.reserveSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `reserveSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
+| `collections.activateSaleInvoiceReceipt` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `activateSaleInvoiceReceipt refuses the sale-invoice receipt without writes` |
+| `collections.recordPayment` with `invoiceSaleId` | `SALE_INVOICE_RECEIPT_DOORS_DISABLED` | `recordPayment bound to a sale invoice refuses the receipt without writes` |
+
+The shipped-switch pin is `the shipped switches for the excluded payout and receipt doors are ON` in the same file.
+The finishDealUnwind payout branch is the separate expected-refusal cell U-REFUND below.
+
+## SCRUM908-cockpit-cost-projection
+
+Bound check: `convex/dealNetProfit.scrum908.test.ts`, `SCRUM-908 complete cockpit responses withhold every cost projection` (bounded CASH/FINANCED × STOCK/SOURCED matrix). Under SCRUM-902 c24475 and SCRUM-908's cost-gate requirement, a non-owner with sales, finance and commission grants receives exact `CostAccessRequired` profit objects, no supplier amount, and no cost keys or sentinel acquisition amount anywhere in either complete cockpit API response. Other finance facts are preserved. Adding cost access and the owner-without-explicit-grants control restore the existing calculations; verified financed sales retain `money: null` on the sale reader. Serial harness evidence only; independent seats, authenticated browser hunters and real backend certification remain pending.
+
 ## SCRUM-760-RT11-DOORS
 
 Owner ruling RT11-DOORS, [SCRUM-760 comment 23862](https://autoflowdealer.atlassian.net/browse/SCRUM-760?focusedCommentId=23862), 2026-10-28.
@@ -239,8 +267,9 @@ OR-4 also requires distinct abandonment rows for: (1) non-refundable consumed ex
 | --- | --- | --- | --- | --- | --- |
 | Owned CASH | Required | Required | Required | Required | Handover costs lack public writer (SCRUM-455, In Progress). |
 | Owned, configured financier | Required | Required | Required | Required | Exercise both full receipt and pending/returned payment states. Supplier-route selection must refuse without writes. |
-| Sourced agent, configured financier, through dealership | Required | Required | Required | Required | Agency economics use supplier payable, not owned vehicle revenue/COGS. |
-| Sourced agent, configured financier, direct to supplier | Required | Public guard/refusal if held | Required | Required | Supplier, not dealer, receives approved amount; assert 1240 supplier claim and 4170 agency revenue for the no-contribution example. |
+| Sourced agent, CASH | Required | n/a before sale | Covered (`SCRUM486-SRC-CASH-REFUND`) | Covered (`SCRUM486-SRC-CASH-FORFEIT`) | Deposit only; no sale. Pilot evidence only after owner confirms SCRUM-486 c23529. |
+| Sourced agent, configured financier, through dealership | Required | Required; covered with a contribution (`SCRUM486-SRC-FIN-DEP`) | Required | Required | Agency economics use supplier payable, not owned vehicle revenue/COGS. |
+| Sourced agent, configured financier, direct to supplier | Required | Required public guard/refusal if held; covered: `convex/scrum411ForwardOrdering.test.ts` "A 12,500, E 9,000, R 500, H 200, D 1,375: the hand-worked entry posts once and balances" | Required | Required | Supplier, not dealer, receives approved amount; assert 1240 supplier claim and 4170 agency revenue for the no-contribution example. |
 | Owned or sourced, named manual finance company | Required | Required | Required | Required | Financier debtor/settlement gap SCRUM-27, In Progress; no fake customer AR pass. |
 | LEASE newly quoted | Required refusal | Required refusal | Required refusal | Required refusal | Current backend retires the mode under SCRUM-495; assert public quote/finalize refusals and unchanged state. Historical lease rows need a separately named migration/support contract. |
 | INTERNAL_INSTALLMENT newly quoted | Required refusal | Required refusal | Required refusal | Required refusal | Owner says dealer never self-finances; assert public refusal and unchanged state. Historical rows are separate. |
@@ -785,6 +814,40 @@ and tenancy only; the registry itself is certified under SCRUM-868.
 Not certified by these rows: relationship navigation to payables, receivables and
 recoveries (slice B), and the registry initialisation in production (SCRUM-888).
 
+### SCRUM-808 per-organization deal number
+
+Every deal gets a shareable number (`D-000123`) allocated in the transaction that
+creates it. The number is an identifier: it moves no money, posts no journal and
+changes no amount. These rows certify uniqueness, scope and authority. ADR:
+`docs/adr/2026-11-04-per-organization-deal-number.md`.
+
+| Row | Obligation | Executable check |
+| --- | --- | --- |
+| `SCRUM808-deal-number-allocation` | Cash drafts and finance applications share one sequence per organization, in creation order. A sale finalized from an application carries the application's number and takes none. A refused creation consumes no number. A counter that fell behind refuses instead of issuing a duplicate. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-tenancy` | Two organizations number independently, and a lookup for another organization is refused, never answered with that organization's deal. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-permission` | `dealNumbers.find` needs VIEW_SALES, and `search.globalSearch` returns no deal to a caller without it. | `convex/dealNumber.scrum808.test.ts` |
+| `SCRUM808-deal-number-backfill` | `dealNumberBackfill:runPage` numbers existing deals per organization in creation order across both tables, a finalized sale sharing its application's number; a re-run reads no row and changes nothing. | `convex/dealNumber.scrum808.test.ts` |
+
+Not proven: concurrency (serial `convex-test`; two creations racing for one
+number rest on Convex's documented serializable OCC), the real Convex runtime,
+and production data.
+
+## SCRUM-486 pilot route cells: SOURCED deposit endings and SOURCED financed deposit with contribution
+
+Three harness cells in `convex/scrum486Certification.test.ts` close matrix rows that the ledger listed as Required for the SOURCED routes. Each figure is derived from the owner ruling SCRUM-407 c21031 and ACC-1 (SOURCED is consignment, never salePrice minus cost), not read from code. Each has a regression record under `regression/scenarios/money/`.
+
+| Row | Scenario | Literal expectation (JOD minor units) | Record |
+| --- | --- | --- | --- |
+| `SCRUM486-SRC-CASH-REFUND` | SOURCED CASH, 200 held deposit, refunded before any sale. | Dr 1100 / Cr 2100 200,000, then Dr 2100 / Cr 1100 200,000; trial balance empty; revenue, other income and net income zero; no sale, no supplier payable, no 4170, 4100, 5100, 1400 or 2400. | `sourced-cash-held-deposit-refunded-before-sale-moves-only-customer-money` |
+| `SCRUM486-SRC-CASH-FORFEIT` | The same, forfeited. | Release is Dr 2100 / Cr 4200 200,000; cash stays 200,000; other income and net income 200,000; revenue zero; same absences. | `sourced-cash-held-deposit-forfeited-before-sale-moves-only-customer-money` |
+| `SCRUM486-SRC-FIN-DEP` | SOURCED configured financier, THROUGH_DEALERSHIP, approved 12,500,000, supplier entitlement 10,000,000, 87.4% policy, 200,000 held first payment. | Funded 10,925,000; contribution 12,500,000 - 10,925,000 - 200,000 = 1,375,000. Sale: Dr 1210 12,500,000; Cr 2400 10,000,000; Cr 4170 2,500,000; Dr 4180 / Cr 2220 1,375,000 (contra-revenue, not a cost); Dr 2100 / Cr 2220 200,000. Forward Dr 2220 / Cr 1110 1,575,000, so 2220 nets to zero. Agency revenue net 2,500,000 - 1,375,000 = 1,125,000, COGS zero, supplier payable 10,000 JOD. Full receipt Dr 1110 / Cr 1210 12,500,000 clears 1210 and leaves 2400, 4170 and 4180 unchanged. | `sourced-financed-held-deposit-contribution-is-contra-revenue` |
+
+Mutation attack on `SCRUM486-SRC-FIN-DEP`: booking the contribution to an expense account instead of 4180 turns the cell red (the 4180 line becomes 6900). Evidence class: serial `convex-test` harness only; no real-backend replay (SCRUM-762), no closed-period or concurrency proof. Receipt check on `SCRUM486-SRC-FIN-DEP`: after `confirmDisbursement`, `subledger.getReceivableBalance` reports the financier receivable `PAID` with outstanding 0, one ACTIVE allocation of 12,500,000, and both 1210 lines carry the financier. Two mutants turn it red: the allocation amount reduced by the customer's 200,000 (outstanding 200,000 left) and the status written `OPEN` after a full allocation. The `receivableStatusForBalance` change at `applications.ts:350` is not reachable here, because it sets only the customer-portion receivable and this deal has no customer gap; the equivalent status line for the financier receivable is in `subledger.ts` `allocatePaymentToReceivable`. The supplier is asserted on the payable row (`supplierId`), since journal lines carry no supplier dimension. Round 3: no public door reaches `receivableStatusForBalance`. Its only caller is `transferFinancedAmountFromCustomerReceivable`, whose only caller is the pre-plan branch of `finalizeDeal` (`!directToSupplier && app.companyId`). `financedSaleRecognitionApplies` is true for every such deal, so the plan branch is always taken first (INSPECTED, not executed). The helper is therefore pinned at its exported seam in `convex/applicationsIndexReads.test.ts`: a customer allocation equal to the non-financed balance gives `PAID`, and a fully financed sale gives original 0 and `PAID`. Mutating the `PAID` return to `OPEN` turns both tests red, and `>=` to `>` turns the first red. The `<= 0` to `< 0` mutant survives as an equivalent mutant: the portion is `max(0, ...)` and allocations are non-negative, so `allocated >= 0` already covers it.
+
+Pilot status of the refund and forfeit cells: they count as pilot evidence only once the owner confirms the SCRUM-486 c23529 scope for the narrow pilot. SCRUM-760 c23812 keeps deposit endings in the pilot's CASH flow, but this document does not read that as covering SOURCED endings until c23529 is confirmed. Until then these two cells are certification coverage, not a pilot sign-off.
+
+Not covered here: a SOURCED financed deposit refunded or forfeited, and cancellation after the forward. The DIRECT_TO_SUPPLIER route with a held deposit is covered by `convex/scrum411ForwardOrdering.test.ts`, not by a new cell.
+
 ## SCRUM-760-G8-SOURCED — hunter bindings, runtime pending
 
 G8 binds four literal public-API certification tests in
@@ -1007,3 +1070,166 @@ refund makes the shown figure too high, so for them it is only partial (the scre
 They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
+
+## SCRUM-902-SUPPLIER-SOURCING
+
+Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level authorization); owner ruling SCRUM-886#c24358 (ACCOUNTANT holds `view:cost_price`; the rollout backfill grants it). A SOURCED car's supplier entitlement equals its acquisition cost, so the per-car supplier and sourcing readers need `STATEMENT_PERMISSIONS` (`view:finance` and `view:cost_price`, `convex/supplierStatement.ts`), exactly like the supplier statement and `supplierDueAging.list`. ADR `docs/adr/2026-11-04-supplier-sourcing-readers-cost-permission.md` holds the class table of every cost-derived reader, and the owner questions for the readers that are not changed.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `sourcingPayables.list`, `listBounded`, `listPipeline`, `get` called by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price`; no rows | `sourcingPayables.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)`, and the same title for `listBounded`, `listPipeline`, `get` |
+| `supplierReceivables.list`, `outstandingSummary` by the same role | refused naming `view:cost_price` | `supplierReceivables.list: …`, `supplierReceivables.outstandingSummary: …` |
+| `sales.consignedSalePreview` by the same role | `null` (fail-soft, so the sale dialog does not crash), not the supplier entitlement or margin | `consignedSalePreview: a caller with view:finance but without view:cost_price gets null, not the supplier entitlement (SCRUM-902)` |
+| Role with both grants (positive controls) | sourcing lists and `get` return the seeded payable (amount 9,500), receivable readers answer, the preview is served | `sourcingPayables readers: a role holding both … (SCRUM-902 positive control)`, `supplierReceivables readers: … positive control`, `consignedSalePreview: … still gets the preview (SCRUM-902 positive control)` |
+| Role with `view:cost_price` and without `view:finance` (negative controls) | refused naming `view:finance`; the preview stays `null` without a finance-side grant | `… (SCRUM-902 negative control)` for sourcing, receivables and the preview |
+
+Failing-first: the six refusals and the preview test failed at `ce61849b3` against the unchanged readers (they resolved with rows) while the positive and negative controls passed. Screens: the web sourcing page and the mobile sourcing module ask for the same pair, send no query without it and show a note in English and Arabic (`SourcingCostAccessRequired`); covered by `app/(dashboard)/[orgId]/sourcing/client.cost.test.tsx` and `apps/mobile/src/features/workspace/modules/sourcing.costGate.test.tsx` (jsdom and React Native test renderers, not a browser). Evidence boundary: `convex-test` only, no production run. Not changed and awaiting owner ruling (ADR Q1-Q4): `supplierCostRecoveries.list` and `listReceipts`, the sales and inventory reports, the GL reconciliations and journal readers, `dashboard.stats`.
+
+## SCRUM-902-COST-READERS
+
+The SCRUM-858 / PR #710 merge extends this row to `accountingReports.supplierRecoverablesReconciliation` and `accountingPeriods.closeChecklist`, which returns supplier and inventory reconciliation balances. Each reader has three named merge tests in `convex/costReaders.scrum902.test.ts` or `convex/costReaders.scrum902c.test.ts`: finance-only refusal, finance-plus-cost success and cost-only refusal. Both finance-only checks failed before the copied `STATEMENT_PERMISSIONS` gates (resolved instead of rejecting); the three-case checks pass afterward. This is serial harness evidence only.
+
+Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level authorization); owner rulings SCRUM-886#c24358 and "Yes, gate all" on SCRUM-902 ADR Q1-Q4. These readers expose acquisition cost or profit, so they need `view:cost_price` besides their own grant. ADR `docs/adr/2026-11-04-supplier-sourcing-readers-cost-permission.md`.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `supplierCostRecoveries.list`, `listReceipts` by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price` | `supplierCostRecoveries.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)`, and the same title for `listReceipts` |
+| `reports.getSalesAndProfitReport`, `getInventoryReport` by a role with `view:reports` and without `view:cost_price` | `null` (fail-soft: the screen shows a note, no cost, profit, purchase price or investment) | `reports.getSalesAndProfitReport: a role with view:reports but without view:cost_price gets null, not cost and profit (SCRUM-902)`, and the inventory title |
+| `accountingReports.supplierPayablesReconciliation`, `supplierReceivablesReconciliation`, `vehicleInventoryReconciliation`, `accountingLedger.listJournalEntries`, `getJournalEntry` by the same finance-only role | refused naming `view:cost_price` | `<reader>: a role with view:finance but without view:cost_price is refused (SCRUM-902)` |
+| `dashboard.stats` by a role with `view:reports` and without `view:cost_price` | gross basis, no margin, the cost loop does not run | `a viewer with view:reports and no view:cost_price gets the gross basis, no margin, no cost loop` in `dashboardCostPermissions.test.ts` |
+| Role with both grants (positive controls) | recoveries list, both reports and the reconciliations and journal list answer | `… (SCRUM-902 positive control)` |
+| `view:cost_price` alone (negative controls) | refused naming `view:finance` (or `view:reports`); the dashboard still shows no margin | `… (SCRUM-902 negative control)` |
+| `accountingReports.trialBalance`, `incomeStatement`, `balanceSheet`, `accountingLedger.getAccountActivity` by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price` (inventory, COGS and gross margin are in these) | `<reader>: a role with view:finance but without view:cost_price is refused (SCRUM-902)` in `costReaders.scrum902c.test.ts` |
+| `reports.getSalespersonPerformance`, `getExpensesReport` by a role with `view:reports` and without `view:cost_price` | `null` (fail-soft; per-rep profit and vehicle landed-cost expenses withheld) | `reports.getSalespersonPerformance: … gets null, not per-rep profit (SCRUM-902)`, and the expenses title |
+| `accountingReports.subledgerReconciliation` by `view:finance` alone (class control) | still answers: AR only, not cost-bearing | `accountingReports.subledgerReconciliation: AR only, not cost-bearing, so view:finance alone still reads (SCRUM-902 class control)` |
+| Class sweep controls | both grants read; `view:cost_price` alone is refused naming `view:finance` or `view:reports` | `GL statements and account activity: …`, `salesperson performance and expenses reports: …` |
+
+Class-sweep failing-first: the six class-sweep reader cases failed at `2852274243f2f95a4df4c3d3a7d9b2ce9ca81900` against the ungated readers while every control passed. The web Financial Reports tab (trial balance, income statement, balance sheet; the VAT return tab is unchanged) and the expenses and performance tabs of the web reports page skip their queries without the grant and show an English and Arabic note; the mobile reports module shows dashes and skips the same two queries.
+
+Failing-first: nine reader cases and the dashboard case failed at `ef03e298f` against the unchanged readers while every control passed. Screens: the web reports page, the web General Ledger tab, the recoveries section and the mobile reports module skip their queries without the grant and show an English and Arabic note; covered by `components/accounting/GeneralLedgerTabCurrency.test.tsx`, `components/sourcing/SupplierCostRecoveriesSection.test.tsx` and `apps/mobile/src/features/workspace/modules/reports.costGate.test.tsx` (jsdom and React Native test renderers, not a browser; the web reports page has no render test). Evidence boundary: `convex-test` only, no production run. Deploy dependency: the SCRUM-886 ACCOUNTANT backfill (Deploy production step 2e) must ship in the same deploy, or an ACCOUNTANT role seeded earlier is refused by these readers.
+
+
+## SCRUM-902-REMAINING-COST-DISCLOSURES
+
+Owner ruling: SCRUM-902 c24475. Synthetic fixtures only. The implementation keeps posting, settlement amounts, durable idempotency results and pilot switches unchanged; response projections use current authority after replay.
+
+| Cell | Expected | Bound test in `convex/costDisclosure.scrum902f.test.ts` |
+| --- | --- | --- |
+| F1 basis | finance without cost is refused; cost grant, ALL_PERMISSIONS and system owner read entitlement | F1 supplierConcessionBasis refuses finance without cost and preserves granted access |
+| F1 comparison | incorrect, correct and adjacent entitlement guesses refuse before comparison; authorized concession still records | F1 resolveAppraisalGap cannot compare guessed entitlement without cost access |
+| F2 posted | null without cost; authorized read retains car id and amount | F2 postedOpeningAllocationReadback withholds per-car opening amounts |
+| F2 pending | no raw draft, allocations, enriched allocations or balancing lines without cost | F2 pending drafts withhold raw allocations, enriched allocations and balancing cost lines |
+| F3 outbox | cost permission required for unfiltered, PENDING, POSTED and FAILED branches | F3 listPending gates cost payloads in every status branch |
+| F4 refusal | no due/projected/entitlement or amount in no-cost EN/AR error; authorized detail retained | F4 partial payment refusal has no cost amount or due field without grant |
+| F4 success/replay | current authority removes amounts after grant revocation; payment recorded once | F4 partial payment success and replay redact accumulated paid and entitlement balance |
+| F5 unfiltered | vehicle-linked capitalized row and its tax operands absent; ordinary office expense remains | F5 unfiltered expenses exclude vehicle cost rows including tax and capitalization operands |
+| Settlement oracle | observed settlement amounts require cost grant; authorized markPaid still settles | sweep markPaid cannot compare a guessed settlement balance without cost access |
+| Margin receipt | generic no-cost refusal and response projection after replay; receipts persist once | sweep supplier receipt refusal and replay do not disclose the margin claim |
+| Recovery receipt | id/status retained; remaining cost removed after replay | sweep cost recovery receipt and replay withhold remaining vehicle cost |
+| Direct route/approval | shared refusal contains no supplier entitlement or difference, in EN/AR | sweep direct supplier route and approval refusals contain no entitlement |
+| Inventory migration | no-cost dry run retains action/counts but no per-car amount; grant retains amount | sweep inventory backfill response withholds vehicle cost but keeps migration results |
+
+Failing-first: the original five findings produced 11 failures against production source at 86abd74bb38d3361684fbaecf6631a90c1e17928. The first sweep added two failing receipt cases; the second added three failing direct-route/backfill cases. Later consolidating status and route variants into named scenario tests preserves their assertions and allows regression-library binding. These are harness results, not Convex platform, concurrency, production, browser E2E or release certification.
+
+## SCRUM-902-SWEEP-CLOSURE
+
+Owner ruling: SCRUM-902 c24475. Each reader refuses before returning any cost-bearing response to a custom role without `view:cost_price`. Non-owner roles with the grant retain the figures. Accounting writes and approval readers are unchanged.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Work order, unfiltered | no-cost vehicle viewer refused; granted viewer reads parts 100, labor 50 and total 150 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=false require cost access` |
+| Work order, vehicle-filtered | same boundary for the vehicle index branch | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=true require cost access` |
+| Bundled finance costs | no-cost application viewer refused; granted viewer reads acquisition amount 9000000 and ordinary fee 20000, total 9020000 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 bundled deal cost reader protects acquisition lines and their totals` |
+| Management report | non-owner cost role reads report; revoked grant refuses before response or missing-basis refusal | `convex/openingManagementSettlement.test.ts`: `SCRUM-902 management profit report requires cost access before basis refusals` |
+
+All four negative assertions failed against unchanged production source at 24869050a64b075faed726db606999d770694c7b before the guards were added. These are `convex-test` results, not real-backend or release certification.
+
+## SOURCED supplier-cost mirror (SCRUM-907)
+
+Owner invariant in `SCRUM-907#description`: `purchasePrice === sourceCost` after a
+SOURCED cost write. Supplier entitlement remains authoritative. These rows bind
+`convex/sourcedCostMirror.scrum907.test.ts` and the money scenario records. They
+are serial harness evidence, not platform, browser or production certification.
+
+| Matrix row | Scenario and expected result | Named backend check |
+| --- | --- | --- |
+| SCRUM907-mirror | Create at 10,250 then edit supplier cost to 9,900; stored costs and approved audit show 9,900 | updating supplier cost mirrors purchasePrice and the approved edit audit |
+| SCRUM907-conflict | Conflicting costs refused with EN/AR code; no vehicle or edit change | conflicting submitted costs are refused without changing the vehicle or its audit |
+| SCRUM907-posted | Posted acquisition prevents editing either cost | posted acquisition still locks supplier cost and the mirror |
+| SCRUM907-approval | Old pending supplier-cost request applies and audits both fields | an old pending supplier-cost request applies and audits the mirror at approval |
+| SCRUM907-repair | Bounded cursor page repairs mismatch; rerun changes zero; STOCK/deleted untouched | repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched |
+| SCRUM907-repair-lock | Posted acquisition counted locked and untouched | repair reports posted-cost locks and does not change them |
+| SCRUM907-repair-history | Sold/opening locks and missing cost counted; none patched | repair reports sold, opening-locked and unreadable supplier costs without changing them |
+| SCRUM907-echo | A changed request records its mirror; an unchanged source-cost echo still refuses with No changes detected | `vehicleCostDisclosureWrites.scrum886.test.ts`: control: a requester who may read cost can still request a cost change |
+| SCRUM907-mobile-echo | Old mobile purchasePrice echo on a stale SOLD row saves color, preserves both costs and omits cost from audit; a different price alone refuses | M1 older mobile can edit a stale SOLD row with its unchanged purchasePrice |
+| SCRUM907-sold-echo | SOLD cost echo writes no vehicle cost or timestamp through direct and approval doors | M2 unchanged sourceCost echo preserves SOLD history through every update door |
+| SCRUM907-opening-echo | Opening-locked cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves opening history through every update door |
+| SCRUM907-posted-echo | Posted-cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves posted history through every update door |
+
+Deploy rollout phase 2f uses a tested `releaseGuard.ts` helper, pages of at most
+25 vehicles, the shared deadline and a 10,000-page cap. Locked and invalid
+rows are counted anomalies. Read failures and incomplete pages refuse the final
+rollout verdict after Social Inbox verification. The implementer ran no repair against a deployment.
+
+### SCRUM-869 settled history: each figure comes from what its source records
+
+Matrix row `SCRUM869-supplier-settled-provenance` binds the nineteen literal tests in `convex/supplierSettledProvenance.scrum869.test.ts` (one scenario record each, `regression/scenarios/money/supplier-history-*`; seven carry a `bugRef` whose failing-first commit is `cf449671f0e0b95c8b854930e2b6d64971e39874`, and the ten added for the PR #764 review findings carry `c94a39db33cc550c7b4d3c848716d90088cf9d64`, where they were red). Owner ruling SCRUM-869#c23881 (2026-10-29): the supplier payable payment and the consignment margin receipt are in the pilot and must be certified. Design: ADR `docs/adr/2026-11-03-supplier-statement-outstanding-query.md`, slice 4 amendment. Invariant: a subledger report shows what each source actually records, and two reports that claim to measure the same thing read it the same way.
+
+- A/P: a payable is read through `settlementView`, as the payments reconciliation and the sale-cancellation guard read it. A PAID payable with no `amountPaid` is fully paid, shown at its `amountDue` and labelled `INFERRED_FROM_PAID_STATUS`. A recorded payable is labelled `RECORDED`.
+- A/R: `vehicleSupplierReceivables.amountReceived` includes the customer deposit applied to a DIRECT_TO_SUPPLIER settlement, so it is never shown as cash from the supplier. The history nets the claim's own SUPPLIER_RECEIVABLE_COLLECTED postings on GL 1240 (credits less debits, so a reversed receipt nets out). A deposit-only or fully reversed claim is not a supplier receipt and is left out. A claim whose recorded receipts cannot be read back from the ledger (fewer posted entries than `receiptSeq`, a foreign org or currency on a line, a negative net, or the read budget) is counted in `unverifiedCount`, `complete` is false and the total is withheld, never a guessed figure.
+- Currencies stay separate in every total; there is no net field.
+- Completion is a separate fact from cash (PR #764 Finding 1). Each row carries a server-derived `settlement` (`COMPLETE` or `PARTIAL`); the screen no longer compares supplier cash with the obligation. A margin claim is `COMPLETE` when the claim's own record says PAID (`recordReceipt` sets it when deposit plus receipts reach the claim) and none of its receipt postings has been reversed; its `settledMinor` stays the supplier's own cash, so a 3,000 JOD claim closed by a 1,000 JOD customer deposit and a 2,000 JOD receipt is `COMPLETE` with cash 2,000, and the deposit is still never counted as a supplier receipt. A reversed receipt leaves the claim row untouched, so a claim with a reversed receipt is `PARTIAL`. A payable and a cost recovery are `COMPLETE` when what was paid or recovered reaches what is due.
+- Byte-aware read (PR #764 Finding 2). A row cap bounds documents, not bytes, and Convex limits one transaction to 16 MiB (https://docs.convex.dev/production/state/limits), while `receiptNotes` and `paymentNotes` are unbounded strings up to the 1 MiB document limit. Every document of the three families and every receipt-provenance ledger read is admitted by the transaction's own headroom (`ctx.meta.getTransactionMetrics()`, the decision `VerificationBudget.hasHeadroom` makes, in `convex/utils/transactionReadHeadroom.ts`): the read stops when the transaction could not take one more worst-case 1 MiB document and still leave a 2 MiB reserve. One budget is shared across the families and the provenance reads. A family cut short is `complete: false` with its totals withheld; it is reported as an incomplete list, not as unconfirmed receipts. This covers records that already exist, which limiting future note lengths would not.
+- An unverifiable claim counts only itself (L1). A claim whose receipts cannot be read back adds one to `unverifiedCount`, and the entries it read are spent from the shared 1,000-entry budget; older, fully posted claims are still read. Only when the entry budget or the transaction headroom is exhausted is every remaining claim that holds money counted unconfirmed.
+
+Evidence boundary: convex-test only, with the real `openSupplierReceivable` and `recordReceipt` writers. The byte tests run with convex-test's `transactionLimits: true`, which emulates the 16 MiB ceiling; the budget arithmetic is pinned with hand-set metrics in `convex/utils/transactionReadHeadroom.test.ts`. Not proven against the Convex backend (SCRUM-762): that its metering matches the headroom figures, the cost of one `getTransactionMetrics` call per document, and that a streamed read does not read ahead past one document. `supplierStatement.outstanding` and `paymentsReconciliation` now use the same budget (next section). Not certified: receipts posted outside `recordReceipt`, cost-recovery receipts (still read from `amountRecoveredMinor`, which holds no deposit), and a legacy PAID payable's date (its `lastChangedAt` is the row's `updatedAt`).
+
+### SCRUM-869 supplier statement queries: no read limit is ever thrown (PR #764 round 4)
+
+Matrix row `SCRUM869-supplier-read-limits` binds seven literal tests (one scenario record each, `regression/scenarios/money/supplier-recon-*`, `supplier-outstanding-*` and `supplier-history-spent-budget-*`; failing-first commits `8c98ed31f2633a817689fe615c8eba408082cc0b` for round 4 and `c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6` for round 5, where they were red). Owner ruling SCRUM-869#c23881 (2026-10-29). Invariant: no supplier statement query (`outstanding`, `settled`, `paymentsReconciliation`) throws on a Convex read limit (16 MiB, 32,000 documents, 4,096 index ranges per function, https://docs.convex.dev/production/state/limits). Each answers UNAVAILABLE / OVER_LIMIT or `complete: false` with its totals withheld.
+
+- Mechanism: every list read goes through `readBoundedStream` (`convex/utils/transactionReadHeadroom.ts`), which asks `ctx.meta.getTransactionMetrics()` for room before each document (https://docs.convex.dev/database/writing-data, "Checking transaction headroom"). One shared budget, no second one. A row cap alone bounds documents, not bytes: `paymentNotes` can be ~1 MiB.
+- `paymentsReconciliation`: the outbox in-flight read, the payables of all seven statuses, each payable's journal entries (shared 1,000-entry budget) and each entry's lines. Any cut is UNAVAILABLE / OVER_LIMIT with no currencies and no differences.
+- `outstanding`: payables, margin receivables and cost recoveries are streamed in turn. A cut family is `complete: false`. A section that is not complete now withholds its totals (W14), as the settled section already did, so a partial sum never sits next to the flag; the row cap path changed with it.
+- `settled` unverified count (LOW-2): a claim with no recorded receipt (`receiptSeq` 0) holds only the customer deposit seed. It is read while budget remains, but when the budget is gone it is skipped and never counted unverified.
+
+Evidence boundary: convex-test with `transactionLimits: true`, which emulates the 16 MiB ceiling; not proven against the Convex backend (SCRUM-762): that its metering matches the headroom figures and the cost of one `getTransactionMetrics` call per document. The shared budget means a heavy payables family can also withhold the receivable side of `outstanding`; that is a truthful incomplete section, not a total. Round 5 closed the two reads this paragraph used to list as not covered (next section).
+
+### SCRUM-869 supplier statement queries: every read spends the shared budget, a cut is never an absence (PR #764 round 5)
+
+Same matrix row, `SCRUM869-supplier-read-limits`; failing-first commit `c4fc1e88ec6ff2ac2c9ea8e98989e1840c669cd6`. Invariant: a read that happens inside a supplier statement query is either charged to the one shared transaction budget or is a single schema-bounded document; and a section the budget cut is reported as incomplete with a reason, never rendered as "none".
+
+- Row enrichment (M1): `payableFacts` and `receivableFacts` read the linked sale and finance application with `db.get`. Those reads now go through `budgetedReader`, which checks `hasReadHeadroom` before each get and throws a private `ReadBudgetExhausted`; `readRowsWithinBudget` catches it per family. The family is then incomplete with `incompleteReason: "READ_BUDGET"` and its totals withheld.
+- Queued postings (M2): `paymentsReconciliation` calls the new `pendingAffectingPostingState`, which reads each queued reversal's original event one at a time after a headroom check and answers NONE, AFFECTING or OVER_LIMIT. OVER_LIMIT is `UNAVAILABLE / OVER_LIMIT`, never "nothing pending". `hasPendingAffectingPosting` is unchanged: its two other callers are report queries outside this change (follow-up, not widened here).
+- Reason (M3): `section` and `settledSection` carry `incompleteReason: "ROW_LIMIT" | "READ_BUDGET"` when `complete` is false. The screen shows the empty sentence only when the section is complete, and a budget cut has its own English and Arabic note.
+
+Class table, every db read in the three readers:
+
+| Reader | Read | Bound |
+| --- | --- | --- |
+| `paymentsReconciliation` | in-flight outbox events | `readBoundedStream`, shared budget |
+| | payables, seven statuses | `readBoundedStream` |
+| | each payable's journal entries and lines | `readBoundedStream`, 1,000-entry budget |
+| | queued reversals' original events | `pendingAffectingPostingState`, headroom before each get |
+| | accounts payable control account | one `unique()` document, no free-text field |
+| `outstanding` | payables, margin receivables, cost recoveries | `readBoundedStream` per family |
+| | linked sale and finance application per row | `budgetedReader`, headroom before each get |
+| `settled` | payables, claims, recoveries | `readSettledFamily` over `readBoundedStream` |
+| | claim receipts and their entries | `readBoundedStream`, 1,000-entry budget |
+| | receivable-from-suppliers control account | one `unique()` document, no free-text field |
+
+Evidence boundary: convex-test with `transactionLimits: true`; the headroom call is not proven against the Convex backend's metering (SCRUM-762). Not changed: a generic reversal of `SUPPLIER_PAYMENT_SETTLED` leaves `amountPaid` as it was, so the payable history can still say "Settled in full" (LOW, SCRUM-879).
+
+## SCRUM-908 ACCOUNTANT commission visibility
+
+Matrix row `SCRUM908-accountant-commission-visibility` binds `convex/accountantCommissionsAccess.scrum908.test.ts` and the ACCOUNTANT/SENIOR_ACCOUNTANT template checks in `convex/utils/permissions.test.ts` to owner ruling SCRUM-908 c24538. A newly created organization seeds ACCOUNTANT with `view:commissions` and without `manage:commissions`. A member in that stored role may call `sales.listCommissions` for its own organization and is refused for a foreign organization. Owner-only role create and update accept commission viewing alongside finance, cost and disbursement permissions. An owner may still withhold commission visibility while retaining cost and sale-completion access. Regression records are under `regression/scenarios/permission/`. Original template/ruling-change records have no `bugRef`; round-2 defect records carry the committed failing-first revision.
+
+`convex/accountantCommissionsBackfill.scrum908.test.ts` extends this row with the coordinator-selected exact 19-permission pre-change ACCOUNTANT set, including cost access. Order is irrelevant; extra, missing, same-length substituted or duplicate permissions, renamed, deleted and system-owner roles are unchanged. The grant and `accountant-commissions-2026-11-04` marker commit in one patch. Replays do nothing, including after an owner removes commissions from a marked role. Public role saves, existing backfills and template sync preserve provenance; new organizations stamp it with the default grant. Owner-run template sync explicitly restores current template permissions, including commission viewing; its test asserts marker retention. The raw admin editor refuses provenance changes while accepting unchanged round trips and normal permission edits. One-row tenant pages preserve ownership, and the 500-row upper clamp resumes through the remaining row. The frozen-set test compares it with a literal snapshot of the pre-change template.
+
+Round-2 review remediation adds deployment-wide completion in `roleMigrationRuns`, atomic with the final page. New public-door tests recreate ACCOUNTANT with exactly 19 permissions and rename a 19-permission Bookkeeper to accountant after completion. Later migration calls must return zero updates and leave both roles without `view:commissions`. A multi-page control checks no premature completion, one final record, unchanged roles and completion history on replay, and a terminal page even with an unusable role cursor. These three records cite red revision `bc5c19cd0ffc34741d0e7c916ec5b82a904a2dfb`, which contains their named tests. Earlier custom-extra-permission recreation coverage remains separately bound.
+
+`scripts/accountantCommissionsRollout.test.ts` retains commissions-before-cost wiring, shared deadline, bounded cursor walking, counts-only output and malformed evidence refusal. Cost order does not affect the supported already-cost-bearing cohort. No-cost rows do not match this commission phase until the separate cost repair changes their set. The backfill remains internal.
+
+Round-2 defect checks have failing-first revision `a59e3afdf198c00c67aa1450a84cb37552bc65d0`, which contains the named tests. The coordinator's read-only observation counted one matching production ACCOUNTANT; this lane used synthetic fixtures and did not access production. See `docs/adr/2026-11-04-accountant-commissions-backfill-runs-in-the-deploy-rollout.md` for commands, mutation controls and provenance boundaries.
+
+Evidence boundary: serial `convex-test`, template and helper checks. This row does not certify PR #772's management-net headline, authenticated browser behavior, platform concurrency, real-backend schema deployment or production rollout. Independent seats and release verification remain pending.

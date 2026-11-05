@@ -65,6 +65,20 @@ async function books(seed: Awaited<ReturnType<typeof fixture>>) {
     prepaid: await ctx.db.query("prepaidExpenseSchedules").collect() }));
 }
 
+test("SCRUM-902 management profit report requires cost access before basis refusals", async () => {
+  const seed = await fixture();
+  const planId = await seed.owner.mutation(draft, seed.args);
+  await seed.approver.mutation(approve, { orgId: seed.orgId, planId });
+  const args = { orgId: seed.orgId, planId, throughDate: Date.now() };
+  // A non-owner positive control proves the additional grant, not an owner bypass.
+  await seed.t.run(ctx => ctx.db.patch(seed.financeId, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
+  expect(await seed.approver.query(report, args)).toMatchObject({ officialNetIncomeMinor: 0, managementProfitMinor: 0 });
+  await seed.t.run(ctx => ctx.db.patch(seed.financeId, { permissions: ["view:finance", "manage:finance"] }));
+  await expect(seed.approver.query(report, args)).rejects.toThrow(/view:cost_price/);
+  await seed.t.run(ctx => ctx.db.delete(seed.parent._id));
+  await expect(seed.approver.query(report, args)).rejects.toThrow(/view:cost_price/);
+});
+
 async function managementState(seed: Awaited<ReturnType<typeof fixture>>) {
   return { books: await books(seed), records: await seed.t.run(async ctx => ({
     plans: await ctx.db.query("openingManagementSettlementPlans").collect(),

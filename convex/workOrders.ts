@@ -61,6 +61,8 @@ async function createWorkOrderExpense(
     date: now,
     category: "REPAIR",
     status: "PAID",
+    // Matches the plain expense posting below, which never capitalizes inventory.
+    accountingTreatment: "PERIOD_EXPENSE",
     notes: args.notes,
   });
 
@@ -110,7 +112,7 @@ export const list = query({
     vehicleId: v.optional(v.id("vehicles")),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES, PERMISSIONS.VIEW_COST_PRICE]);
 
     let results = [];
     if (args.vehicleId) {

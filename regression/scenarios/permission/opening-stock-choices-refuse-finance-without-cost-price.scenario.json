@@ -1,0 +1,51 @@
+{
+  "id": "opening-stock-choices-refuse-finance-without-cost-price",
+  "fingerprint": "da740345db438a6be755d4cc760aba495bc71cad8ab83be780d0eb2a7328fc0a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-manage-finance-no-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.listOpeningStockChoices",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "accountingCutover.listOpeningStockChoices: a role with manage:finance but without view:cost_price is refused (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "dc32045ed4a1693486af3770936a03b8a586bf74"
+  }
+}
