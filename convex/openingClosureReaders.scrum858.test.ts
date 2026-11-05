@@ -17,6 +17,7 @@ import {
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
 } from "./utils/closeWarnings";
 import { computeCloseChecklist } from "./accountingPeriods";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import {
   computeEmployeeAdvancesReconciliation,
   computeSupplierRecoverablesReconciliation,
@@ -867,12 +868,14 @@ async function seedReversedAdvancePairs(
   family: SeededFamily = ADVANCE_FAMILY,
   balancingAccountId?: Id<"chartOfAccounts">,
   eventPayloadBytes = 0,
+  ledgerOptions: { periodId?: Id<"accountingPeriods">; lineDescriptionBytes?: number } = {},
 ) {
   // Seed in chunks: under `transactionLimits` each insert's triggers also count against one function's read ceilings.
-  for (let from = 0; from < pairs; from += SEED_CHUNK) {
+  const chunk = ledgerOptions.lineDescriptionBytes ? 4 : SEED_CHUNK;
+  for (let from = 0; from < pairs; from += chunk) {
   await t.run(async (ctx) => {
     const now = Date.now();
-    for (let i = from; i < Math.min(pairs, from + SEED_CHUNK); i++) {
+    for (let i = from; i < Math.min(pairs, from + chunk); i++) {
       const advId = family.advanceRow
         ? String(await ctx.db.insert("employeeAdvances", {
             orgId,
@@ -913,6 +916,7 @@ async function seedReversedAdvancePairs(
         sourceId: advId,
         category: "SYSTEM",
         memo: `Pilot advance ${i}`,
+        periodId: ledgerOptions.periodId,
         status: "REVERSED",
         currency: "JOD",
         postedBy: actorId,
@@ -926,6 +930,7 @@ async function seedReversedAdvancePairs(
         orgId,
         journalEntryId: forwardJournalId,
         lineNumber: 1,
+        description: "x".repeat(ledgerOptions.lineDescriptionBytes ?? 0),
         accountId: advancesAccountId,
         debitMinor: 1000,
         creditMinor: 0,
@@ -935,7 +940,8 @@ async function seedReversedAdvancePairs(
       });
       if (balancingAccountId) {
         await ctx.db.insert("journalLines", { orgId, journalEntryId: forwardJournalId, lineNumber: 2, accountId: balancingAccountId,
-          debitMinor: 0, creditMinor: 1000, currency: "JOD", scale: 2, accountingDate: now });
+          debitMinor: 0, creditMinor: 1000, currency: "JOD", scale: 2, accountingDate: now,
+          description: "x".repeat(ledgerOptions.lineDescriptionBytes ?? 0) });
       }
 
       // Reversal
@@ -965,6 +971,7 @@ async function seedReversedAdvancePairs(
         sourceId: advId,
         category: "REVERSAL",
         memo: `Pilot reversal ${i}`,
+        periodId: ledgerOptions.periodId,
         status: "POSTED",
         currency: "JOD",
         reversalOfJournalEntryId: forwardJournalId,
@@ -979,6 +986,7 @@ async function seedReversedAdvancePairs(
         orgId,
         journalEntryId: revJournalId,
         lineNumber: 1,
+        description: "x".repeat(ledgerOptions.lineDescriptionBytes ?? 0),
         accountId: advancesAccountId,
         debitMinor: 0,
         creditMinor: 1000,
@@ -988,7 +996,8 @@ async function seedReversedAdvancePairs(
       });
       if (balancingAccountId) {
         await ctx.db.insert("journalLines", { orgId, journalEntryId: revJournalId, lineNumber: 2, accountId: balancingAccountId,
-          debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: now });
+          debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: now,
+          description: "x".repeat(ledgerOptions.lineDescriptionBytes ?? 0) });
       }
     }
   });
@@ -1187,6 +1196,72 @@ test("events with large payloads make the provenance reader answer OVER_LIMIT, n
 // SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide
 // history of other families must never make a small control history unavailable, and the scan must stay inside
 // an explicit, stated read budget whichever strategy it picks. Observed counts are harness evidence only.
+async function cumulativeLimitSeed(descriptionBytes: number, unrelatedJournals: number) {
+  const seed = await fixture(undefined, false, true);
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const recovery = accounts.find((row) => row.systemKey === "RECEIVABLE_FROM_SUPPLIERS");
+  const cash = accounts.find((row) => row.systemKey === "CASH_ON_HAND");
+  const retained = accounts.find((row) => row.systemKey === "RETAINED_EARNINGS");
+  const actor = await t.run((ctx) => ctx.db.query("users").first());
+  if (!recovery || !cash || !retained || !actor) throw new Error("Missing cumulative limit fixture accounts/actor");
+  await t.run((ctx) => ctx.db.patch(periodId, { snapshotFastPathEligible: undefined }));
+  await seedReversedAdvancePairs(t, orgId, employeeId, recovery._id, actor._id, 20, "cumulative", RECOVERY_FAMILY, cash._id, 0,
+    { periodId, lineDescriptionBytes: descriptionBytes });
+  for (let from = 0; from < unrelatedJournals; from += SEED_CHUNK) {
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(unrelatedJournals, from + SEED_CHUNK); i++) {
+        const journalEntryId = await ctx.db.insert("journalEntries", {
+          orgId, periodId, journalNumber: `JE-CUMULATIVE-${i}`, accountingDate: Date.now(), sourceType: "expenses",
+          sourceId: `cumulative-${i}`, category: "SYSTEM", memo: "Synthetic unrelated balanced journal",
+          status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: Date.now(), createdAt: Date.now(),
+        });
+        await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 1, accountId: cash._id,
+          debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: Date.now() });
+        await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 2, accountId: retained._id,
+          debitMinor: 0, creditMinor: 1000, currency: "JOD", scale: 2, accountingDate: Date.now() });
+      }
+    });
+  }
+  // Causal control: the cumulative GL read alone fits. The failure needs the preceding provenance work.
+  const balances = await t.run((ctx) => getCumulativeBalancesAsOf(ctx, orgId, Date.now()));
+  expect(balances.find((row) => row.accountId === recovery._id && row.currency === "JOD"))
+    .toMatchObject({ debitMinor: 70_000, creditMinor: 20_000 });
+  return seed;
+}
+
+test.each([
+  { limit: "bytes", descriptionBytes: 160_000, unrelatedJournals: 0 },
+  { limit: "ranges", descriptionBytes: 0, unrelatedJournals: 4_000 },
+])("cumulative GL after provenance returns OVER_LIMIT without a partial balance ($limit)", ({ descriptionBytes, unrelatedJournals }) => withFrozenScheduler(async () => {
+  const { owner, orgId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
+  const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
+  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false,
+    currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+}), 300_000);
+
+test("cumulative GL small-description control preserves complete balances and snapshot close", () => withFrozenScheduler(async () => {
+  const { owner, orgId, periodId } = await cumulativeLimitSeed(64, 0);
+  const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
+  expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(result.byCurrency.JOD).toMatchObject({ glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000, discrepancyMinor: 0 });
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(checklist.supplierRecoverablesReconciliation.byCurrency.JOD).toMatchObject({ glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000 });
+}), 300_000);
+
+test.each([
+  { limit: "bytes", descriptionBytes: 160_000, unrelatedJournals: 0 },
+  { limit: "ranges", descriptionBytes: 0, unrelatedJournals: 4_000 },
+])("cumulative GL closeChecklist uses elapsed snapshots for retained periods ($limit)", ({ descriptionBytes, unrelatedJournals }) => withFrozenScheduler(async () => {
+  const { owner, orgId, periodId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  expect(checklist.supplierRecoverablesReconciliation.byCurrency.JOD).toMatchObject({
+    glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000, discrepancyMinor: 0,
+  });
+}), 300_000);
+
 async function provenanceSeed() {
   const seed = await fixture();
   const accounts = await seed.owner.query(api.chartOfAccounts.list, { orgId: seed.orgId, activeOnly: true });
