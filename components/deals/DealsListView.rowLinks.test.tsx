@@ -8,7 +8,7 @@
  *    four fixtures) are on the list's DEFAULT view, at exactly the href the audit
  *    builds. So a missing row is not the failure.
  * 2. PAINT: every deal is rendered TWICE, a card (hidden from the container's
- *    `@2xl` width up) before a table row (hidden below it). The first anchor in
+ *    `@3xl` width up) before a table row (hidden below it). The first anchor in
  *    document order is therefore display:none on a wide screen, which is why a
  *    bare `.first()` cannot be clicked at desktop width.
  */
@@ -80,13 +80,13 @@ describe("Deals list rows as the role audit reads them", () => {
     const [first, second] = links;
     const cards = first.closest('[data-testid="deals-cards"]');
     expect(cards).not.toBeNull();
-    // Hidden from the container's @2xl width up: display:none on a wide screen.
-    expect(cards!.className).toContain("@2xl:hidden");
+    // Hidden from the container's @3xl width up: display:none on a wide screen.
+    expect(cards!.className).toContain("@3xl:hidden");
 
-    // The table sits in a wrapper that is hidden below @2xl and displayed above it.
+    // The table sits in a wrapper that is hidden below @3xl and displayed above it.
     const tableBox = second.closest("div.hidden");
     expect(tableBox).not.toBeNull();
-    expect(tableBox!.className).toContain("@2xl:block");
+    expect(tableBox!.className).toContain("@3xl:block");
     expect(tableBox!.contains(first)).toBe(false);
   });
 });

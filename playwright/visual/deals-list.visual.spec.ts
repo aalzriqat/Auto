@@ -48,8 +48,12 @@ const VIEWPORTS = [
 
 /** Two text lines + padding, or the 40px vehicle mark + padding — whichever is taller, with slack. */
 const MAX_ROW_HEIGHT = 96;
-/** A phone card: name, vehicle, kind/financier, reason, owner/date — five lines and padding. */
-const MAX_CARD_HEIGHT = 156;
+/**
+ * A phone card, six lines and padding (SCRUM-917 rich rows): car + status,
+ * deal number + customer, kind/financier, step + owner/date, reason, and the
+ * selling-price / net-profit footer, its labels stacked above the amounts so\r\n * Arabic labels never truncate at 390px. Was 156 for the five-line card.
+ */
+const MAX_CARD_HEIGHT = 212;
 const LATIN_MONTH = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/;
 
 /**
@@ -259,7 +263,7 @@ for (const view of VIEWS) {
             expect(metrics.tableScroll, "the table scrolls inside its own box").toBeLessThanOrEqual(1);
             expect(metrics.entries).toBeGreaterThan(0);
             expect(metrics.tallestRow, "a deal row wrapped").toBeLessThanOrEqual(MAX_ROW_HEIGHT);
-            expect(metrics.tallestCard, "a deal card grew past its four lines").toBeLessThanOrEqual(MAX_CARD_HEIGHT);
+            expect(metrics.tallestCard, "a deal card grew past its six lines").toBeLessThanOrEqual(MAX_CARD_HEIGHT);
             expect(metrics.wrapped, "a one-line run wrapped").toEqual([]);
             expect(metrics.missingFacts, "a deal lost a fact at this width").toEqual([]);
             expect(metrics.wrongTarget, "a row's centre opens another deal").toEqual([]);

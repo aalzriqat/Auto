@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { DealsListView, type DealRow } from "./DealsListView";
+import { DealRowFiguresContext, DealsListView, type DealRow, type RowFigures } from "./DealsListView";
+import type { DealListRowFigures } from "@/convex/dealListRow";
 
 const t = (key: string) => key;
 
@@ -20,6 +21,24 @@ function row(overrides: Partial<DealRow> = {}): DealRow {
     since: Date.UTC(2026, 8, 1),
     salespersonName: "Sales One",
     amountLabel: "15,000 JD",
+    source: { kind: "APPLICATION", id: "app_1" },
+    ...overrides,
+  };
+}
+
+function figures(overrides: Partial<DealListRowFigures> = {}): DealListRowFigures {
+  return {
+    photoUrl: null,
+    consigned: false,
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "CREDIT_DECISION", state: "BLOCKED" },
+    ],
+    sellingPriceMinor: 15_000_000,
+    sellingPriceReason: null,
+    netProfitMinor: 640_500,
+    netProfitReason: null,
+    currency: "JOD",
     ...overrides,
   };
 }
@@ -78,8 +97,8 @@ describe("the Deals list is a needs-action queue first", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /DealsAll/ }));
     expect(screen.getAllByRole("row")).toHaveLength(5);
-    expect(screen.getByRole("link", { name: "OpenDealRow: Cash Buyer" }).getAttribute("href")).toBe("/org1/sales/sale_1/deal");
-    expect(screen.getByRole("link", { name: "OpenDealRow: Test Customer" }).getAttribute("href")).toBe(
+    expect(screen.getByRole("link", { name: "OpenDealRow: Cash Buyer · 2024 Kia Sportage" }).getAttribute("href")).toBe("/org1/sales/sale_1/deal");
+    expect(screen.getByRole("link", { name: "OpenDealRow: Test Customer · 2024 Kia Sportage" }).getAttribute("href")).toBe(
       "/org1/applications/app_1/deal"
     );
   });
@@ -189,6 +208,78 @@ describe("the Deals list is a needs-action queue first", () => {
       expect(links).toHaveLength(1);
       expect(links[0].getAttribute("href")).toMatch(/\/deal$/);
     }
+  });
+
+  test("a row shows the cockpit's step, selling price and net profit as served (owner rich rows)", () => {
+    render(
+      <DealRowFiguresContext.Provider value={() => figures({ consigned: true, netProfitMinor: -125_000 })}>
+        <DealsListView
+          rows={[row({ amountLabel: null, dealNumber: 123 })]}
+          loading={false}
+          canLoadMore={false}
+          loadingMore={false}
+          complete
+          onLoadMore={vi.fn()}
+          newDealHref={null}
+          t={t}
+        />
+      </DealRowFiguresContext.Provider>
+    );
+    const tableRow = screen.getByTestId("deal-row-app_1");
+    expect(within(tableRow).getByTestId("deal-row-number").textContent).toBe("D-000123");
+    expect(tableRow.querySelector('[data-fact="step"]')?.textContent).toContain("StageCreditDecision");
+    expect(tableRow.querySelector('[data-fact="step"]')?.getAttribute("data-blocked")).toBe("true");
+    expect(tableRow.querySelectorAll('[data-fact="consigned"]').length).toBeGreaterThan(0);
+    expect(tableRow.textContent).toContain("15,000 JOD");
+    const profit = tableRow.querySelector('[data-fact="net-profit"]');
+    expect(profit?.textContent).toBe("-125 JOD");
+    expect(profit?.querySelector(".text-destructive")).not.toBeNull();
+  });
+
+  test.each([
+    ["CostAccessRequired", "DealsFigureNeedsCostAccess"],
+    ["FinanceAccessRequired", "DealsFigureNeedsFinanceAccess"],
+    ["ProfitNotCalculable", "DealsFigureNotCalculable"],
+  ])("a withheld net profit (%s) reads as a dash with its reason, never a zero", (reason, hint) => {
+    const served: RowFigures = figures({ netProfitMinor: null, netProfitReason: reason });
+    render(
+      <DealRowFiguresContext.Provider value={() => served}>
+        <DealsListView
+          rows={[row()]}
+          loading={false}
+          canLoadMore={false}
+          loadingMore={false}
+          complete
+          onLoadMore={vi.fn()}
+          newDealHref={null}
+          t={t}
+        />
+      </DealRowFiguresContext.Provider>
+    );
+    const profit = screen.getByTestId("deal-row-app_1").querySelector('[data-fact="net-profit"]');
+    expect(profit?.textContent).toBe(`—${hint}`);
+    expect(profit?.textContent).not.toMatch(/\d/);
+  });
+
+  test("while a row's facts load it shows a placeholder; a caller who cannot be served profit gets no column", () => {
+    render(
+      <DealRowFiguresContext.Provider value={() => undefined}>
+        <DealsListView
+          rows={[row({ amountLabel: null })]}
+          loading={false}
+          canLoadMore={false}
+          loadingMore={false}
+          complete
+          onLoadMore={vi.fn()}
+          newDealHref={null}
+          t={t}
+          showNetProfit={false}
+        />
+      </DealRowFiguresContext.Provider>
+    );
+    expect(screen.queryByText("DealsNetProfitColumn")).toBeNull();
+    expect(screen.getByTestId("deal-row-app_1").querySelector('[data-fact="net-profit"]')).toBeNull();
+    expect(screen.getByTestId("deal-row-app_1").querySelector('[data-fact="step-loading"]')).not.toBeNull();
   });
 
   test("an incomplete queue with nothing loadable right now offers no dead Load more click", () => {

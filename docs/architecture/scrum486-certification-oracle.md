@@ -421,6 +421,19 @@ Practice and evidence boundary: the aging layout (days past the due date in 30-d
 | Caller-supplied day | `nowMs` decides the aging (a day later reads one day older); a value more than a day from the server clock, or not a whole number, is refused; a call without it is refused | `aging follows the supplied nowMs, and a clock far from the server's is refused`, `a call without nowMs is refused rather than silently reading the clock` |
 
 Known simplifications, stated rather than hidden: `complete` is per family and per page walk (a caller must walk to the last page; totals are for the page only); a payable's ownership model is read from its sale's `supplierSettlementRoute` (no sale means OWNED ON_ACCOUNT); alerts (S8) are a separate section.
+## SCRUM917-deals-list-net-profit
+
+SCRUM-917 (owner rich-row direction, 2026-11-05): each Deals list row reads its car photo, consignment flag, step rail, financed selling price and net profit from `dealListRow.figures`, which composes the deal screen's own queries (`sales.dealCockpit`; `applications.dealCockpit` plus `dealOverview.financedDealOverview`). The net profit is the cockpit's headline, never recomputed; it is gated on `view:cost_price` in the list query itself, in front of the cockpit's own gate (SCRUM-902, R-PERMISSION SCRUM-760#c22465). Tests in `convex/dealListRow.test.ts`.
+
+| Caller and deal | Expected | Test |
+|---|---|---|
+| view:sales + view:finance, no view:cost_price; cash and financed, SOURCED and STOCK | `netProfitMinor` null, `netProfitReason` `CostAccessRequired`; neither the figure nor its operands on the wire | `scenario deals-list-row-withholds-net-profit: …`; `deals list financed=%s %s: net profit is null without view:cost_price and the cockpit figure with it` |
+| view:sales + view:finance + view:cost_price; same four kinds | `netProfitMinor` equals the cockpit's headline net profit | `scenario deals-list-row-serves-the-cockpit-net-profit: …` |
+| Owner | the cockpit's figure | `deals list financed=%s %s: the owner reads the cockpit's figure` |
+| view:sales only | step rail served; no price, no profit (each with a reason), no photo | `deals list financed=%s %s: a sales-only caller sees the step but no money` |
+| Financed deal with view:finance | selling price equals the overview's `customerSalePrice`; a SOURCED car reads `consigned: true` | `deals list: the financed row's selling price is the cockpit's customer sale price` |
+| Another organisation | its own org id with a foreign sale reads null; the foreign org id is refused | `deals list: a caller from another organization cannot read a row` |
+
 ## SCRUM-869-DUE-ALERTS
 
 Owner ruling SCRUM-869#c23883 (2026-10-29, OQ-1), the coordinator's Jira record of a chat ruling, not the owner's own text; the digest in `regression/rulings.json` covers the whole markdown body of that comment. Supplier obligations (payables, margin receivables, cost recoveries) raise in-app alerts through the existing `notifications` table: 3 days before the due date, on the due date, at 7 days overdue, then weekly. Disputed obligations and obligations with no due date are never alerted. Recipients are resolved on the server: the Owner, members holding `manage:finance` (Finance Manager) and members holding `view:finance` (authorised accounting staff), never an offboarding member and never a role of another organisation. SCRUM-901: the cost-derived `amount` goes only to the Owner and to roles that hold both `view:finance` and `view:cost_price` (the `STATEMENT_PERMISSIONS` of the supplier statement and `supplierDueAging.list`; OWASP A01:2021); every other recipient gets the same alert (kind, currency, due date, days overdue) with no `amount` key, and the English and Arabic sentences have a `_MessageNoAmount` variant. Idempotency keys carry no amount.

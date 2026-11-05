@@ -16,7 +16,13 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
-import { DealsListView, type DealRow } from "./DealsListView";
+import {
+  DealRowFiguresContext,
+  DealsListView,
+  type DealRow,
+  type RowFigures,
+  type UseDealRowFigures,
+} from "./DealsListView";
 
 const GENERATE = process.env.DEALS_LIST_VISUAL_FIXTURE === "1";
 const OUT_DIR = process.env.DEALS_LIST_VISUAL_FIXTURE_DIR;
@@ -40,8 +46,9 @@ function rows(t: (key: string) => string): DealRow[] {
       waitingOn: "OTHERS",
       since: base,
       salespersonName: "Sales Agent One",
-      amountLabel: "10,850.000 JOD",
+      amountLabel: null,
       dealNumber: 1042,
+      source: { kind: "APPLICATION", id: "app_pntr" },
     },
     {
       key: "app_2",
@@ -56,8 +63,9 @@ function rows(t: (key: string) => string): DealRow[] {
       waitingOn: "DEALERSHIP",
       since: base - day,
       salespersonName: "سامي خليل",
-      amountLabel: "15,000.000 JOD",
+      amountLabel: null,
       dealNumber: 1043,
+      source: { kind: "APPLICATION", id: "app_2" },
     },
     {
       key: "sale_1",
@@ -74,6 +82,7 @@ function rows(t: (key: string) => string): DealRow[] {
       salespersonName: "Sales Agent One",
       amountLabel: "9,800.000 JOD",
       dealNumber: 1044,
+      source: { kind: "SALE", id: "sale_1" },
     },
     {
       key: "app_3",
@@ -88,7 +97,8 @@ function rows(t: (key: string) => string): DealRow[] {
       waitingOn: "DEALERSHIP",
       since: base - 5 * day,
       salespersonName: "Sales Agent Two",
-      amountLabel: "32,400.000 JOD",
+      amountLabel: null,
+      source: { kind: "APPLICATION", id: "app_3" },
     },
     {
       key: "app_4",
@@ -104,9 +114,77 @@ function rows(t: (key: string) => string): DealRow[] {
       since: base - 9 * day,
       salespersonName: "سامي خليل",
       amountLabel: null,
+      source: { kind: "APPLICATION", id: "app_4" },
     },
   ];
 }
+
+/** A 4:3 swatch standing in for a car photo, inline so the static page needs no server. */
+const PHOTO =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="90"><rect width="120" height="90" fill="#94a3b8"/></svg>');
+
+/**
+ * Each row's cockpit facts in every state the list must paint: a photo and a
+ * consigned car, a negative profit, a profit withheld for want of cost access,
+ * a stopped deal, and one row still loading.
+ */
+const FIGURES: Record<string, RowFigures> = {
+  app_pntr: {
+    photoUrl: PHOTO,
+    consigned: true,
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "HANDOVER", state: "COMPLETE" },
+      { key: "SETTLEMENT", state: "CURRENT" },
+    ],
+    sellingPriceMinor: 10_850_000,
+    sellingPriceReason: null,
+    netProfitMinor: 640_500,
+    netProfitReason: null,
+    currency: "JOD",
+  },
+  app_2: {
+    photoUrl: null,
+    consigned: false,
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "CREDIT_DECISION", state: "COMPLETE" },
+      { key: "DELIVERY_ACTIONS", state: "BLOCKED" },
+    ],
+    sellingPriceMinor: 15_000_000,
+    sellingPriceReason: null,
+    netProfitMinor: -125_000,
+    netProfitReason: null,
+    currency: "JOD",
+  },
+  sale_1: {
+    photoUrl: PHOTO,
+    consigned: false,
+    stages: [{ key: "SALE_AGREED", state: "CURRENT" }],
+    sellingPriceMinor: null,
+    sellingPriceReason: null,
+    netProfitMinor: null,
+    netProfitReason: "CostAccessRequired",
+    currency: "JOD",
+  },
+  app_3: {
+    photoUrl: null,
+    consigned: false,
+    stages: [
+      { key: "APPLICATION", state: "COMPLETE" },
+      { key: "CREDIT_DECISION", state: "STOPPED" },
+    ],
+    sellingPriceMinor: 32_400_000,
+    sellingPriceReason: null,
+    netProfitMinor: null,
+    netProfitReason: "ProfitNotCalculable",
+    currency: "JOD",
+  },
+  // app_4 is absent: its facts are still loading.
+};
+
+const useFixtureFigures: UseDealRowFigures = (row) => FIGURES[row.key];
 
 describe.skipIf(!GENERATE)("SCRUM-694 deals list visual fixture", () => {
   test.each(["en", "ar"] as const)("writes the %s markup", (locale) => {
@@ -114,22 +192,24 @@ describe.skipIf(!GENERATE)("SCRUM-694 deals list visual fixture", () => {
     mkdirSync(resolve(OUT_DIR!), { recursive: true });
     const table = dictionaries[locale] as Record<string, string>;
     const t = (key: string) => table[key] || (dictionaries.en as Record<string, string>)[key] || key;
-    for (const key of ["DealsTitle", "DealsAll", "DealsCustomerVehicleColumn", "OpenDealRow"]) {
+    for (const key of ["DealsTitle", "DealsAll", "DealsCarColumn", "DealsNetProfitColumn", "OpenDealRow"]) {
       expect(table[key], `${locale} dictionary lacks ${key}`).toBeTruthy();
     }
     for (const view of ["needs", "all"] as const) {
       const { container } = render(
-        <DealsListView
-          rows={rows(t)}
-          loading={false}
-          canLoadMore
-          loadingMore={false}
-          complete={false}
-          onLoadMore={() => undefined}
-          newDealHref="/org1/sales"
-          t={t}
-          locale={locale}
-        />
+        <DealRowFiguresContext.Provider value={useFixtureFigures}>
+          <DealsListView
+            rows={rows(t)}
+            loading={false}
+            canLoadMore
+            loadingMore={false}
+            complete={false}
+            onLoadMore={() => undefined}
+            newDealHref="/org1/sales"
+            t={t}
+            locale={locale}
+          />
+        </DealRowFiguresContext.Provider>
       );
       if (view === "all") fireEvent.click(screen.getByRole("tab", { name: new RegExp(table.DealsAll) }));
       writeFileSync(resolve(OUT_DIR!, `deals-${view}-${locale}.html`), container.innerHTML);

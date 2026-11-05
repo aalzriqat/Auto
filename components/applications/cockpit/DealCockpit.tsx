@@ -97,6 +97,7 @@ import {
   isFinishedStageState,
   isLiveStageState,
   STAGE_ICON,
+  STAGE_LABEL_KEY,
   STAGE_STATE_KEY,
   type DealCockpitData,
   type DealStageState,
@@ -257,29 +258,6 @@ const MOMENT_UNAVAILABLE = "—";
 function renderMoment(value: number | undefined, pattern: string, locale?: string): string {
   return isRenderableMoment(value) ? formatLocalized(value, pattern, locale) : MOMENT_UNAVAILABLE;
 }
-
-const STAGE_LABEL: Record<string, string> = {
-  /** CASH only — the cash rail's anchor stage. */
-  SALE_AGREED: "StageSaleAgreed",
-  APPLICATION: "StageApplication",
-  CREDIT_DECISION: "StageCreditDecision",
-  APPRAISAL: "StageAppraisal",
-  GAP_RESOLUTION: "StageGapResolution",
-  APPROVED_PURCHASE: "StageApprovedPurchase",
-  DELIVERY_ACTIONS: "StageDeliveryActions",
-  /**
-   * The stage the backend already emits and this build is the first to name.
-   *
-   * Until now the map had no entry, so the rail fell through to `t(rawKey)` —
-   * covered only by a transitional dictionary entry under the raw key. This
-   * entry is what makes that crutch unnecessary going forward; it is
-   * deliberately NOT the signal to delete it — see the note on `DISBURSEMENT`
-   * in `lib/i18n/domains/sales.ts`.
-   */
-  DISBURSEMENT: "StageDisbursement",
-  HANDOVER: "StageHandover",
-  SETTLEMENT: "StageSettlement",
-};
 
 /**
  * Who actually performed the appraisal on record, as the SERVER recorded it.
@@ -6010,7 +5988,7 @@ export function DealCockpitView({
   const railStages = stages.map((stage) => ({
     key: stage.key,
     state: stage.state,
-    label: t(STAGE_LABEL[stage.key] ?? stage.key),
+    label: t(STAGE_LABEL_KEY[stage.key] ?? stage.key),
     // The same provenance-gated resolution the focus panel uses, so a node
     // and the panel can never name different parties for one step.
     // A stage that is not needed has nobody acting on it, so no owner is drawn.
@@ -6776,7 +6754,7 @@ export function DealCockpitView({
           checklistItems?.find((entry) => entry.status === "current") ??
           checklistItems?.find((entry) => entry.status === "pending");
         if (item) return t(item.labelKey);
-        return live ? t(STAGE_LABEL[live.key] ?? live.key) : null;
+        return live ? t(STAGE_LABEL_KEY[live.key] ?? live.key) : null;
       })()
     : null;
   // "Nothing left to do" is a claim about a FINISHED deal only. A stopped deal has
@@ -6820,7 +6798,7 @@ export function DealCockpitView({
       stageKey={otherStage.key}
       path={dealPath}
       closed={dealClosed}
-      label={t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}
+      label={t(STAGE_LABEL_KEY[otherStage.key] ?? otherStage.key)}
       state={otherStage.state}
       owner={otherStage.state === "NOT_APPLICABLE" ? undefined : stageOwnerLabel(otherStage, activeAppraisalProvider, t)}
       position={stages.findIndex((stage) => stage.key === otherStage.key) + 1}
@@ -6857,7 +6835,7 @@ export function DealCockpitView({
   const stepNode: ReactNode = live ? (
     <StageFocusRow
       state={live.state}
-      label={t(STAGE_LABEL[live.key] ?? live.key)}
+      label={t(STAGE_LABEL_KEY[live.key] ?? live.key)}
       position={liveIndex + 1}
       total={stages.length}
       owner={stageOwnerLabel(live, activeAppraisalProvider, t)}
@@ -7453,7 +7431,7 @@ export function DealCockpitView({
                 )}
               </span>
               <span className="block break-words text-base font-semibold leading-snug">
-                {t(STAGE_LABEL[mobileStage.key] ?? mobileStage.key)}
+                {t(STAGE_LABEL_KEY[mobileStage.key] ?? mobileStage.key)}
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -7491,12 +7469,12 @@ export function DealCockpitView({
         viewKey={otherStage?.key ?? null}
         message={
           otherStage
-            ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
+            ? `${t("StageViewAnnounceShowing")}: ${t(STAGE_LABEL_KEY[otherStage.key] ?? otherStage.key)}, ${t(STAGE_STATE_KEY[otherStage.state])}`
             : null
         }
         restoreMessage={
           live
-            ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL[live.key] ?? live.key)}`
+            ? `${t("StageViewAnnounceBack")}: ${t(STAGE_LABEL_KEY[live.key] ?? live.key)}`
             : t("StageViewAnnounceBackDone")
         }
       />

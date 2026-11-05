@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { applicationReason, dealsPaging, mergeDealRows, type ApplicationListRow, type PagingStatus, type SaleListRow } from "./dealRows";
+import { applicationReason, currentDealStep, dealsPaging, mergeDealRows, type ApplicationListRow, type PagingStatus, type SaleListRow } from "./dealRows";
 
 const t = (key: string) => key;
 const fmt = (major: number) => `${major} JD`;
@@ -131,9 +131,52 @@ describe("one entry per deal", () => {
     // A sale still to be completed is the dealership's move whatever the application says.
     expect(mergeDealRows([], [sale({ status: "PENDING", applicationId: "app_101", linkedApplication: linked })], "org1", t, fmt)[0]).toMatchObject({ reason: "SALE_PENDING", waitingOn: "DEALERSHIP" });
   });
-  test("a financed row with no recorded financed amount shows no amount rather than zero", () => {
-    const rows = mergeDealRows([app({ financedAmount: 0 })], [], "org1", t, fmt);
+  test("a financed row never shows the financed amount as its selling price", () => {
+    // The financed selling price is the cockpit's customer sale price, read per row; the list serves none.
+    const rows = mergeDealRows([app({ financedAmount: 15_000 })], [], "org1", t, fmt);
     expect(rows[0].amountLabel).toBeNull();
+    expect(rows[0].source).toEqual({ kind: "APPLICATION", id: "app_1" });
+  });
+
+  test("a cash row carries its list-served price and its sale as the cockpit source", () => {
+    const rows = mergeDealRows([], [sale()], "org1", t, fmt);
+    expect(rows[0]).toMatchObject({ amountLabel: "12000 JD", source: { kind: "SALE", id: "sale_1" } });
+  });
+});
+
+describe("the current step is the cockpit's live stage", () => {
+  test("no served stages, no step", () => {
+    expect(currentDealStep([])).toBeNull();
+  });
+
+  test("the live stage in display order, blocked or not", () => {
+    expect(
+      currentDealStep([
+        { key: "APPLICATION", state: "COMPLETE" },
+        { key: "CREDIT_DECISION", state: "BLOCKED" },
+        { key: "HANDOVER", state: "PENDING" },
+      ])
+    ).toEqual({ kind: "LIVE", labelKey: "StageCreditDecision", blocked: true });
+    expect(currentDealStep([{ key: "SALE_AGREED", state: "CURRENT" }])).toEqual({
+      kind: "LIVE",
+      labelKey: "StageSaleAgreed",
+      blocked: false,
+    });
+  });
+
+  test("every stage over is done; a stopped deal is stopped", () => {
+    expect(
+      currentDealStep([
+        { key: "APPLICATION", state: "COMPLETE" },
+        { key: "DISBURSEMENT", state: "NOT_APPLICABLE" },
+      ])
+    ).toEqual({ kind: "DONE" });
+    expect(
+      currentDealStep([
+        { key: "APPLICATION", state: "COMPLETE" },
+        { key: "CREDIT_DECISION", state: "STOPPED" },
+      ])
+    ).toEqual({ kind: "STOPPED" });
   });
 });
 
