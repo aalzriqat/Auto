@@ -179,6 +179,12 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
         ].join("\n"),
         env: { CI: true },
       },
+      {
+        name: "Upload static visual diagnostics",
+        uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+        if: "always()",
+        with: { name: "regression-library-static-visual-diagnostics", path: "test-results/deal-cockpit-visual/artifacts", "retention-days": 14 },
+      },
       { name: "Verify the local backend was not changed during the run", if: "always()", run: `${LOCAL_BACKEND} verify`, env: backendEnv },
       { name: "Stop the local Convex backend", if: "always()", run: `${LOCAL_BACKEND} stop` },
       {
@@ -223,11 +229,14 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
     expect(verdict?.if).toBe("always()");
   });
 
-  test("public artifacts contain only the counts-and-ids runner summary, never raw browser reports", () => {
+  test("public artifacts allow static diagnostics and the counts-and-ids runner summary, never raw browser reports", () => {
     const steps = workflow.jobs["regression-library"]?.steps ?? [];
     const uploads = steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
-    expect(uploads.map(step => step.with?.path)).toEqual(["regression-library-summary.json"]);
-    expect(uploads[0]?.with?.["if-no-files-found"]).toBe("error");
+    expect(uploads.map(step => step.with?.path)).toEqual([
+      "test-results/deal-cockpit-visual/artifacts",
+      "regression-library-summary.json",
+    ]);
+    expect(uploads[1]?.with?.["if-no-files-found"]).toBe("error");
     const judge = steps.find(step => step.name === "Judge every active record");
     expect(judge?.run).toContain("> regression-library-summary.json");
   });

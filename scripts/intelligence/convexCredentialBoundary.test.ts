@@ -336,8 +336,11 @@ const CREDENTIAL_WORKFLOW_PINS: Record<string, string> = {
   // F3/F4 review remediation: publish only the counts/codes/ids summary; move
   // static visuals after the browser under !cancelled(). Credential steps,
   // grants and exact always() verify/stop/judge are unchanged and deep-equal pinned.
+  // Restore only the credential-free static config's outputDir upload under
+  // always(), with 14-day retention. Raw backend-backed reports stay private to
+  // the runner; no credential step, grant or tripwire change.
   "regression-library.yml":
-    "c6989ed491fab89dadff3772496bf56cd8ae88905be9754125dd5b3c98c9726a",
+    "ec9b121da9e2bde3bc368631614749b6fb7c118690fb4693329fce7ec9622d52",
   "convex-preview-key-diagnostic.yml":
     "cb33b1b8f2e26457d00f78f31b6460e14df19b2b6f8254e720ca097a8c66dd8c",
   "deploy-production.yml":
