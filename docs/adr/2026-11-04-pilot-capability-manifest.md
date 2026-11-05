@@ -180,6 +180,70 @@ The snapshot traverses root files and non-hidden directories, excluding `node_mo
 `.test`/`.spec` files. The public mutation census adds the generated server declaration solely for builder identity.
 The snapshot is immutable by convention and refreshed when test modules reset; it does not observe edits after creation.
 
+### Round 12: structural source classification
+
+The recurring class was export-shape discovery silently accepting a source occurrence it had not measured.
+The earlier shorthand/computed-key omission at `7a0582763` and wrapped/nested-map omissions at `9da6125bc`
+are distinct reproductions of that class. Following `correct`, the prevention is an independent AST walk,
+using `ts.forEachChild` over each non-test source in the same snapshot. A switch-pattern declaration,
+property key, class member or export name must be classified at its own AST location. A discovered
+same-name occurrence elsewhere cannot excuse it. Unclassified occurrences throw
+`PILOT_SOURCE_UNCLASSIFIED` with the file, one-based line and name, including in files without exports.
+
+Exact file-and-owner entries in `NON_DOOR_REGISTRIES` name the error-code, refusal-copy, translation,
+manifest-reader/binding/guard and test-adapter registries, each with a reason. The exemption requires
+a non-boolean entry, except for the named test adapter's getters. It does not exempt a whole file,
+a suffix, another registry with the same name in another file, or nested properties. Exported boolean
+maps in those files still enter discovery. Unknown metadata/copy registries now refuse classification.
+
+| Form | Result |
+| --- | --- |
+| `Object.freeze({ SWITCH_PILOT_DISABLED: true })` | Discovered with one object-literal argument. |
+| `Object.freeze({ SWITCH_PILOT_DISABLED: true } as const)` | Discovered after unwrapping the argument. |
+| `<const>{ ... }` or `<{ SWITCH_PILOT_DISABLED: boolean }>{ ... }` | Discovered; assertion types never supply the boolean value. |
+| `({ SWITCH_PILOT_DISABLED: true })!` | Discovered; non-null assertion unwraps like parentheses, `as` and `satisfies`. |
+| Nested object map | Refused by the structural backstop. |
+| Class static member | Refused by the structural backstop. |
+| Direct default object export | Refused by the structural backstop. |
+
+A recognized door map with a non-boolean sibling fails closed, including `{ X_PILOT_DISABLED: true, label: "x" }`.
+Destructured bindings keep unavailable values; a direct RHS property corresponding to that binding is classified,
+without guessing its shipped value. Private switch declarations that discovery cannot reach now fail closed.
+
+The baseline repository registration census passed before implementation. Against the unchanged
+`9da6125bc7117367098a58e8a240bfb5314e8ae3` analyzer, the following command produced **11 failed** controls:
+five discovery controls for forms 1–4, including both angle-assertion variants, three refusals for forms 5–7,
+and three manifest registration controls for forms 1, 3 and 5. Each failed because discovery returned no
+declaration or did not throw. No production switch was changed to generate the red evidence.
+
+```powershell
+pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts lib/pilotCapabilityManifest.test.ts --maxWorkers=1 -t R12 --reporter=verbose
+```
+
+Material decisions follow the official [TypeScript compiler API traversal guide](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API#traversing-the-ast-with-a-little-linter),
+the [angle-bracket assertion documentation](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#type-assertions),
+and the [non-null assertion documentation](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-0.html#non-null-assertion-operator).
+The installed compiler declarations confirm `TypeAssertion` and `NonNullExpression` expose their operand as `expression`.
+Assertions are erased by the compiler, so discovery unwraps their operands and never trusts their asserted types.
+`Object.freeze` handling is bounded syntax inspection, not code execution.
+
+Final round-12 validation on Windows passed **166/166 tests**: discovery 71, configuration parity 54,
+manifest 19, tenant write guard 13, supplier settlement census 9. The named-file command was:
+
+```powershell
+pnpm exec vitest run test-utils/pilotSourceDiscovery.test.ts test-utils/pilotConfigParity.test.ts lib/pilotCapabilityManifest.test.ts scripts/tenantWriteGuard.test.ts scripts/supplierSettlementCensus.test.ts --maxWorkers=1
+```
+
+The same five files also passed with V8 coverage and the unchanged thresholds. The scoped implementation
+coverage was 96.21% statements, 92.43% branches, 97.22% functions and 99.34% lines. Diff-to-V8 statement-start
+measurement against `9da6125bc` covered **103/103 added executable lines** in `pilotSourceDiscovery.ts`.
+Local ESLint and SonarJS recommended rules reported zero errors or warnings across the four changed
+TypeScript files, with cognitive complexity capped at 14. No suppression, threshold or production switch changed.
+Both `pnpm typecheck` and `pnpm typecheck:convex` exited 0. The root config excludes `convex/` and `test-utils/`
+as input roots; the Convex config includes both, with `_generated/` excluded as input roots. Imported dependencies can
+enter either graph. The focused eleven controls above were rerun after the final changes and all eleven passed.
+These are local measurements; independent seats, remote Sonar/CI and real-backend certification remain unverified.
+
 Remaining limits:
 
 - Arbitrary callees with computed paths, a path stored in another variable, or a path nested in an array/object argument are
@@ -190,7 +254,9 @@ Remaining limits:
   moved to such a pattern cannot obtain a shipped-value certification.
 - The reverse census scans exported public mutations in top-level `convex/*.ts`, with recognized mutation builders and inline
   handler configurations. It finds direct containment-guard calls and direct references to exported switch symbols; it does
-  not trace arbitrary helper bodies or custom registration factories. An unregistered helper-mediated switch is not proven absent.
+  not trace arbitrary helper bodies or custom registration factories. Direct reads such as `doors.REVIEW_PILOT_DISABLED`
+  remain outside the reverse census when the map export's name lacks the switch infix. The key itself must still be discovered
+  and registered. An unregistered helper-mediated switch is not proven absent.
 - Screen scans retain literal `api.module.function` reference matching. They do not resolve aliased references, computed access
   or string-built names, nor prove that a gate controls the right rendered action. Supplier scanning also accepts its existing
   colon form and includes mobile source; that is source evidence, not mobile pilot certification.

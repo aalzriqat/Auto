@@ -156,6 +156,23 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
   });
 
   test.each([
+    ["Object.freeze", "export const doors = Object.freeze({ REVIEW_PILOT_DISABLED: true });"],
+    ["TypeAssertion", "export const doors = <const>{ REVIEW_PILOT_DISABLED: true };"],
+  ])("R12: registration census rejects an unregistered %s door", (_shape, source) => {
+    const sources = new Map(pilotSourceSnapshot());
+    sources.set("review/flags.ts", source);
+    const names = discoverPilotSources(sources, new Set()).declarations.map(({ name }) => name);
+    expect(unregisteredSwitches(names)).toEqual(["REVIEW_PILOT_DISABLED"]);
+  });
+
+  test("R12: registration census refuses an unregistered nested door", () => {
+    const sources = new Map(pilotSourceSnapshot());
+    sources.set("review/flags.ts", "export const doors = { custody: { REVIEW_PILOT_DISABLED: true } };");
+    expect(() => discoverPilotSources(sources, new Set()))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*review\/flags.ts:1.*REVIEW_PILOT_DISABLED/);
+  });
+
+  test.each([
     ["shorthand", "const REVIEW_PILOT_DISABLED = true;", "REVIEW_PILOT_DISABLED"],
     ["computed string", "", '["REVIEW_PILOT_DISABLED"]: true'],
     ["computed const", 'const key = "REVIEW_PILOT_DISABLED";', "[key]: true"],
@@ -178,7 +195,8 @@ describe("pilot capability manifest", { timeout: 60_000 }, () => {
       "doorMap:D_PILOT_DISABLED",
       "doorMap:E_PILOT_DISABLED",
     ]);
-    expect(names("const NOT_EXPORTED_PILOT_DISABLED = true; export const OTHER = 1;")).toEqual([]);
+    expect(() => names("const NOT_EXPORTED_PILOT_DISABLED = true; export const OTHER = 1;"))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*NOT_EXPORTED_PILOT_DISABLED/);
   });
 
   test("shipped values: the source, the manifest reader and the pinned table agree for every switch", () => {

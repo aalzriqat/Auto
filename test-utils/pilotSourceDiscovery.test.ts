@@ -43,8 +43,96 @@ describe("SCRUM-810 bounded compiler work", () => {
 
 describe("pilot source discovery controls", () => {
   test.each([
+    ["Object.freeze", "Object.freeze({ REVIEW_PILOT_DISABLED: true })"],
+    ["Object.freeze as const", "Object.freeze({ REVIEW_PILOT_DISABLED: true } as const)"],
+    ["TypeAssertion", "<const>{ REVIEW_PILOT_DISABLED: true }"],
+    ["typed TypeAssertion", "<{ REVIEW_PILOT_DISABLED: boolean }>{ REVIEW_PILOT_DISABLED: true }"],
+    ["NonNullExpression", "({ REVIEW_PILOT_DISABLED: true })!"],
+  ])("R12: discovers %s door maps", (_shape, initializer) => {
+    const source = `export const doors = ${initializer};`;
+    expect(discoverPilotSources(new Map([["flags.ts", source]]), new Set()).declarations)
+      .toMatchObject([{ name: "REVIEW_PILOT_DISABLED", kind: "doorMap", value: true }]);
+  });
+
+  test.each([
+    ["nested", "export const doors = { custody: { REVIEW_PILOT_DISABLED: true } };"],
+    ["class static", "export class Doors { static REVIEW_PILOT_DISABLED = true; }"],
+    ["default export", "export default { REVIEW_PILOT_DISABLED: true };"],
+  ])("R12: backstop refuses %s door maps with a source location", (_shape, source) => {
+    expect(() => discoverPilotSources(new Map([["flags.ts", source]]), new Set()))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*flags.ts:1.*REVIEW_PILOT_DISABLED/);
+  });
+
+  test.each([
+    ["script declaration", "const REVIEW_PILOT_DISABLED = true;"],
+    ["private object", "const doors = { REVIEW_PILOT_DISABLED: true };"],
+    ["nested string key", 'export const doors = { custody: { "REVIEW_PILOT_DISABLED": true } };'],
+    ["nested computed key", 'export const doors = { custody: { ["REVIEW_PILOT_DISABLED"]: true } };'],
+    ["nested wrapped computed key", 'export const doors = { custody: { [("REVIEW_PILOT_DISABLED")!]: true } };'],
+    ["class instance", 'export class Doors { "REVIEW_PILOT_DISABLED" = true; }'],
+    ["class private member", "export class Doors { static #REVIEW_PILOT_DISABLED = true; }"],
+    ["class method", "export class Doors { REVIEW_PILOT_DISABLED() { return true; } }"],
+    ["class getter", "export class Doors { get REVIEW_PILOT_DISABLED() { return true; } }"],
+    ["wrapped factory", "export const doors = factory({ REVIEW_PILOT_DISABLED: true });"],
+    ["freeze extra argument", "export const doors = Object.freeze({ REVIEW_PILOT_DISABLED: true }, extra);"],
+    ["freeze other receiver", "export const doors = Other.freeze({ REVIEW_PILOT_DISABLED: true });"],
+    ["destructured property key", 'const { REVIEW_PILOT_DISABLED: off } = input;'],
+  ])("R12: backstop refuses an unclassified %s", (_shape, source) => {
+    expect(() => discoverPilotSources(new Map([["flags.ts", `\n${source}`]]), new Set()))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*flags.ts:2.*REVIEW_PILOT_DISABLED/);
+  });
+
+  test("R12: another discovered occurrence cannot excuse a same-name private declaration", () => {
+    const sources = new Map([
+      ["flags.ts", "export const REVIEW_PILOT_DISABLED = true; function other() { const REVIEW_PILOT_DISABLED = false; }"],
+    ]);
+    expect(() => discoverPilotSources(sources, new Set())).toThrow(/PILOT_SOURCE_UNCLASSIFIED.*flags.ts:1.*REVIEW_PILOT_DISABLED/);
+  });
+
+  test.each([
+    ["convex/utils/errors.ts", 'export const AppErrorCode = { REVIEW_PILOT_DISABLED: "off" };'],
+    ["lib/pilotCapabilityManifest.ts", 'export const PILOT_SWITCHES = { REVIEW_PILOT_DISABLED: () => true };'],
+    ["lib/i18n/domains/common.ts", 'const workspaceMessages = translate({ REVIEW_PILOT_DISABLED: ["off", "blocked"] });'],
+    ["test-utils/pilotSwitchMock.ts", 'export function pilotSwitchModule() { return { get REVIEW_PILOT_DISABLED() { return true; } }; }'],
+  ])("R12: named non-door registry in %s stays outside switch declarations", (file, source) => {
+    expect(discoverPilotSources(new Map([[file, source]]), new Set()).declarations).toEqual([]);
+  });
+
+  test.each([
+    ["wrong file", "other.ts", 'export const AppErrorCode = { REVIEW_PILOT_DISABLED: "off" };'],
+    ["wrong registry", "convex/utils/errors.ts", 'export const OtherCodes = { REVIEW_PILOT_DISABLED: "off" };'],
+    ["inherited registry name", "convex/utils/errors.ts", 'export const toString = { REVIEW_PILOT_DISABLED: "off" };'],
+    ["shadowed registry name", "convex/utils/errors.ts", 'function other() { const AppErrorCode = { REVIEW_PILOT_DISABLED: "off" }; }'],
+    ["nested registry key", "convex/utils/errors.ts", 'export const AppErrorCode = { group: { REVIEW_PILOT_DISABLED: "off" } };'],
+    ["private boolean map", "convex/utils/errors.ts", 'const AppErrorCode = { REVIEW_PILOT_DISABLED: true };'],
+  ])("R12: registry exemption rejects %s", (_shape, file, source) => {
+    expect(() => discoverPilotSources(new Map([[file, source]]), new Set())).toThrow(/PILOT_SOURCE_UNCLASSIFIED.*REVIEW_PILOT_DISABLED/);
+  });
+
+  test("R12: comments, value strings, direct reads and test declarations are not new door names", () => {
+    const sources = new Map([
+      ["flags.ts", '// REVIEW_PILOT_DISABLED\nexport const example = "REVIEW_PILOT_DISABLED"; read(doors.REVIEW_PILOT_DISABLED);'],
+      ["flags.test.ts", "const REVIEW_PILOT_DISABLED = true;"],
+    ]);
+    expect(discoverPilotSources(sources, new Set()).declarations).toEqual([]);
+  });
+
+  test("R12: a boolean in a named registry must enter switch discovery", () => {
+    const source = 'export const AppErrorCode = { REVIEW_PILOT_DISABLED: true };';
+    expect(discoverPilotSources(new Map([["convex/utils/errors.ts", source]]), new Set()).declarations)
+      .toMatchObject([{ name: "REVIEW_PILOT_DISABLED", kind: "doorMap", value: true }]);
+  });
+
+  test("R12: namespace export names are discovered with unavailable values", () => {
+    const source = 'export * as REVIEW_PILOT_DISABLED from "./empty";';
+    expect(discoverPilotSources(new Map([["flags.ts", source]]), new Set()).declarations)
+      .toMatchObject([{ name: "REVIEW_PILOT_DISABLED", value: null }]);
+  });
+
+  test.each([
     ["shorthand", "const REVIEW_PILOT_DISABLED = true; export const doors = { REVIEW_PILOT_DISABLED };", true],
     ["computed string", 'export const doors = { ["REVIEW_PILOT_DISABLED"]: false };', false],
+    ["wrapped computed string", 'export const doors = { [("REVIEW_PILOT_DISABLED")!]: false };', false],
     ["computed template", 'export const doors = { [`REVIEW_PILOT_DISABLED`]: true };', true],
     ["computed const", 'const key = "REVIEW_PILOT_DISABLED"; export const doors = { [key]: true };', true],
   ] as const)("door maps discover %s properties", (_shape, source, value) => {
@@ -94,14 +182,15 @@ describe("pilot source discovery controls", () => {
     ]);
   });
 
-  test("nonboolean refusal-copy and reader registries remain outside the boolean map census", () => {
+  test("unnamed nonboolean registries must be explicitly classified", () => {
     const source = `
       const copy: { REVIEW_PILOT_DISABLED: "off" | "blocked" } = { REVIEW_PILOT_DISABLED: "off" };
       export const copies = { ...copy };
       export const readers = { REVIEW_PILOT_DISABLED: () => true };
       export const metadata = { REVIEW_PILOT_DISABLED: ["off"] };
     `;
-    expect(discoverPilotSources(new Map([["metadata.ts", source]]), new Set()).declarations).toEqual([]);
+    expect(() => discoverPilotSources(new Map([["metadata.ts", source]]), new Set()))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*metadata.ts:2.*REVIEW_PILOT_DISABLED/);
   });
 
   test.each([

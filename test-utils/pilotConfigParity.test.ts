@@ -107,13 +107,22 @@ describe("SCRUM-810 review negative controls", () => {
 
   test.each([
     "/* Example:\n CUSTODY_REOPEN_PILOT_DISABLED: false,\n*/\n",
-    "const example = {\n CUSTODY_REOPEN_PILOT_DISABLED: false,\n};\n",
+    'const example = "CUSTODY_REOPEN_PILOT_DISABLED: false";\n',
   ])("F3: door-map values ignore unrelated examples: %s", async (example) => {
     const file = "convex/utils/fixedAssetLifecycleContainment.ts";
     const parity = await parityWithSources({
       [file]: example + read(file),
     });
     expect(parity.shippedValue("CUSTODY_REOPEN_PILOT_DISABLED")).toBe(true);
+  }, RELOAD_TIMEOUT_MS);
+
+  test("R12: an executable private door is refused even when its name is discovered elsewhere", async () => {
+    const file = "convex/utils/fixedAssetLifecycleContainment.ts";
+    const parity = await parityWithSources({
+      [file]: "const example = { CUSTODY_REOPEN_PILOT_DISABLED: false };\n" + read(file),
+    });
+    expect(() => parity.shippedValue("CUSTODY_REOPEN_PILOT_DISABLED"))
+      .toThrow(/PILOT_SOURCE_UNCLASSIFIED.*fixedAssetLifecycleContainment.ts:1.*CUSTODY_REOPEN_PILOT_DISABLED/);
   }, RELOAD_TIMEOUT_MS);
 
   test("F4: replacing only the manual-journal guard cannot certify", async () => {
