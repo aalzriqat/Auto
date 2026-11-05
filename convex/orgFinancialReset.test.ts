@@ -1,3 +1,4 @@
+// NON-PILOT-CERTIFYING: the conservative census matches a commission-line table-name argument; no switch is replaced.
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
