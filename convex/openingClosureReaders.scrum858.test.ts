@@ -16,6 +16,7 @@ import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
   OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
+  SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
   OPENING_SUSPENSE_OPEN_WARNING,
 } from "./utils/closeWarnings";
 import { computeCloseChecklist } from "./accountingPeriods";
@@ -1196,7 +1197,7 @@ async function retainedHeaderSeed(count = 11) {
 }
 
 test("R15f retained source history refuses without partial results or a generic reader exception", () => withFrozenScheduler(async () => {
-  const { owner, orgId } = await retainedHeaderSeed(18);
+  const { owner, orgId } = await retainedHeaderSeed(22);
   const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
   expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {},
     isReconciled: false, unexplainedOpeningDifference: null });
@@ -1219,34 +1220,53 @@ test("R15f retained source history becomes an acknowledgeable checklist unavaila
   expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES);
 }), 300_000);
 
-test.each([0, 1, 2, 4, 8, 16, 32, 64, 128])("R15f checklist refuses truthfully after admission stage %s", (stage) => withFrozenScheduler(async () => {
+test("R15f checklist refuses truthfully after admission stage %s", () => withFrozenScheduler(async () => {
   const { t, orgId, periodId } = await fixture(undefined, false, true);
   const period = await t.run(ctx => ctx.db.get(periodId));
   if (!period) throw new Error("Missing R15f period");
-  let admissions = 0;
-  let refused = false;
-  const checklist = await t.run(ctx => computeCloseChecklist({ ...ctx, meta: {
+  let completeAdmissions = 0;
+  await t.run(ctx => computeCloseChecklist({ ...ctx, meta: {
     ...ctx.meta,
     getTransactionMetrics: async () => {
-      const metrics = await ctx.meta.getTransactionMetrics();
-      if (admissions++ < stage) return metrics;
-      refused = true;
-      return { ...metrics, bytesRead: { ...metrics.bytesRead, remaining: 0 } };
+      completeAdmissions++;
+      return ctx.meta.getTransactionMetrics();
     },
   } }, orgId, period));
-  expect(refused).toBe(true);
-  expect(checklist.canClose).toBe(true);
-  expect(checklist.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
-  const families = [
-    ["EMPLOYEE_ADVANCES", checklist.employeeAdvancesReconciliation],
-    ["SUPPLIER_RECOVERABLES", checklist.supplierRecoverablesReconciliation],
-    ["PARTNER_CAPITAL", checklist.partnerCapitalReconciliation],
-  ] as const;
-  for (const [family, result] of families) {
-    if (result.status !== "UNAVAILABLE") continue;
-    expect(result).toMatchObject({ unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
-    expect(checklist.warnings).toContain(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
-    expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  expect(completeAdmissions).toBeGreaterThan(128);
+  console.info("R15f exhaustive admission stages", completeAdmissions);
+  for (let stage = 0; stage < completeAdmissions; stage++) {
+    let admissions = 0;
+    let refused = false;
+    const checklist = await t.run(ctx => computeCloseChecklist({ ...ctx, meta: {
+      ...ctx.meta,
+      getTransactionMetrics: async () => {
+        const metrics = await ctx.meta.getTransactionMetrics();
+        if (admissions++ < stage) return metrics;
+        refused = true;
+        return { ...metrics, bytesRead: { ...metrics.bytesRead, remaining: 0 } };
+      },
+    } }, orgId, period));
+    expect(refused).toBe(true);
+    expect(checklist.canClose).toBe(true);
+    expect(checklist.warnings).not.toContain(OPENING_SUSPENSE_OPEN_WARNING);
+    if (checklist.supplierPayablesReconciliation.status === "UNAVAILABLE") {
+      expect(checklist.supplierPayablesReconciliation).toMatchObject({
+        unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, isReconciled: false,
+      });
+      expect(checklist.warnings).toContain(SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING);
+      expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
+    }
+    const families = [
+      ["EMPLOYEE_ADVANCES", checklist.employeeAdvancesReconciliation],
+      ["SUPPLIER_RECOVERABLES", checklist.supplierRecoverablesReconciliation],
+      ["PARTNER_CAPITAL", checklist.partnerCapitalReconciliation],
+    ] as const;
+    for (const [family, result] of families) {
+      if (result.status !== "UNAVAILABLE") continue;
+      expect(result).toMatchObject({ unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+      expect(checklist.warnings).toContain(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+      expect(checklist.warnings).not.toContain(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+    }
   }
 }), 300_000);
 
