@@ -38,7 +38,7 @@ import {
   SupplierPayablesReconciliationResult,
   type SharedGlBalances,
 } from "./accountingReports";
-import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { getCumulativeBalancesAsOfBounded } from "./accounting/accountSnapshots";
 
 const OPENING_SOURCE_FAMILY_WARNINGS = {
   EMPLOYEE_ADVANCES: EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
@@ -528,8 +528,8 @@ export async function computeCloseChecklist(
   // three: each reading it alone pushed the checklist past the per-transaction document limit.
   let glRead: ReturnType<SharedGlBalances> | undefined;
   const sharedGl: SharedGlBalances = (cutoff) => {
-    if (cutoff !== period.endDate) return getCumulativeBalancesAsOf(ctx, orgId, cutoff);
-    glRead ??= getCumulativeBalancesAsOf(ctx, orgId, cutoff);
+    if (cutoff !== period.endDate) return getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff);
+    glRead ??= getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff);
     return glRead;
   };
 
@@ -566,8 +566,8 @@ export async function computeCloseChecklist(
   // run them concurrently rather than five sequential round-trips.
   const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
-      computeSubledgerReconciliation(ctx, orgId, period.endDate),
-      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
+      computeSubledgerReconciliation(ctx, orgId, period.endDate, true),
+      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate, true),
       computeSupplierPayablesReconciliation(ctx, orgId, period.endDate, {
         outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
       }),

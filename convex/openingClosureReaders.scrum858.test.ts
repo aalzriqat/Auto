@@ -10,6 +10,7 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   OPENING_DIFFERENCE_WARNING_BY_FAMILY,
@@ -21,6 +22,8 @@ import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import {
   computeEmployeeAdvancesReconciliation,
   computeSupplierRecoverablesReconciliation,
+  computeSubledgerReconciliation,
+  computeVehicleInventoryReconciliation,
   PROVENANCE_BATCH_DOC_BUDGET,
   PROVENANCE_RANGE_BUDGET,
 } from "./accountingReports";
@@ -1196,15 +1199,16 @@ test("events with large payloads make the provenance reader answer OVER_LIMIT, n
 // SCRUM-858 round 5 (Seat 2 MEDIUM): the provenance scan must keep reading only what it needs. Organization-wide
 // history of other families must never make a small control history unavailable, and the scan must stay inside
 // an explicit, stated read budget whichever strategy it picks. Observed counts are harness evidence only.
-async function cumulativeLimitSeed(descriptionBytes: number, unrelatedJournals: number) {
+async function cumulativeLimitSeed(descriptionBytes: number, unrelatedJournals: number, historyDebitKey = "CASH_ON_HAND") {
   const seed = await fixture(undefined, false, true);
   const { t, owner, orgId, employeeId, periodId } = seed;
   const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
   const recovery = accounts.find((row) => row.systemKey === "RECEIVABLE_FROM_SUPPLIERS");
   const cash = accounts.find((row) => row.systemKey === "CASH_ON_HAND");
   const retained = accounts.find((row) => row.systemKey === "RETAINED_EARNINGS");
+  const historyDebit = accounts.find((row) => row.systemKey === historyDebitKey);
   const actor = await t.run((ctx) => ctx.db.query("users").first());
-  if (!recovery || !cash || !retained || !actor) throw new Error("Missing cumulative limit fixture accounts/actor");
+  if (!recovery || !cash || !retained || !historyDebit || !actor) throw new Error("Missing cumulative limit fixture accounts/actor");
   await t.run((ctx) => ctx.db.patch(periodId, { snapshotFastPathEligible: undefined }));
   await seedReversedAdvancePairs(t, orgId, employeeId, recovery._id, actor._id, 20, "cumulative", RECOVERY_FAMILY, cash._id, 0,
     { periodId, lineDescriptionBytes: descriptionBytes });
@@ -1216,7 +1220,7 @@ async function cumulativeLimitSeed(descriptionBytes: number, unrelatedJournals: 
           sourceId: `cumulative-${i}`, category: "SYSTEM", memo: "Synthetic unrelated balanced journal",
           status: "POSTED", currency: "JOD", postedBy: actor._id, postedAt: Date.now(), createdAt: Date.now(),
         });
-        await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 1, accountId: cash._id,
+        await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 1, accountId: historyDebit._id,
           debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: Date.now() });
         await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 2, accountId: retained._id,
           debitMinor: 0, creditMinor: 1000, currency: "JOD", scale: 2, accountingDate: Date.now() });
@@ -1230,15 +1234,16 @@ async function cumulativeLimitSeed(descriptionBytes: number, unrelatedJournals: 
   return seed;
 }
 
-test.each([
-  { limit: "bytes", descriptionBytes: 160_000, unrelatedJournals: 0 },
-  { limit: "ranges", descriptionBytes: 0, unrelatedJournals: 4_000 },
-])("cumulative GL after provenance returns OVER_LIMIT without a partial balance ($limit)", ({ descriptionBytes, unrelatedJournals }) => withFrozenScheduler(async () => {
-  const { owner, orgId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
-  const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
-  expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false,
-    currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
-}), 300_000);
+function expectCumulativeGlOverLimit(descriptionBytes: number, unrelatedJournals: number) {
+  return withFrozenScheduler(async () => {
+    const { owner, orgId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
+    const result = await owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId });
+    expect(result).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false,
+      currencies: [], byCurrency: {}, unexplainedOpeningDifference: null });
+  });
+}
+test("cumulative GL after provenance returns OVER_LIMIT without a partial balance ('bytes')", () => expectCumulativeGlOverLimit(160_000, 0), 300_000);
+test("cumulative GL after provenance returns OVER_LIMIT without a partial balance ('ranges')", () => expectCumulativeGlOverLimit(0, 4_000), 300_000);
 
 test("cumulative GL small-description control preserves complete balances and snapshot close", () => withFrozenScheduler(async () => {
   const { owner, orgId, periodId } = await cumulativeLimitSeed(64, 0);
@@ -1250,16 +1255,94 @@ test("cumulative GL small-description control preserves complete balances and sn
   expect(checklist.supplierRecoverablesReconciliation.byCurrency.JOD).toMatchObject({ glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000 });
 }), 300_000);
 
-test.each([
-  { limit: "bytes", descriptionBytes: 160_000, unrelatedJournals: 0 },
-  { limit: "ranges", descriptionBytes: 0, unrelatedJournals: 4_000 },
-])("cumulative GL closeChecklist uses elapsed snapshots for retained periods ($limit)", ({ descriptionBytes, unrelatedJournals }) => withFrozenScheduler(async () => {
-  const { owner, orgId, periodId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
-  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
-  expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
-  expect(checklist.supplierRecoverablesReconciliation.byCurrency.JOD).toMatchObject({
-    glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000, discrepancyMinor: 0,
+function expectCumulativeSnapshotClose(descriptionBytes: number, unrelatedJournals: number) {
+  return withFrozenScheduler(async () => {
+    const { owner, orgId, periodId } = await cumulativeLimitSeed(descriptionBytes, unrelatedJournals);
+    const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+    expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+    expect(checklist.supplierRecoverablesReconciliation.byCurrency.JOD).toMatchObject({
+      glBalanceMinor: 70_000, subledgerBalanceMinor: 70_000, discrepancyMinor: 0,
+    });
   });
+}
+test("cumulative GL closeChecklist uses elapsed snapshots for retained periods ('bytes')", () => expectCumulativeSnapshotClose(160_000, 0), 300_000);
+test("cumulative GL closeChecklist uses elapsed snapshots for retained periods ('ranges')", () => expectCumulativeSnapshotClose(0, 4_000), 300_000);
+
+test("cumulative GL close OVER_LIMIT remains an acknowledgeable warning", () => withFrozenScheduler(async () => {
+  const seed = await cumulativeLimitSeed(160_000, 0);
+  const { t, owner, orgId, employeeId, periodId } = seed;
+  const accounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
+  const advances = accounts.find((row) => row.systemKey === "EMPLOYEE_ADVANCES");
+  const cash = accounts.find((row) => row.systemKey === "CASH_ON_HAND");
+  const actor = await t.run((ctx) => ctx.db.query("users").first());
+  if (!advances || !cash || !actor) throw new Error("Missing warning control accounts/actor");
+  await seedReversedAdvancePairs(t, orgId, employeeId, advances._id, actor._id, 20, "close-fat", ADVANCE_FAMILY, cash._id, 0,
+    { periodId, lineDescriptionBytes: 240_000 });
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  expect(checklist.supplierRecoverablesReconciliation).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT",
+    isReconciled: false, currencies: [], byCurrency: {} });
+  expect(checklist.warnings).toContain(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES);
+  await expect(owner.mutation(api.accountingPeriods.close, { orgId, periodId })).rejects.toThrow("Review and acknowledge every warning");
+  await owner.mutation(api.accountingPeriods.close, { orgId, periodId, acknowledgedWarnings: checklist.warnings });
+  expect((await t.run((ctx) => ctx.db.get(periodId)))?.status).toBe("CLOSED");
+}), 300_000);
+
+test("checklist control projection preserves large relevant AR history without per-parent range exhaustion", () => withFrozenScheduler(async () => {
+  const { owner, orgId, periodId } = await cumulativeLimitSeed(0, 4_000, "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+  const checklist = await owner.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+  // All 4,000 journal debits belong to AR. There is no receivable row, so this is a real blocker,
+  // not a reason to fabricate a zero or to fail before the owner can review it.
+  expect(checklist.arReconciliation.byCurrency.JOD).toMatchObject({
+    glArBalanceMinor: 4_000_000, subledgerOutstandingMinor: 0, discrepancyMinor: 4_000_000,
+  });
+  expect(checklist.canClose).toBe(false);
+  expect(checklist.blockers).toContain("AR subledger does not reconcile to the GL for: JOD.");
+}), 300_000);
+
+const PROJECTION_STATUSES = ["POSTED", "REVERSED", "DRAFT", "MISSING", "FOREIGN", "SENTINEL", "FUTURE"] as const;
+async function seedProjectionJournal(
+  ctx: MutationCtx,
+  request: { orgId: Id<"organizations">; periodId: Id<"accountingPeriods">; actorId: Id<"users">;
+    accountId: Id<"chartOfAccounts">; index: number; status: (typeof PROJECTION_STATUSES)[number] },
+) {
+  const { orgId, periodId, actorId, accountId, index, status } = request;
+  const parentOrgId = status === "FOREIGN"
+    ? await ctx.db.insert("organizations", { name: "QA TEST foreign projection", createdAt: Date.now() }) : orgId;
+  const journalEntryId = await ctx.db.insert("journalEntries", { orgId: parentOrgId, periodId,
+    journalNumber: `JE-PROJECTION-${accountId}-${index}`, accountingDate: Date.now(), sourceType: "expenses",
+    sourceId: `projection-${index}`, category: "SYSTEM", memo: "Synthetic projection control",
+    status: status === "DRAFT" ? "DRAFT" : "POSTED", currency: "JOD", postedBy: actorId, postedAt: Date.now(), createdAt: Date.now() });
+  if (status === "REVERSED") await ctx.db.patch(journalEntryId, { status: "REVERSED" });
+  const accountingDate = status === "SENTINEL" ? -1 : Date.now();
+  const date = status === "FUTURE" ? Date.now() + 86_400_000 : accountingDate;
+  await ctx.db.insert("journalLines", { orgId, journalEntryId, lineNumber: 1, accountId: accountId,
+    debitMinor: 1000, creditMinor: 0, currency: "JOD", scale: 2, accountingDate: date,
+    reportPosted: status === "POSTED" || status === "REVERSED" || status === "SENTINEL" || status === "FUTURE" });
+  if (status === "MISSING") await ctx.db.delete(journalEntryId);
+}
+
+test.each([false, true])("checklist control projection preserves posted-line semantics (READY=%s)", (ready) => withFrozenScheduler(async () => {
+  const { t, orgId, periodId } = await fixture();
+  await t.run(async (ctx) => {
+    const actor = await ctx.db.query("users").first();
+    const chart = await ctx.db.query("chartOfAccounts").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+    const controls = chart.filter((row) => row.systemKey === "ACCOUNTS_RECEIVABLE_CUSTOMERS" || row.systemKey === "VEHICLE_INVENTORY");
+    if (!actor || controls.length !== 2) throw new Error("Missing projection fixture accounts/actor");
+    for (const account of controls) {
+      for (const [index, status] of PROJECTION_STATUSES.entries()) {
+        await seedProjectionJournal(ctx, { orgId, periodId, actorId: actor._id, accountId: account._id, index, status });
+      }
+    }
+    if (ready) await ctx.db.insert("journalReportEligibility", { orgId, phase: "READY", cursor: null });
+  });
+  const cutoff = Date.now();
+  const legacy = await t.run((ctx) => computeSubledgerReconciliation(ctx, orgId, cutoff));
+  const targeted = await t.run((ctx) => computeSubledgerReconciliation(ctx, orgId, cutoff, true));
+  expect(targeted).toEqual(legacy);
+  // READY trusts the stored reportPosted bits, including the synthetic foreign parent's posted bit.
+  expect(targeted.byCurrency.JOD).toMatchObject({ glArBalanceMinor: ready ? 3000 : 2000 });
+  expect(await t.run((ctx) => computeVehicleInventoryReconciliation(ctx, orgId, cutoff, true)))
+    .toEqual(await t.run((ctx) => computeVehicleInventoryReconciliation(ctx, orgId, cutoff)));
 }), 300_000);
 
 async function provenanceSeed() {

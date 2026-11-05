@@ -27,6 +27,7 @@ import { requireFeature } from "./subscriptions";
 import {
   getControlAccountBalancesAsOf,
   getCumulativeBalancesAsOf,
+  getCumulativeBalancesAsOfBounded,
   getCumulativeBalancesAsOfChecked,
   hasDocumentHeadroom,
   ReadHeadroomExhausted,
@@ -183,6 +184,47 @@ export async function getPostedLines(
       (l) => (!excludeSentinel || l.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && entryIds.has(l.journalEntryId)
     ),
   ]);
+}
+
+/**
+ * Checklist-only account projection of getPostedLines. AR and inventory discard every other account
+ * anyway; reading those wide descriptions twice concurrently can exhaust bytes before opening checks.
+ * Preserve the READY certificate and the legacy parent/date rules, using the account-leading index.
+ */
+async function getPostedControlLines(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accounts: ReadonlySet<Id<"chartOfAccounts">>,
+  toDate: number | undefined,
+): Promise<Doc<"journalLines">[]> {
+  if (accounts.size === 0) return [];
+  const eligibility = await ctx.db.query("journalReportEligibility")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+  const parents = eligibility?.phase === "READY" ? null : await postedControlParentIds(ctx, orgId);
+  const included: Doc<"journalLines">[] = [];
+  for (const accountId of accounts) {
+    const lines = ctx.db.query("journalLines").withIndex("by_org_account_date", (q) => {
+      const scoped = q.eq("orgId", orgId).eq("accountId", accountId);
+      return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
+    });
+    for await (const line of lines) {
+      if (line.accountingDate === NO_ACCOUNTING_DATE_SENTINEL) continue;
+      const posted = parents ? parents.has(line.journalEntryId) : line.reportPosted === true;
+      if (posted) included.push(line);
+    }
+  }
+  return mergeByCreation([included]);
+}
+
+async function postedControlParentIds(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<Set<Id<"journalEntries">>> {
+  // Retain the legacy reader's two status ranges. Per-parent gets here would add a range per journal
+  // and could make a large, previously readable AR population take close over the 4,096-range limit.
+  const batches = await Promise.all((["POSTED", "REVERSED"] as const).map((status) => ctx.db
+    .query("journalEntries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)).collect()));
+  return new Set(batches.flat().map((entry) => entry._id));
 }
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
@@ -695,7 +737,8 @@ export type SubledgerReconciliationResult = {
 export async function computeSubledgerReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<SubledgerReconciliationResult> {
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).
@@ -709,7 +752,9 @@ export async function computeSubledgerReconciliation(
       a.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES
     ).map((a) => a._id));
 
-    const lines = await getPostedLines(ctx, orgId, undefined, toDate);
+    const lines = scopeGlToControls
+      ? await getPostedControlLines(ctx, orgId, arAccountIds, toDate)
+      : await getPostedLines(ctx, orgId, undefined, toDate);
     const arLines = lines.filter((l) => arAccountIds.has(l.accountId));
     // Never sum minor units across currencies (JOD fils + USD cents is not a
     // meaningful number) — accumulate each currency's GL balance separately.
@@ -800,7 +845,8 @@ async function computeGlBalanceByCurrency(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   systemKey: SystemKey,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<Map<string, number>> {
   const account = await ctx.db
     .query("chartOfAccounts")
@@ -810,7 +856,10 @@ async function computeGlBalanceByCurrency(
   const glByCurrency = new Map<string, number>();
   if (!account) return glByCurrency;
 
-  const lines = (await getPostedLines(ctx, orgId, undefined, toDate)).filter((l) => l.accountId === account._id);
+  const posted = scopeGlToControls
+    ? await getPostedControlLines(ctx, orgId, new Set([account._id]), toDate)
+    : await getPostedLines(ctx, orgId, undefined, toDate);
+  const lines = posted.filter((l) => l.accountId === account._id);
   for (const l of lines) {
     const delta = account.normalBalance === "DEBIT" ? l.debitMinor - l.creditMinor : l.creditMinor - l.debitMinor;
     glByCurrency.set(l.currency, (glByCurrency.get(l.currency) ?? 0) + delta);
@@ -841,7 +890,8 @@ function combineGlAndSubledger(
 export async function computeVehicleInventoryReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<GlVsSubledgerResult> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const vehicles = await ctx.db
@@ -864,7 +914,7 @@ export async function computeVehicleInventoryReconciliation(
   const subByCurrency = new Map<string, number>();
   if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
 
-  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, toDate);
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, toDate, scopeGlToControls);
   return combineGlAndSubledger(glByCurrency, subByCurrency);
 }
 
@@ -1388,7 +1438,7 @@ export async function computeSupplierPayablesReconciliation(
   // counted against `readLimit` (documents) and `readBytesLimit` (bytes), and each is admitted against the transaction's own
   // remaining read headroom; it is refused as OVER_LIMIT past any of them. The trial balance and the other
   // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
-  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit);
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit, true);
   if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
   const glByCurrency=new Map<string,number>();
@@ -1800,14 +1850,10 @@ async function addSystemAccount(
   if (account) accounts.add(account._id);
 }
 
-/** Whole-ledger balances at a cutoff, shared by readers that run in one transaction. The close checklist runs three
- * opening-family readers at the same cutoff; each used to read the whole ledger itself, so one shared read serves all
- * three. This removes the repeated whole-ledger scans and nothing more: it does NOT keep the checklist inside Convex's
- * 32,000-document, 4,096-range and 16 MiB function limits (https://docs.convex.dev/production/state/limits), because
- * the provenance and subledger reads still sit on top of it (SCRUM-858 PR #710 R11: two controls with 1,024 reversed
- * pairs each read 38,045 documents). That bound is the headroom check in `readBoundedDocuments`, which makes
- * each of those reads report OVER_LIMIT instead of letting the platform stop the function. */
-export type SharedGlBalances = (cutoff: number) => Promise<Awaited<ReturnType<typeof getCumulativeBalancesAsOf>>>;
+/** One complete, bounded GL read shared by the opening readers in a transaction. Both success and refusal
+ * are cached: every GL period, snapshot, entry and line read checks live headroom and charges the same
+ * document/byte budget. Earlier provenance work therefore cannot leave an unguarded GL scan (R15d). */
+export type SharedGlBalances = (cutoff: number) => ReturnType<typeof getCumulativeBalancesAsOfBounded>;
 
 async function glNetByAccounts(
   ctx: QueryCtx,
@@ -1816,9 +1862,11 @@ async function glNetByAccounts(
   accounts: ReadonlySet<Id<"chartOfAccounts">>,
   normalSide: "DEBIT" | "CREDIT",
   shared?: SharedGlBalances,
-): Promise<Map<string, number>> {
+): Promise<Map<string, number> | "OVER_LIMIT"> {
+  const read = await (shared ? shared(cutoff) : getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff));
+  if (read.status === "OVER_LIMIT") return "OVER_LIMIT";
   const byCurrency = new Map<string, number>();
-  for (const balance of await (shared ? shared(cutoff) : getCumulativeBalancesAsOf(ctx, orgId, cutoff))) {
+  for (const balance of read.balances) {
     if (!accounts.has(balance.accountId)) continue;
     const net = normalSide === "DEBIT" ? balance.debitMinor - balance.creditMinor : balance.creditMinor - balance.debitMinor;
     byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + net);
@@ -1838,7 +1886,7 @@ export async function openingSuspenseIsOpen(ctx: QueryCtx, orgId: Id<"organizati
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE))
     .first();
   if (!account) return false;
-  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT);
+  const gl = await getControlAccountBalancesAsOf(ctx, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT, true);
   if (gl.status !== "OK") return true;
   return gl.balances.some((balance) => balance.debitMinor !== balance.creditMinor);
 }
@@ -1875,6 +1923,7 @@ export async function computeEmployeeAdvancesReconciliation(
   const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "EMPLOYEE_ADVANCE");
   if (familyRefusal) return unavailableFamilyResult(familyRefusal);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -1930,6 +1979,7 @@ export async function computeSupplierRecoverablesReconciliation(
   const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "SUPPLIER_RECOVERABLE");
   if (familyRefusal) return unavailableFamilyResult(familyRefusal);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",
@@ -2007,6 +2057,7 @@ export async function computePartnerCapitalReconciliation(
   // Draws debit Partner Drawings, a separate account that lowers each partner's balance.
   await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_DRAWINGS);
   const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "CREDIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
   return {
     ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
     status: "AVAILABLE",

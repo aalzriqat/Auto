@@ -1,0 +1,60 @@
+{
+  "id": "opening-cumulative-close-relevant-ar-control",
+  "fingerprint": "74c5c72ab169abccf6e80dff38a76cbdc03e0ffb6000d97650da134da8eab446",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15d",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedRetainedOpeningHistory",
+      "input": {
+        "reversalPairs": 20,
+        "balancedArJournals": 4000,
+        "snapshotCertified": false,
+        "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "closeChecklist.ar.glArBalanceMinor",
+      "value": 4000000
+    },
+    {
+      "observable": "closeChecklist.ar.subledgerOutstandingMinor",
+      "value": 0
+    },
+    {
+      "observable": "closeChecklist.canClose",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "checklist control projection preserves large relevant AR history without per-parent range exhaustion"
+  },
+  "matrixRow": "SCRUM-858-opening-cumulative-read-budget"
+}

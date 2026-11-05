@@ -1,0 +1,83 @@
+{
+  "id": "opening-cumulative-close-warning-ack",
+  "fingerprint": "073dc9404c08fb63fb3afac2879b38f38ca291ca962757a7f1ae6a6c1c273147",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15d",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedRetainedOpeningHistory",
+      "input": {
+        "reversalPairs": 20,
+        "descriptionBytes": 160000,
+        "unrelatedBalancedJournals": 0,
+        "snapshotCertified": false,
+        "transactionLimits": true,
+        "employeeReversalPairs": 20,
+        "employeeDescriptionBytes": 240000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "acknowledge": false
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "acknowledge": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "close.withoutAcknowledgment.refused",
+      "value": true
+    },
+    {
+      "observable": "close.withAcknowledgment.periodStatus",
+      "value": "CLOSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "cumulative GL close OVER_LIMIT remains an acknowledgeable warning"
+  },
+  "matrixRow": "SCRUM-858-opening-cumulative-read-budget"
+}

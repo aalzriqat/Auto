@@ -102,6 +102,34 @@ export async function getCumulativeBalancesAsOf(
   return (await readCumulativeBalances(ctx, orgId, asOfDate, undefined)).balances;
 }
 
+export type BoundedCumulativeBalances =
+  | { status: "OK"; balances: CumulativeBalance[] }
+  | { status: "OVER_LIMIT" };
+
+/**
+ * The opening readers compose provenance and GL work in one transaction. Admit every GL read against
+ * that transaction's live headroom, and charge every period, snapshot, entry and line to one budget.
+ * Keep the original cumulative API unchanged for existing reports. No partial balance escapes a refusal.
+ */
+export async function getCumulativeBalancesAsOfBounded(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number,
+): Promise<BoundedCumulativeBalances> {
+  try {
+    const read = await readCumulativeBalances(ctx, orgId, asOfDate, undefined, cumulativeReadBudget(ctx));
+    return { status: "OK", balances: read.balances };
+  } catch (error) {
+    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    throw error;
+  }
+}
+
+function cumulativeReadBudget(ctx: QueryCtx): VerificationBudget {
+  // Each standalone GL reproduction fits these caps. Live headroom must also account for prior reads.
+  return new VerificationBudget(ctx, { accountIds: [], readLimit: 30_000, readBytesLimit: 14 * 1024 * 1024 });
+}
+
 export type CheckedCumulativeBalances =
   | { status: "OK"; balances: CumulativeBalance[] }
   /**
@@ -167,10 +195,17 @@ export async function getCumulativeBalancesAsOfChecked(
   asOfDate: number,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
   readLimit: number,
-  readBytesLimit: number
+  readBytesLimit: number,
+  boundedScan = false,
 ): Promise<CheckedCumulativeBalances> {
-  const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit, readBytesLimit });
-  return read.outcome === "OK" ? { status: "OK", balances: read.balances } : { status: read.outcome };
+  try {
+    const budget = boundedScan ? cumulativeReadBudget(ctx) : undefined;
+    const read = await readCumulativeBalances(ctx, orgId, asOfDate, { accountIds, readLimit, readBytesLimit }, budget);
+    return read.outcome === "OK" ? { status: "OK", balances: read.balances } : { status: read.outcome };
+  } catch (error) {
+    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    throw error;
+  }
 }
 
 type BalanceAdder = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => void;
@@ -295,18 +330,48 @@ class VerificationBudget {
     this.remainingBytes -= documentSize(parent);
     return this.remainingBytes >= 0;
   }
+
+  /** Stream one complete population (or a point probe), stopping before a read the transaction cannot take. */
+  async read<T extends object>(query: AsyncIterable<T>, count = Infinity): Promise<T[]> {
+    if (!(await this.hasHeadroom())) throw new ReadHeadroomExhausted();
+    const iterator = query[Symbol.asyncIterator]();
+    const docs: T[] = [];
+    while (this.remainingDocs >= 0 && docs.length < count) {
+      if (!(await this.hasHeadroom())) throw new ReadHeadroomExhausted();
+      const next = await iterator.next();
+      if (next.done) return docs;
+      if (!this.chargeLine(next.value)) throw new ReadHeadroomExhausted();
+      docs.push(next.value);
+    }
+    if (docs.length === count) return docs;
+    throw new ReadHeadroomExhausted();
+  }
+}
+
+type DocumentQuery<T extends object> = AsyncIterable<T> & { collect(): Promise<T[]>; first(): Promise<T | null> };
+
+function readBalanceDocuments<T extends object>(query: DocumentQuery<T>, budget?: VerificationBudget): Promise<T[]> {
+  return budget ? budget.read(query) : query.collect();
+}
+
+async function readBalanceProbe<T extends object>(query: DocumentQuery<T>, budget?: VerificationBudget): Promise<T | null> {
+  if (!budget) return query.first();
+  return (await budget.read(query, 1))[0] ?? null;
 }
 
 async function addPeriodSnapshots(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   periodId: Id<"accountingPeriods">,
-  addTo: BalanceAdder
+  addTo: BalanceAdder,
+  budget?: VerificationBudget,
 ): Promise<void> {
-  const snapshots = await ctx.db
-    .query("accountBalanceSnapshots")
-    .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", periodId))
-    .collect();
+  const snapshots = await readBalanceDocuments(
+    ctx.db
+      .query("accountBalanceSnapshots")
+      .withIndex("by_org_period", (q) => q.eq("orgId", orgId).eq("periodId", periodId)),
+    budget,
+  );
   for (const s of snapshots) {
     addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
   }
@@ -318,13 +383,16 @@ async function addEntryLines(
   orgId: Id<"organizations">,
   entries: ReadonlyArray<{ _id: Id<"journalEntries"> }>,
   addTo: BalanceAdder,
-  checkLineOrg: boolean
+  checkLineOrg: boolean,
+  budget?: VerificationBudget,
 ): Promise<boolean> {
   for (const entry of entries) {
-    const lines = await ctx.db
-      .query("journalLines")
-      .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
-      .collect();
+    const lines = await readBalanceDocuments(
+      ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id)),
+      budget,
+    );
     for (const line of lines) {
       if (checkLineOrg && line.orgId !== orgId) return false;
       addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
@@ -417,12 +485,15 @@ async function readCumulativeBalances(
   orgId: Id<"organizations">,
   asOfDate: number,
   /** When given, the journal-line path verifies line and parent ownership within document and byte caps and the transaction's read headroom (see getCumulativeBalancesAsOfChecked). */
-  check: LedgerCheck | undefined
+  check: LedgerCheck | undefined,
+  budget?: VerificationBudget,
 ): Promise<{ balances: CumulativeBalance[]; outcome: ReadOutcome }> {
-  const periods = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .collect();
+  const periods = await readBalanceDocuments(
+    ctx.db
+      .query("accountingPeriods")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    budget,
+  );
 
   const fullyElapsedPeriods = periods.filter((p) => p.endDate <= asOfDate);
   const containingPeriod = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
@@ -437,7 +508,7 @@ async function readCumulativeBalances(
   };
 
   for (const period of fullyElapsedPeriods) {
-    await addPeriodSnapshots(ctx, orgId, period._id, addTo);
+    await addPeriodSnapshots(ctx, orgId, period._id, addTo, budget);
   }
 
   if (containingPeriod) {
@@ -448,14 +519,16 @@ async function readCumulativeBalances(
     if (containingPeriod.snapshotFastPathEligible) {
       // The indexed probe reads at most one entry. A future-dated posting
       // requires the original date-bounded journal-line calculation.
-      const futureEntry = await ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_period_date", (q) =>
-          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
-        )
-        .first();
+      const futureEntry = await readBalanceProbe(
+        ctx.db
+          .query("journalEntries")
+          .withIndex("by_org_period_date", (q) =>
+            q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
+          ),
+        budget,
+      );
       if (!futureEntry) {
-        await addPeriodSnapshots(ctx, orgId, containingPeriod._id, addTo);
+        await addPeriodSnapshots(ctx, orgId, containingPeriod._id, addTo, budget);
         return { balances: Array.from(totals.values()), outcome: "OK" };
       }
     }
@@ -463,15 +536,17 @@ async function readCumulativeBalances(
     // On a partial-period read, narrow the range by accounting date before
     // loading entries. Include REVERSED entries too: their original lines
     // remain postings, offset by a separately posted reversal.
-    const allEntriesInPeriod = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org_period_date", (q) =>
-        q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
-      )
-      .collect();
+    const allEntriesInPeriod = await readBalanceDocuments(
+      ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_period_date", (q) =>
+          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).lte("accountingDate", asOfDate)
+        ),
+      budget,
+    );
     const entriesInPeriod = allEntriesInPeriod.filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
-    if (!(await addEntryLines(ctx, orgId, entriesInPeriod, addTo, check !== undefined))) {
+    if (!(await addEntryLines(ctx, orgId, entriesInPeriod, addTo, check !== undefined, budget))) {
       return { balances: [], outcome: "INCONSISTENT_REFERENCE" };
     }
 
@@ -531,7 +606,25 @@ export async function getControlAccountBalancesAsOf(
   orgId: Id<"organizations">,
   accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
   asOfDate: number,
-  readLimit: number
+  readLimit: number,
+  boundedScan = false,
+): Promise<BoundedControlBalances> {
+  try {
+    return await readControlAccountBalancesAsOf(ctx, orgId, accountIds, asOfDate, readLimit,
+      boundedScan ? cumulativeReadBudget(ctx) : undefined);
+  } catch (error) {
+    if (error instanceof ReadHeadroomExhausted) return { status: "OVER_LIMIT" };
+    throw error;
+  }
+}
+
+async function readControlAccountBalancesAsOf(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accountIds: ReadonlyArray<Id<"chartOfAccounts">>,
+  asOfDate: number,
+  readLimit: number,
+  budget?: VerificationBudget,
 ): Promise<BoundedControlBalances> {
   let remaining = readLimit;
   const over: BoundedControlBalances = { status: "OVER_LIMIT" };
@@ -542,88 +635,118 @@ export async function getControlAccountBalancesAsOf(
     return remaining >= 0;
   };
 
-  const periods = await ctx.db
-    .query("accountingPeriods")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .take(remaining + 1);
+  const periods = await readControlDocuments(
+    ctx.db.query("accountingPeriods").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    remaining + 1,
+    budget,
+  );
   if (!charge(periods.length)) return over;
 
-  const fullyElapsedPeriods = periods.filter((p) => p.endDate <= asOfDate);
-  const containingPeriod = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
-
-  const snapshotPeriods = new Set<Id<"accountingPeriods">>(fullyElapsedPeriods.map((p) => p._id));
-  let journalPeriod: (typeof periods)[number] | undefined;
-  if (containingPeriod) {
-    // Same rule as getCumulativeBalancesAsOf: a certified period with no entry dated after asOfDate is
-    // summed from its snapshots; any other containing period is rebuilt from journal lines.
-    let useSnapshots = false;
-    if (containingPeriod.snapshotFastPathEligible) {
-      const futureEntry = await ctx.db
-        .query("journalEntries")
-        .withIndex("by_org_period_date", (q) =>
-          q.eq("orgId", orgId).eq("periodId", containingPeriod._id).gt("accountingDate", asOfDate)
-        )
-        .first();
-      if (!charge(futureEntry ? 1 : 0)) return over;
-      useSnapshots = !futureEntry;
-    }
-    if (useSnapshots) snapshotPeriods.add(containingPeriod._id);
-    else journalPeriod = containingPeriod;
-  }
-
+  const selected = await selectControlReadPeriods(ctx, { orgId, asOfDate, periods, budget, charge });
+  if (selected === "OVER_LIMIT") return over;
   const totals = new Map<string, CumulativeBalance>();
-  const addTo = (accountId: Id<"chartOfAccounts">, currency: string, debitMinor: number, creditMinor: number) => {
+  const addTo: BalanceAdder = (accountId, currency, debitMinor, creditMinor) => {
     const key = `${accountId}__${currency}`;
     const existing = totals.get(key) ?? { accountId, currency, debitMinor: 0, creditMinor: 0 };
     existing.debitMinor += debitMinor;
     existing.creditMinor += creditMinor;
     totals.set(key, existing);
   };
-
-  const entryStatusCache = new Map<Id<"journalEntries">, boolean>();
-  const accountsWithLaterLines: Array<Id<"chartOfAccounts">> = [];
+  const reader: ControlBalanceReader = {
+    ctx, orgId, asOfDate, budget, charge, addTo, ...selected,
+    remaining: () => remaining, entryStatusCache: new Map(), accountsWithLaterLines: [],
+  };
   for (const accountId of new Set(accountIds)) {
-    const later = await ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", asOfDate))
-      .first();
-    if (later) {
-      if (!charge(1)) return over;
-      accountsWithLaterLines.push(accountId);
-    }
-    const snapshots = await ctx.db
-      .query("accountBalanceSnapshots")
-      .withIndex("by_org_account_currency_period_shard", (q) => q.eq("orgId", orgId).eq("accountId", accountId))
-      .take(remaining + 1);
-    if (!charge(snapshots.length)) return over;
-    for (const s of snapshots) {
-      if (snapshotPeriods.has(s.periodId)) addTo(s.accountId, s.currency, s.runningDebitMinor, s.runningCreditMinor);
-    }
-
-    if (journalPeriod) {
-      const period = journalPeriod;
-      // Include REVERSED entries too: their original lines remain postings, offset by a separately
-      // posted reversal (as getCumulativeBalancesAsOf does).
-      const lines = await ctx.db
-        .query("journalLines")
-        .withIndex("by_org_account_date", (q) =>
-          q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", period.startDate).lte("accountingDate", asOfDate)
-        )
-        .take(remaining + 1);
-      if (!charge(lines.length)) return over;
-      for (const line of lines) {
-        let counts = entryStatusCache.get(line.journalEntryId);
-        if (counts === undefined) {
-          if (!charge(1)) return over;
-          const entry = await ctx.db.get(line.journalEntryId);
-          if (!entry || entry.orgId !== orgId) return { status: "INCONSISTENT_REFERENCE" };
-          counts = entry.periodId === period._id && (entry.status === "POSTED" || entry.status === "REVERSED");
-          entryStatusCache.set(line.journalEntryId, counts);
-        }
-        if (counts) addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
-      }
-    }
+    const outcome = await addControlAccountBalance(reader, accountId);
+    if (outcome !== "OK") return { status: outcome };
   }
+  return { status: "OK", balances: Array.from(totals.values()), accountsWithLaterLines: reader.accountsWithLaterLines };
+}
 
-  return { status: "OK", balances: Array.from(totals.values()), accountsWithLaterLines };
+type ControlBalanceReader = {
+  ctx: QueryCtx;
+  orgId: Id<"organizations">;
+  asOfDate: number;
+  budget?: VerificationBudget;
+  remaining: () => number;
+  charge: (rows: number) => boolean;
+  addTo: BalanceAdder;
+  snapshotPeriods: Set<Id<"accountingPeriods">>;
+  journalPeriod?: { _id: Id<"accountingPeriods">; startDate: number };
+  entryStatusCache: Map<Id<"journalEntries">, boolean>;
+  accountsWithLaterLines: Array<Id<"chartOfAccounts">>;
+};
+
+async function selectControlReadPeriods(
+  ctx: QueryCtx,
+  request: Pick<ControlBalanceReader, "orgId" | "asOfDate" | "budget" | "charge"> & {
+    periods: Array<{ _id: Id<"accountingPeriods">; startDate: number; endDate: number; snapshotFastPathEligible?: boolean }>;
+  },
+): Promise<Pick<ControlBalanceReader, "snapshotPeriods" | "journalPeriod"> | "OVER_LIMIT"> {
+  const { orgId, asOfDate, periods, budget, charge } = request;
+  const snapshotPeriods = new Set(periods.filter((p) => p.endDate <= asOfDate).map((p) => p._id));
+  const containing = periods.find((p) => p.startDate <= asOfDate && asOfDate < p.endDate);
+  if (!containing) return { snapshotPeriods };
+  if (!containing.snapshotFastPathEligible) return { snapshotPeriods, journalPeriod: containing };
+  const future = await readBalanceProbe(ctx.db.query("journalEntries").withIndex("by_org_period_date", (q) =>
+    q.eq("orgId", orgId).eq("periodId", containing._id).gt("accountingDate", asOfDate)), budget);
+  if (!charge(future ? 1 : 0)) return "OVER_LIMIT";
+  if (future) return { snapshotPeriods, journalPeriod: containing };
+  snapshotPeriods.add(containing._id);
+  return { snapshotPeriods };
+}
+
+async function addControlAccountBalance(reader: ControlBalanceReader, accountId: Id<"chartOfAccounts">): Promise<ReadOutcome> {
+  const { ctx, orgId, asOfDate, budget, charge, snapshotPeriods, journalPeriod, addTo } = reader;
+  const later = await readBalanceProbe(ctx.db.query("journalLines").withIndex("by_org_account_date", (q) =>
+    q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", asOfDate)), budget);
+  if (later) {
+    if (!charge(1)) return "OVER_LIMIT";
+    reader.accountsWithLaterLines.push(accountId);
+  }
+  const snapshots = await readControlDocuments(ctx.db.query("accountBalanceSnapshots")
+    .withIndex("by_org_account_currency_period_shard", (q) => q.eq("orgId", orgId).eq("accountId", accountId)), reader.remaining() + 1, budget);
+  if (!charge(snapshots.length)) return "OVER_LIMIT";
+  for (const snapshot of snapshots) {
+    if (snapshotPeriods.has(snapshot.periodId)) addTo(snapshot.accountId, snapshot.currency, snapshot.runningDebitMinor, snapshot.runningCreditMinor);
+  }
+  if (!journalPeriod) return "OK";
+  const lines = await readControlDocuments(ctx.db.query("journalLines").withIndex("by_org_account_date", (q) =>
+    q.eq("orgId", orgId).eq("accountId", accountId).gte("accountingDate", journalPeriod.startDate).lte("accountingDate", asOfDate)), reader.remaining() + 1, budget);
+  if (!charge(lines.length)) return "OVER_LIMIT";
+  return addControlJournalLines(reader, lines);
+}
+
+async function addControlJournalLines(
+  reader: ControlBalanceReader,
+  lines: ReadonlyArray<{ journalEntryId: Id<"journalEntries">; accountId: Id<"chartOfAccounts">; currency: string; debitMinor: number; creditMinor: number }>,
+): Promise<ReadOutcome> {
+  for (const line of lines) {
+    const counts = await controlEntryCounts(reader, line.journalEntryId);
+    if (typeof counts !== "boolean") return counts;
+    if (counts) reader.addTo(line.accountId, line.currency, line.debitMinor, line.creditMinor);
+  }
+  return "OK";
+}
+
+async function controlEntryCounts(reader: ControlBalanceReader, entryId: Id<"journalEntries">): Promise<boolean | "OVER_LIMIT" | "INCONSISTENT_REFERENCE"> {
+  const { ctx, orgId, budget, entryStatusCache, journalPeriod } = reader;
+  const cached = entryStatusCache.get(entryId);
+  if (cached !== undefined) return cached;
+  if (!reader.charge(1)) return "OVER_LIMIT";
+  if (budget && !(await budget.hasHeadroom())) return "OVER_LIMIT";
+  const entry = await ctx.db.get(entryId);
+  if (budget && entry && !budget.chargeLine(entry)) return "OVER_LIMIT";
+  if (!entry || entry.orgId !== orgId) return "INCONSISTENT_REFERENCE";
+  const counts = entry.periodId === journalPeriod?._id && (entry.status === "POSTED" || entry.status === "REVERSED");
+  entryStatusCache.set(entryId, counts);
+  return counts;
+}
+
+function readControlDocuments<T extends object>(
+  query: AsyncIterable<T> & { take(n: number): Promise<T[]> },
+  count: number,
+  budget?: VerificationBudget,
+): Promise<T[]> {
+  return budget ? budget.read(query, count) : query.take(count);
 }

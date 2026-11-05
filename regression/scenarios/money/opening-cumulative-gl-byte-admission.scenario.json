@@ -1,0 +1,75 @@
+{
+  "id": "opening-cumulative-gl-byte-admission",
+  "fingerprint": "acf4022e2f81e9f01da9d67f2c47244237ef247b3870d72be355b63f07f3f56a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15d",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedRetainedOpeningHistory",
+      "input": {
+        "reversalPairs": 20,
+        "descriptionBytes": 160000,
+        "unrelatedBalancedJournals": 0,
+        "snapshotCertified": false,
+        "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.cumulativeGlControl",
+      "input": {
+        "complete": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierRecoverablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "OVER_LIMIT"
+    },
+    {
+      "observable": "reconciliation.balanceMap.empty",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c24449",
+      "digest": "ee1db0b29d2aa6d6b95c194b63bc32fcfd49b068ba4c1781230d20d42da587bd"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "cumulative GL after provenance returns OVER_LIMIT without a partial balance ('bytes')"
+  },
+  "matrixRow": "SCRUM-858-opening-cumulative-read-budget",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "bec120497b01a1c82e7d72c3c90604ae27476543"
+  }
+}
