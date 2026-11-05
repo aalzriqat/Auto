@@ -982,6 +982,27 @@ describe("dealOverview.financedDealOverview", () => {
     expect(view!.vehicleCostBasis).toBeNull();
   });
 
+  test("SCRUM-902: view:finance without view:cost_price gets the financed profit withheld as CostAccessRequired, in the overview and in the cockpit", async () => {
+    const s = await seed("902");
+    const applicationId = await insertApplication(s);
+    const finance = await callerWith(s, "finance902", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE]);
+    const view = await finance.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    expect(view!.financialSummary!.profit).toEqual({ available: false, reason: "CostAccessRequired" });
+    const cockpit = await finance.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId });
+    expect(cockpit!.money!.profit).toEqual({ available: false, reason: "CostAccessRequired" });
+    expect(cockpit!.money!.managementProfit).toEqual({ available: false, reason: "CostAccessRequired" });
+    expect(JSON.stringify(view)).not.toContain("VEHICLE_COST");
+  });
+
+  test("SCRUM-902 control: view:finance plus view:cost_price still reads the financed profit", async () => {
+    const s = await seed("902b");
+    const applicationId = await insertApplication(s);
+    const both = await callerWith(s, "both902", [PERMISSIONS.VIEW_SALES, PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+    const view = await both.query(api.dealOverview.financedDealOverview, { orgId: s.orgId, applicationId });
+    const profit = view!.financialSummary!.profit;
+    expect(profit.available === false && profit.reason === "CostAccessRequired").toBe(false);
+  });
+
   test("view:cost_price reads the vehicle's cost but not the deal's economics", async () => {
     const s = await seed("6");
     const applicationId = await insertApplication(s);

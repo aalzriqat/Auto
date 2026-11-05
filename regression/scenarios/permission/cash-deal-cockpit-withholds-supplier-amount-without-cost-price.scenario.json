@@ -1,0 +1,55 @@
+{
+  "id": "cash-deal-cockpit-withholds-supplier-amount-without-cost-price",
+  "fingerprint": "2df54ff5d200e6b6503d9df9e13649c2019ad727ec3cbe1be0ec851ae420fb19",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-finance-no-cost",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplier.position",
+      "value": "OWED_TO_DEALERSHIP"
+    },
+    {
+      "observable": "supplier.amountMinor",
+      "value": "null"
+    },
+    {
+      "observable": "marginFigure",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/cashDealCockpit.test.ts",
+    "testName": "SCRUM-902: a role without view:cost_price sees the supplier row and position but not its amount"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "bc8da13fe8a1e643a255a3ff62640f84a700abde"
+  }
+}

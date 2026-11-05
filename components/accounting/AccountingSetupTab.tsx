@@ -33,6 +33,16 @@ type SetupActionMessage<T> = (outcome: T) => string;
 
 export type AccountingSetupView = "all" | "settings" | "close";
 
+function OpeningBalanceReadback({ orgId, canManageFinance, canReadCost, t }: Readonly<{
+  orgId: Id<"organizations">;
+  canManageFinance: boolean;
+  canReadCost: boolean;
+  t: (key: string) => string;
+}>) {
+  if (!canReadCost) return <p className="text-sm text-muted-foreground">{t("OpeningReadbackCostAccessNeeded")}</p>;
+  return <OpeningBalanceApprovalPanel orgId={orgId} canManageFinance={canManageFinance} />;
+}
+
 export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: AccountingSetupView }> = {}) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -219,7 +229,7 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
           organization's opening balance forward. It renders nothing when
           nothing is pending. */}
       {showSettings && (
-        <OpeningBalanceApprovalPanel orgId={activeOrgId} canManageFinance={canManageFinance} />
+        <OpeningBalanceReadback orgId={activeOrgId} canManageFinance={canManageFinance} canReadCost={hasPermission(PERMISSIONS.VIEW_COST_PRICE)} t={t} />
       )}
 
       {!canManageFinance && (

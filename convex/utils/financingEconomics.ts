@@ -2441,7 +2441,9 @@ export type AccountingProfit =
         | "UnknownMargin"
         | "DealCancelled"
         | "SaleNotCompleted"
-        | "FinancedDirectUnverified";
+        | "FinancedDirectUnverified"
+        /** SCRUM-902: the caller lacks view:cost_price, and every profit figure is measured against acquisition cost. */
+        | "CostAccessRequired";
     };
 
 /** Cash management net keeps the accounting result's meaning separate. */

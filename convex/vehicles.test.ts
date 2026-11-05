@@ -692,6 +692,7 @@ describe("inventory intelligence", () => {
       startDate: saleDate - 1000,
       endDate: saleDate + 1000,
     });
+    if (!report) throw new Error("report withheld");
 
     // 8000 purchase + 2000 landed = 10000 cost basis, not one replacing the other.
     expect(report.sales[0].vehicleCost).toBe(10000);

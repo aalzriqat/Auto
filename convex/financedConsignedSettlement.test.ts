@@ -4027,6 +4027,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     // What the ledger recognized.
     expect(report.totalProfit).toBe(3_000);
@@ -4048,6 +4049,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       orgId: s.orgId,
       ...range(),
     });
+    if (!perf) throw new Error("report withheld");
 
     const row = perf.find((r: { totalProfit: number }) => r.totalProfit !== 0) ?? perf[0];
     expect(row.totalProfit).toBe(3_000);
@@ -4065,6 +4067,7 @@ describe("the sales reports reconcile to the ledger on a financed direct deal", 
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalProfit).toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
   });
 });
@@ -4290,6 +4293,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const dash = (await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId,
       timeRange: "ALL_TIME",
@@ -4667,6 +4671,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     const row = report.sales.find((r: { _id: string }) => r._id === saleId)!;
     // UNKNOWN, and distinguishable from zero — a sale that earned nothing and a
@@ -4693,6 +4698,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       ...range(),
     });
+    if (!perf) throw new Error("report withheld");
 
     const row = perf[0]!;
     expect(row.totalProfit).toBe(0);
@@ -4711,6 +4717,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalProfit).toBe(3_000);
     expect(report.unknownMarginSaleCount).toBe(0);
   });
@@ -6323,6 +6330,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     // The ledger took the owned-stock path and the report agrees with it. The
     // premise, asserted so this cannot pass by both being wrong together.
@@ -6444,6 +6452,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     // 3,000 is what the GL, the supplier claim and the cockpit recognized.
     expect(report.totalRevenue).toBe(3_000);
@@ -6470,6 +6479,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       ...range(),
     });
+    if (!before) throw new Error("report withheld");
     expect(before.totalSupplierSettlement).toBe(15_000);
 
     await s.t.run(async (ctx) => {
@@ -6481,6 +6491,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
       orgId: s.orgId,
       ...range(),
     });
+    if (!after) throw new Error("report withheld");
 
     // The entitlement the claim was raised against, unchanged by a later edit.
     expect(after.totalSupplierSettlement).toBe(15_000);

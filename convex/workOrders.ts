@@ -112,7 +112,7 @@ export const list = query({
     vehicleId: v.optional(v.id("vehicles")),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES, PERMISSIONS.VIEW_COST_PRICE]);
 
     let results = [];
     if (args.vehicleId) {

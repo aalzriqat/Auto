@@ -61,6 +61,9 @@ const PERMS = [
   "view:vehicles", "view:customers",
   "manage:finance", "view:finance", "view:expenses", "view:reports",
   "view:deposits", "create:deposits", "manage:deposits",
+  // SCRUM-902: the supplier entitlement is cost; sales.consignedSalePreview returns null without it, and completing a
+  // SOURCED sale already needs it (SCRUM-886 round 13), so a role that reaches this dialog holds it.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;

@@ -13,7 +13,7 @@ import { api } from "./_generated/api";
 const CAP = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 6, 15);
-const FULL_PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales", "view:expenses"];
+const FULL_PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales", "view:expenses", "view:cost_price"];
 
 afterEach(() => {
   vi.useRealTimers();

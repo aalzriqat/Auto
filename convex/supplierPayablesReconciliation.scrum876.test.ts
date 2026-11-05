@@ -47,7 +47,7 @@ async function seedDealer(tag: string) {
     orgName: `AP876 ${tag}`,
     roleName: "Owner",
     memberName: `${tag} User`,
-    permissions: ["view:finance", "manage:finance", "view:vehicles", "create:vehicles"],
+    permissions: ["view:finance", "view:cost_price", "manage:finance", "view:vehicles", "create:vehicles"],
   });
   await t.run((ctx) => ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"] }));
   const asUser = t.withIdentity({ subject: `${tag}_user`, clerkId: `${tag}_user` });

@@ -20,6 +20,8 @@ const PERMISSIONS = [
   "approve:requests",
   "manage:finance",
   "view:finance",
+  // SCRUM-902: the sourcing readers need cost access as well as finance.
+  "view:cost_price",
 ];
 
 async function setup() {
@@ -506,6 +508,7 @@ describe("inventory valuation split", () => {
     await makeSourcedVehicle(t, orgId);
 
     const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+    if (!report) throw new Error("report withheld");
 
     // Summing both into one figure overstated the org's assets against its own
     // general ledger — a sourced car never posts to Vehicle Inventory.
@@ -520,6 +523,7 @@ describe("inventory valuation split", () => {
     await makeSourcedVehicle(t, orgId);
 
     const report = await asUser.query(api.reports.getInventoryReport, { orgId });
+    if (!report) throw new Error("report withheld");
     expect(report.sourcedCount).toBe(1);
     expect(report.sourcedCommitment).toBe(12800);
     expect(report.totalValue).toBe(0);

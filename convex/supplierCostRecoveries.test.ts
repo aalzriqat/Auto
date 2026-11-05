@@ -294,12 +294,14 @@ describe("profit readers exclude a supplier-borne cost", () => {
   test("the P&L carries only the showroom's cost", async () => {
     const s = await seedBoth("pnl");
     const pnl = await s.as.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...range });
+    if (!pnl) throw new Error("report withheld");
     expect(pnl.costOfGoodsSold).toBe(SHOWROOM_COST);
   });
 
   test("the expenses report and the per-vehicle total carry only the showroom's cost", async () => {
     const s = await seedBoth("exrep");
     const report = await s.as.query(api.reports.getExpensesReport, { orgId: s.orgId, ...range });
+    if (!report) throw new Error("report withheld");
     expect(report.totalExpenses).toBe(SHOWROOM_COST);
     const total = await s.as.query(api.expenses.totalByVehicle, { orgId: s.orgId, vehicleId: s.sourcedId });
     expect(total).toBe(SHOWROOM_COST);

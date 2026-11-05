@@ -1,0 +1,39 @@
+{
+  "id": "performance-and-expenses-still-serve-reports-and-cost-price",
+  "fingerprint": "51811505e0e1c6fa7dae2c12dc30b017d51e88d02c660d32db59f7e9126aebd9",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-and-cost",
+        "org": "A"
+      },
+      "action": "reports.getSalespersonPerformance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "report"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "salesperson performance and expenses reports: a role holding both view:reports and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

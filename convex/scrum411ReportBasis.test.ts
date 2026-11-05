@@ -120,7 +120,9 @@ const WINDOW = () => ({ startDate: Date.now() - 30 * DAY, endDate: Date.now() + 
 /** What each report consumer answers for the org's one sale, in major units. */
 async function readEveryConsumer(s: Seeded) {
   const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+  if (!report) throw new Error("report withheld");
   const performance = await s.owner.as.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, ...WINDOW() });
+  if (!performance) throw new Error("report withheld");
   const dashboard = await s.owner.as.query(api.dashboard.stats, { orgId: s.orgId, timeRange: "ALL_TIME" });
   const transactions = await s.t.run((ctx) =>
     ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).collect()
@@ -422,6 +424,7 @@ describe("SCRUM-411 - cancelling the deal removes it from every report", () => {
     });
 
     const report = await s.owner.as.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, ...WINDOW() });
+    if (!report) throw new Error("report withheld");
     expect(report.totalRevenue).toBe(0);
     expect(report.totalProfit).toBe(0);
     expect(report.sales).toHaveLength(0);

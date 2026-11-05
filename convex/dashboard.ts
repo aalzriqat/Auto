@@ -291,10 +291,12 @@ export const stats = query({
       canRoleView(role, PERMISSIONS.VIEW_SALES) ||
       canRoleView(role, PERMISSIONS.VIEW_REPORTS) ||
       canRoleView(role, PERMISSIONS.VIEW_FINANCE);
+    // SCRUM-902: cost and profit tiles also need view:cost_price (SCRUM-886), the grant the vehicle readers use.
     const canViewCostMetrics =
-      canRoleView(role, PERMISSIONS.VIEW_EXPENSES) ||
-      canRoleView(role, PERMISSIONS.VIEW_REPORTS) ||
-      canRoleView(role, PERMISSIONS.VIEW_FINANCE);
+      (canRoleView(role, PERMISSIONS.VIEW_EXPENSES) ||
+        canRoleView(role, PERMISSIONS.VIEW_REPORTS) ||
+        canRoleView(role, PERMISSIONS.VIEW_FINANCE)) &&
+      canRoleView(role, PERMISSIONS.VIEW_COST_PRICE);
     const canViewProfitMetrics = canViewSalesMetrics && canViewCostMetrics;
 
     const now = Date.now();

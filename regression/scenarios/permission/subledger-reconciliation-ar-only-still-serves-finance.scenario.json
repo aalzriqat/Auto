@@ -1,0 +1,39 @@
+{
+  "id": "subledger-reconciliation-ar-only-still-serves-finance",
+  "fingerprint": "4e2696fcf14bc21085b608fd16644a5cb5f6c6b549a23c6cdbadac8383873100",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "accountingReports.subledgerReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "report"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "accountingReports.subledgerReconciliation: AR only, not cost-bearing, so view:finance alone still reads (SCRUM-902 class control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

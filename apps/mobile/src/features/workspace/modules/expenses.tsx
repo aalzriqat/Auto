@@ -105,6 +105,11 @@ export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; o
 
   return (
     <>
+      <Text style={styles.recordMeta}>
+        {locale === "ar"
+          ? "تُحجب مصاريف السيارات إذا لم يتضمن دورك صلاحية عرض سعر التكلفة."
+          : "Vehicle-linked expenses are omitted when your role lacks cost-price access."}
+      </Text>
       <ModuleList
         data={results}
         emptyLabel={locale === "ar" ? "لا توجد مصاريف." : "No expenses found."}

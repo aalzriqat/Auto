@@ -1,0 +1,47 @@
+{
+  "id": "cash-deal-cockpit-still-serves-profit-with-finance-and-cost-price",
+  "fingerprint": "0ffee45e93ff00aa738fe78fe3a8c766bea411139dec5b952696f8ae387d440c",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-deal-finance-and-cost",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "profit.available",
+      "value": true
+    },
+    {
+      "observable": "vehicleCostLine",
+      "value": "present"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "sales.dealCockpit: a role holding view:finance and view:cost_price still gets the profit with its vehicle-cost line (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

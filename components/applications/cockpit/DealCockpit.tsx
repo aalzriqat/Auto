@@ -944,6 +944,7 @@ export function DealCockpit({
     canViewApplications &&
       !permissionsLoading &&
       hasPermission(PERMISSIONS.VIEW_FINANCE) &&
+      hasPermission(PERMISSIONS.VIEW_COST_PRICE) &&
       deal &&
       typeof deal.money?.shortfall?.totalMinor === "number"
       ? { orgId, applicationId }
@@ -1097,11 +1098,11 @@ export function DealCockpit({
     api.documents.getHistoryForApplication,
     canViewApplications && deal ? { orgId, applicationId } : "skip"
   );
-  // The deal's cost lines, same permission as the document rows; skipped rather
-  // than thrown for a caller without it.
+  const canViewDealCosts = canViewApplications && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  // The bundled cost read requires both grants, including while permissions load.
   const dealCosts = useQuery(
     api.financeDealCosts.listDealCosts,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    canViewDealCosts && deal ? { orgId, applicationId } : "skip"
   );
   // SCRUM-417 UX5 (S7). A step's success is held until the read model shows the
   // fact THAT action wrote (each call site names it: `reflectedWhen`), then shown
@@ -1558,7 +1559,7 @@ export function DealCockpit({
           // Undefined is "loading" until the permission has resolved AND, for a
           // caller who holds it, the query has answered; only a resolved caller
           // WITHOUT the permission is told the rows are not theirs to read.
-          loading: permissionsLoading || (canViewApplications && dealCosts === undefined),
+          loading: permissionsLoading || (canViewDealCosts && dealCosts === undefined),
           costs: dealCosts
             ? ({
                 lines: dealCosts.fees.map((fee) => ({
@@ -5769,6 +5770,7 @@ export function DealCockpitView({
     deal?.money?.settlesDirectToSupplier === true &&
     deal.money.routeKnown &&
     supplierRow?.position === "OWED_TO_DEALERSHIP" &&
+    supplierRow.amountMinor !== null &&
     supplierReceipt?.actionable === true;
   const canSettleSupplier = callerMaySettleSupplier && supplierClaimSettleable;
   const supplierReceiptBankOptions = useQuery(

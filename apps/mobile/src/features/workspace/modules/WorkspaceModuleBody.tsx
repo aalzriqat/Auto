@@ -79,9 +79,9 @@ function ModuleBody({
     case "accounting":
       return <AccountingModule orgId={org._id} />;
     case "sourcing":
-      return <SourcingModule orgId={org._id} />;
+      return <SourcingModule orgId={org._id} permissions={myMembership.permissions} />;
     case "reports":
-      return <ReportsModule orgId={org._id} />;
+      return <ReportsModule orgId={org._id} permissions={myMembership.permissions} />;
     case "team":
       return <TeamModule orgId={org._id} />;
     case "applications":

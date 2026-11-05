@@ -4,6 +4,8 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -80,6 +82,32 @@ function pipelineStageKey(row: { hasArrived: boolean; isHeld: boolean }): keyof 
   return row.isHeld ? "HELD" : "ON_ORDER";
 }
 
+function useSourcingData(activeOrgId: Id<"organizations"> | null, queryOrgId: Id<"organizations"> | null, statusFilter: StatusFilter, payDialogPayable: SourcingPayable | null) {
+  // allPayables for summary cards (unfiltered); payables for the table (filtered by statusFilter).
+  const allPayables = useQuery(
+    api.sourcingPayables.list,
+    queryOrgId ? { orgId: queryOrgId } : "skip"
+  );
+  const payables = useQuery(
+    api.sourcingPayables.list,
+    queryOrgId ? { orgId: queryOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
+  );
+  const paymentBanks = useQuery(
+    api.sourcingPayables.listPaymentBankOptions,
+    activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
+  );
+
+  // The live special-order pipeline — cars on order for a customer that have
+  // not sold yet. Payables below only exist once the sale completes, so without
+  // this the page was empty for the entire life of an order.
+  const pipeline = useQuery(
+    api.sourcingPayables.listPipeline,
+    queryOrgId ? { orgId: queryOrgId } : "skip"
+  );
+
+  return { allPayables, payables, paymentBanks, pipeline };
+}
+
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
@@ -92,28 +120,15 @@ export function SourcingClient() {
   const [isPaying, setIsPaying] = useState(false);
   const markPaidIdempotencyKeyRef = useRef<string | null>(null);
 
-  // allPayables for summary cards (unfiltered); payables for the table (filtered by statusFilter).
-  const allPayables = useQuery(
-    api.sourcingPayables.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-  const payables = useQuery(
-    api.sourcingPayables.list,
-    activeOrgId ? { orgId: activeOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
-  );
-  const paymentBanks = useQuery(
-    api.sourcingPayables.listPaymentBankOptions,
-    activeOrgId && payDialogPayable ? { orgId: activeOrgId, payableId: payDialogPayable._id } : "skip"
-  );
-  const bankMethod = paymentMethod === "BANK_TRANSFER";
+  // SCRUM-902: a sourced car's supplier amount is its cost, so the server requires view:cost_price as well as
+  // view:finance (STATEMENT_PERMISSIONS). Ask for the same pair before querying, and say so instead of erroring.
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const canViewSupplierCost =
+    !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  const queryOrgId = canViewSupplierCost ? activeOrgId : null;
 
-  // The live special-order pipeline — cars on order for a customer that have
-  // not sold yet. Payables below only exist once the sale completes, so without
-  // this the page was empty for the entire life of an order.
-  const pipeline = useQuery(
-    api.sourcingPayables.listPipeline,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
+  const { allPayables, payables, paymentBanks, pipeline } = useSourcingData(activeOrgId, queryOrgId, statusFilter, payDialogPayable);
+  const bankMethod = paymentMethod === "BANK_TRANSFER";
 
   const markPaid = useMutation(api.sourcingPayables.markPaid);
   const markArrived = useMutation(api.vehicles.markSourcedVehicleArrived);
@@ -184,15 +199,31 @@ export function SourcingClient() {
   const allPending = allPayables?.filter((p: SourcingPayable) => p.status === "PENDING") ?? [];
   const totalOwed = allPending.reduce((sum: number, p: SourcingPayable) => sum + p.amountDue, 0);
 
+  const header = (
+    <div className="flex items-center gap-3">
+      <Truck className="h-6 w-6 text-orange-500" />
+      <div>
+        <h1 className="text-2xl font-bold">{t("SpecialOrdersSourcing" as any)}</h1>
+        <p className="text-sm text-muted-foreground">{t("SpecialOrdersDesc" as any)}</p>
+      </div>
+    </div>
+  );
+
+  // Truthful refusal: no figures, no empty tables that read as "nothing owed".
+  if (!permissionsLoading && !canViewSupplierCost) {
+    return (
+      <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
+        {header}
+        <p role="note" className="rounded-md border p-6 text-center text-sm text-muted-foreground">
+          {t("SourcingCostAccessRequired" as any)}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
-      <div className="flex items-center gap-3">
-        <Truck className="h-6 w-6 text-orange-500" />
-        <div>
-          <h1 className="text-2xl font-bold">{t("SpecialOrdersSourcing" as any)}</h1>
-          <p className="text-sm text-muted-foreground">{t("SpecialOrdersDesc" as any)}</p>
-        </div>
-      </div>
+      {header}
 
       {/* Summary row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const stubs = vi.hoisted(() => ({
   total: undefined as number | undefined,
-  permissions: ["view:expenses"] as string[],
+  permissions: ["view:expenses", "view:cost_price"] as string[],
   permissionsLoading: false,
   orgId: "org1" as string | null,
 }));
@@ -43,21 +43,21 @@ function renderBar() {
 afterEach(() => {
   cleanup();
   stubs.total = undefined;
-  stubs.permissions = [PERMISSIONS.VIEW_EXPENSES];
+  stubs.permissions = [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_COST_PRICE];
   stubs.permissionsLoading = false;
   stubs.orgId = "org1";
 });
 
 describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
   test("holds the panel's place while the expense total loads", () => {
-    stubs.permissions = [PERMISSIONS.VIEW_EXPENSES];
+    stubs.permissions = [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_COST_PRICE];
     renderBar();
     const placeholder = screen.getByTestId("vehicle-cost-bar-loading");
     expect(placeholder.getAttribute("aria-busy")).toBe("true");
   });
 
   test("the loaded panel replaces the placeholder", () => {
-    stubs.permissions = [PERMISSIONS.VIEW_EXPENSES];
+    stubs.permissions = [PERMISSIONS.VIEW_EXPENSES, PERMISSIONS.VIEW_COST_PRICE];
     stubs.total = 500;
     renderBar();
     expect(screen.queryByTestId("vehicle-cost-bar-loading")).toBeNull();
@@ -66,6 +66,13 @@ describe("VehicleCostBar — no layout shift (SCRUM-628 F-06)", () => {
 
   test("a viewer without the expense permission gets nothing, not a placeholder", () => {
     stubs.permissions = [];
+    const { container } = renderBar();
+    expect(container.innerHTML).toBe("");
+  });
+
+  test("SCRUM-902: a viewer with view:expenses but without view:cost_price gets nothing, and the total is never asked for", () => {
+    stubs.permissions = [PERMISSIONS.VIEW_EXPENSES];
+    stubs.total = 500;
     const { container } = renderBar();
     expect(container.innerHTML).toBe("");
   });

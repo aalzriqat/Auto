@@ -4,6 +4,7 @@ import { mutation } from "./functions";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { Doc, Id } from "./_generated/dataModel";
 
 type LedgerTransaction = Doc<"transactions">;
@@ -184,7 +185,7 @@ export const list = query({
     endDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const q = ctx.db
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
@@ -203,7 +204,12 @@ export const list = query({
       })
       .paginate(args.paginationOpts);
 
-    const page = await enrichLedgerTransactions(ctx, pageResult.page);
+    // SCRUM-902: a VEHICLE_PURCHASE row's amount is the acquisition cost, so a caller without
+    // view:cost_price (SCRUM-886) does not receive it. The row is absent, never zeroed.
+    const visibleRows = canReadVehicleCost(role)
+      ? pageResult.page
+      : pageResult.page.filter((row) => row.category !== "VEHICLE_PURCHASE");
+    const page = await enrichLedgerTransactions(ctx, visibleRows);
     return { ...pageResult, page };
   },
 });

@@ -1,0 +1,78 @@
+{
+  "id": "cost-disclosure-902f-direct-refusals",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.approveDealerPurchaseAmount",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "direct-refusals",
+        "approvedAmountMinor": 8000000,
+        "supplierEntitlementMinor": 9000000,
+        "doors": [
+          "setSupplierSettlementRoute",
+          "approveDealerPurchaseAmount"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.approveDealerPurchaseAmount",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "direct-refusals",
+        "approvedAmountMinor": 8000000,
+        "supplierEntitlementMinor": 9000000,
+        "doors": [
+          "setSupplierSettlementRoute",
+          "approveDealerPurchaseAmount"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "code": "SUPPLIER_DIRECT_SETTLEMENT_REFUSED",
+        "amountFields": "absent"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "code": "SUPPLIER_DIRECT_SETTLEMENT_REFUSED"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "sweep direct supplier route and approval refusals contain no entitlement"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "0c7d591ff6233f37ddfe1dbf35d0aee696675d01c784b6024ba37325c83b1743"
+}

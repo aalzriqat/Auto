@@ -371,3 +371,43 @@ describe("transactions ledger", () => {
     expect(rows[0].isDeleted).toBeUndefined();
   });
 });
+
+describe("transactions.list cost visibility (SCRUM-902 H1)", () => {
+  async function withRole(permissions: string[], clerkId: string) {
+    const base = await setupLedgerOrg();
+    const userId = await base.t.run((ctx) =>
+      ctx.db.insert("users", { clerkId, email: `${clerkId}@example.com`, name: clerkId })
+    );
+    const roleId = await base.t.run((ctx) =>
+      ctx.db.insert("roles", { orgId: base.orgId, name: clerkId, permissions: permissions as any })
+    );
+    await base.t.run((ctx) => ctx.db.insert("memberships", { orgId: base.orgId, userId, roleId }));
+    await base.t.run(async (ctx) => {
+      await ctx.db.insert("transactions", {
+        orgId: base.orgId, type: "OUT" as const, amount: 16000, date: Date.now(),
+        category: "VEHICLE_PURCHASE" as const, description: "Vehicle purchase", vehicleId: base.vehicleId,
+      });
+      await ctx.db.insert("transactions", {
+        orgId: base.orgId, type: "IN" as const, amount: 750, date: Date.now(),
+        category: "DEPOSIT" as const, description: "Deposit held for walk-in customer", vehicleId: base.vehicleId,
+      });
+    });
+    return { ...base, as: base.t.withIdentity({ subject: clerkId }) };
+  }
+  const page = { numItems: 10, cursor: null };
+
+  test("a role with view:finance but not view:cost_price gets no purchase-cost rows and the other rows unchanged", async () => {
+    const { orgId, as } = await withRole(["view:finance"], "finance_only");
+    const result = await as.query(api.transactions.list, { orgId, paginationOpts: page });
+    expect(result.page.map((r: any) => r.category)).toEqual(["DEPOSIT"]);
+    expect(result.page[0]).toMatchObject({ amount: 750, vehicleLabel: "2022 Hyundai Tucson" });
+    expect(JSON.stringify(result)).not.toContain("16000");
+  });
+
+  test("a role with view:finance and view:cost_price still gets the purchase-cost row", async () => {
+    const { orgId, as } = await withRole(["view:finance", "view:cost_price"], "finance_and_cost");
+    const result = await as.query(api.transactions.list, { orgId, paginationOpts: page });
+    expect(result.page.map((r: any) => r.category).sort()).toEqual(["DEPOSIT", "VEHICLE_PURCHASE"]);
+    expect(result.page.find((r: any) => r.category === "VEHICLE_PURCHASE")?.amount).toBe(16000);
+  });
+});

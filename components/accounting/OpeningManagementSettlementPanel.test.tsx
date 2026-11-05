@@ -6,7 +6,7 @@ import { OpeningManagementSettlementPanel } from "./OpeningManagementSettlementP
 import type { Id } from "@/convex/_generated/dataModel";
 
 const fixture = vi.hoisted(() => ({ permissions: ["view:finance", "manage:finance"], actor: "preparer",
-  pending: false, opening: "opening-a", version: "version-a", calls: [] as Array<{ name: string; args: unknown }>, mutation: vi.fn() }));
+  approved: false, pending: false, opening: "opening-a", version: "version-a", calls: [] as Array<{ name: string; args: unknown }>, mutation: vi.fn() }));
 vi.mock("next/navigation", () => ({ useParams: () => ({ orgId: "org-a" }), usePathname: () => "/org-a/accounting",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }) }));
 vi.mock("convex/react", async () => {
@@ -21,19 +21,44 @@ vi.mock("convex/react", async () => {
       if (name === "organizations:listMine") return [{ _id: "org-a" }];
       if (name === "memberships:getMyMembership") return { roleName: "Accountant", permissions: fixture.permissions };
       if (name === "openingManagementSettlement:context") return { actorId: fixture.actor, postedOpening: { id: fixture.opening, observationVersion: fixture.version, currency: "JOD", asOfDate: Date.UTC(2026, 0, 1) } };
+      if (name === "openingManagementSettlement:list" && fixture.approved) return [{ _id: "plan-a", status: "APPROVED" }];
+      if (name === "openingManagementSettlement:report") return { currency: "JOD", throughDate: Date.UTC(2026, 0, 15),
+        officialNetIncomeMinor: 123000, recognisedMinor: 23000, managementProfitMinor: 100000, installments: [] };
       if (name === "openingManagementSettlement:list") return fixture.pending ? [{ _id: "plan-a", status: "PENDING_APPROVAL", createdBy: "preparer", supportingReference: "Synthetic reference", currency: "JOD", totalMinor: 100003,
         installments: Array.from({ length: 7 }, (_, i) => ({ sequence: i + 1, effectiveMonth: Date.UTC(2026, i + 1, 1), amountMinor: i === 6 ? 14287 : 14286 })) }] : [];
       throw new Error("Unexpected management SDK boundary query " + name);
     } };
 });
 beforeEach(() => {
-  fixture.permissions = ["view:finance", "manage:finance"]; fixture.actor = "preparer"; fixture.pending = false;
+  fixture.permissions = ["view:finance", "manage:finance"]; fixture.actor = "preparer"; fixture.pending = false; fixture.approved = false;
   fixture.opening = "opening-a"; fixture.version = "version-a";
   fixture.calls = []; fixture.mutation.mockReset(); fixture.mutation.mockResolvedValue("plan-a");
   vi.stubGlobal("localStorage", { getItem: () => "en", setItem: () => {} });
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function page() { return <OrgProvider><LanguageProvider><OpeningManagementSettlementPanel orgId={"org-a" as Id<"organizations">} /></LanguageProvider></OrgProvider>; }
+
+test.each(["en", "ar"])("SCRUM-902 %s management report skips costs and shows the access note", locale => {
+  fixture.approved = true;
+  vi.stubGlobal("localStorage", { getItem: () => locale, setItem: () => {} });
+  render(page());
+  const note = screen.getByRole("status").textContent;
+  expect(note).toBe(locale === "en"
+    ? "This statement includes vehicle inventory and cost of goods sold. Your role needs cost-price access as well as finance access to see it. Ask an administrator to update your role."
+    : "يتضمن هذا الكشف مخزون المركبات وتكلفة البضاعة المباعة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.");
+  const reads = fixture.calls.filter(call => call.name === "openingManagementSettlement:report");
+  expect(reads.length).toBeGreaterThan(0);
+  expect(reads.every(call => call.args === "skip")).toBe(true);
+});
+
+test("SCRUM-902 cost grant keeps the management report readable", () => {
+  fixture.approved = true;
+  fixture.permissions.push("view:cost_price");
+  render(page());
+  expect(screen.getByText("Native GL net income")).toBeTruthy();
+  expect(fixture.calls.find(call => call.name === "openingManagementSettlement:report")?.args)
+    .toMatchObject({ orgId: "org-a", planId: "plan-a" });
+});
 
 test("a replacement opening clears the entire old draft intent before it can submit", () => {
   const view = render(page());

@@ -1,11 +1,14 @@
 "use client";
 
+import { CostAccessNote } from "./CostAccessNote";
 import { useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrencyFormatter, useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { scaleForCurrency, supportedCurrencyScale } from "./AccountingTabShared";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -125,6 +128,10 @@ export function GeneralLedgerTab() {
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const formatInCurrency = useCurrencyFormatterInCurrency();
+  // SCRUM-902: journal entries carry acquisition cost, so the readers need view:cost_price as well as view:finance.
+  const { hasAllPermissions, isOwner, isLoading: permissionsLoading } = usePermissions();
+  const canReadJournal = isOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+  const journalEnabled = canReadJournal && !permissionsLoading;
 
   const [activeLedgerView, setActiveLedgerView] = useState<"gl" | "register">("gl");
   const [selectedEntryId, setSelectedEntryId] = useState<Id<"journalEntries"> | null>(null);
@@ -166,7 +173,7 @@ export function GeneralLedgerTab() {
     loadMore: loadMoreJournalEntries,
   } = usePaginatedQuery(
     api.accountingLedger.listJournalEntries,
-    activeOrgId && activeLedgerView === "gl"
+    activeOrgId && activeLedgerView === "gl" && journalEnabled
       ? {
           orgId: activeOrgId,
           ...(glPeriodId !== "ALL" ? { periodId: glPeriodId } : {}),
@@ -178,7 +185,7 @@ export function GeneralLedgerTab() {
 
   const entryDetails = useQuery(
     api.accountingLedger.getJournalEntry,
-    activeOrgId && selectedEntryId ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
+    activeOrgId && selectedEntryId && journalEnabled ? { orgId: activeOrgId, journalEntryId: selectedEntryId } : "skip"
   );
 
   const { results: transactions, status, loadMore } = usePaginatedQuery(
@@ -211,6 +218,9 @@ export function GeneralLedgerTab() {
       transaction.description;
   }
 
+  const journalWithheld = activeLedgerView === "gl" && !permissionsLoading && !canReadJournal;
+  const journalVisible = activeLedgerView === "gl" && !journalWithheld;
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -242,7 +252,12 @@ export function GeneralLedgerTab() {
         </div>
       </div>
 
-      {activeLedgerView === "gl" ? (
+      {journalWithheld && (
+        <CostAccessNote>
+          {t("LedgerCostAccessRequired" as any)}
+        </CostAccessNote>
+      )}
+      {journalVisible && (
         <>
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">
@@ -366,7 +381,8 @@ export function GeneralLedgerTab() {
             </p>
           )}
         </>
-      ) : (
+      )}
+      {activeLedgerView !== "gl" && (
         <>
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">
@@ -381,6 +397,12 @@ export function GeneralLedgerTab() {
               {filterActive ? t("ClearFilter" as any) : t("ApplyFilter" as any)}
             </Button>
           </div>
+
+          {!permissionsLoading && !canReadJournal ? (
+            <CostAccessNote>
+              {t("RegisterCostRowsWithheld" as any)}
+            </CostAccessNote>
+          ) : null}
 
           <div className="flex gap-4 text-sm">
             <span className="font-semibold text-emerald-600 dark:text-emerald-400">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>

@@ -23,7 +23,7 @@ process.env.TZ = "UTC";
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Deliberately not a midnight, so every rolling cutoff falls inside a day.
 const NOW = Date.UTC(2026, 6, 15, 13, 37, 11, 123);
-const PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales", "view:expenses"];
+const PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales", "view:expenses", "view:cost_price"];
 const RANGES = ["DAY", "MONTH", "YEAR", "ALL_TIME"] as const;
 
 const begin = makeFunctionReference<"mutation", { orgId: Id<"organizations"> }, { generation: number }>(

@@ -1,0 +1,77 @@
+{
+  "id": "cost-disclosure-902f-concession-oracle",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "concession-oracle",
+        "supplierGapShareMinor": 100000,
+        "observedGuesses": [
+          8999999,
+          9000000,
+          9000001
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "financingEconomics.resolveAppraisalGap",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "concession-oracle",
+        "supplierGapShareMinor": 100000,
+        "observedGuesses": [
+          8999999,
+          9000000,
+          9000001
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "everyGuess": "FORBIDDEN"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "resolution": "recorded"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F1 resolveAppraisalGap cannot compare guessed entitlement without cost access"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "0eefb438c02f8e6c8ef574124cb9df34781f8f33daa3749e9918e69ebdc34e61"
+}

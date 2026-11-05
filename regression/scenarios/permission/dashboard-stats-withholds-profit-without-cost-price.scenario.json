@@ -1,0 +1,51 @@
+{
+  "id": "dashboard-stats-withholds-profit-without-cost-price",
+  "fingerprint": "271623104ac9daf964a02c98dc34be299bb48824b443dbd60683ec4fd0dc293a",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-only",
+        "org": "A"
+      },
+      "action": "dashboard.stats",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "margin",
+      "value": "absent"
+    },
+    {
+      "observable": "basis",
+      "value": "gross"
+    },
+    {
+      "observable": "costLoop",
+      "value": "skipped"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/dashboardCostPermissions.test.ts",
+    "testName": "a viewer with view:reports and no view:cost_price gets the gross basis, no margin, no cost loop"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "ef03e298f866a1cf1bebc71d66fa6941bce36aa5"
+  }
+}

@@ -35,7 +35,7 @@ async function seedPhase4Dealer() {
       orgId,
       name: "Owner",
       permissions: [
-        "view:sales", "manage:finance", "view:finance", "manage:vehicles",
+        "view:sales", "manage:finance", "view:finance", "view:cost_price", "manage:vehicles",
         "create:expenses", "view:expenses", "approve:requests",
       ],
     })
@@ -105,7 +105,7 @@ async function seedWithoutPeriod() {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId, name: "Owner",
-      permissions: ["view:sales", "manage:finance", "view:finance", "create:expenses", "view:expenses"],
+      permissions: ["view:sales", "manage:finance", "view:finance", "view:cost_price", "create:expenses", "view:expenses"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));

@@ -1,0 +1,65 @@
+{
+  "id": "cost-sweep-902g-management-report",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902g-remaining-sweep",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-with-cost",
+        "org": "A"
+      },
+      "action": "openingManagementSettlement.report",
+      "input": {
+        "approved": true,
+        "revokeCost": true,
+        "deleteBasis": true,
+        "hasCostAccess": true
+      }
+    },
+    {
+      "actor": {
+        "role": "custom-without-cost",
+        "org": "A"
+      },
+      "action": "openingManagementSettlement.report",
+      "input": {
+        "approved": true,
+        "revokeCost": true,
+        "deleteBasis": true,
+        "hasCostAccess": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "granted.result",
+      "value": "FIGURES_AVAILABLE"
+    },
+    {
+      "observable": "restricted.result",
+      "value": "FORBIDDEN_COST_PRICE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingManagementSettlement.test.ts",
+    "testName": "SCRUM-902 management profit report requires cost access before basis refusals"
+  },
+  "matrixRow": "SCRUM-902-SWEEP-CLOSURE",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "24869050a64b075faed726db606999d770694c7b"
+  },
+  "fingerprint": "b3fc3b8dc2aad9eb0ada18984281c96068753ba112a5c870eb4986591c4e802e"
+}

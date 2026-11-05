@@ -1,0 +1,43 @@
+{
+  "id": "dashboard-stats-cost-price-alone-still-gets-no-margin",
+  "fingerprint": "842769538fdae390e701844be66772ae6184db17bebd6a6e0a99af3f98be813f",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-cost-only",
+        "org": "A"
+      },
+      "action": "dashboard.stats",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "margin",
+      "value": "absent"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/dashboardCostPermissions.test.ts",
+    "testName": "negative control: view:cost_price alone, with no sales-side grant, still gets no margin"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

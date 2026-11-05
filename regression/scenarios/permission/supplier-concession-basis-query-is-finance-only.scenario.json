@@ -3,7 +3,7 @@
   "steps": [
     {
       "actor": {
-        "role": "approver",
+        "role": "finance-with-cost",
         "org": "A"
       },
       "action": "financingEconomics.supplierConcessionBasis",
@@ -12,6 +12,14 @@
     {
       "actor": {
         "role": "clerk",
+        "org": "A"
+      },
+      "action": "financingEconomics.supplierConcessionBasis",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-without-cost",
         "org": "A"
       },
       "action": "financingEconomics.supplierConcessionBasis",
@@ -26,6 +34,10 @@
     {
       "observable": "step2.refusal",
       "value": "missing-permissions"
+    },
+    {
+      "observable": "step3.refusal",
+      "value": "missing-cost-permission"
     }
   ],
   "rulings": [
@@ -36,14 +48,18 @@
     {
       "id": "SCRUM-760#c23812",
       "digest": "7de1a2da821769ec82c06553529f44a19f5c0e75aecd3295439bc9637f5e8c44"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
     }
   ],
   "impl": {
     "file": "convex/supplierConcession.scrum766c.test.ts",
-    "testName": "the dialog's basis query is finance-only and reports eligibility and the entitlement"
+    "testName": "the dialog's basis query requires finance and cost access and reports eligibility and the entitlement"
   },
   "matrixRow": "pilot-supplier-concession-authority",
-  "fingerprint": "8bfdd4dc4dc28bd85dfd24c1837c1fb0b13df7eb2f94bb5ba74cf726a275fbc5",
+  "fingerprint": "3ec6e24363aee3c0cd7f0ec56255c39ec99121be0447da7d79301036efb0c199",
   "domain": "permission",
   "level": "backend",
   "status": "active",

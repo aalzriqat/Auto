@@ -1,0 +1,77 @@
+{
+  "id": "cost-disclosure-902f-outbox",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "accountingOutbox.listPending",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "outbox",
+        "statuses": [
+          "unfiltered",
+          "PENDING",
+          "POSTED",
+          "FAILED"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "accountingOutbox.listPending",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "outbox",
+        "statuses": [
+          "unfiltered",
+          "PENDING",
+          "POSTED",
+          "FAILED"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "everyStatus": "FORBIDDEN"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "cogsMinor": 9000000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F3 listPending gates cost payloads in every status branch"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "c8e85407aeb2e88f19e742dbf449d3dc82d78289557fafc8410778e8607bd0e7"
+}

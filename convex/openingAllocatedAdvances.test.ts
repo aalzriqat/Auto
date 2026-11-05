@@ -15,7 +15,8 @@ async function fixture() {
     const approverId = await ctx.db.insert("users", { clerkId: "opening-advance-reviewer", email: "reviewer@example.test" });
     const employeeId = await ctx.db.insert("users", { clerkId: "opening-advance-employee", email: "employee@example.test" });
     const ownerRole = await ctx.db.insert("roles", { orgId, name: "OWNER", isSystemOwnerRole: true, permissions: [] });
-    const financeRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance", "view:payroll", "manage:payroll"] });
+    // SCRUM-886: the real ACCOUNTANT role can read cost-bearing opening reviews.
+    const financeRole = await ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance", "view:payroll", "manage:payroll", "view:cost_price"] });
     await ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRole });
     await ctx.db.insert("memberships", { orgId, userId: approverId, roleId: financeRole });
     await ctx.db.insert("memberships", { orgId, userId: employeeId, roleId: financeRole });
@@ -115,10 +116,10 @@ test.each(["PREPARE", "APPROVE"] as const)("finance-only authority cannot %s pay
 
 test("pending payroll allocations require payroll read authority", async () => withFrozenScheduler(async () => {
   const seed = await fixture();
-  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance"] }));
+  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
   await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload);
   expect(await seed.approver.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId })).toEqual([]);
-  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "view:payroll"] }));
+  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "view:payroll", "view:cost_price"] }));
   const visible = await seed.approver.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
   expect(visible).toHaveLength(1);
   expect(visible[0]?.allocations).toEqual(seed.payload.allocations);
@@ -141,7 +142,7 @@ test("finance-only viewer gets only a generic pending state and cannot reject pa
 
 test("payroll manager may inspect a pending opening advance without separate payroll-view grant", async () => withFrozenScheduler(async () => {
   const seed = await fixture();
-  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "manage:payroll"] }));
+  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "manage:payroll", "view:cost_price"] }));
   await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload);
   const visible = await seed.approver.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: seed.orgId });
   expect(visible).toHaveLength(1);
@@ -167,6 +168,9 @@ test("posted opening readback withholds payroll debt from finance-only viewers",
   expect(ownerReadback?.rows).toEqual([expect.objectContaining({ kind: "EMPLOYEE_ADVANCE",
     amountMinor: 100_000, partyId: seed.employeeId, recordAvailable: true })]);
   await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance"] }));
+  expect(await seed.approver.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: seed.orgId })).toBeNull();
+  // Cost access permits this reader, but does not grant access to payroll details.
+  await seed.t.run((ctx) => ctx.db.patch(seed.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
   const financeReadback = await seed.approver.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: seed.orgId });
   expect(financeReadback?.rows).toEqual([{ kind: "EMPLOYEE_ADVANCE", restricted: true }]);
   expect(JSON.stringify(financeReadback)).not.toContain(seed.employeeId);

@@ -48,6 +48,8 @@ const PERMS = [
   "view:customers", "create:customers",
   "manage:finance", "view:finance", "view:reports",
   "view:commissions", "manage:commissions",
+  // SCRUM-902: the consigned sale preview shows the supplier entitlement, which is cost.
+  "view:cost_price",
 ];
 
 const SALE_PRICE = 12_500;
@@ -516,6 +518,7 @@ describe("turnover excludes agent gross", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalRevenue).toBe(MARGIN);
     expect(report.totalCost).toBe(0);
@@ -533,6 +536,7 @@ describe("turnover excludes agent gross", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalRevenue).toBe(OWNED_PRICE);
     expect(report.totalCost).toBe(OWNED_COST);
@@ -551,6 +555,7 @@ describe("turnover excludes agent gross", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalRevenue).toBe(MARGIN + OWNED_PRICE);
     expect(report.totalCost).toBe(OWNED_COST);
@@ -568,6 +573,7 @@ describe("turnover excludes agent gross", () => {
     const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
       orgId: s.orgId, ...range(),
     });
+    if (!rows) throw new Error("report withheld");
     const row = rows.find((r) => r.userId === s.userId)!;
 
     // Ranking reps on 12,500 of someone else's car would put this one above a
@@ -605,6 +611,7 @@ describe("a recorded margin the reader cannot trust", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(Number.isFinite(report.totalProfit)).toBe(true);
     expect(Number.isFinite(report.totalRevenue)).toBe(true);
@@ -626,6 +633,7 @@ describe("a recorded margin the reader cannot trust", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     expect(report.totalProfit).toBe(MARGIN);
   });
@@ -682,6 +690,7 @@ describe("a recorded margin the reader cannot trust", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
 
     // The margin survived, so the earning is known and belongs in the totals.
     expect(report.totalProfit).toBe(MARGIN);
@@ -702,6 +711,7 @@ describe("a recorded margin the reader cannot trust", () => {
     const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
       orgId: s.orgId, ...range(),
     });
+    if (!rows) throw new Error("report withheld");
     expect(rows.every((r) => Number.isFinite(r.totalProfit))).toBe(true);
   });
 });
@@ -770,6 +780,7 @@ describe("ranking a salesperson whose earnings are not fully known", () => {
     const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
       orgId: s.orgId, ...range(),
     });
+    if (!rows) throw new Error("report withheld");
 
     const incomplete = rows.find((r) => r.userId === otherId)!;
     const complete = rows.find((r) => r.userId !== otherId)!;
@@ -805,6 +816,7 @@ describe("ranking a salesperson whose earnings are not fully known", () => {
     const rows = await s.asUser.query(api.reports.getSalespersonPerformance, {
       orgId: s.orgId, ...range(),
     });
+    if (!rows) throw new Error("report withheld");
     expect(rows.every((r) => r.marginComplete)).toBe(true);
     expect(rows[0]!.totalProfit).toBeGreaterThanOrEqual(rows[1]!.totalProfit);
   });
@@ -824,9 +836,11 @@ describe("historical and new agent sales report identically", () => {
     const legacyReport = await legacy.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: legacy.orgId, ...range(),
     });
+    if (!legacyReport) throw new Error("report withheld");
     const freshReport = await fresh.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: fresh.orgId, ...range(),
     });
+    if (!freshReport) throw new Error("report withheld");
 
     expect(legacyReport.totalRevenue).toBe(freshReport.totalRevenue);
     expect(legacyReport.totalCost).toBe(freshReport.totalCost);
@@ -842,12 +856,14 @@ describe("historical and new agent sales report identically", () => {
     const before = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!before) throw new Error("report withheld");
     await s.t.mutation(internal.migrateConsignedSaleBasis.migrateConsignedSaleBasis, {
       orgId: s.orgId,
     });
     const after = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!after) throw new Error("report withheld");
 
     expect(after.totalRevenue).toBe(before.totalRevenue);
     expect(after.totalCost).toBe(before.totalCost);
@@ -865,6 +881,7 @@ describe("per-sale detail", () => {
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!report) throw new Error("report withheld");
     const row = report.sales[0]!;
 
     expect(row.isAgentSale).toBe(true);
@@ -897,9 +914,11 @@ describe("every revenue consumer agrees on the same month", () => {
     const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!sales) throw new Error("report withheld");
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     // The dashboard takes a coarse window rather than explicit dates.
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
@@ -954,9 +973,11 @@ describe("every revenue consumer agrees on the same month", () => {
     const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!sales) throw new Error("report withheld");
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });
@@ -973,6 +994,7 @@ describe("every revenue consumer agrees on the same month", () => {
     const perf = await s.asUser.query(api.reports.getSalespersonPerformance, {
       orgId: s.orgId, ...range(),
     });
+    if (!perf) throw new Error("report withheld");
     // The dashboard takes a coarse window rather than explicit dates.
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
@@ -1065,6 +1087,7 @@ describe("historical consigned sales after the migration", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(SALE_PRICE);
   });
 
@@ -1082,9 +1105,11 @@ describe("historical consigned sales after the migration", () => {
     const sales = await s.asUser.query(api.reports.getSalesAndProfitReport, {
       orgId: s.orgId, ...range(),
     });
+    if (!sales) throw new Error("report withheld");
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...range(),
     });
+    if (!pl) throw new Error("report withheld");
     const dash = await s.asUser.query(api.dashboard.stats, {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });

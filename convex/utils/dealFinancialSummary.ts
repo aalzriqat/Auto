@@ -63,6 +63,7 @@ export type ExpectedCostsReason = "NO_POLICY" | "MIXED_DENOMINATION" | "UNSAFE_A
 export type ServedParty = Readonly<{
   party: "CUSTOMER" | "SUPPLIER" | "FINANCIER";
   position: "UNKNOWN" | "DEALERSHIP_HOLDS" | "NOT_INVOLVED" | "SETTLED" | "OWED_TO_DEALERSHIP" | "DEALERSHIP_OWES";
+  /** null: withheld from a caller without view:cost_price (the SUPPLIER row only, SCRUM-902). */
   amountMinor: number | null;
   currency: string;
 }>;
@@ -391,7 +392,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
   // held deposit is the ONLY operand: it is the one figure here with a
   // receipt behind it.
   const heldDepositMinor =
-    customer !== undefined && customer.position !== "UNKNOWN" && customer.currency === currency
+    customer !== undefined && customer.position !== "UNKNOWN" && customer.currency === currency && customer.amountMinor !== null
       ? boundary.serve("customerPaidToDealer", customer.amountMinor)
       : null;
   const customerPaidToDealer =
@@ -431,7 +432,7 @@ export function deriveDealFinancialSummary(input: DealFinancialSummaryInputs): D
       : "THROUGH_DEALERSHIP";
 
   const supplierAmountMinor =
-    supplier === undefined || supplier.position === "UNKNOWN" || supplier.currency !== currency
+    supplier === undefined || supplier.position === "UNKNOWN" || supplier.currency !== currency || supplier.amountMinor === null
       ? null
       : boundary.serve("supplierAmount", supplier.amountMinor);
 

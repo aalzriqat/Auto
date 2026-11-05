@@ -46,7 +46,7 @@ const MODULE_GLOB = import.meta.glob("./**/*.*s");
 const FINANCE_PERMS = [
   "view:sales", "create:sales", "edit:sales",
   "view:expenses", "create:expenses", "edit:expenses",
-  "manage:finance", "view:finance",
+  "manage:finance", "view:finance", "view:cost_price",
   "view:commissions", "manage:commissions",
   "view:customers", "create:customers",
   "view:vehicles", "create:vehicles", "edit:vehicles",

@@ -1,0 +1,43 @@
+{
+  "id": "consigned-sale-preview-withholds-the-entitlement-without-cost-price",
+  "fingerprint": "25c68558fece93a9b3101e991377be73a137a44f191aa391a19c827cbcf0b871",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-sweep-from-pr765",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "sales.consignedSalePreview",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSourcingCostGate.scrum902.test.ts",
+    "testName": "consignedSalePreview: a caller with view:finance but without view:cost_price gets null, not the supplier entitlement (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-SUPPLIER-SOURCING",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "ce61849b3844ed40dfce0c301d85d0960fc37d68"
+  }
+}
