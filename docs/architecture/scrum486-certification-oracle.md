@@ -998,6 +998,32 @@ They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
 
+## SOURCED supplier-cost mirror (SCRUM-907)
+
+Owner invariant in `SCRUM-907#description`: `purchasePrice === sourceCost` after a
+SOURCED cost write. Supplier entitlement remains authoritative. These rows bind
+`convex/sourcedCostMirror.scrum907.test.ts` and the money scenario records. They
+are serial harness evidence, not platform, browser or production certification.
+
+| Matrix row | Scenario and expected result | Named backend check |
+| --- | --- | --- |
+| SCRUM907-mirror | Create at 10,250 then edit supplier cost to 9,900; stored costs and approved audit show 9,900 | updating supplier cost mirrors purchasePrice and the approved edit audit |
+| SCRUM907-conflict | Conflicting costs refused with EN/AR code; no vehicle or edit change | conflicting submitted costs are refused without changing the vehicle or its audit |
+| SCRUM907-posted | Posted acquisition prevents editing either cost | posted acquisition still locks supplier cost and the mirror |
+| SCRUM907-approval | Old pending supplier-cost request applies and audits both fields | an old pending supplier-cost request applies and audits the mirror at approval |
+| SCRUM907-repair | Bounded cursor page repairs mismatch; rerun changes zero; STOCK/deleted untouched | repair pages mismatches idempotently and leaves STOCK and deleted vehicles untouched |
+| SCRUM907-repair-lock | Posted acquisition counted locked and untouched | repair reports posted-cost locks and does not change them |
+| SCRUM907-repair-history | Sold/opening locks and missing cost counted; none patched | repair reports sold, opening-locked and unreadable supplier costs without changing them |
+| SCRUM907-echo | A changed request records its mirror; an unchanged source-cost echo still refuses with No changes detected | `vehicleCostDisclosureWrites.scrum886.test.ts`: control: a requester who may read cost can still request a cost change |
+| SCRUM907-mobile-echo | Old mobile purchasePrice echo on a stale SOLD row saves color, preserves both costs and omits cost from audit; a different price alone refuses | M1 older mobile can edit a stale SOLD row with its unchanged purchasePrice |
+| SCRUM907-sold-echo | SOLD cost echo writes no vehicle cost or timestamp through direct and approval doors | M2 unchanged sourceCost echo preserves SOLD history through every update door |
+| SCRUM907-opening-echo | Opening-locked cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves opening history through every update door |
+| SCRUM907-posted-echo | Posted-cost echo passes without changing the vehicle | M2 unchanged sourceCost echo preserves posted history through every update door |
+
+Deploy rollout phase 2f uses a tested `releaseGuard.ts` helper, pages of at most
+25 vehicles, the shared deadline and a 10,000-page cap. Locked and invalid
+rows are counted anomalies. Read failures and incomplete pages refuse the final
+rollout verdict after Social Inbox verification. The implementer ran no repair against a deployment.
 
 ### SCRUM-869 settled history: each figure comes from what its source records
 

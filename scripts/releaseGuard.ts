@@ -1461,6 +1461,53 @@ export const ACCOUNTANT_COST_PRICE_PAGE_SIZE = 100;
 /** 100 roles per page, so this bounds one deployment at 1,000,000 role rows. */
 export const MAX_ACCOUNTANT_COST_PRICE_PAGES = 10_000;
 
+const SOURCED_MIRROR_DEPLOYED = "Production is DEPLOYED, but the SOURCED cost mirror repair";
+const SOURCED_MIRROR_PAGE_SIZE = 25;
+type SourcedMirrorCounts = { scanned: number; updated: number; skippedLocked: number; skippedInvalid: number };
+
+function parseSourcedMirrorPage(value: unknown): (CursorPage & SourcedMirrorCounts) | null {
+  const cursor = parseCursorPage(value);
+  if (!cursor || typeof cursor.continueCursor !== "string") return null;
+  const counts = value as Partial<SourcedMirrorCounts>;
+  const { scanned, updated, skippedLocked, skippedInvalid } = counts;
+  if (!isCount(scanned) || scanned > SOURCED_MIRROR_PAGE_SIZE ||
+      !isCount(updated) || !isCount(skippedLocked) || !isCount(skippedInvalid)) return null;
+  if (updated + skippedLocked + skippedInvalid > scanned) return null;
+  return { ...cursor, scanned, updated, skippedLocked, skippedInvalid };
+}
+
+/** SCRUM-907: use the shared deadline/cursor checks and never echo backend text. */
+export function backfillSourcedCostMirrorRollout(input: WalkLimits & {
+  runPage: (cursor: string | null) => RegistryStep;
+}): ({ ok: true; pages: number } & SourcedMirrorCounts) | Refusal {
+  const totals = { pages: 0, scanned: 0, updated: 0, skippedLocked: 0, skippedInvalid: 0 };
+  const walk = walkCursorPages(input, SOURCED_MIRROR_DEPLOYED, input.runPage, parseSourcedMirrorPage, page => {
+    totals.pages += 1;
+    totals.scanned += page.scanned;
+    totals.updated += page.updated;
+    totals.skippedLocked += page.skippedLocked;
+    totals.skippedInvalid += page.skippedInvalid;
+  });
+  if (!walk.ok) return walk;
+  return { ok: true, ...totals };
+}
+
+/** Keep the CLI arguments and public summary in tested TypeScript, as in phase 2e. */
+export function runSourcedCostMirrorPhase(input: {
+  convex: (args: string[]) => RegistryStep;
+  now: () => number;
+  startedAt: number;
+  timeoutMs: number;
+}): { ok: true; summary: string } | Refusal {
+  const result = backfillSourcedCostMirrorRollout({
+    ...input,
+    maxPages: 10_000,
+    runPage: cursor => input.convex(["run", "vehicles:backfillSourcedCostMirror", JSON.stringify({ cursor, numItems: SOURCED_MIRROR_PAGE_SIZE })]),
+  });
+  if (!result.ok) return result;
+  return { ok: true, summary: `Checked ${result.scanned} vehicles in ${result.pages} page call(s); repaired ${result.updated} SOURCED cost mirrors; locked ${result.skippedLocked}; invalid ${result.skippedInvalid}.` };
+}
+
 /**
  * SCRUM-896: the whole ACCOUNTANT cost-price phase of the rollout, minus the CLI. `rolloutRelease.mjs` is a top-level script
  * that no test executes in-process (coverage does not follow a child process), so it keeps only the phase skeleton (log,
