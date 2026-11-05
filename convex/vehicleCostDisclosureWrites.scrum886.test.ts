@@ -303,7 +303,10 @@ describe("SCRUM-886 round 4: requestUpdate gives a caller without cost access no
     const requestId = await s.actors.costRequester.mutation(api.vehicleEdits.requestUpdate, {
       orgId: s.orgId, vehicleId: s.sourcedId, payload: { sourceCost: STORED_SOURCE_COST + 1 },
     });
-    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.payload).toEqual({ sourceCost: STORED_SOURCE_COST + 1 });
+    expect((await s.t.run((ctx) => ctx.db.get(requestId)))?.payload).toEqual({
+      sourceCost: STORED_SOURCE_COST + 1,
+      purchasePrice: STORED_SOURCE_COST + 1,
+    });
     await expect(s.actors.costRequester.mutation(api.vehicleEdits.requestUpdate, {
       orgId: s.orgId, vehicleId: s.sourcedId, payload: { sourceCost: STORED_SOURCE_COST },
     })).rejects.toThrow("No changes detected.");

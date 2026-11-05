@@ -1,9 +1,10 @@
+// NON-PILOT-CERTIFYING: the conservative census includes source-read calls; this suite measures source, not runtime certification.
 /**
  * SCRUM-869 S1 / SCRUM-869#c23881: enumeration ratchets for the supplier settlement doors. The
  * reversal, unwind and correction doors of these three money flows must refuse server-side during
  * the pilot; a new public mutation here must be classified by a person.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
@@ -35,12 +36,23 @@ describe("no screen offers the contained reversal", () => {
     }
     return out;
   }
-  test("no app, component or mobile source references supplierCostRecoveries.reverseReceipt", () => {
-    const roots = ["app", "components", "lib", join("apps", "mobile", "src")];
-    const offenders = roots.flatMap((root) => sourceFiles(join(process.cwd(), root))).filter((file) =>
+  function reversalCallers(): string[] {
+    const roots = ["app", "components", "hooks", "lib", join("apps", "mobile", "src")];
+    return roots.flatMap((root) => sourceFiles(join(process.cwd(), root))).filter((file) =>
       /supplierCostRecoveries\s*\.\s*reverseReceipt|supplierCostRecoveries:reverseReceipt/.test(readFileSync(file, "utf8"))
     );
-    expect(offenders).toEqual([]);
+  }
+  test("R3-F4: hooks/useSupplierReversal.ts cannot offer the contained reversal", () => {
+    const fixture = join(process.cwd(), "hooks", "useSupplierReversal.ts");
+    writeFileSync(fixture, "const reverse = useMutation(api.supplierCostRecoveries.reverseReceipt);", { flag: "wx" });
+    try {
+      expect(reversalCallers()).toContain(fixture);
+    } finally {
+      unlinkSync(fixture);
+    }
+  });
+  test("no app, component, hook or mobile source references supplierCostRecoveries.reverseReceipt", () => {
+    expect(reversalCallers()).toEqual([]);
   });
 });
 

@@ -84,9 +84,13 @@ export function DealCommissionLinesDialog({
         <DialogHeader>
           <DialogTitle>{t("DealCommissionLinesTitle")}</DialogTitle>
         </DialogHeader>
-        {view === undefined ? (
+        {view === undefined && (
           <p className="text-sm text-muted-foreground">{t("DealCommissionsLoading")}</p>
-        ) : (
+        )}
+        {view?.lineEvidence === "UNAVAILABLE" && (
+          <p role="alert" className="text-sm text-muted-foreground">{t("DealCommissionsUnreadable")}</p>
+        )}
+        {view !== undefined && view.lineEvidence !== "UNAVAILABLE" && (
           <div className="space-y-4">
             <ul className="divide-y rounded-md border text-sm">
               <li className="flex items-start justify-between gap-3 px-3 py-2">

@@ -144,6 +144,8 @@ describe("SCRUM-446: the financier leg of a deal nobody finances through a compa
           customerId: s.customerId,
           salespersonId: s.userId,
           salePrice: 10_500,
+          // A recorded no-commission decision makes management net readable.
+          commissionAmount: 0,
           saleDate: Date.now(),
           status: saleKind === "CANCELLED" ? "CANCELLED" : "COMPLETED",
           financingType: mode === "LEASE" ? "LEASE" : mode === "CASH" || mode === "NONE" ? "CASH" : "FINANCED",

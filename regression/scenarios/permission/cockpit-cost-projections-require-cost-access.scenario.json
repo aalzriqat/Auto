@@ -1,0 +1,101 @@
+{
+  "id": "cockpit-cost-projections-require-cost-access",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum908-round4-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-no-cost",
+        "org": "A"
+      },
+      "action": "applications.dealCockpit",
+      "input": {
+        "sourceTypes": [
+          "STOCK",
+          "SOURCED"
+        ],
+        "financed": [
+          false,
+          true
+        ],
+        "permissions": [
+          "view:sales",
+          "view:finance",
+          "view:commissions"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-no-cost",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {
+        "sourceTypes": [
+          "STOCK",
+          "SOURCED"
+        ],
+        "financed": [
+          false,
+          true
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "application.money.profit-and-managementProfit",
+      "value": {
+        "available": false,
+        "reason": "CostAccessRequired"
+      }
+    },
+    {
+      "observable": "cash.money.profit-and-managementNetProfit",
+      "value": {
+        "available": false,
+        "reason": "CostAccessRequired"
+      }
+    },
+    {
+      "observable": "financed-sale.money",
+      "value": null
+    },
+    {
+      "observable": "supplier-party.amountMinor",
+      "value": null
+    },
+    {
+      "observable": "complete-response.cost-fields-and-sentinel",
+      "value": "absent"
+    },
+    {
+      "observable": "cost-role-and-owner.profit",
+      "value": "existing-calculations-preserved"
+    },
+    {
+      "observable": "other-finance-facts",
+      "value": "unchanged"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-908#description",
+      "digest": "6b3a93db0ab9e19f453ae8382a7e253a2740593791ca46e983416914a30be5cd"
+    }
+  ],
+  "impl": {
+    "file": "convex/dealNetProfit.scrum908.test.ts",
+    "testName": "SCRUM-908 complete cockpit responses withhold every cost projection"
+  },
+  "matrixRow": "SCRUM908-cockpit-cost-projection",
+  "bugRef": { "key": "SCRUM-908", "failingFirst": "91ce0c8a4395fd27c904662a7be6c421423f705c" },
+  "fingerprint": "bc96870a26e47f7fc9c37c36d4be57b0b35e9114a90533efa870f8791c5dbc57"
+}

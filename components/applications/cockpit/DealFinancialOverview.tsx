@@ -157,6 +157,9 @@ export function DealFinancialOverview({
     supplier.consigned === false ? money(0, cur) : supplier.amountMinor === null ? null : money(supplier.amountMinor, cur);
   const supplierNote = ((): string => {
     if (supplier.consigned === false) return t("OverviewSupplierOwned");
+    if (supplier.amountMinor === null && !summary.profit.available && summary.profit.reason === "CostAccessRequired") {
+      return t("CostAmountWithheld");
+    }
     const route =
       supplier.route === "DIRECT_TO_SUPPLIER"
         ? t("OverviewRouteDirect")

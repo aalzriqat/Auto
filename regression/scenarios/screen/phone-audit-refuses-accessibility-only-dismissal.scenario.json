@@ -68,5 +68,8 @@
     "file": "playwright/tests/audit-navigation-dismissal.spec.ts",
     "testName": "phone capture refuses navigation hidden only from accessibility"
   },
-  "fingerprint": "fe8ce5e5c12fab5dc23d1fea4788393859ffbcf9c544b19ab664dcd19f083a59"
+  "fingerprint": "fe8ce5e5c12fab5dc23d1fea4788393859ffbcf9c544b19ab664dcd19f083a59",
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts"
+  ]
 }

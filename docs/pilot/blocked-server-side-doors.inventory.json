@@ -1,0 +1,2753 @@
+[
+ {
+  "door": "accountingCutover.approveOpeningBalance",
+  "class": "UNCLASSIFIED",
+  "effect": "posts the opening-balance journal from a draft; same ruling and same gap",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingCutover.draftOpeningBalance",
+  "class": "UNCLASSIFIED",
+  "effect": "stages an opening-balance draft; SCRUM-858 data refusals apply. Opening balances stay enabled by owner ruling SCRUM-795#c22479 Q1, but no certification row names this door",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingCutover.postOpeningBalanceDirect",
+  "class": "UNCLASSIFIED",
+  "effect": "posts opening balances directly to the ledger; same ruling and same gap",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingCutover.rejectOpeningBalanceDraft",
+  "class": "UNCLASSIFIED",
+  "effect": "rejects an opening-balance draft; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingCutover.signOffCutover",
+  "class": "UNCLASSIFIED",
+  "effect": "records the cutover sign-off that freezes opening entries",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingMigration.backfillClaimMinorUnits",
+  "class": "UNCLASSIFIED",
+  "effect": "rewrites claim amounts into minor units; a migration, no posting",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingMigration.backfillFixedAssetMinorUnits",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/accountingMigration.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "accountingMigration.backfillPartnerEquityMinorUnits",
+  "class": "UNCLASSIFIED",
+  "effect": "rewrites partner-equity amounts into minor units; a migration, no posting",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingMigration.backfillVehicleInventoryOpeningBalances",
+  "class": "UNCLASSIFIED",
+  "effect": "posts opening vehicle-inventory journals for cars that have none",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingMigration.migrateUnpostedTransactions",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/accountingMigration.ts",
+    "guard": "MIGRATION_RETIRED_MESSAGE",
+    "code": "retired text, no AppErrorCode",
+    "test": "convex/accountingMigrationRetirement.test.ts"
+   }
+  ],
+  "note": "unconditional throw; plain ConvexError text, no AppErrorCode"
+ },
+ {
+  "door": "accountingOutbox.redrive",
+  "class": "UNCLASSIFIED",
+  "effect": "re-drives pending posting events so held journals post",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingOutbox.retryFailed",
+  "class": "UNCLASSIFIED",
+  "effect": "re-queues failed posting outbox rows so their journals post",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingPeriods.close",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds, the reversal is DEFERRED, then posts exactly once a period opens"
+  }
+ },
+ {
+  "door": "accountingPeriods.create",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET closed period: unwinding next year's deal leaves the closed period's stored snapshots and reports untouched"
+  }
+ },
+ {
+  "door": "accountingPeriods.lock",
+  "class": "UNCLASSIFIED",
+  "effect": "locks a closed period against reopening",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingPeriods.open",
+  "class": "UNCLASSIFIED",
+  "effect": "opens a period; held posting rows then drain into the ledger",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "accountingPeriods.reopen",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × CHEQUE tender × cleared cheque return with no open period: the return succeeds, the reversal is DEFERRED, then posts exactly once a period opens"
+  }
+ },
+ {
+  "door": "adminBroadcasts.create",
+  "class": "NON_FINANCIAL",
+  "reason": "platform broadcast message"
+ },
+ {
+  "door": "adminData.adminHardDelete",
+  "class": "UNCLASSIFIED",
+  "effect": "super-admin hard delete; financial tables refused by the same guard",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "adminData.adminRestoreRecords",
+  "class": "UNCLASSIFIED",
+  "effect": "super-admin restore of soft-deleted rows; financial tables refused by the same guard",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "adminData.adminUpdateRecord",
+  "class": "UNCLASSIFIED",
+  "effect": "super-admin generic patch; financial tables are refused by assertAdminMayMutateTable, but vehicles (cost fields) are not in FINANCIAL_TABLES",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "adminImpersonation.endImpersonation",
+  "class": "NON_FINANCIAL",
+  "reason": "platform support session"
+ },
+ {
+  "door": "adminImpersonation.startImpersonation",
+  "class": "NON_FINANCIAL",
+  "reason": "platform support session"
+ },
+ {
+  "door": "adminMarketplace.markMatchNotified",
+  "class": "NON_FINANCIAL",
+  "reason": "platform marketplace moderation"
+ },
+ {
+  "door": "adminMarketplace.markSpam",
+  "class": "NON_FINANCIAL",
+  "reason": "platform marketplace moderation"
+ },
+ {
+  "door": "adminMarketplace.markWeeklyReportSentViaWhatsApp",
+  "class": "NON_FINANCIAL",
+  "reason": "platform marketplace moderation"
+ },
+ {
+  "door": "adminMarketplace.updateMarketplaceTier",
+  "class": "NON_FINANCIAL",
+  "reason": "platform marketplace moderation"
+ },
+ {
+  "door": "adminMarketplace.verifyDealerPhone",
+  "class": "NON_FINANCIAL",
+  "reason": "platform marketplace moderation"
+ },
+ {
+  "door": "adminOrgs.approveDeletionRequest",
+  "class": "UNCLASSIFIED",
+  "effect": "platform operator approves an organization deletion request",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "adminOrgs.hardDeleteOrg",
+  "class": "UNCLASSIFIED",
+  "effect": "platform operator deletes an organization and its data",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "adminOrgs.rejectDeletionRequest",
+  "class": "NON_FINANCIAL",
+  "reason": "platform organization suspension"
+ },
+ {
+  "door": "adminOrgs.suspendOrg",
+  "class": "NON_FINANCIAL",
+  "reason": "platform organization suspension"
+ },
+ {
+  "door": "adminOrgs.unsuspendOrg",
+  "class": "NON_FINANCIAL",
+  "reason": "platform organization suspension"
+ },
+ {
+  "door": "adminSupportAgents.addSupportAgent",
+  "class": "NON_FINANCIAL",
+  "reason": "platform support staffing"
+ },
+ {
+  "door": "adminSupportAgents.removeSupportAgent",
+  "class": "NON_FINANCIAL",
+  "reason": "platform support staffing"
+ },
+ {
+  "door": "adminSupportAgents.setSupportAgentActive",
+  "class": "NON_FINANCIAL",
+  "reason": "platform support staffing"
+ },
+ {
+  "door": "adminSystem.retryWebhookEvent",
+  "class": "NON_FINANCIAL",
+  "reason": "platform site configuration and webhook retry"
+ },
+ {
+  "door": "adminSystem.setSiteConfig",
+  "class": "NON_FINANCIAL",
+  "reason": "platform site configuration and webhook retry"
+ },
+ {
+  "door": "adminUsers.changeUserRole",
+  "class": "NON_FINANCIAL",
+  "reason": "platform user administration"
+ },
+ {
+  "door": "adminUsers.disableUser",
+  "class": "NON_FINANCIAL",
+  "reason": "platform user administration"
+ },
+ {
+  "door": "adminUsers.enableUser",
+  "class": "NON_FINANCIAL",
+  "reason": "platform user administration"
+ },
+ {
+  "door": "adminUsers.removeMembership",
+  "class": "NON_FINANCIAL",
+  "reason": "platform user administration"
+ },
+ {
+  "door": "adminUsers.resolveOffboardingReview",
+  "class": "NON_FINANCIAL",
+  "reason": "platform user administration"
+ },
+ {
+  "door": "applications.amendSupplierDisbursementAdvice",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "SUPPLIER_ADVICE_AMENDMENT_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "applications.attestChequeFace",
+  "class": "UNCLASSIFIED",
+  "effect": "attests the face amount of a post-dated cheque before it is relied on",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "applications.cancelApplication",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × no deposit × cancellation before receipt: finance AR and sale reverse"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/accounting/invoiceReceiptDisposition.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/dealUnwind.test.ts"
+   }
+  ],
+  "note": "enabled; a REFUND disposition on cancel is refused through invoiceReceiptDisposition"
+ },
+ {
+  "door": "applications.confirmDisbursement",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "applications.confirmSupplierDisbursement",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SOURCED configured financier × direct supplier payment: only the supplier owes the agent margin"
+  }
+ },
+ {
+  "door": "applications.correctExpectedPayment",
+  "class": "UNCLASSIFIED",
+  "effect": "corrects the registered expected-payment method or amount before payout; after a dealer or supplier payout it is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "EXPECTED_PAYMENT_PAID_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "applications.createFromQuote",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "applications.finalizeDeal",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/applications.ts",
+    "guard": "refuseDepositOtherTreatment",
+    "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+    "test": "convex/scrum411P202ForwardedDeposit.test.ts"
+   }
+  ],
+  "note": "enabled; deposit OTHER treatment is refused"
+ },
+ {
+  "door": "applications.registerExpectedPayment",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "applications.registerVehicleHandover",
+  "class": "UNCLASSIFIED",
+  "effect": "records the vehicle handover; the commission receivable due on handover follows it (SCRUM-869#c23906)",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "applications.repairQuoteEconomicsLineage",
+  "class": "UNCLASSIFIED",
+  "effect": "rewrites the quote-economics link on an application's override row",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "applications.returnFinanceDisbursementCheque",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × CHEQUE tender × cleared cheque returned by the bank: the receipt is undone exactly"
+  },
+  "note": "owner ruling 2026-10-19 declined the block; four cells in the oracle section 'SCRUM-760 finance-company cheque return cells'"
+ },
+ {
+  "door": "applications.setSupplierSettlementRoute",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SOURCED configured financier × no deposit: company AR funds supplier liability and agent margin"
+  }
+ },
+ {
+  "door": "applications.updateStatus",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "approvals.cancelMyApproval",
+  "class": "NON_FINANCIAL",
+  "reason": "pricing-control approval rows (minimum price uplift, c22479 Q4); posts nothing"
+ },
+ {
+  "door": "approvals.requestProfitApproval",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes requested profit, minimum profit and sale/list price approval amounts; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "approvals.respondToApproval",
+  "class": "NON_FINANCIAL",
+  "reason": "pricing-control approval rows (minimum price uplift, c22479 Q4); posts nothing"
+ },
+ {
+  "door": "bankAccounts.create",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a bank account that the ledger and reconciliation read",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankAccounts.deactivate",
+  "class": "UNCLASSIFIED",
+  "effect": "deactivates a bank account; later postings to it are refused",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankAccounts.setReconciliationTarget",
+  "class": "NON_FINANCIAL",
+  "reason": "sets the reconciliation-target configuration flag on bank accounts; writes no amounts, ledger, cash or subledger rows and calls no posting helper"
+ },
+ {
+  "door": "bankAccounts.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits bank-account details",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankReconciliation.confirmMatch",
+  "class": "UNCLASSIFIED",
+  "effect": "matches a statement line to a ledger line; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankReconciliation.ignoreLine",
+  "class": "UNCLASSIFIED",
+  "effect": "ignores a statement line",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankReconciliation.unmatch",
+  "class": "UNCLASSIFIED",
+  "effect": "removes a statement-line match",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "bankReconciliation.uploadStatementLines",
+  "class": "UNCLASSIFIED",
+  "effect": "imports bank statement lines for matching; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "branches.add",
+  "class": "NON_FINANCIAL",
+  "reason": "branch directory; no money"
+ },
+ {
+  "door": "branches.migrateToDefaultBranch",
+  "class": "UNCLASSIFIED",
+  "effect": "stamps a default branchId on vehicles, memberships, leads, sales and expenses; no amount changes",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "branches.update",
+  "class": "NON_FINANCIAL",
+  "reason": "branch directory; no money"
+ },
+ {
+  "door": "cashDrawer.approveVariance",
+  "class": "UNCLASSIFIED",
+  "effect": "approves a drawer variance and writes the cash movement that deposits the counted cash to the bank",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "cashDrawer.beginCount",
+  "class": "UNCLASSIFIED",
+  "effect": "locks the drawer's movements so a count can begin",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "cashDrawer.close",
+  "class": "UNCLASSIFIED",
+  "effect": "submits the physical count and computes the variance",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "cashDrawer.open",
+  "class": "UNCLASSIFIED",
+  "effect": "opens a cashier drawer session with an opening float",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "cashDrawer.recordMovement",
+  "class": "UNCLASSIFIED",
+  "effect": "records a cash movement into or out of a drawer",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "changelog.create",
+  "class": "NON_FINANCIAL",
+  "reason": "product changelog content"
+ },
+ {
+  "door": "changelog.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "product changelog content"
+ },
+ {
+  "door": "changelog.seedHistoricalEntries",
+  "class": "NON_FINANCIAL",
+  "reason": "product changelog content"
+ },
+ {
+  "door": "changelog.update",
+  "class": "NON_FINANCIAL",
+  "reason": "product changelog content"
+ },
+ {
+  "door": "chartOfAccounts.confirmSystemAccountAdoption",
+  "class": "UNCLASSIFIED",
+  "effect": "adopts an existing account as a system account so posting can resume",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "chartOfAccounts.create",
+  "class": "UNCLASSIFIED",
+  "effect": "adds a ledger account",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "chartOfAccounts.initialize",
+  "class": "UNCLASSIFIED",
+  "effect": "creates the default chart of accounts and drains pending posting events",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "chartOfAccounts.repairMissingSystemAccounts",
+  "class": "UNCLASSIFIED",
+  "effect": "adds missing system accounts and drains pending posting events",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "chartOfAccounts.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits a ledger account",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "claims.add",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/claims.ts",
+    "guard": "refuseRetiredClaimsWriter",
+    "code": "CLAIMS_RETIRED",
+    "test": "convex/claimsRetirement.test.ts"
+   }
+  ],
+  "note": "retired writer"
+ },
+ {
+  "door": "claims.reject",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/claims.ts",
+    "guard": "refuseRetiredClaimsWriter",
+    "code": "CLAIMS_RETIRED",
+    "test": "convex/claimsRetirement.test.ts"
+   }
+  ],
+  "note": "retired writer"
+ },
+ {
+  "door": "claims.remove",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/claims.ts",
+    "guard": "refuseRetiredClaimsWriter",
+    "code": "CLAIMS_RETIRED",
+    "test": "convex/claimsRetirement.test.ts"
+   }
+  ],
+  "note": "retired writer"
+ },
+ {
+  "door": "claims.settle",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/claims.ts",
+    "guard": "refuseRetiredClaimsWriter",
+    "code": "CLAIMS_RETIRED",
+    "test": "convex/claimsRetirement.test.ts"
+   }
+  ],
+  "note": "retired writer"
+ },
+ {
+  "door": "claims.update",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/claims.ts",
+    "guard": "refuseRetiredClaimsWriter",
+    "code": "CLAIMS_RETIRED",
+    "test": "convex/claimsRetirement.test.ts"
+   }
+  ],
+  "note": "retired writer"
+ },
+ {
+  "door": "collections.activateSaleInvoiceReceipt",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/collections.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.applyRetainedCredit",
+  "class": "UNCLASSIFIED",
+  "effect": "applies retained customer credit to a receivable; a sale-linked target is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/saleDebtContainment.ts",
+    "guard": "assertReceiptTargetNotSaleLinked",
+    "code": "SALE_DEBT_RECEIPT_REFUSED",
+    "test": "convex/scrum571s1Containment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.clearCheque",
+  "class": "UNCLASSIFIED",
+  "effect": "clears a customer cheque, records a collection payment and receipt movement, and enqueues the receipt posting against the bank",
+  "ruling": "owner ruling needed",
+  "note": "The U-REFUND addActiveCustomerCredit helper uses this door only for setup. No oracle cell certifies its cheque-clearing contract."
+ },
+ {
+  "door": "collections.createInstallmentPlan",
+  "class": "UNCLASSIFIED",
+  "effect": "splits a receivable into an installment plan",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "collections.createReceivable",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a customer receivable; a receivable aimed at a sale is refused by saleDebtContainment",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/saleDebtContainment.ts",
+    "guard": "assertSourceIsNotSaleDebt",
+    "code": "SALE_DEBT_RECEIPT_REFUSED",
+    "test": "convex/scrum571s1Containment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.depositCheque",
+  "class": "UNCLASSIFIED",
+  "effect": "marks a post-dated cheque deposited at the bank",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "collections.recordPayment",
+  "class": "UNCLASSIFIED",
+  "effect": "records a customer payment on a receivable and enqueues its receipt posting; the sale-invoice branch (invoiceSaleId) is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/collections.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.registerCheque",
+  "class": "UNCLASSIFIED",
+  "effect": "registers a customer cheque amount in post-dated cheque custody for later receipt and clearing",
+  "ruling": "owner ruling needed",
+  "note": "The U-REFUND addActiveCustomerCredit helper uses this door only for setup. No oracle cell certifies its cheque-registration contract."
+ },
+ {
+  "door": "collections.registerSaleInvoiceCheque",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/collections.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.replaceCheque",
+  "class": "UNCLASSIFIED",
+  "effect": "replaces a post-dated cheque with a new one on the same receivable",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "collections.requestApproval",
+  "class": "UNCLASSIFIED",
+  "effect": "requests approval for a collection write-off or refund; a REFUND request is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/legacyCollectionRefundContainment.ts",
+    "guard": "assertLegacyCollectionRefundAllowed",
+    "code": "LEGACY_COLLECTION_REFUND_PILOT_DISABLED",
+    "test": "convex/legacyCollectionRefundContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.reserveSaleInvoiceReceipt",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/collections.ts",
+    "guard": "assertSaleInvoiceReceiptDoorsAllowed",
+    "code": "SALE_INVOICE_RECEIPT_DOORS_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.respondToApproval",
+  "class": "UNCLASSIFIED",
+  "effect": "answers a collection approval request; APPROVED on a REFUND is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/legacyCollectionRefundContainment.ts",
+    "guard": "assertLegacyCollectionRefundAllowed",
+    "code": "LEGACY_COLLECTION_REFUND_PILOT_DISABLED",
+    "test": "convex/legacyCollectionRefundContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.returnCheque",
+  "class": "UNCLASSIFIED",
+  "effect": "marks an uncleared cheque returned; no receipt had posted",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "collections.returnClearedCheque",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/postDeliveryDoorContainment.ts",
+    "guard": "assertClearedChequeReturnAllowed",
+    "code": "CLEARED_CHEQUE_RETURN_PILOT_DISABLED",
+    "test": "convex/postDeliveryDoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "collections.reviewCashierReconciliation",
+  "class": "UNCLASSIFIED",
+  "effect": "reviews a submitted cashier reconciliation; same prerequisite",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "collections.submitCashierReconciliation",
+  "class": "UNCLASSIFIED",
+  "effect": "submits a cashier's daily reconciliation; owner ruling SCRUM-795#c22479 Q2 makes SCRUM-396 a prerequisite before relying on it",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "customerFinanceCompanyPayments.confirmPayment",
+  "class": "UNCLASSIFIED",
+  "effect": "confirms the customer's contribution paid to the finance company, which changes the contribution used in the forward",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "customerFinanceCompanyPayments.voidPayment",
+  "class": "UNCLASSIFIED",
+  "effect": "voids a confirmed customer contribution to the finance company",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "customers.create",
+  "class": "NON_FINANCIAL",
+  "reason": "customer directory rows; no ledger or balance field"
+ },
+ {
+  "door": "customers.importBulk",
+  "class": "NON_FINANCIAL",
+  "reason": "customer directory rows; no ledger or balance field"
+ },
+ {
+  "door": "customers.softDelete",
+  "class": "NON_FINANCIAL",
+  "reason": "customer directory rows; no ledger or balance field"
+ },
+ {
+  "door": "customers.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes customer profile and financial data through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "dealCommissions.addLine",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SALE line for the sale's own salesperson is refused with nothing written; other employee SALE and the salesperson's PURCHASE/EXECUTION are allowed; a second organization's rows never move"
+  },
+  "note": "DEAL_COMMISSION_LINES_PILOT_DISABLED is false; the door is enabled"
+ },
+ {
+  "door": "dealCommissions.removeLine",
+  "class": "UNCLASSIFIED",
+  "effect": "removes a deal commission line",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "dealUnwind.abandonDealUnwind",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-ABANDON: abandoning leaves the paid deal exactly as it was, releases the lock and a later unwind completes"
+  },
+  "note": "enabled: abandons an unwind and releases the lock"
+ },
+ {
+  "door": "dealUnwind.finishDealUnwind",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/dealUnwind.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/dealUnwind.test.ts"
+   }
+  ],
+  "note": "enabled with RETAIN_CREDIT, or REFUND with no active customer credit; any positive customer-credit payout is refused"
+ },
+ {
+  "door": "dealUnwind.recordDealUnwindForwardReturn",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  },
+  "note": "enabled financier leg: books the finance company's remittance back"
+ },
+ {
+  "door": "dealUnwind.startDealUnwind",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  },
+  "note": "enabled: oracle:256 deal unwind of a financed deal"
+ },
+ {
+  "door": "depositRequests.confirm",
+  "class": "UNCLASSIFIED",
+  "effect": "confirms a deposit request and posts the quote deposit",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "depositRequests.reject",
+  "class": "UNCLASSIFIED",
+  "effect": "rejects a deposit request; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "depositRequests.request",
+  "class": "UNCLASSIFIED",
+  "effect": "a requester asks to take a customer deposit",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "depositRequests.withdraw",
+  "class": "UNCLASSIFIED",
+  "effect": "withdraws a deposit request; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "deposits.allocateToVehicles",
+  "class": "UNCLASSIFIED",
+  "effect": "allocates a held deposit across cars",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "deposits.create",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  },
+  "note": "salesperson cash intake is removed by role permission, not by a door block"
+ },
+ {
+  "door": "deposits.release",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SOURCED CASH × applied deposit × cancellation × refund: customer money returns without supplier debt"
+  }
+ },
+ {
+  "door": "deposits.releaseVehicleAllocation",
+  "class": "UNCLASSIFIED",
+  "effect": "releases one car's share of a deposit allocation",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "deposits.resolveReleasedAllocation",
+  "class": "UNCLASSIFIED",
+  "effect": "resolves a released deposit hold; deposit OTHER treatment is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/deposits.ts",
+    "guard": "refuseDepositOtherTreatment",
+    "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+    "test": "convex/multiVehicleDepositAllocation.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "deposits.voidDeposit",
+  "class": "UNCLASSIFIED",
+  "effect": "voids a held customer deposit: reverses the receipt so the money leaves the customer's balance (looks like a deferred correction)",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "directMessages.createGroup",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.getOrCreateDm",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.markDelivered",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.markRead",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.sendMessage",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.setMuted",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "directMessages.setTyping",
+  "class": "NON_FINANCIAL",
+  "reason": "internal chat"
+ },
+ {
+  "door": "documents.addRule",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "documents.ensureApplicationDocument",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "documents.generateUploadUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "documents.removeRule",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "documents.saveDocumentFile",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "documents.updateDocumentStatus",
+  "class": "NON_FINANCIAL",
+  "reason": "document rules and files; no money"
+ },
+ {
+  "door": "exchangeRates.setRate",
+  "class": "UNCLASSIFIED",
+  "effect": "appends a reporting exchange rate; the ledger itself never converts",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "expenses.create",
+  "class": "UNCLASSIFIED",
+  "effect": "creates an expense and posts it",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "expenses.remove",
+  "class": "UNCLASSIFIED",
+  "effect": "deletes an expense and soft-deletes its linked transaction row",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "expenses.reverseExpense",
+  "class": "UNCLASSIFIED",
+  "effect": "reverses a posted expense; the reversal of an expense a supplier owes is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/expenses.ts",
+    "guard": "assertSupplierSettlementDoorAllowed",
+    "code": "SUPPLIER_COST_EXPENSE_REVERSAL_PILOT_DISABLED",
+    "test": "convex/supplierObligationCorrections.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "expenses.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits an expense",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "facebookIntegrations.createConnectUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "facebookIntegrations.disconnect",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "facebookIntegrations.setFacebookAutoReplyConfig",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "facebookIntegrations.setFacebookLeadCreationConfig",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "feedback.adminReply",
+  "class": "NON_FINANCIAL",
+  "reason": "product feedback"
+ },
+ {
+  "door": "feedback.adminSetStatus",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes feedback status through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "feedback.setStatus",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes feedback status through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "feedback.submit",
+  "class": "NON_FINANCIAL",
+  "reason": "product feedback"
+ },
+ {
+  "door": "finance.createCompany",
+  "class": "UNCLASSIFIED",
+  "effect": "Creates financier profit, insurance and fee pricing rules used in financial calculations; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "finance.deleteCompany",
+  "class": "NON_FINANCIAL",
+  "reason": "finance-company directory and vehicle valuations; no ledger posting"
+ },
+ {
+  "door": "finance.saveValuation",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a vehicle valuation amount used in financier pricing; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "finance.updateCompany",
+  "class": "UNCLASSIFIED",
+  "effect": "Updates financier profit, insurance and fee pricing rules used in financial calculations; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeCompanyForward.recordFinanceCompanyForward",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "financeCompanyForward.reportFinanceCompanyForwardReturned",
+  "class": "UNCLASSIFIED",
+  "effect": "reverses a forward on the books after the finance company returned the money (looks like a deferred correction)",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeCompanyForward.reverseFinanceCompanyForward",
+  "class": "UNCLASSIFIED",
+  "effect": "takes back a forward payment recorded to the finance company before the transfer is confirmed (looks like a deferred correction)",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.adoptCompanyFeeTemplates",
+  "class": "UNCLASSIFIED",
+  "effect": "copies a finance company's fee templates onto a deal",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.bindExecutionFeeLine",
+  "class": "UNCLASSIFIED",
+  "effect": "binds an execution-fee line to a ledger posting",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.migrateLegacyCustodyToLedger",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "CUSTODY_MIGRATION_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financeDealCosts.openDealCustody",
+  "class": "UNCLASSIFIED",
+  "effect": "opens custody of a deal's held fee money",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.planCustodyHandler",
+  "class": "UNCLASSIFIED",
+  "effect": "plans who handles a deal's custody",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.reconcileDealCustody",
+  "class": "UNCLASSIFIED",
+  "effect": "closes a deal's custody; a balanced closure is allowed, a shortage write-off is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "CUSTODY_WRITEOFF_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financeDealCosts.reconcileDealFee",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "financeDealCosts.recordActualFeeAmount",
+  "class": "UNCLASSIFIED",
+  "effect": "records the actual fee amount on the application's override row",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.recordCustodyMovement",
+  "class": "UNCLASSIFIED",
+  "effect": "records a custody movement against a deal's held fee money (issue, return, reimburse); pre-final movements post to the ledger",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financeDealCosts.recordDealFee",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "financeDealCosts.recordDirectFeePayment",
+  "class": "UNCLASSIFIED",
+  "effect": "records a fee paid directly rather than through the dealership",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.recordExecutionFeeActual",
+  "class": "UNCLASSIFIED",
+  "effect": "records the actual amount of an execution fee",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.recordLegalInvoice",
+  "class": "UNCLASSIFIED",
+  "effect": "records a legal invoice against a deal's fees",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.recordTemplateFeeActual",
+  "class": "UNCLASSIFIED",
+  "effect": "records the actual amount of a templated deal fee",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.reopenDealCustody",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "CUSTODY_REOPEN_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financeDealCosts.setFeeCustody",
+  "class": "UNCLASSIFIED",
+  "effect": "sets who holds a deal fee's money",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.unbindExecutionFeeLine",
+  "class": "UNCLASSIFIED",
+  "effect": "unbinds an execution-fee line",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financeDealCosts.voidDealFee",
+  "class": "UNCLASSIFIED",
+  "effect": "voids a recorded deal fee",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financialAudit.approveManualJournal",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/financialAudit.ts",
+    "guard": "assertManualJournalsEnabled",
+    "code": "MANUAL_JOURNALS_DISABLED",
+    "test": "convex/manualJournalsPilotOff.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financialAudit.createManualJournal",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/financialAudit.ts",
+    "guard": "assertManualJournalsEnabled",
+    "code": "MANUAL_JOURNALS_DISABLED",
+    "test": "convex/manualJournalsPilotOff.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financialAudit.rejectManualJournal",
+  "class": "UNCLASSIFIED",
+  "effect": "rejects a pending manual journal draft by patching its status and reviewer metadata; its typed manualJournalDrafts id matches the conservative journal-table check, although rejection itself posts nothing",
+  "ruling": "owner ruling needed",
+  "note": "Kept as an exit by owner ruling SCRUM-795#c22479. Reclassification records unavailable NON_FINANCIAL evidence under the broader table check, not a newly disabled door or a claim that rejection posts money."
+ },
+ {
+  "door": "financingEconomics.applyQuoteFirstPayment",
+  "class": "UNCLASSIFIED",
+  "effect": "applies a quote's first payment to the deal",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financingEconomics.approveDealerPurchaseAmount",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "financingEconomics.recordAppraisal",
+  "class": "UNCLASSIFIED",
+  "effect": "records a vehicle appraisal used in the deal economics",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financingEconomics.recordManualFinanceApproval",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "MANUAL_FINANCE_APPROVAL_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "financingEconomics.recordSubmittedQuotation",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "financingEconomics.reopenApproval",
+  "class": "UNCLASSIFIED",
+  "effect": "reopens a dealer-purchase-amount approval so it can be changed",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financingEconomics.resolveAppraisalGap",
+  "class": "UNCLASSIFIED",
+  "effect": "resolves the gap between appraisal and payoff; the oracle holds it for a finance-authority ruling",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "financingEconomics.resolveFinancingReconciliation",
+  "class": "UNCLASSIFIED",
+  "effect": "resolves a financing reconciliation difference",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "fixedAssets.capitalize",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/fixedAssets.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "fixedAssets.dispose",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/fixedAssets.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "fixedAssets.impair",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/fixedAssets.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "fixedAssets.remove",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/fixedAssets.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "fixedAssets.update",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/fixedAssets.ts",
+    "guard": "assertFixedAssetLifecycleAllowed",
+    "code": "FIXED_ASSET_LIFECYCLE_DISABLED",
+    "test": "convex/fixedAssetLifecycleContainment.scrum560.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "guarantors.add",
+  "class": "NON_FINANCIAL",
+  "reason": "guarantor details on an application"
+ },
+ {
+  "door": "guarantors.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "guarantor details on an application"
+ },
+ {
+  "door": "guarantors.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes guarantor details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "importMappings.save",
+  "class": "NON_FINANCIAL",
+  "reason": "import column mapping preferences"
+ },
+ {
+  "door": "leads.addNote",
+  "class": "NON_FINANCIAL",
+  "reason": "CRM lead rows"
+ },
+ {
+  "door": "leads.create",
+  "class": "NON_FINANCIAL",
+  "reason": "CRM lead rows"
+ },
+ {
+  "door": "leads.softDelete",
+  "class": "NON_FINANCIAL",
+  "reason": "CRM lead rows"
+ },
+ {
+  "door": "leads.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes lead details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "liveChat.acceptOffer",
+  "class": "UNCLASSIFIED",
+  "effect": "Calls postAgentJoinedNotice to post a chat notice. The conservative post* call check refuses NON_FINANCIAL evidence; this is not a claim that the notice posts a journal.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "liveChat.claimThread",
+  "class": "UNCLASSIFIED",
+  "effect": "Calls postAgentJoinedNotice to post a chat notice. The conservative post* call check refuses NON_FINANCIAL evidence; this is not a claim that the notice posts a journal.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "liveChat.closeThread",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.endThreadByDealer",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.endThreadByLead",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.heartbeat",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.markLeadThreadRead",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.markThreadReadByAgent",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.markThreadReadByDealer",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.rejectOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.requestOrgAccess",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.revokeOrgAccess",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.sendAgentMessage",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.sendDealerMessage",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.sendLeadMessage",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.setAgentStatus",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.setAgentTyping",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.setDealerTyping",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.setLeadTyping",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.startOrGetLeadThread",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.startOrGetMyThread",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.updateAgentPresence",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.updateDealerPresence",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "liveChat.updateLeadPresence",
+  "class": "NON_FINANCIAL",
+  "reason": "support chat"
+ },
+ {
+  "door": "marketplaceBuyerActions.acceptOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace buyer interactions"
+ },
+ {
+  "door": "marketplaceBuyerActions.allowContact",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace buyer interactions"
+ },
+ {
+  "door": "marketplaceBuyerActions.declineOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace buyer interactions"
+ },
+ {
+  "door": "marketplaceBuyerActions.shortlistOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace buyer interactions"
+ },
+ {
+  "door": "marketplaceBuyerPush.registerBuyerPushToken",
+  "class": "NON_FINANCIAL",
+  "reason": "push token registration"
+ },
+ {
+  "door": "marketplaceDealers.updateProfile",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace profile"
+ },
+ {
+  "door": "marketplaceListings.adminSetListingStatus",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a marketplace listing patch typed to permit price fields. The conservative money-field check cannot establish NON_FINANCIAL from that patch type; no certification row covers it.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "marketplaceListings.confirmListingImageUpload",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace listing content"
+ },
+ {
+  "door": "marketplaceListings.createListing",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the advertised vehicle price and currency; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "marketplaceListings.generateListingImageUploadUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace listing content"
+ },
+ {
+  "door": "marketplaceListings.markListingSold",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace listing content"
+ },
+ {
+  "door": "marketplaceListings.softDeleteListing",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace listing content"
+ },
+ {
+  "door": "marketplaceListings.updateListing",
+  "class": "UNCLASSIFIED",
+  "effect": "Updates the advertised vehicle price; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "marketplaceResponses.respond",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes a vehicle offer price and financing offer; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "marketplaceTradeIns.acceptOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace trade-in offers; no ledger posting"
+ },
+ {
+  "door": "marketplaceTradeIns.acceptOfferByPublicId",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace trade-in offers; no ledger posting"
+ },
+ {
+  "door": "marketplaceTradeIns.declineOffer",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace trade-in offers; no ledger posting"
+ },
+ {
+  "door": "marketplaceTradeIns.declineOfferByPublicId",
+  "class": "NON_FINANCIAL",
+  "reason": "marketplace trade-in offers; no ledger posting"
+ },
+ {
+  "door": "marketplaceTradeIns.makeOffer",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the trade-in offer amount; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "memberships.acceptInvitation",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.add",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.leave",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.setLeadAutoAssignmentExcluded",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.syncRolePermissionsToTemplate",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.touchLastSeen",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.transferOwnership",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "memberships.updateCommissionRate",
+  "class": "UNCLASSIFIED",
+  "effect": "changes a member's commission rate used by the automatic commission modes",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "memberships.updateRole",
+  "class": "NON_FINANCIAL",
+  "reason": "team membership and roles; no money"
+ },
+ {
+  "door": "mobilePushTokens.register",
+  "class": "NON_FINANCIAL",
+  "reason": "push token registration"
+ },
+ {
+  "door": "mobilePushTokens.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "push token registration"
+ },
+ {
+  "door": "mobileReleases.publishRelease",
+  "class": "NON_FINANCIAL",
+  "reason": "mobile release metadata"
+ },
+ {
+  "door": "notificationPreferences.setPreference",
+  "class": "NON_FINANCIAL",
+  "reason": "notification settings"
+ },
+ {
+  "door": "notifications.archive",
+  "class": "NON_FINANCIAL",
+  "reason": "notification state"
+ },
+ {
+  "door": "notifications.markAllAsRead",
+  "class": "NON_FINANCIAL",
+  "reason": "notification state"
+ },
+ {
+  "door": "notifications.markAsRead",
+  "class": "NON_FINANCIAL",
+  "reason": "notification state"
+ },
+ {
+  "door": "openingManagementSettlement.approve",
+  "class": "UNCLASSIFIED",
+  "effect": "approves an opening management settlement into the books",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingManagementSettlement.draft",
+  "class": "UNCLASSIFIED",
+  "effect": "drafts an opening management settlement",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingManagementSettlement.draftFromObservation",
+  "class": "UNCLASSIFIED",
+  "effect": "drafts an opening management settlement from an observation",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "openingManagementSettlement.reject",
+  "class": "UNCLASSIFIED",
+  "effect": "rejects an opening management settlement; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgCustomFields.create",
+  "class": "NON_FINANCIAL",
+  "reason": "custom field configuration"
+ },
+ {
+  "door": "orgCustomFields.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "custom field configuration"
+ },
+ {
+  "door": "orgCustomFields.setValues",
+  "class": "NON_FINANCIAL",
+  "reason": "custom field configuration"
+ },
+ {
+  "door": "orgCustomFields.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes custom-field definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgCustomerStatuses.create",
+  "class": "NON_FINANCIAL",
+  "reason": "customer status configuration"
+ },
+ {
+  "door": "orgCustomerStatuses.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "customer status configuration"
+ },
+ {
+  "door": "orgCustomerStatuses.reorder",
+  "class": "NON_FINANCIAL",
+  "reason": "customer status configuration"
+ },
+ {
+  "door": "orgCustomerStatuses.seed",
+  "class": "NON_FINANCIAL",
+  "reason": "customer status configuration"
+ },
+ {
+  "door": "orgCustomerStatuses.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes customer-status definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgLeadSources.create",
+  "class": "NON_FINANCIAL",
+  "reason": "lead source configuration"
+ },
+ {
+  "door": "orgLeadSources.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "lead source configuration"
+ },
+ {
+  "door": "orgLeadSources.reorder",
+  "class": "NON_FINANCIAL",
+  "reason": "lead source configuration"
+ },
+ {
+  "door": "orgLeadSources.seed",
+  "class": "NON_FINANCIAL",
+  "reason": "lead source configuration"
+ },
+ {
+  "door": "orgLeadSources.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes lead-source definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgPipelineStages.reorder",
+  "class": "NON_FINANCIAL",
+  "reason": "pipeline configuration"
+ },
+ {
+  "door": "orgPipelineStages.seed",
+  "class": "NON_FINANCIAL",
+  "reason": "pipeline configuration"
+ },
+ {
+  "door": "orgPipelineStages.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes pipeline-stage definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgSettings.generateLogoUploadUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "organization display and assignment settings"
+ },
+ {
+  "door": "orgSettings.setCommissionMode",
+  "class": "UNCLASSIFIED",
+  "effect": "switches the commission policy; refuses MANUAL while live completed sales carry unpaid automatic commission",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgSettings.setGeneratedLeadAutoAssignmentEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "organization display and assignment settings"
+ },
+ {
+  "door": "orgSettings.upsert",
+  "class": "UNCLASSIFIED",
+  "effect": "upserts organization settings, including the opening-balance configuration",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "orgValuationCompanies.create",
+  "class": "NON_FINANCIAL",
+  "reason": "valuation company directory"
+ },
+ {
+  "door": "orgValuationCompanies.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "valuation company directory"
+ },
+ {
+  "door": "orgValuationCompanies.seed",
+  "class": "NON_FINANCIAL",
+  "reason": "valuation company directory"
+ },
+ {
+  "door": "orgValuationCompanies.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes valuation-company definitions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "organizations.create",
+  "class": "NON_FINANCIAL",
+  "reason": "organization record and lifecycle"
+ },
+ {
+  "door": "organizations.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "organization record and lifecycle"
+ },
+ {
+  "door": "organizations.update",
+  "class": "NON_FINANCIAL",
+  "reason": "organization record and lifecycle"
+ },
+ {
+  "door": "partnerEquity.add",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a partner and posts or enqueues the opening equity",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "partnerEquity.recordEquityMovement",
+  "class": "UNCLASSIFIED",
+  "effect": "records a partner CONTRIBUTION or DRAW (money in or out of the business); PROFIT_DISTRIBUTION is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/partnerEquity.ts",
+    "guard": "PARTNER_PROFIT_DISTRIBUTION_PILOT_DISABLED",
+    "code": "uncoded ConvexError (PARTNER_PROFIT_DISTRIBUTION_UNAVAILABLE.en)",
+    "test": "convex/partnerDistributionPilot.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "partnerEquity.remove",
+  "class": "UNCLASSIFIED",
+  "effect": "removes a partner record",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "partnerEquity.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits a partner's identity fields only; balances move through recordEquityMovement",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "paymentIntents.create",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a payment link; refused while payment links are off",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/paymentIntents.ts",
+    "guard": "PAYMENT_LINKS_PILOT_DISABLED",
+    "code": "PAYMENT_LINKS_DISABLED",
+    "test": "convex/scrum571s1Containment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "paymentIntents.expire",
+  "class": "UNCLASSIFIED",
+  "effect": "expires a payment intent; moves no money",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "paymentIntents.linkHeldCaptureToIntent",
+  "class": "UNCLASSIFIED",
+  "effect": "links a held provider capture to a payment intent",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "paymentIntents.markSettled",
+  "class": "UNCLASSIFIED",
+  "effect": "settles a payment intent; refused while payment links are off",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/paymentIntents.ts",
+    "guard": "PAYMENT_LINKS_PILOT_DISABLED",
+    "code": "PAYMENT_LINKS_DISABLED",
+    "test": "convex/scrum571s1Containment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "paymentIntents.resolveUnmatchedProviderFunds",
+  "class": "UNCLASSIFIED",
+  "effect": "resolves provider funds that matched no intent",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.approveRun",
+  "class": "UNCLASSIFIED",
+  "effect": "approves a payroll run: accrues salaries and commissions to payable",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.cancelRun",
+  "class": "UNCLASSIFIED",
+  "effect": "cancels a payroll run",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.createRun",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a payroll run with items",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.payRun",
+  "class": "UNCLASSIFIED",
+  "effect": "pays a payroll run: clears the payables, recovers advances and pays net cash",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.recordAdvance",
+  "class": "UNCLASSIFIED",
+  "effect": "records an employee advance (a recoverable asset)",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.recoverAdvance",
+  "class": "UNCLASSIFIED",
+  "effect": "records a repayment of an employee advance",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "payroll.setCompensation",
+  "class": "UNCLASSIFIED",
+  "effect": "sets an employee's compensation",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "prepaidExpenses.approveCorrectionRequest",
+  "class": "UNCLASSIFIED",
+  "effect": "approves a pending prepaid correction request, which applies it",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "prepaidExpenses.correctSchedule",
+  "class": "UNCLASSIFIED",
+  "effect": "corrects a prepaid schedule; a write-off needs a second user's approval",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "prepaidExpenses.redriveScheduleEvents",
+  "class": "UNCLASSIFIED",
+  "effect": "re-drives a prepaid schedule's posting events",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "prepaidExpenses.rejectCorrectionRequest",
+  "class": "UNCLASSIFIED",
+  "effect": "rejects a prepaid correction request; posts nothing",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "prepaidExpenses.retryAmortizationFailure",
+  "class": "UNCLASSIFIED",
+  "effect": "re-runs amortization for a prepaid schedule with cron failures",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "pushSubscriptions.disableDevice",
+  "class": "NON_FINANCIAL",
+  "reason": "push subscription registration"
+ },
+ {
+  "door": "pushSubscriptions.subscribe",
+  "class": "NON_FINANCIAL",
+  "reason": "push subscription registration"
+ },
+ {
+  "door": "pushSubscriptions.unsubscribe",
+  "class": "NON_FINANCIAL",
+  "reason": "push subscription registration"
+ },
+ {
+  "door": "quotes.saveQuote",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned configured financier × held 200 first payment: contribution, forward, partial refusal and full receipt"
+  }
+ },
+ {
+  "door": "quotes.updateQuoteStatus",
+  "class": "UNCLASSIFIED",
+  "effect": "changes a quote's status",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "retainedCreditRefunds.cancelRetainedCreditRefund",
+  "class": "NON_FINANCIAL",
+  "reason": "marks a payout request CANCELLED and posts nothing; no new request can exist while the payout switch is on"
+ },
+ {
+  "door": "retainedCreditRefunds.executeRetainedCreditRefund",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/retainedCreditRefunds.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "retainedCreditRefunds.requestRetainedCreditRefund",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/retainedCreditRefunds.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "retainedCreditRefunds.respondToRetainedCreditRefund",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/retainedCreditRefunds.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/pilotBlockedDoors.scrum795.test.ts"
+   }
+  ],
+  "note": "APPROVED is refused; REJECTED stays an exit"
+ },
+ {
+  "door": "roles.create",
+  "class": "NON_FINANCIAL",
+  "reason": "role and permission configuration (authority, not money)"
+ },
+ {
+  "door": "roles.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "role and permission configuration (authority, not money)"
+ },
+ {
+  "door": "roles.update",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes role details and permissions through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "sales.completeDraft",
+  "class": "UNCLASSIFIED",
+  "effect": "completes a draft sale, posting revenue and receivable; its SCRUM-886 rows bind cost-access permission, not the ledger effect",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/sales.ts",
+    "guard": "refuseDepositOtherTreatment",
+    "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+    "test": "convex/consignedDepositResolution.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "sales.completeFromQuote",
+  "class": "UNCLASSIFIED",
+  "effect": "completes a sale from a quote, posting revenue and receivable; its SCRUM-886 rows bind cost-access permission, not the ledger effect",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/sales.ts",
+    "guard": "refuseDepositOtherTreatment",
+    "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+    "test": "convex/consignedDepositResolution.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "sales.create",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "owned CASH × full price held as deposit: sale recognizes literal receivable, revenue, COGS and inventory, and the deposit settles the receivable"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/sales.ts",
+    "guard": "refuseDepositOtherTreatment",
+    "code": "DEPOSIT_OTHER_TREATMENT_PILOT_DISABLED",
+    "test": "convex/consignedDepositResolution.test.ts"
+   }
+  ],
+  "note": "enabled; deposit OTHER treatment is refused"
+ },
+ {
+  "door": "sales.createDraft",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a draft sale; posts nothing until completed",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "sales.markCommissionPaid",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "DIRECT_COMMISSION_PAYOUT_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ],
+  "note": "direct payout only; payroll pays commission"
+ },
+ {
+  "door": "sales.markCommissionUnpaid",
+  "class": "UNCLASSIFIED",
+  "effect": "clears a paid mark on a commission; refuses when payroll paid it",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "sales.recalculateCommission",
+  "class": "UNCLASSIFIED",
+  "effect": "recomputes a sale's commission from the frozen basis",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "sales.setCommissionAmount",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  }
+ },
+ {
+  "door": "sales.softDelete",
+  "class": "UNCLASSIFIED",
+  "effect": "soft-deletes a sale",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "sales.update",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SOURCED configured financier × direct supplier payment: only the supplier owes the agent margin"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/sales.ts",
+    "guard": "assertCustomerCreditPayoutAllowed",
+    "code": "CUSTOMER_CREDIT_PAYOUT_DISABLED",
+    "test": "convex/chequeCancelledSaleCredit.test.ts"
+   }
+  ],
+  "note": "enabled; the cancel path that would pay customer credit out is refused"
+ },
+ {
+  "door": "siteVisitors.purgeEventsOlderThan",
+  "class": "NON_FINANCIAL",
+  "reason": "analytics event retention"
+ },
+ {
+  "door": "smartReply.setSmartReplyConfig",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the default down-payment percentage used in financing estimates; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "socialInbox.setConversationVehicle",
+  "class": "NON_FINANCIAL",
+  "reason": "Links a vehicle to social conversation events and an associated lead, then maintains conversation aggregates; no money fields or posting helpers."
+ },
+ {
+  "door": "socialIntegrations.createConnectUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "socialIntegrations.disconnect",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "socialIntegrations.setAutoPostEnabled",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "socialIntegrations.setInstagramAutoReplyConfig",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "socialIntegrations.setInstagramLeadCreationConfig",
+  "class": "NON_FINANCIAL",
+  "reason": "social connection settings"
+ },
+ {
+  "door": "socialPostingData.requestPost",
+  "class": "NON_FINANCIAL",
+  "reason": "social post requests"
+ },
+ {
+  "door": "sourcingPayables.markPaid",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/accountingVehicleInventory.test.ts",
+   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE",
+   "row": "settling the payable via sourcingPayables.markPaid clears AP against Bank and reclassifies VAT out of Vehicle Inventory, not COGS"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/sourcingPayables.ts",
+    "guard": "assertSupplierSettlementMethodAllowed",
+    "code": "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED",
+    "test": "convex/supplierSettlementContainment.test.ts"
+   }
+  ],
+  "note": "CASH and BANK_TRANSFER only"
+ },
+ {
+  "door": "sourcingPayables.recordPartialPayment",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "CC-AP VENDOR_CREDIT lowers the payable and cost; a partly paid payable refuses both AP types"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/sourcingPayables.ts",
+    "guard": "assertSupplierSettlementMethodAllowed",
+    "code": "SUPPLIER_PAYMENT_METHOD_PILOT_UNSUPPORTED",
+    "test": "convex/supplierSettlementContainment.test.ts"
+   }
+  ],
+  "note": "CASH and BANK_TRANSFER only"
+ },
+ {
+  "door": "sourcingPayables.setDisputed",
+  "class": "UNCLASSIFIED",
+  "effect": "marks a sourcing payable disputed",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "subscriptions.adminUpdateSubscription",
+  "class": "NON_FINANCIAL",
+  "reason": "SaaS subscription billing between the platform and a tenant, not dealer money"
+ },
+ {
+  "door": "supplierCostRecoveries.recordReceipt",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/supplierSettlementContainment.test.ts",
+   "oracleSection": "SCRUM-869-SUPPLIER-SETTLE",
+   "row": "recording a receipt is unaffected by the containment"
+  },
+  "note": "owner ruling SCRUM-869#c23881: in the pilot and certified"
+ },
+ {
+  "door": "supplierCostRecoveries.reverseReceipt",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/supplierCostRecoveries.ts",
+    "guard": "assertSupplierSettlementDoorAllowed",
+    "code": "SUPPLIER_RECEIPT_REVERSAL_PILOT_DISABLED",
+    "test": "convex/supplierSettlementContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "supplierReceivables.recordReceipt",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "SOURCED direct settlement × supplier receipt: claim clears, duplicate and premature cancellation refuse"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/supplierReceivables.ts",
+    "guard": "assertSupplierSettlementMethodAllowed",
+    "code": "SUPPLIER_RECEIPT_METHOD_PILOT_UNSUPPORTED",
+    "test": "convex/supplierSettlementContainment.test.ts"
+   }
+  ],
+  "note": "CASH and BANK_TRANSFER only"
+ },
+ {
+  "door": "supplierReceivables.setDisputed",
+  "class": "UNCLASSIFIED",
+  "effect": "marks a supplier receivable disputed",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.addAlias",
+  "class": "UNCLASSIFIED",
+  "effect": "adds a supplier alias",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.create",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a supplier",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.deactivate",
+  "class": "UNCLASSIFIED",
+  "effect": "deactivates a supplier; its open payables stay payable",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.reactivate",
+  "class": "UNCLASSIFIED",
+  "effect": "reactivates a supplier",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.retireAlias",
+  "class": "UNCLASSIFIED",
+  "effect": "retires a supplier alias",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "suppliers.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits a supplier",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "support.setThreadCategory",
+  "class": "NON_FINANCIAL",
+  "reason": "support messages"
+ },
+ {
+  "door": "support.setThreadStatus",
+  "class": "NON_FINANCIAL",
+  "reason": "support messages"
+ },
+ {
+  "door": "support.submitContactMessage",
+  "class": "NON_FINANCIAL",
+  "reason": "support messages"
+ },
+ {
+  "door": "tasks.create",
+  "class": "NON_FINANCIAL",
+  "reason": "task rows"
+ },
+ {
+  "door": "tasks.softDelete",
+  "class": "NON_FINANCIAL",
+  "reason": "task rows"
+ },
+ {
+  "door": "tasks.update",
+  "class": "NON_FINANCIAL",
+  "reason": "task rows"
+ },
+ {
+  "door": "test_drives.complete",
+  "class": "NON_FINANCIAL",
+  "reason": "test-drive scheduling"
+ },
+ {
+  "door": "test_drives.create",
+  "class": "NON_FINANCIAL",
+  "reason": "test-drive scheduling"
+ },
+ {
+  "door": "test_drives.remove",
+  "class": "NON_FINANCIAL",
+  "reason": "test-drive scheduling"
+ },
+ {
+  "door": "transactions.add",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/transactions.ts",
+    "guard": "refuseLegacyLedgerWrite",
+    "code": "refuseLegacyLedgerWrite text",
+    "test": "convex/transactionsLegacyWriteContainment.test.ts"
+   }
+  ],
+  "note": "retired writer; plain ConvexError text, no AppErrorCode"
+ },
+ {
+  "door": "transactions.remove",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/transactions.ts",
+    "guard": "refuseLegacyLedgerWrite",
+    "code": "refuseLegacyLedgerWrite text",
+    "test": "convex/transactionsLegacyWriteContainment.test.ts"
+   }
+  ],
+  "note": "retired writer; plain ConvexError text, no AppErrorCode"
+ },
+ {
+  "door": "transactions.update",
+  "class": "EXCLUDED_GUARDED",
+  "blocks": [
+   {
+    "guardFile": "convex/transactions.ts",
+    "guard": "refuseLegacyLedgerWrite",
+    "code": "refuseLegacyLedgerWrite text",
+    "test": "convex/transactionsLegacyWriteContainment.test.ts"
+   }
+  ],
+  "note": "retired writer; plain ConvexError text, no AppErrorCode"
+ },
+ {
+  "door": "users.updateMyNotificationProfile",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes notification profile details through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicleEdits.requestCreate",
+  "class": "NON_FINANCIAL",
+  "reason": "Stores a pending vehicle-edit request; applying it requires the separate vehicleEdits.resolve door."
+ },
+ {
+  "door": "vehicleEdits.requestUpdate",
+  "class": "NON_FINANCIAL",
+  "reason": "Stores a pending vehicle-edit request; applying it requires the separate vehicleEdits.resolve door."
+ },
+ {
+  "door": "vehicleEdits.resolve",
+  "class": "UNCLASSIFIED",
+  "effect": "Approving CREATE or an acquisition-affecting UPDATE calls postVehicleAcquisitionIfOwned, posting VEHICLE_ACQUIRED against cash, bank or supplier payable. It does not delegate to vehicles.update; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicleRequests.create",
+  "class": "NON_FINANCIAL",
+  "reason": "vehicle request rows"
+ },
+ {
+  "door": "vehicleRequests.resolve",
+  "class": "NON_FINANCIAL",
+  "reason": "vehicle request rows"
+ },
+ {
+  "door": "vehicles.correctAcquisitionCost",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET × cost correction: the returned car's cost can be corrected and still equals Vehicle Inventory"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/vehicles.ts",
+    "guard": "assertSupplierSettlementDoorAllowed",
+    "code": "SUPPLIER_PAYABLE_CORRECTION_PILOT_DISABLED",
+    "test": "convex/supplierObligationCorrections.test.ts"
+   }
+  ],
+  "note": "cash-refund, on-account invoice error and vendor credit corrections"
+ },
+ {
+  "door": "vehicles.create",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  }
+ },
+ {
+  "door": "vehicles.createReservation",
+  "class": "UNCLASSIFIED",
+  "effect": "reserves a car for a customer",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.createSourced",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a consigned (SOURCED) car",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.deleteImage",
+  "class": "NON_FINANCIAL",
+  "reason": "vehicle image and upload handling; no money field"
+ },
+ {
+  "door": "vehicles.generateUploadUrl",
+  "class": "NON_FINANCIAL",
+  "reason": "vehicle image and upload handling; no money field"
+ },
+ {
+  "door": "vehicles.importBulk",
+  "class": "UNCLASSIFIED",
+  "effect": "bulk-creates cars with acquisition cost and owned-car inventory postings",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.markSourcedVehicleArrived",
+  "class": "UNCLASSIFIED",
+  "effect": "marks a consigned car as arrived",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.releaseReservation",
+  "class": "UNCLASSIFIED",
+  "effect": "releases a car reservation",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.softDelete",
+  "class": "UNCLASSIFIED",
+  "effect": "soft-deletes a car",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "vehicles.update",
+  "class": "ENABLED_CERTIFIED",
+  "certification": {
+   "test": "convex/scrum486Certification.test.ts",
+   "row": "U-RET owned financed unwind × held 200 deposit × zero credit (%s): start, forward return, finish restore the pre-sale books"
+  },
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "VEHICLE_OWNERSHIP_CHANGE_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ],
+  "note": "ordinary vehicle edits; an ownership change is refused"
+ },
+ {
+  "door": "vehicles.upsertLandedCosts",
+  "class": "UNCLASSIFIED",
+  "effect": "adds landed-cost lines on a car; editing, removing or moving a paid cost is refused",
+  "ruling": "owner ruling needed",
+  "blocks": [
+   {
+    "guardFile": "convex/utils/rt11DoorContainment.ts",
+    "guard": "assertRt11DoorAllowed",
+    "code": "PAID_LANDED_COST_CHANGE_PILOT_DISABLED",
+    "test": "convex/rt11DoorContainment.test.ts"
+   }
+  ]
+ },
+ {
+  "door": "websites.addLeadBlocklistEntry",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.checkSubdomain",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.publish",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.purchaseDomain",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.removeLeadBlocklistEntry",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.saveDraft",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes website draft settings through an open-ended Record<string, unknown/any> patch. The scan cannot establish that money fields are absent; this is not proof of a money movement, and no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "websites.searchDomain",
+  "class": "UNCLASSIFIED",
+  "effect": "Writes the registrar domain-price quote to domainSearchLogs; no certification row covers this door.",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "websites.startSetup",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "websites.unpublish",
+  "class": "NON_FINANCIAL",
+  "reason": "website builder"
+ },
+ {
+  "door": "wizardDrafts.clearDraft",
+  "class": "NON_FINANCIAL",
+  "reason": "wizard draft storage"
+ },
+ {
+  "door": "wizardDrafts.saveDraft",
+  "class": "NON_FINANCIAL",
+  "reason": "wizard draft storage"
+ },
+ {
+  "door": "workOrders.create",
+  "class": "UNCLASSIFIED",
+  "effect": "creates a work order and, for a showroom-borne cost, an expense plus a legacy transactions row",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "workOrders.remove",
+  "class": "UNCLASSIFIED",
+  "effect": "removes a work order",
+  "ruling": "owner ruling needed"
+ },
+ {
+  "door": "workOrders.update",
+  "class": "UNCLASSIFIED",
+  "effect": "edits a work order; completing it creates the cost expense with its transaction row, and a completed order with a posted expense is locked",
+  "ruling": "owner ruling needed"
+ }
+]

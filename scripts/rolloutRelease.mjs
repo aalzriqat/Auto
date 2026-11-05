@@ -41,6 +41,8 @@ import {
   repairAndVerifySupplierIdentity,
   requireBoundProductionKey,
   runAccountantCostPricePhase,
+  runSourcedCostMirrorPhase,
+  runAccountantCommissionsPhase,
   runDealNumberBackfillPhase,
   supplierIdentityRefusalMessage,
 } from "./releaseGuard.ts";
@@ -96,6 +98,8 @@ let supplierVatSummary = null;
 let supplierRegistrySummary = null;
 let supplierIdentitySummary = null;
 let accountantCostPriceSummary = null;
+let sourcedCostMirrorSummary = null;
+let accountantCommissionsSummary = null;
 let dealNumberSummary = null;
 
 function writeSummary(extra) {
@@ -121,6 +125,8 @@ function writeSummary(extra) {
   if (supplierRegistrySummary) body += `\n### Supplier registry\n\n${supplierRegistrySummary}\n`;
   if (supplierIdentitySummary) body += `\n### Supplier identity\n\n${supplierIdentitySummary}\n`;
   if (accountantCostPriceSummary) body += `\n### ACCOUNTANT cost-price backfill\n\n${accountantCostPriceSummary}\n`;
+  if (sourcedCostMirrorSummary) body += `\n### SOURCED cost mirrors\n\n${sourcedCostMirrorSummary}\n`;
+  if (accountantCommissionsSummary) body += `\n### ACCOUNTANT commissions backfill\n\n${accountantCommissionsSummary}\n`;
   if (dealNumberSummary) body += `\n### Deal number backfill\n\n${dealNumberSummary}\n`;
   if (extra) body += `\n### What stopped it\n\n\`\`\`\n${extra}\n\`\`\`\n`;
   appendFileSync(summaryPath, `${body}\n`);
@@ -392,6 +398,12 @@ supplierIdentitySummary = renderSupplierIdentitySummary(supplierIdentity);
 console.log(`  ${supplierIdentitySummary}`);
 if (!supplierIdentity.ok) fail(supplierIdentity.reason);
 
+// SCRUM-908 c24538: grant view:commissions to unmarked roles that hold exactly the pre-change ACCOUNTANT template,
+// which already includes view:cost_price, so phase order does not matter for that cohort. An older 18-permission
+// role would match one rollout later under a recurring scan; this migration's completion record prevents that scan.
+// The tested helper owns all paging, refusal and public-summary behavior.
+accountantCommissionsSummary = runAccountantCommissionsPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail, log: console.log });
+
 // ─── 2e. Give stored ACCOUNTANT roles the cost-price permission ──────────────
 
 // SCRUM-896 (owner ruling SCRUM-886 c24372, "after the deploy, automatically"): sale completion on a SOURCED car now needs
@@ -407,7 +419,13 @@ lastVerdict = before.verdict;
 accountantCostPriceSummary = runAccountantCostPricePhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail });
 console.log(`  ${accountantCostPriceSummary}`);
 
-// ─── 2f. Number the deals created before deal numbers existed ────────────────
+// ─── 2f. Repair unposted SOURCED purchase-price mirrors (SCRUM-907) ───────────
+console.log(`Repairing SOURCED cost mirrors…`);
+const sourcedCostMirror = runSourcedCostMirrorPhase({ convex, now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS });
+sourcedCostMirrorSummary = sourcedCostMirror.ok ? sourcedCostMirror.summary : sourcedCostMirror.reason;
+console.log(`  ${sourcedCostMirrorSummary}`);
+
+// ─── 2g. Number the deals created before deal numbers existed ────────────────
 
 // SCRUM-808: every deal gets a readable per-organization number at creation; rows created before this release get theirs
 // here, in creation order, from each organization's counter. One page per call through the operator key (internal
@@ -457,6 +475,12 @@ const supplierIdentityRefusal = lastOutcome === "verified" ? supplierIdentityRef
 if (supplierIdentityRefusal) {
   lastOutcome = "failed";
   fail(supplierIdentityRefusal);
+}
+
+// A failed repair remains a deploy failure, but cannot prevent Social Inbox verification.
+if (!sourcedCostMirror.ok) {
+  lastOutcome = "failed";
+  fail(sourcedCostMirror.reason);
 }
 
 if (lastOutcome === "verified") {

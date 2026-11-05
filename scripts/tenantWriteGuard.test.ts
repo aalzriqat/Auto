@@ -791,18 +791,26 @@ describe("the analyzer's coverage does not shrink silently", () => {
   // that pages through ALL roles with a cursor and takes no orgId, like the other migrateRoles backfills: +1 total, +1 skippedNoOrgId,
   // other counts unchanged. Re-measured FROM THE ANALYSER (567/383/15/169 -> 568/383/15/170). It writes only the `permissions` of a
   // role row it has just read in the same page, and only for a non-deleted role whose normalized name is ACCOUNTANT.
-  // SCRUM-808: +dealNumberBackfill:runPage, one internal mutation (called page by page by the Deploy production rollout, phase 2f)
+  // SCRUM-908: +backfillAccountantCommissionsAccess, the same org-less internal page contract and exact predicate.
+  // Measured by this analyser: 568/383/15/170 -> 569/383/15/171. It patches only a role read from that page.
+  // SCRUM-808: +dealNumberBackfill:runPage, one internal mutation (called page by page by the Deploy production rollout, phase 2g after merging SCRUM-907)
   // that walks the unnumbered rows of sales and financeApplications and takes no orgId: +1 total, +1 skippedNoOrgId, other counts
   // unchanged. Re-measured FROM THE ANALYSER (568/383/15/170 -> 569/383/15/171). It takes no caller-supplied org or row id: it patches
   // only the deal rows it has just read in the same page, and the organization of each counter it advances is that stored row's orgId.
   // The public doors that now allocate a number (insertSaleRecord's callers and applications.createFromQuote) already derive the
   // org through requireTenantAuth and are counted as analysed already.
   test("the analysed surface matches the pinned counts", () => {
+    // SCRUM-907 adds vehicles.backfillSourcedCostMirror: one internal, global cursor walk,
+    // no caller-supplied org/document id. Measured delta: total +1, no-org +1; analysed unchanged.
+    // Merged with SCRUM-908 (both sides added one org-less backfill to 568/383/15/170), re-measured
+    // FROM THE ANALYSER at the merge: 570/383/15/172.
+    // Merged with SCRUM-808 (#773 adds dealNumberBackfill:runPage, one more org-less backfill), re-measured
+    // FROM THE ANALYSER at the merge: 571/383/15/173.
     expect(summarizeCoverage(CONVEX_ROOT)).toEqual({
-      totalMutations: 569,
+      totalMutations: 571,
       analysed: 383,
       skippedNoArgsBlock: 15,
-      skippedNoOrgId: 171,
+      skippedNoOrgId: 173,
     });
   });
 });

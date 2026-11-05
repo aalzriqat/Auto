@@ -8,6 +8,13 @@
  * @module
  */
 
+import type * as accountingCutover from "../accountingCutover.js";
+import type * as accountingLedger from "../accountingLedger.js";
+import type * as accountingMigration from "../accountingMigration.js";
+import type * as accountingOutbox from "../accountingOutbox.js";
+import type * as accountingPeriods from "../accountingPeriods.js";
+import type * as accountingReports from "../accountingReports.js";
+import type * as accountingSetup from "../accountingSetup.js";
 import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
 import type * as accounting_bankAggregateTriggers from "../accounting/bankAggregateTriggers.js";
 import type * as accounting_bankLineAggregate from "../accounting/bankLineAggregate.js";
@@ -24,13 +31,6 @@ import type * as accounting_receiptOccurrence from "../accounting/receiptOccurre
 import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as accounting_supplierCostRecoveryPosting from "../accounting/supplierCostRecoveryPosting.js";
 import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
-import type * as accountingCutover from "../accountingCutover.js";
-import type * as accountingLedger from "../accountingLedger.js";
-import type * as accountingMigration from "../accountingMigration.js";
-import type * as accountingOutbox from "../accountingOutbox.js";
-import type * as accountingPeriods from "../accountingPeriods.js";
-import type * as accountingReports from "../accountingReports.js";
-import type * as accountingSetup from "../accountingSetup.js";
 import type * as adminAnalytics from "../adminAnalytics.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
@@ -202,9 +202,11 @@ import type * as utils_dealCommissionLines from "../utils/dealCommissionLines.js
 import type * as utils_dealCostLimits from "../utils/dealCostLimits.js";
 import type * as utils_dealCustodyPosting from "../utils/dealCustodyPosting.js";
 import type * as utils_dealFinancialSummary from "../utils/dealFinancialSummary.js";
+import type * as utils_dealManagementNet from "../utils/dealManagementNet.js";
 import type * as utils_dealModes from "../utils/dealModes.js";
 import type * as utils_dealNumber from "../utils/dealNumber.js";
 import type * as utils_dealNumberFormat from "../utils/dealNumberFormat.js";
+import type * as utils_dealProfitReads from "../utils/dealProfitReads.js";
 import type * as utils_dealUnwindGuard from "../utils/dealUnwindGuard.js";
 import type * as utils_dealUnwindMessages from "../utils/dealUnwindMessages.js";
 import type * as utils_dealVehicleProfile from "../utils/dealVehicleProfile.js";
@@ -368,6 +370,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountingCutover: typeof accountingCutover;
+  accountingLedger: typeof accountingLedger;
+  accountingMigration: typeof accountingMigration;
+  accountingOutbox: typeof accountingOutbox;
+  accountingPeriods: typeof accountingPeriods;
+  accountingReports: typeof accountingReports;
+  accountingSetup: typeof accountingSetup;
   "accounting/accountSnapshots": typeof accounting_accountSnapshots;
   "accounting/bankAggregateTriggers": typeof accounting_bankAggregateTriggers;
   "accounting/bankLineAggregate": typeof accounting_bankLineAggregate;
@@ -384,13 +393,6 @@ declare const fullApi: ApiFromModules<{
   "accounting/reversals": typeof accounting_reversals;
   "accounting/supplierCostRecoveryPosting": typeof accounting_supplierCostRecoveryPosting;
   "accounting/workflowHooks": typeof accounting_workflowHooks;
-  accountingCutover: typeof accountingCutover;
-  accountingLedger: typeof accountingLedger;
-  accountingMigration: typeof accountingMigration;
-  accountingOutbox: typeof accountingOutbox;
-  accountingPeriods: typeof accountingPeriods;
-  accountingReports: typeof accountingReports;
-  accountingSetup: typeof accountingSetup;
   adminAnalytics: typeof adminAnalytics;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
@@ -562,9 +564,11 @@ declare const fullApi: ApiFromModules<{
   "utils/dealCostLimits": typeof utils_dealCostLimits;
   "utils/dealCustodyPosting": typeof utils_dealCustodyPosting;
   "utils/dealFinancialSummary": typeof utils_dealFinancialSummary;
+  "utils/dealManagementNet": typeof utils_dealManagementNet;
   "utils/dealModes": typeof utils_dealModes;
   "utils/dealNumber": typeof utils_dealNumber;
   "utils/dealNumberFormat": typeof utils_dealNumberFormat;
+  "utils/dealProfitReads": typeof utils_dealProfitReads;
   "utils/dealUnwindGuard": typeof utils_dealUnwindGuard;
   "utils/dealUnwindMessages": typeof utils_dealUnwindMessages;
   "utils/dealVehicleProfile": typeof utils_dealVehicleProfile;
