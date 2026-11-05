@@ -1,5 +1,6 @@
 "use client";
 
+import { CostAccessNote } from "../CostAccessNote";
 import { useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { Plus, Trash2 } from "lucide-react";
@@ -50,12 +51,14 @@ type Props = {
   canSelectPartners: boolean;
   /** Needed only to name a vehicle on a reservation deposit; absent means no vehicle picker. */
   canSelectVehicles?: boolean;
+  /** Opening stock choices carry per-car cost, so the server needs view:cost_price (SCRUM-902). */
+  canReadOpeningStockCost?: boolean;
 };
 
 /** Party families use existing party read grants; backend posting still
  * re-resolves each selected ID and owns every financial rule. */
 export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChange,
-  canSelectCustomers, canSelectEmployees, canSelectPartners, canSelectVehicles = false }: Readonly<Props>) {
+  canSelectCustomers, canSelectEmployees, canSelectPartners, canSelectVehicles = false, canReadOpeningStockCost = true }: Readonly<Props>) {
   const { t } = useLanguage();
   const [activeCustomerRow, setActiveCustomerRow] = useState<string | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -70,7 +73,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
   const needsPartners = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("PARTNER_CAPITAL"));
   const needsVehicles = groups.some((group) => (group.allowedKinds ?? [group.kind]).includes("VEHICLE_INVENTORY"));
   const vehicles = useQuery(api.accountingCutover.listOpeningStockChoices,
-    needsVehicles ? { orgId } : "skip");
+    needsVehicles && canReadOpeningStockCost ? { orgId } : "skip");
   const reservationVehicleOptions = useQuery(api.vehicles.selectorOptions,
     needsReservationVehicles && canSelectVehicles && activeVehicleRow !== null
       ? { orgId, search: vehicleSearch } : "skip");
@@ -170,6 +173,9 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
         <p className="text-xs text-muted-foreground">{t("OpeningAllocationHelp")}</p>
       </div>
       {selectionError && <p role="alert" className="text-xs text-amber-700">{selectionError}</p>}
+      {needsVehicles && !canReadOpeningStockCost && (
+        <CostAccessNote className="text-xs text-amber-700">{t("OpeningAllocationStockCostAccessNeeded" as any)}</CostAccessNote>
+      )}
       {groups.map((group) => {
         const groupRows = rows.filter((row) => row.accountId === group.accountId);
         const allocated = groupRows.reduce((sum, row) => sum + (parseOpeningMoneyMinor(row.amount, currency) ?? 0), 0);

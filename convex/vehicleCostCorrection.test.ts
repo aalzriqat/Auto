@@ -754,6 +754,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     expect(refund?.vehicleId).toBe(vehicleId);
     expect(refund?.description).toMatch(/correction/i);
     const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    if (!pnl) throw new Error("report withheld");
     expect(pnl.costOfGoodsSold).toBe(9800);
     expect(pnl.totalRevenue).toBe(0);
   });
@@ -767,6 +768,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     const rows = (await listAll(d)).page.filter((r) => r.category === "VEHICLE_PURCHASE");
     expect(rows.map((r) => [r.type, r.amount]).sort()).toEqual([["OUT", 12500], ["OUT", 500]]);
     const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    if (!pnl) throw new Error("report withheld");
     expect(pnl.costOfGoodsSold).toBe(13000);
   });
 
@@ -791,6 +793,7 @@ describe("SCRUM-650 batch 2 A4: the cashbook projection of a cash correction", (
     expect(rowsAfter.map((r) => r._id).sort()).toEqual(rowsBefore.map((r) => r._id).sort());
     expect(rowsAfter.filter((r) => r.category === "VEHICLE_PURCHASE" && r.type === "IN")).toHaveLength(0);
     const pnl = await d.asOwner.query(api.reports.getProfitAndLoss, { orgId: d.orgId, ...ALL_TIME });
+    if (!pnl) throw new Error("report withheld");
     expect(pnl.costOfGoodsSold).toBeGreaterThanOrEqual(0);
   });
 

@@ -1,0 +1,66 @@
+{
+  "id": "cost-disclosure-902f-posted-opening",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.postedOpeningAllocationReadback",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "posted-opening",
+        "allocationAmountMinor": 9000000
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.postedOpeningAllocationReadback",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "posted-opening",
+        "allocationAmountMinor": 9000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": null
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "amountMinor": 9000000,
+        "vehicle": "fixture-vehicle"
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F2 postedOpeningAllocationReadback withholds per-car opening amounts"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "d1f6b477c417def36d04945debe6dfc9357b934be7661af2df761e5193b987f7"
+}

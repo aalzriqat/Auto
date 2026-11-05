@@ -1,0 +1,43 @@
+{
+  "id": "opening-stock-choices-still-serve-finance-and-cost-price",
+  "fingerprint": "9d1ba269e9685ca233c1ec9b35ebd59c6554e8391884cebcb5e8fbf9a3ed0ba6",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-manage-finance-and-cost",
+        "org": "A"
+      },
+      "action": "accountingCutover.listOpeningStockChoices",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "stockChoices"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "accountingCutover.listOpeningStockChoices: a role holding both manage:finance and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

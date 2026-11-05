@@ -1053,6 +1053,77 @@ They do not certify `overdueOutstanding` or the aging buckets against the
 organization day (those still compare a due date with the current instant), the reconciliation
 history list (50 rows), or measured I/O.
 
+## SCRUM-902-SUPPLIER-SOURCING
+
+Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level authorization); owner ruling SCRUM-886#c24358 (ACCOUNTANT holds `view:cost_price`; the rollout backfill grants it). A SOURCED car's supplier entitlement equals its acquisition cost, so the per-car supplier and sourcing readers need `STATEMENT_PERMISSIONS` (`view:finance` and `view:cost_price`, `convex/supplierStatement.ts`), exactly like the supplier statement and `supplierDueAging.list`. ADR `docs/adr/2026-11-04-supplier-sourcing-readers-cost-permission.md` holds the class table of every cost-derived reader, and the owner questions for the readers that are not changed.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `sourcingPayables.list`, `listBounded`, `listPipeline`, `get` called by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price`; no rows | `sourcingPayables.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)`, and the same title for `listBounded`, `listPipeline`, `get` |
+| `supplierReceivables.list`, `outstandingSummary` by the same role | refused naming `view:cost_price` | `supplierReceivables.list: …`, `supplierReceivables.outstandingSummary: …` |
+| `sales.consignedSalePreview` by the same role | `null` (fail-soft, so the sale dialog does not crash), not the supplier entitlement or margin | `consignedSalePreview: a caller with view:finance but without view:cost_price gets null, not the supplier entitlement (SCRUM-902)` |
+| Role with both grants (positive controls) | sourcing lists and `get` return the seeded payable (amount 9,500), receivable readers answer, the preview is served | `sourcingPayables readers: a role holding both … (SCRUM-902 positive control)`, `supplierReceivables readers: … positive control`, `consignedSalePreview: … still gets the preview (SCRUM-902 positive control)` |
+| Role with `view:cost_price` and without `view:finance` (negative controls) | refused naming `view:finance`; the preview stays `null` without a finance-side grant | `… (SCRUM-902 negative control)` for sourcing, receivables and the preview |
+
+Failing-first: the six refusals and the preview test failed at `ce61849b3` against the unchanged readers (they resolved with rows) while the positive and negative controls passed. Screens: the web sourcing page and the mobile sourcing module ask for the same pair, send no query without it and show a note in English and Arabic (`SourcingCostAccessRequired`); covered by `app/(dashboard)/[orgId]/sourcing/client.cost.test.tsx` and `apps/mobile/src/features/workspace/modules/sourcing.costGate.test.tsx` (jsdom and React Native test renderers, not a browser). Evidence boundary: `convex-test` only, no production run. Not changed and awaiting owner ruling (ADR Q1-Q4): `supplierCostRecoveries.list` and `listReceipts`, the sales and inventory reports, the GL reconciliations and journal readers, `dashboard.stats`.
+
+## SCRUM-902-COST-READERS
+
+Standard: OWASP A01:2021 (Broken Access Control) and API3:2023 (property level authorization); owner rulings SCRUM-886#c24358 and "Yes, gate all" on SCRUM-902 ADR Q1-Q4. These readers expose acquisition cost or profit, so they need `view:cost_price` besides their own grant. ADR `docs/adr/2026-11-04-supplier-sourcing-readers-cost-permission.md`.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| `supplierCostRecoveries.list`, `listReceipts` by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price` | `supplierCostRecoveries.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)`, and the same title for `listReceipts` |
+| `reports.getSalesAndProfitReport`, `getInventoryReport` by a role with `view:reports` and without `view:cost_price` | `null` (fail-soft: the screen shows a note, no cost, profit, purchase price or investment) | `reports.getSalesAndProfitReport: a role with view:reports but without view:cost_price gets null, not cost and profit (SCRUM-902)`, and the inventory title |
+| `accountingReports.supplierPayablesReconciliation`, `supplierReceivablesReconciliation`, `vehicleInventoryReconciliation`, `accountingLedger.listJournalEntries`, `getJournalEntry` by the same finance-only role | refused naming `view:cost_price` | `<reader>: a role with view:finance but without view:cost_price is refused (SCRUM-902)` |
+| `dashboard.stats` by a role with `view:reports` and without `view:cost_price` | gross basis, no margin, the cost loop does not run | `a viewer with view:reports and no view:cost_price gets the gross basis, no margin, no cost loop` in `dashboardCostPermissions.test.ts` |
+| Role with both grants (positive controls) | recoveries list, both reports and the reconciliations and journal list answer | `… (SCRUM-902 positive control)` |
+| `view:cost_price` alone (negative controls) | refused naming `view:finance` (or `view:reports`); the dashboard still shows no margin | `… (SCRUM-902 negative control)` |
+| `accountingReports.trialBalance`, `incomeStatement`, `balanceSheet`, `accountingLedger.getAccountActivity` by a role with `view:finance` and without `view:cost_price` | refused naming `view:cost_price` (inventory, COGS and gross margin are in these) | `<reader>: a role with view:finance but without view:cost_price is refused (SCRUM-902)` in `costReaders.scrum902c.test.ts` |
+| `reports.getSalespersonPerformance`, `getExpensesReport` by a role with `view:reports` and without `view:cost_price` | `null` (fail-soft; per-rep profit and vehicle landed-cost expenses withheld) | `reports.getSalespersonPerformance: … gets null, not per-rep profit (SCRUM-902)`, and the expenses title |
+| `accountingReports.subledgerReconciliation` by `view:finance` alone (class control) | still answers: AR only, not cost-bearing | `accountingReports.subledgerReconciliation: AR only, not cost-bearing, so view:finance alone still reads (SCRUM-902 class control)` |
+| Class sweep controls | both grants read; `view:cost_price` alone is refused naming `view:finance` or `view:reports` | `GL statements and account activity: …`, `salesperson performance and expenses reports: …` |
+
+Class-sweep failing-first: the six class-sweep reader cases failed at `2852274243f2f95a4df4c3d3a7d9b2ce9ca81900` against the ungated readers while every control passed. The web Financial Reports tab (trial balance, income statement, balance sheet; the VAT return tab is unchanged) and the expenses and performance tabs of the web reports page skip their queries without the grant and show an English and Arabic note; the mobile reports module shows dashes and skips the same two queries.
+
+Failing-first: nine reader cases and the dashboard case failed at `ef03e298f` against the unchanged readers while every control passed. Screens: the web reports page, the web General Ledger tab, the recoveries section and the mobile reports module skip their queries without the grant and show an English and Arabic note; covered by `components/accounting/GeneralLedgerTabCurrency.test.tsx`, `components/sourcing/SupplierCostRecoveriesSection.test.tsx` and `apps/mobile/src/features/workspace/modules/reports.costGate.test.tsx` (jsdom and React Native test renderers, not a browser; the web reports page has no render test). Evidence boundary: `convex-test` only, no production run. Deploy dependency: the SCRUM-886 ACCOUNTANT backfill (Deploy production step 2e) must ship in the same deploy, or an ACCOUNTANT role seeded earlier is refused by these readers.
+
+
+## SCRUM-902-REMAINING-COST-DISCLOSURES
+
+Owner ruling: SCRUM-902 c24475. Synthetic fixtures only. The implementation keeps posting, settlement amounts, durable idempotency results and pilot switches unchanged; response projections use current authority after replay.
+
+| Cell | Expected | Bound test in `convex/costDisclosure.scrum902f.test.ts` |
+| --- | --- | --- |
+| F1 basis | finance without cost is refused; cost grant, ALL_PERMISSIONS and system owner read entitlement | F1 supplierConcessionBasis refuses finance without cost and preserves granted access |
+| F1 comparison | incorrect, correct and adjacent entitlement guesses refuse before comparison; authorized concession still records | F1 resolveAppraisalGap cannot compare guessed entitlement without cost access |
+| F2 posted | null without cost; authorized read retains car id and amount | F2 postedOpeningAllocationReadback withholds per-car opening amounts |
+| F2 pending | no raw draft, allocations, enriched allocations or balancing lines without cost | F2 pending drafts withhold raw allocations, enriched allocations and balancing cost lines |
+| F3 outbox | cost permission required for unfiltered, PENDING, POSTED and FAILED branches | F3 listPending gates cost payloads in every status branch |
+| F4 refusal | no due/projected/entitlement or amount in no-cost EN/AR error; authorized detail retained | F4 partial payment refusal has no cost amount or due field without grant |
+| F4 success/replay | current authority removes amounts after grant revocation; payment recorded once | F4 partial payment success and replay redact accumulated paid and entitlement balance |
+| F5 unfiltered | vehicle-linked capitalized row and its tax operands absent; ordinary office expense remains | F5 unfiltered expenses exclude vehicle cost rows including tax and capitalization operands |
+| Settlement oracle | observed settlement amounts require cost grant; authorized markPaid still settles | sweep markPaid cannot compare a guessed settlement balance without cost access |
+| Margin receipt | generic no-cost refusal and response projection after replay; receipts persist once | sweep supplier receipt refusal and replay do not disclose the margin claim |
+| Recovery receipt | id/status retained; remaining cost removed after replay | sweep cost recovery receipt and replay withhold remaining vehicle cost |
+| Direct route/approval | shared refusal contains no supplier entitlement or difference, in EN/AR | sweep direct supplier route and approval refusals contain no entitlement |
+| Inventory migration | no-cost dry run retains action/counts but no per-car amount; grant retains amount | sweep inventory backfill response withholds vehicle cost but keeps migration results |
+
+Failing-first: the original five findings produced 11 failures against production source at 86abd74bb38d3361684fbaecf6631a90c1e17928. The first sweep added two failing receipt cases; the second added three failing direct-route/backfill cases. Later consolidating status and route variants into named scenario tests preserves their assertions and allows regression-library binding. These are harness results, not Convex platform, concurrency, production, browser E2E or release certification.
+
+## SCRUM-902-SWEEP-CLOSURE
+
+Owner ruling: SCRUM-902 c24475. Each reader refuses before returning any cost-bearing response to a custom role without `view:cost_price`. Non-owner roles with the grant retain the figures. Accounting writes and approval readers are unchanged.
+
+| Cell | Expected | Bound test |
+| --- | --- | --- |
+| Work order, unfiltered | no-cost vehicle viewer refused; granted viewer reads parts 100, labor 50 and total 150 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=false require cost access` |
+| Work order, vehicle-filtered | same boundary for the vehicle index branch | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 work orders with vehicle filter=true require cost access` |
+| Bundled finance costs | no-cost application viewer refused; granted viewer reads acquisition amount 9000000 and ordinary fee 20000, total 9020000 | `convex/costSweep.scrum902g.test.ts`: `SCRUM-902 bundled deal cost reader protects acquisition lines and their totals` |
+| Management report | non-owner cost role reads report; revoked grant refuses before response or missing-basis refusal | `convex/openingManagementSettlement.test.ts`: `SCRUM-902 management profit report requires cost access before basis refusals` |
+
+All four negative assertions failed against unchanged production source at 24869050a64b075faed726db606999d770694c7b before the guards were added. These are `convex-test` results, not real-backend or release certification.
+
 ## SOURCED supplier-cost mirror (SCRUM-907)
 
 Owner invariant in `SCRUM-907#description`: `purchasePrice === sourceCost` after a

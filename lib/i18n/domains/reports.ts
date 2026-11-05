@@ -78,6 +78,18 @@ export const reportsEn = {
     "This sale was financed and settled directly with the supplier, and the amount the finance company actually paid him was not recorded on it, so what the dealership earned cannot be worked out.",
   ProfitUnknownNotice:
     "{count} sale(s) are excluded from revenue and profit above because what they earned could not be established. Those totals are therefore a minimum, not the full picture.",
+  // SCRUM-902: shown instead of the cost-bearing reports to a role that has view:reports but not view:cost_price.
+  ReportsCostAccessRequired:
+    "This report shows what each car cost and what it earned. Your role needs cost-price access as well as report access to see it. Ask an administrator to update your role.",
+  // SCRUM-902: shown above the transaction register to a role without view:cost_price, whose list omits car purchase rows.
+  RegisterCostRowsWithheld:
+    "Car purchase rows are not shown, and the totals below leave them out. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+  // SCRUM-902: shown instead of the journal to a role that has view:finance but not view:cost_price.
+  LedgerCostAccessRequired:
+    "Journal entries show what each car cost. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+  // SCRUM-902: shown instead of the trial balance, income statement and balance sheet to a role without view:cost_price.
+  FinancialStatementCostAccessRequired:
+    "This statement includes vehicle inventory and cost of goods sold. Your role needs cost-price access as well as finance access to see it. Ask an administrator to update your role.",
   PerformanceUnknownNotice:
     "{count} sale(s) could not have their earnings established, so the salespeople who made them are listed separately at the bottom and are not ranked. Their totals cover only the sales that are known.",
   /**
@@ -173,6 +185,14 @@ export const reportsAr = {
     "هذه المركبة بيعت بالتمويل وتمت تسوية ثمنها مع المورّد مباشرة، ولم يُسجَّل عليها المبلغ الذي دفعته شركة التمويل له فعلياً، لذلك لا يمكن احتساب ما حققه المعرض منها.",
   ProfitUnknownNotice:
     "تم استثناء {count} عملية بيع من الإيرادات والأرباح أعلاه لتعذُّر تحديد ما حققته. لذلك فإن هذه الإجماليات تمثّل الحد الأدنى وليست الصورة الكاملة.",
+  ReportsCostAccessRequired:
+    "يعرض هذا التقرير تكلفة كل مركبة وما حققته من ربح. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية التقارير. اطلب من المسؤول تحديث دورك.",
+  RegisterCostRowsWithheld:
+    "لا تظهر صفوف شراء المركبات، وتستثنيها الإجماليات أدناه. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+  LedgerCostAccessRequired:
+    "تعرض قيود اليومية تكلفة كل مركبة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+  FinancialStatementCostAccessRequired:
+    "يتضمن هذا الكشف مخزون المركبات وتكلفة البضاعة المباعة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
   PerformanceUnknownNotice:
     "تعذّر تحديد ما حققته {count} عملية بيع، لذلك يظهر البائعون الذين نفّذوها في أسفل الجدول بشكل منفصل ولا يدخلون في الترتيب. الإجماليات الخاصة بهم تشمل المبيعات المعروفة فقط.",
   ProfitKnownOnly: "{count} غير محتسبة",

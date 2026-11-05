@@ -491,7 +491,7 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     expect((finance as { supplierGapShareMinor?: number }).supplierGapShareMinor).toBe(jod(400));
   });
 
-  test("the dialog's basis query is finance-only and reports eligibility and the entitlement", async () => {
+  test("the dialog's basis query requires finance and cost access and reports eligibility and the entitlement", async () => {
     const s = await seed("r12");
     const stock = await seed("r12s", { sourced: false });
     const applicationId = await approvedDeal(s, "THROUGH_DEALERSHIP");
@@ -500,6 +500,7 @@ describe("PR-C resolution: the supplier share of the net shortfall", () => {
     const stockApplication = await approvedDeal(stock, "THROUGH_DEALERSHIP");
     expect(await stock.approver.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: stock.orgId, applicationId: stockApplication })).toMatchObject({ eligible: false });
     expect((await refusalOf(s.actors.Clerk.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })))?.message).toContain("Missing required permissions");
+    expect((await refusalOf(s.actors.NoApprove.as.query(api.financingEconomics.supplierConcessionBasis, { orgId: s.orgId, applicationId })))?.message).toContain("view:cost_price");
   });
 
   test("a vehicle edit that changes the supplier, cost or type is refused while a concession is held, and allowed after release", async () => {

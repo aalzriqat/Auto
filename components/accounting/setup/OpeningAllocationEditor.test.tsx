@@ -292,3 +292,17 @@ test("without the customer-view grant a named deposit row cannot pick a customer
   expect((screen.getByRole("combobox", { name: "OpeningAllocationCustomer" }) as HTMLSelectElement).disabled).toBe(true);
   expect(screen.getByRole("alert").textContent).toBe("OpeningAllocationPermissionNeeded");
 });
+
+const stockGroup: OpeningAllocationGroup = { accountId: "account-s" as Id<"chartOfAccounts">, kind: "VEHICLE_INVENTORY",
+  journalMinor: 100_000, label: "1300 · Vehicle inventory" };
+
+test("SCRUM-902: opening stock without cost-price access shows the access note, and none with it", () => {
+  language.locale = "en";
+  queryRows = [];
+  const props = { orgId: "org-a" as Id<"organizations">, currency: "JOD", groups: [stockGroup], rows: [] as OpeningAllocationDraft[],
+    onChange: vi.fn(), canSelectCustomers: false, canSelectEmployees: false, canSelectPartners: false };
+  const { rerender } = render(<OpeningAllocationEditor {...props} canReadOpeningStockCost={false} />);
+  expect(screen.getByText("OpeningAllocationStockCostAccessNeeded")).toBeTruthy();
+  rerender(<OpeningAllocationEditor {...props} canReadOpeningStockCost />);
+  expect(screen.queryByText("OpeningAllocationStockCostAccessNeeded")).toBeNull();
+});

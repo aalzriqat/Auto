@@ -1,4 +1,5 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
 import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
@@ -871,6 +872,8 @@ export const listPendingOpeningBalanceDrafts = query({
   handler: async (ctx, args) => {
     const openingReader=createOpeningSettlementReader(ctx,args.orgId);
     const { role, user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Raw allocations and balancing lines can reconstruct a single car's cost.
+    if (!canReadVehicleCost(role)) return [];
     const drafts = await ctx.db
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
@@ -1059,6 +1062,7 @@ export const openingBalanceStatus = query({
     canSelectEmployees: boolean;
     canSelectPartners: boolean;
     canSelectVehicles: boolean;
+    canReadOpeningStockCost: boolean;
     currency: string;
   }> => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -1092,6 +1096,8 @@ export const openingBalanceStatus = query({
       canSelectPartners: canEnter,
       // SCRUM-858 S1: a reservation deposit may name a vehicle; the picker reads vehicles.selectorOptions.
       canSelectVehicles: canEnter && (isOwner || role.permissions.includes(PERMISSIONS.VIEW_VEHICLES)),
+      // SCRUM-902: listOpeningStockChoices returns per-car cost; the client skips it without this.
+      canReadOpeningStockCost: canManageFinance && (isOwner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE)),
       // The form converts entered amounts to minor units, and the scale is
       // per-currency (3 for JOD/KWD/BHD/OMR, 2 otherwise). Returned here so the
       // client uses the org's real currency rather than assuming one — getting
@@ -1195,7 +1201,8 @@ export const listOpeningAccountPolicies = query({
 export const listOpeningStockChoices = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // SCRUM-902 (owner "Yes, gate all"): the per-car opening cost needs view:cost_price too.
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
     const currency = await getOrgCurrency(ctx, args.orgId);
     const evidence = await listOpeningStockEvidence(ctx, args.orgId);
     const resetGeneration = orgResetState(await ctx.db.get(args.orgId)).generation;
@@ -1448,6 +1455,7 @@ export const postedOpeningAllocationReadback = query({
   handler: async (ctx, args) => {
     const openingReader=createOpeningSettlementReader(ctx,args.orgId);
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    if (!canReadVehicleCost(role)) return null;
     const draft=await selectOpeningReadbackDraft(ctx,args.orgId);
     if(!draft)return null;
     const journal = draft.journalEntryId ? await ctx.db.get(draft.journalEntryId) : null;

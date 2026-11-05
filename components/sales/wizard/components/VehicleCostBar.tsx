@@ -27,7 +27,9 @@ export function VehicleCostBar({ vehicleId, purchasePrice }: Readonly<VehicleCos
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const [isRevealed, setIsRevealed] = useState(false);
 
-  const canViewExpenses = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_EXPENSES);
+  // SCRUM-902: the per-car expense total is the car's landed cost, so the server also needs view:cost_price.
+  const canViewExpenses =
+    !permissionsLoading && hasPermission(PERMISSIONS.VIEW_EXPENSES) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
 
   const totalExpenses = useQuery(
     api.expenses.totalByVehicle,

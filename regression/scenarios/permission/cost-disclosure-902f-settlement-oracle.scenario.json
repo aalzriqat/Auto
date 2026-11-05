@@ -1,0 +1,73 @@
+{
+  "id": "cost-disclosure-902f-settlement-oracle",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "settlement-oracle",
+        "expectedSettlementGuesses": [
+          8899999,
+          8900000
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "settlement-oracle",
+        "expectedSettlementGuesses": [
+          8899999,
+          8900000
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "everyGuess": "FORBIDDEN"
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "amountPaid": 9000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "sweep markPaid cannot compare a guessed settlement balance without cost access"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "01dc5bae3a5b60b8fd2cd8ca86c10ca5dec5645401121393ce8dc2e7124625ef"
+}

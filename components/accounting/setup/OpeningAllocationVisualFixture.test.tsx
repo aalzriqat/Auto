@@ -123,7 +123,7 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   capture("review");
 
   fixture.values.set("accountingCutover:openingBalanceStatus", { posted: true, pendingExists: false,
-    canManageFinance: true, currency: "JOD", canPostDirectly: true });
+    canManageFinance: true, currency: "JOD", canPostDirectly: true, canReadOpeningStockCost: true });
   fixture.values.set("chartOfAccounts:list", []);
   fixture.values.set("bankAccounts:list", []);
   fixture.values.set("accountingCutover:postedOpeningAllocationReadback", {

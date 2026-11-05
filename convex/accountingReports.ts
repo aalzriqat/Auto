@@ -18,6 +18,8 @@ import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
+// SCRUM-902: supplier and inventory totals are acquisition cost; they need the supplier statement's pair.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
@@ -188,7 +190,8 @@ export const trialBalance = query({
     reportingCurrency: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the trial balance carries the vehicle inventory and COGS accounts, so it needs the cost permission too.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     // Include all accounts (active and inactive) so historical postings on
@@ -397,7 +400,8 @@ export const incomeStatement = query({
     toDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the income statement shows cost of goods sold and gross margin.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeIncomeStatement(ctx, args);
   },
@@ -411,7 +415,8 @@ export const balanceSheet = query({
     asOfDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: the balance sheet carries the vehicle inventory line.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const accounts = await ctx.db
@@ -860,7 +865,7 @@ export async function computeVehicleInventoryReconciliation(
 export const vehicleInventoryReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeVehicleInventoryReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1382,7 +1387,7 @@ export async function computeSupplierPayablesReconciliation(
 export const supplierPayablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeSupplierPayablesReconciliation(ctx, args.orgId, args.toDate);
   },
@@ -1940,7 +1945,7 @@ export const supplierReceivablesReconciliation = query({
   }),
   handler: async (ctx, args) => {
     try {
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
       await requireFeature(ctx, args.orgId, "accounting");
       return await computeSupplierReceivablesReconciliation(ctx, args.orgId, args.toDate);
     } catch (error) {

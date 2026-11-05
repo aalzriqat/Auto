@@ -1,0 +1,39 @@
+{
+  "id": "sourcing-payables-readers-still-serve-a-role-with-finance-and-cost-price",
+  "fingerprint": "6eeb85e843224195f9f88499651c1523b50689a64f0336b0454b30ca49b3c04f",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-sweep-from-pr765",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-and-cost",
+        "org": "A"
+      },
+      "action": "sourcingPayables.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "rows"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSourcingCostGate.scrum902.test.ts",
+    "testName": "sourcingPayables readers: a role holding both view:finance and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-SUPPLIER-SOURCING"
+}

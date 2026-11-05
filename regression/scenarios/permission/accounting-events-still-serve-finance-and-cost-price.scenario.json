@@ -1,0 +1,43 @@
+{
+  "id": "accounting-events-still-serve-finance-and-cost-price",
+  "fingerprint": "84c3325c1dd14e27e6cd8e2c6ea36b5eaa4612bea10d603b818cfee45d4aa781",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-and-cost",
+        "org": "A"
+      },
+      "action": "accountingLedger.listAccountingEvents",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "events"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902d.test.ts",
+    "testName": "accountingLedger.listAccountingEvents: a role holding both view:finance and view:cost_price still reads (SCRUM-902 positive control)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

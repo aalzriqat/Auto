@@ -54,7 +54,7 @@ const BASE_PERMS = [
   "view:sales", "create:sales",
   "view:leads",
 ];
-const PROFIT_PERMS = ["view:reports", "view:financials"];
+const PROFIT_PERMS = ["view:reports", "view:financials", "view:cost_price"];
 
 async function seedDealer(tag: string, permissions: string[]) {
   const t = convexTestWithComponents(schema, MODULE_GLOB);
@@ -143,6 +143,34 @@ describe("a viewer without profit permission", () => {
     // A gross figure passing itself off as accounting turnover is the other
     // way this goes wrong, and the label is what stops it.
     expect(dash.salesVolumeBasis).toBe("GROSS_TRANSACTION_VALUE");
+  });
+});
+
+describe("SCRUM-902: profit figures need view:cost_price as well as a reports or finance grant", () => {
+  test("a viewer with view:reports and no view:cost_price gets the gross basis, no margin, no cost loop", async () => {
+    const s = await seedDealer("nocost1", [...BASE_PERMS, "view:reports", "view:financials"]);
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    expect(dash.salesVolumeBasis).toBe("GROSS_TRANSACTION_VALUE");
+    expect(dash.salesVolumeThisMonth).toBe(SALE_PRICE);
+    expect(dash.salesTrend.some((point) => point.Revenue === MARGIN)).toBe(false);
+    expect(costProbe.calls).toBe(0);
+  });
+
+  test("negative control: view:cost_price alone, with no sales-side grant, still gets no margin", async () => {
+    const s = await seedDealer("costonly1", [...BASE_PERMS, "view:cost_price"]);
+
+    const dash = await s.asUser.query(api.dashboard.stats, {
+      orgId: s.orgId, timeRange: "YEAR" as const,
+    });
+
+    // BASE_PERMS carries view:sales, so the sales side is satisfied; the cost side
+    // (expenses, reports or finance) is not, so no margin.
+    expect(dash.salesVolumeBasis).toBe("GROSS_TRANSACTION_VALUE");
+    expect(costProbe.calls).toBe(0);
   });
 });
 

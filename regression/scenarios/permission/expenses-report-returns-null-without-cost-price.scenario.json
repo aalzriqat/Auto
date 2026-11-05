@@ -1,0 +1,43 @@
+{
+  "id": "expenses-report-returns-null-without-cost-price",
+  "fingerprint": "88d4b219ec1228c859ccf22abda9f6a6ca53f32911d4ca4a9cbe397c3c1c9755",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-gate-all-ruling",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-reports-only",
+        "org": "A"
+      },
+      "action": "reports.getExpensesReport",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "null"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "reports.getExpensesReport: a role with view:reports but without view:cost_price gets null, not vehicle landed-cost expenses (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "2852274243f2f95a4df4c3d3a7d9b2ce9ca81900"
+  }
+}

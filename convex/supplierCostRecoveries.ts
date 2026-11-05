@@ -1,3 +1,4 @@
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { requireResolvedSupplierId } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
@@ -20,6 +21,8 @@ import {
 import { auditLog } from "./financialAudit";
 import { assertSupplierSettlementDoorAllowed } from "./utils/supplierSettlementContainment";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
+// SCRUM-902: a supplier-borne cost is part of the acquisition cost, so its readers share the supplier statement's pair.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 
 /**
  * SCRUM-389 — recovering supplier-borne vehicle costs.
@@ -202,7 +205,7 @@ export const list = query({
     complete: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     const LIMIT = 200;
     const rows = args.status
       ? await ctx.db
@@ -265,7 +268,7 @@ export const listReceipts = query({
     })
   ),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.");
     const receipts = await ctx.db
       .query("supplierCostRecoveryReceipts")
@@ -333,12 +336,12 @@ export const recordReceipt = mutation({
   },
   returns: v.object({
     receiptId: v.id("supplierCostRecoveryReceipts"),
-    amountRecoveredMinor: v.number(),
-    remainingMinor: v.number(),
+    amountRecoveredMinor: v.optional(v.number()),
+    remainingMinor: v.optional(v.number()),
     status: recoveryStatusValidator,
   }),
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     await openingRecoveryBasis(ctx,args.orgId,await requireOwnedRow(ctx,args.orgId,"supplierCostRecoveries",args.recoveryId,"Supplier cost recovery not found."));
     await requireResolvedSupplierId(
@@ -346,7 +349,7 @@ export const recordReceipt = mutation({
       args.orgId,
       await requireOwnedRow(ctx, args.orgId, "supplierCostRecoveries", args.recoveryId, "Supplier cost recovery not found.")
     );
-    return await runWithIdempotency(
+    const result = await runWithIdempotency(
       ctx,
       {
         orgId: args.orgId,
@@ -481,6 +484,8 @@ export const recordReceipt = mutation({
         };
       }
     );
+    // Apply current authority to fresh results and cached replays alike.
+    return canReadVehicleCost(role) ? result : { receiptId: result.receiptId, status: result.status };
   },
 });
 

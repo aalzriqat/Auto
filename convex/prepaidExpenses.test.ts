@@ -421,6 +421,7 @@ describe("prepaid expense — operational report matches the GL", () => {
     const report = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     // Report recognizes 1/12 (100 JOD major) for January — the same 100,000
     // minor the GL posted to the expense account.
     expect(report.totalExpenses).toBeCloseTo(100, 6);
@@ -440,6 +441,7 @@ describe("prepaid expense — operational report matches the GL", () => {
     const report = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     // Net 1000 / 10 = 100 per month — NOT gross 1200 / 10 = 120. The report and
     // the GL agree exactly because both read the net schedule row.
     expect(report.totalExpenses).toBeCloseTo(100, 6);
@@ -460,6 +462,7 @@ describe("prepaid expense — operational report matches the GL", () => {
     const report = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 2, 1), endDate: Date.UTC(2026, 2, 31, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalExpenses).toBeCloseTo(100, 6); // March's 1/12
     expect(report.expenses.some((e) => e._id === expenseId)).toBe(true);
   });
@@ -488,6 +491,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
       const report = await asOwner.query(api.reports.getExpensesReport, {
         orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
       });
+      if (!report) throw new Error("report withheld");
       expect(report.totalExpenses).toBeCloseTo(100, 6);
     }
 
@@ -499,6 +503,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     // write-off shows up there, in full, and nowhere else.
     const { start, end } = monthRange(toYearMonth(Date.now()));
     const correctionReport = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: start, endDate: end });
+    if (!correctionReport) throw new Error("report withheld");
     expect(correctionReport.totalExpenses).toBeCloseTo(300, 6);
 
     // Jan-Mar still report exactly what they always did — the correction
@@ -507,6 +512,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
       const report = await asOwner.query(api.reports.getExpensesReport, {
         orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
       });
+      if (!report) throw new Error("report withheld");
       expect(report.totalExpenses).toBeCloseTo(100, 6);
     }
 
@@ -519,6 +525,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     const lifetimeReport = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2000, 0, 1), endDate: Date.UTC(2100, 0, 1),
     });
+    if (!lifetimeReport) throw new Error("report withheld");
     expect(lifetimeReport.totalExpenses).toBeCloseTo(1200, 6);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(1_200_000);
   });
@@ -540,12 +547,14 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
 
     const { start, end } = monthRange(toYearMonth(Date.now()));
     const correctionReport = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: start, endDate: end });
+    if (!correctionReport) throw new Error("report withheld");
     expect(correctionReport.totalExpenses).toBe(0);
 
     for (const monthIdx of [0, 1, 2]) {
       const report = await asOwner.query(api.reports.getExpensesReport, {
         orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
       });
+      if (!report) throw new Error("report withheld");
       expect(report.totalExpenses).toBeCloseTo(100, 6);
     }
 
@@ -556,6 +565,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     const aprilReport = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 3, 1), endDate: Date.UTC(2026, 3, 30, 23, 59, 59, 999),
     });
+    if (!aprilReport) throw new Error("report withheld");
     expect(aprilReport.totalExpenses).toBeCloseTo(66.666, 3);
   });
 
@@ -579,6 +589,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     const januaryReport = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
     });
+    if (!januaryReport) throw new Error("report withheld");
     expect(januaryReport.totalExpenses).toBeCloseTo(100, 6);
 
     // Lifetime total equals the GL total exactly once (no double count from
@@ -586,6 +597,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     const lifetimeReport = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2000, 0, 1), endDate: Date.UTC(2100, 0, 1),
     });
+    if (!lifetimeReport) throw new Error("report withheld");
     expect(lifetimeReport.totalExpenses).toBeCloseTo(1200, 6);
   });
 
@@ -618,6 +630,7 @@ describe("Phase 1 — report derives from posted/parked recognition events, neve
     const report = await asOwner.query(api.reports.getExpensesReport, {
       orgId, startDate: Date.UTC(2026, 1, 1), endDate: Date.UTC(2026, 1, 28, 23, 59, 59, 999),
     });
+    if (!report) throw new Error("report withheld");
     expect(report.totalExpenses).toBeCloseTo(100, 6);
   });
 });

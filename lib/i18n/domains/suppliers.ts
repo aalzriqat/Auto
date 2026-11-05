@@ -265,6 +265,11 @@ const suppliersMessages = defineBilingualMessages({
     "The supplier statement is not included in your current plan.",
     "كشف حساب المورّد غير مشمول في خطتك الحالية.",
   ],
+  // SCRUM-902: shown instead of the sourcing lists to a role that holds view:finance without view:cost_price.
+  SourcingCostAccessRequired: [
+    "Supplier payables and special orders show what each sourced car cost. Your role needs cost-price access as well as finance access to see them. Ask an administrator to update your role.",
+    "تعرض مستحقات الموردين والطلبات الخاصة تكلفة كل مركبة مورَّدة. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية المالية. اطلب من المسؤول تحديث دورك.",
+  ],
   SuppliersStmtLoading: ["Loading the statement…", "جارٍ تحميل كشف الحساب…"],
   SuppliersStmtLoadError: [
     "The statement could not be loaded. Reload the page and try again.",

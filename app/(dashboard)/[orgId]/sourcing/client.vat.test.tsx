@@ -56,6 +56,10 @@ vi.mock("@/convex/_generated/api", () => ({
   },
 }));
 vi.mock("@/components/providers/OrgProvider", () => ({ useOrg: () => ({ activeOrgId: "org_1" }) }));
+// SCRUM-902: the screen asks for view:finance and view:cost_price before it queries.
+vi.mock("@/hooks/use-permissions", () => ({
+  usePermissions: () => ({ isLoading: false, hasPermission: () => true }),
+}));
 vi.mock("@/components/providers/LanguageProvider", () => ({
   useLanguage: () => ({
     locale,

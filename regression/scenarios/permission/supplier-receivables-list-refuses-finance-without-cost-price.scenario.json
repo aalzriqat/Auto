@@ -1,0 +1,47 @@
+{
+  "id": "supplier-receivables-list-refuses-finance-without-cost-price",
+  "fingerprint": "8e4ae85bf8857d4a8943bd291cefd4be5294a60d0dda6aa70e6194cb745b7e28",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum902-sweep-from-pr765",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "supplierReceivables.list",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierSourcingCostGate.scrum902.test.ts",
+    "testName": "supplierReceivables.list: a role with view:finance but without view:cost_price is refused (SCRUM-902)"
+  },
+  "matrixRow": "SCRUM-902-SUPPLIER-SOURCING",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "ce61849b3844ed40dfce0c301d85d0960fc37d68"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "cost-disclosure-902f-recovery-receipt",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "recovery-receipt",
+        "amountMinor": 50000,
+        "recoveryCostMinor": 200000,
+        "revokeBeforeReplay": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "recovery-receipt",
+        "amountMinor": 50000,
+        "recoveryCostMinor": 200000,
+        "revokeBeforeReplay": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "fields": [
+          "receiptId",
+          "status"
+        ]
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "amountRecoveredMinor": 50000,
+        "remainingMinor": 150000
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "sweep cost recovery receipt and replay withhold remaining vehicle cost"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "3979b3559624cfaeb659696b187c9649b45d9a2fec614a6a56c719ec45a4b843"
+}

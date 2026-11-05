@@ -1,0 +1,76 @@
+{
+  "id": "cost-disclosure-902f-unfiltered-expenses",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum902f-cost-disclosure",
+    "firstSeen": "2026-11-04"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-without-cost",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {
+        "hasCostAccess": false,
+        "variant": "unfiltered-expenses",
+        "vehicleAmount": 116,
+        "taxAmount": 16,
+        "capitalizedAmount": 100,
+        "officeAmount": 20
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-with-cost",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {
+        "hasCostAccess": true,
+        "variant": "unfiltered-expenses",
+        "vehicleAmount": 116,
+        "taxAmount": 16,
+        "capitalizedAmount": 100,
+        "officeAmount": 20
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restricted.result",
+      "value": {
+        "officeAmount": 20,
+        "vehicleRows": []
+      }
+    },
+    {
+      "observable": "granted.result",
+      "value": {
+        "vehicleAmount": 116,
+        "taxAmount": 16,
+        "capitalizedAmount": 100
+      }
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costDisclosure.scrum902f.test.ts",
+    "testName": "F5 unfiltered expenses exclude vehicle cost rows including tax and capitalization operands"
+  },
+  "matrixRow": "SCRUM-902-REMAINING-COST-DISCLOSURES",
+  "bugRef": {
+    "key": "SCRUM-902",
+    "failingFirst": "86abd74bb38d3361684fbaecf6631a90c1e17928"
+  },
+  "fingerprint": "c65b423ef3b7a1706306635e00684dcc8064821756082b97942c78ae4258f6c8"
+}

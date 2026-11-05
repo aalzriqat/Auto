@@ -67,6 +67,7 @@ describe("backfillExpenseReversedAt", () => {
     // Simulate a row reversed before reversedAt existed.
     await t.run((ctx) => ctx.db.patch(expenseId, { reversedAt: undefined }));
     const broken = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: JAN_START, endDate: JAN_END });
+    if (!broken) throw new Error("report withheld");
     expect(broken.totalExpenses).toBeCloseTo(0, 6); // the bug, reproduced
 
     const result = await t.mutation(internal.migrateExpenseReversals.backfillExpenseReversedAt, {});
@@ -77,6 +78,7 @@ describe("backfillExpenseReversedAt", () => {
 
     // January reports again, matching the ledger.
     const fixed = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: JAN_START, endDate: JAN_END });
+    if (!fixed) throw new Error("report withheld");
     const ledger = await asOwner.query(api.accountingReports.incomeStatement, { orgId, fromDate: JAN_START, toDate: JAN_END });
     expect(fixed.totalExpenses).toBeCloseTo(500, 6);
     expect(ledger.totalExpenses / 1000).toBeCloseTo(500, 6);
@@ -136,6 +138,7 @@ describe("backfillExpenseReversedAt", () => {
     // of the P&L in June while the ledger still carries it.
     expect((await t.run((ctx) => ctx.db.get(expenseId)))?.reversedAt).toBeUndefined();
     const report = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: JAN_START, endDate: JAN_END });
+    if (!report) throw new Error("report withheld");
     expect(report.totalExpenses).toBeCloseTo(400, 6);
   });
 });

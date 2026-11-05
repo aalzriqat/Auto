@@ -2673,6 +2673,7 @@ export const dealCockpit = query({
           : {
               profit: costWithheld,
               managementProfit: costWithheld,
+              // The supplier balance is the purchase cost (or the margin it leaves): absent, not zero.
               parties: cockpitMoney.parties.map((party) =>
                 party.party === "SUPPLIER" ? { ...party, amountMinor: null } : party
               ),

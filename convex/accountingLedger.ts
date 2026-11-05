@@ -4,6 +4,8 @@ import { query } from "./_generated/server";
 import { internalMutation } from "./functions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+// SCRUM-902: journal lines carry inventory and supplier-payable amounts, which are acquisition cost.
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOccurrence";
@@ -84,7 +86,7 @@ export const listJournalEntries = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     // Account filtering on the entry-level list is answered through the
@@ -188,7 +190,7 @@ export const getJournalEntry = query({
     journalEntryId: v.id("journalEntries"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     const entry = await ctx.db.get(args.journalEntryId);
     if (!entry || entry.orgId !== args.orgId) return null;
@@ -232,7 +234,8 @@ export const getAccountActivity = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: any account can be the inventory or COGS account, so the activity of every account needs the cost permission.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const account = await ctx.db.get(args.accountId);
@@ -367,7 +370,8 @@ export const listAccountingEvents = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    // SCRUM-902: event payloads carry costMinor and cogsMinor, so this reads like the journal readers.
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const limit = Math.min(args.limit ?? 50, 200);

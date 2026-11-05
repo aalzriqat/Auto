@@ -190,6 +190,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const salePeriod = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...monthWindow(saleAt),
     });
+    if (!depositPeriod || !salePeriod) throw new Error("report withheld");
 
     // Nothing was earned when the money arrived.
     expect(depositPeriod.totalRevenue).toBe(0);
@@ -217,6 +218,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const salePeriod = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...monthWindow(saleAt),
     });
+    if (!depositPeriod || !salePeriod) throw new Error("report withheld");
 
     expect(depositPeriod.totalRevenue).toBe(0);
     // The margin, whole — the supplier's share was never the dealership's, and
@@ -242,6 +244,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...monthWindow(at),
     });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(OWNED_PRICE);
   });
 
@@ -257,6 +260,7 @@ describe("a عربون is not revenue when the cash arrives", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...monthWindow(at),
     });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(0);
   });
 });
@@ -344,7 +348,9 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await applyToSale(s, { depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-a" });
 
     const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    if (!jan) throw new Error("report withheld");
     const feb = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(febAt) });
+    if (!feb) throw new Error("report withheld");
 
     expect(jan.totalRevenue).toBe(0);
     expect(feb.totalRevenue).toBe(MARGIN);
@@ -377,7 +383,9 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await applyToSale(s, { depositId, vehicleId: v, saleId, amount: DEPOSIT, key: "k-b" });
 
     const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    if (!jan) throw new Error("report withheld");
     const feb = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(febAt) });
+    if (!feb) throw new Error("report withheld");
 
     expect(jan.totalRevenue).toBe(0);
     expect(feb.totalRevenue).toBe(OWNED_PRICE);
@@ -396,6 +404,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await completedSale(s, v, OWNED_PRICE, at);
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(DEPOSIT);
   });
 
@@ -406,6 +415,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await legacyDepositWithRow(s, { vehicleId: v, at, amount: DEPOSIT });
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(DEPOSIT);
   });
 
@@ -416,6 +426,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await legacyDepositWithRow(s, { vehicleId: v, at, amount: DEPOSIT, status: "REFUNDED" });
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     // Correcting it belongs to the follow-up historical PR, not to this path.
     expect(pl.totalRevenue).toBe(DEPOSIT);
   });
@@ -439,6 +450,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await applyToSale(s, { depositId, vehicleId: b, saleId: saleB, amount: 100, key: "k-f2" });
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     // The receipt is one row; it leaves revenue once. Nothing goes negative.
     expect(pl.totalRevenue).toBe(0);
   });
@@ -462,6 +474,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     });
 
     const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    if (!jan) throw new Error("report withheld");
     expect(jan.totalRevenue).toBe(0);
   });
 
@@ -484,6 +497,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await applyToSale(s, { depositId, vehicleId: v, saleId: saleId2, amount: DEPOSIT, key: "k-h2b" });
 
     const jan = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(janAt) });
+    if (!jan) throw new Error("report withheld");
     expect(jan.totalRevenue).toBe(0);
   });
 
@@ -498,6 +512,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     }
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     // The receipt is one row: it leaves revenue once, and nothing subtracts it
     // a second time. Exclusion is set membership, not arithmetic.
     expect(pl.totalRevenue).toBe(0);
@@ -510,6 +525,7 @@ describe("a legacy عربون that a completed sale later takes over", () => {
     await depositReceipt(s, { vehicleId: v, at, amount: DEPOSIT });
 
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, { orgId: s.orgId, ...monthWindow(at) });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(0);
   });
 });
@@ -530,6 +546,7 @@ describe("the back-book keeps the arithmetic it was written under", () => {
     const pl = await s.asUser.query(api.reports.getProfitAndLoss, {
       orgId: s.orgId, ...monthWindow(at),
     });
+    if (!pl) throw new Error("report withheld");
     expect(pl.totalRevenue).toBe(DEPOSIT);
   });
 

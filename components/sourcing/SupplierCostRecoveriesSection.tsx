@@ -57,7 +57,9 @@ export function SupplierCostRecoveriesSection() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
-  const canView = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE);
+  // SCRUM-902: the list shows what each sourced car cost, so it needs view:cost_price as well.
+  const canView =
+    !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
   const canRecord = !permissionsLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
 
   const recoveries = useQuery(
