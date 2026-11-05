@@ -72,7 +72,10 @@ schemas, and requires `verify` to run exactly `if: always()`. The browser steps 
   workflows' job (`browser-attack-swarm.yml`, SCRUM-376); `JEV_FORM_EXPLORER` is off here.
 - **Other cloud-preview workflows remain.** `deal-scenarios-e2e.yml` (nightly 01:00) still creates a cloud preview. It overlaps
   this workflow's scenario matrix and should move to the local backend or be retired once this one is proven.
-- **Reports are public.** Playwright JSON reports upload as 14-day artifacts, as `trusted-main-e2e.yml` already does.
+- **Public artifacts contain only the verdict summary.** The runner's counts, codes and scenario ids upload for 14 days.
+  Raw Playwright JSON, console/error text, attachment bodies and visual artifacts stay on the disposable runner.
+  [GitHub artifact access](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
+  extends to signed-in readers of this public repository; it is not a private diagnostics channel.
 - The library has `level: "cloud"` records only if SCRUM-762 defines a runner; the validator refuses active ones today.
 
 ## Reuse

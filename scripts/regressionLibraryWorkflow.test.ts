@@ -183,14 +183,14 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
       {
         name: "Judge every active record",
         if: "always()",
-        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json",
+        run: "node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json > regression-library-summary.json",
         env: { NODE_ENV: "test", NODE_OPTIONS: "--max-old-space-size=5632" },
       },
       {
-        name: "Upload Playwright reports",
+        name: "Upload regression library summary",
         uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
         if: "always()",
-        with: { name: "regression-library-playwright-reports", path: "regression-reports/\nplaywright-json/\ntest-results/deal-cockpit-visual/artifacts/\n", "if-no-files-found": "warn", "retention-days": 14 },
+        with: { name: "regression-library-summary", path: "regression-library-summary.json", "if-no-files-found": "error", "retention-days": 14 },
       },
     ]);
   });
@@ -221,6 +221,17 @@ describe("SCRUM-761 regression library workflow: the whole job is pinned", () =>
     expect(verdict?.run).toContain("--tier full");
     expect(verdict?.if).toBe("always()");
   });
+
+  test("public artifacts contain only the counts-and-ids runner summary, never raw browser reports", () => {
+    const steps = workflow.jobs["regression-library"]?.steps ?? [];
+    const uploads = steps.filter(step => step.uses?.startsWith("actions/upload-artifact@"));
+    expect(uploads.map(step => step.with?.path)).toEqual(["regression-library-summary.json"]);
+    expect(uploads[0]?.with?.["if-no-files-found"]).toBe("error");
+    const judge = steps.find(step => step.name === "Judge every active record");
+    expect(judge?.run).toContain("> regression-library-summary.json");
+  });
+
+
 });
 
 describe("SCRUM-761 PR-tier workflow: no backend, no secret, advisory", () => {

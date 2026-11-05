@@ -175,19 +175,18 @@ jobs:
       # records are read from the reports above. Runs even when an earlier step failed.
       - name: Judge every active record
         if: always()
-        run: node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json
+        run: node scripts/regression/prRunner.mjs --tier full --playwright-report regression-reports/visual.json --playwright-report regression-reports/opening-visual.json --playwright-report regression-reports/tests.json --playwright-report regression-reports/scenarios.json --playwright-report regression-reports/opening-proof.json > regression-library-summary.json
         env:
           NODE_ENV: test
           NODE_OPTIONS: --max-old-space-size=5632
 
-      - name: Upload Playwright reports
+      # Raw reports contain error text, console output and attachment bodies.
+      # Public artifacts carry only the runner's counts, codes and scenario ids.
+      - name: Upload regression library summary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: regression-library-playwright-reports
-          path: |
-            regression-reports/
-            playwright-json/
-            test-results/deal-cockpit-visual/artifacts/
-          if-no-files-found: warn
+          name: regression-library-summary
+          path: regression-library-summary.json
+          if-no-files-found: error
           retention-days: 14
