@@ -62,6 +62,25 @@ async function refused(s: Setup, call: () => Promise<unknown>, code: string) {
 }
 
 describe("SCRUM-868 P4b expense parties", () => {
+  test.each([
+    ["VAT", "A supplier-borne cost cannot carry VAT."],
+    ["prepaid", "A prepaid expense cannot be borne by the supplier."],
+    ["stock", "Only a sourced (consigned) vehicle's cost can be borne by the supplier."],
+    ["precision", "The amount is finer than the currency allows, so it cannot be recovered exactly."],
+  ] as const)("SCRUM-389 %s refusal preserves its reason without a supplier role code", async (kind, reason) => {
+    const s = await setup();
+    if (kind === "stock") await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
+    const before = await dbSnapshot(s.t, tables);
+    await expect(s.owner.mutation(api.expenses.create, {
+      ...s.args,
+      taxAmount: kind === "VAT" ? fromMinorUnits(1000, "JOD") : undefined,
+      isPrepaid: kind === "prepaid",
+      amortizationMonths: kind === "prepaid" ? 2 : undefined,
+      amount: kind === "precision" ? 200.0001 : s.args.amount,
+    })).rejects.toMatchObject({ data: reason });
+    expect(await dbSnapshot(s.t, tables)).toEqual(before);
+  });
+
   test.each(["PENDING", "PAID"] as const)("%s stores distinct canonical parties and never trusts a typed payee name", async status => {
     const s = await setup();
     const id = await s.owner.mutation(api.expenses.create, { ...s.args, status });
