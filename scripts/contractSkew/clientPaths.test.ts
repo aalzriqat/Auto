@@ -139,14 +139,13 @@ describe("SCRUM-920 spread alternative budget", () => {
     for (const arm of arms(payload)) {
       expect(arm.kind).toBe("object");
       if (arm.kind !== "object") throw new Error("Expected object alternative");
-      expect(arm.keysComplete).toBe(false);
-      expect(arm.fields.get("before")?.node.kind).toBe("opaqueValue");
+      expect(arm.keysComplete).toBe(true);
+      expect(arm.fields.get("before")?.node).toEqual({ kind: "literal", values: new Set([1]) });
       expect(arm.fields.get("after")?.node).toEqual({ kind: "literal", values: new Set([2]) });
     }
     const fields = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`bit${i}`, v.optional(v.number())]));
     const findings = compare(payload, { before: v.number(), after: v.number(), ...fields }).findings;
-    expect(findings).toContainEqual(expect.objectContaining({ severity: "TYPE_UNKNOWN", path: "before" }));
-    expect(findings.some((finding) => finding.severity === "BREAKING")).toBe(false);
+    expect(findings).toEqual([]);
   });
 
   // A balanced ternary reaches 127 distinct arms without hitting MAX_DEPTH.
@@ -160,7 +159,12 @@ describe("SCRUM-920 spread alternative budget", () => {
     `{ value: ${i}${i === 128 ? ", bogus: 1" : ""} }`));
   const extraChoices = (count: number) => choices(Array.from({ length: count }, (_, i) => `{ extra: ${i} }`));
   const bitFields = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`bit${i}`, v.number()]));
-  const overflowCases = [
+  const overflowCases: {
+    name: string;
+    source: string;
+    fields: Parameters<typeof v.object>[0];
+    path: string;
+  }[] = [
     { name: "129 arms before required field", source: `{ ...(${bogusChoices}), value: 1 }`,
       fields: { value: v.number() }, path: "bogus" },
     { name: "conditional of sibling products", source: `{ ...(c ? { ${siblings(7)} } : { ${siblings(7)}, bogus: 1 }), value: 1 }`,

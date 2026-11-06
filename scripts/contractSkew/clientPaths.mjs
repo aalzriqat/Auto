@@ -998,11 +998,12 @@ function collectFromExpression(expr, context) {
           collectFromExpression(prop.expression, nested())
         );
         if (alternatives.length > MAX_OBJECT_ALTERNATIVES / spreads.length) {
-          // Discard the entire incoming spread's proof, never a verified prefix
-          // of its alternatives. The opaque path below obscures earlier values
-          // and withdraws key completeness; later explicit fields still win.
+          // Fall back to main's field-wise merge, retaining observed keys and
+          // values. Opaque widening loses undeclared-field breaks when later
+          // fields satisfy the validator; call.unknowns alone cannot prevent it.
+          // Correlations may be lost (and false breaks restored) past the cap.
           acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread: alternative budget ${MAX_OBJECT_ALTERNATIVES} exceeded)`);
-          spreads = [{ kind: "opaqueValue" }];
+          spreads = [spreads.slice(1).reduce((merged, spread) => mergeClientNodes(merged, spread), spreads[0])];
         } else if (spreads.some((spread) => spread.kind !== "object")) {
           acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
         }
@@ -2068,6 +2069,9 @@ function objectSpreadAlternatives(node) {
   const source = unwrapTypeClaims(node);
   if (source.kind !== "variants") return [source];
   const alternatives = source.nodes.flatMap(objectSpreadAlternatives);
+  // Above the cap the caller merges the whole list. Avoid quadratic equality
+  // work on a list that cannot be expanded exactly within the budget anyway.
+  if (alternatives.length > MAX_OBJECT_ALTERNATIVES) return alternatives;
   // Native structural equality preserves Maps, Sets, undefined, optionality,
   // provenance and assertion effects. Do not merge merely compatible shapes.
   return alternatives.filter((alternative, index) =>
