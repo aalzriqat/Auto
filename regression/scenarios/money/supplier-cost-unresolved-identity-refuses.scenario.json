@@ -1,0 +1,57 @@
+{
+  "id": "supplier-cost-unresolved-identity-refuses",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_UNLINKED",
+        "costBearer": "SUPPLIER",
+        "amountMinor": 200000,
+        "supplierId": "ABSENT",
+        "supplierName": "ABSENT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "step1.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "applicationState.changed",
+      "value": false
+    },
+    {
+      "observable": "scheduler.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P4a-recovery-identity",
+  "impl": {
+    "file": "convex/supplierRecoveryIdentity.scrum868.test.ts",
+    "testName": "creation with neither id nor name still returns the coded identity refusal"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4a-recovery-identity",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "025516912d24354c824f3267cd19fdefb7a9b7c7"
+  },
+  "fingerprint": "0cd2b48e048c3faff2703280bdc748b47f79b0b5a7aee9a7885fbb708f30bdca"
+}

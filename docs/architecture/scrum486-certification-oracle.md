@@ -1259,3 +1259,32 @@ PR #710 round 15d binds seven active records in `regression/scenarios/money/open
 ### SCRUM-858-opening-read-headroom-class
 
 R15f checks zero suspense after exhaustion, retained-header reader and checklist limits, complete eleven-header proof reuse, and every measured admission stage. Refused readers return no currency map or opening difference. Suspense is OPEN, CLEAR or UNAVAILABLE; an unverified balance never produces the still-carries warning. Acknowledging the coded unavailable warning permits the existing owner close. A 22-header single-stream fixture kills a partial-result mutant. The five `opening-*headroom*` / `opening-history-*` / `opening-checklist-admission-stage-guard` records bind literal tests to SCRUM-858#c23884. See the [R15f census and evidence boundary](scrum858-pr710-r15d-ledger-budget.md#r15f-close-the-read-headroom-class). These are enforced-limit backend-harness checks, not platform or production certification.
+
+### SCRUM868-P4a-recovery-identity
+
+SCRUM-868 c23871 and c23873 require canonical tenant-owned supplier identity at
+new supplier money writes, without a name fallback or migration. P4a implements
+the recovery gap identified in c24646. See the [ADR and impact map](../adr/2026-11-06-supplier-cost-recovery-identity.md).
+
+| Case | Independent expected result | Executable evidence |
+| --- | --- | --- |
+| PENDING/PAID creation, bearer/vehicle/pending edit, PENDING payment without a supplier link | SUPPLIER_IDENTITY_UNRESOLVED; all main-schema rows and scheduled functions unchanged | supplierRecoveryIdentity.scrum868.test.ts, public expenses mutations |
+| Foreign or missing supplier master row | Same coded refusal, no existence disclosure and no partial financial state | same file, public create and recordReceipt controls |
+| Valid canonical link, including no intake name | Recovery supplierId is the linked master; sourcedFromName is Canonical supplier; snapshot version 3; due 200000 JOD minor, recovered 0; balanced debit 200000 and credit 200000 | same file, create and pending-payment controls |
+| Rename then same-intent retry | One expense/recovery/posting effect; original supplier snapshot version 3 retained, all rows unchanged by retry | same file, retry control |
+| Inactive linked supplier after a pending cost | Existing obligation remains payable under the P3 completion policy; identity and snapshot retained | same file, inactive control |
+| Terminal legacy id-less recovery, missing vehicle | RECOVERED, due/recovered 200000, remaining 0, vehicleLabel null; repeated reads and committed retry change no rows | same file, historical control |
+| EN/AR expense dialog with unlinked or unavailable vehicle | Explanation before submit; localized coded refusal toast; Arabic RTL; private diagnostic absent | ExpenseDialog.supplierIdentity.test.tsx, real form/provider/translator/toast with network boundary replaced |
+
+The three `supplier-cost-*.scenario.json` records bind literal tests in
+`convex/supplierRecoveryIdentity.scrum868.test.ts` to this row. The unresolved
+creation and snapshot-retry regressions cite failing-first commit
+`025516912d24354c824f3267cd19fdefb7a9b7c7` (13 failed, 2 passed). The legacy
+history control is preventive and claims no failing-first defect.
+Money literals above are integer minor units; the major-unit expense API is
+fed through `fromMinorUnits(200000, "JOD")`.
+
+Evidence boundary: convex-test is serial harness evidence, not platform/OCC or
+production certification. jsdom checks content and direction, not browser
+layout. The id-less terminal production recovery, release count/repair,
+openings (P5), expense payee/bearer fields (P4b), and posting rules are unchanged.
