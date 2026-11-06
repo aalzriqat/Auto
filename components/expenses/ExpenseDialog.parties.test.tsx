@@ -48,6 +48,24 @@ afterEach(() => {
 });
 
 describe("P4b distinct expense parties", () => {
+  test.each([
+    ["en", "Supplier bearing the cost"],
+    ["ar", "المورّد المتحمل للتكلفة"],
+  ] as const)("%s names the vehicle supplier separately from the selected payee in a read-only field", async (locale, label) => {
+    localStorage.setItem("autoflow-locale", locale);
+    network.vehicles = [{ _id: pendingExpense.vehicleId, sourceType: "SOURCED", sourcedSupplierId: "supplier_bearer" as Id<"suppliers">,
+      sourcedFromName: "Vehicle supplier snapshot", make: "Toyota", model: "Camry", year: 2024 }];
+    render(<LanguageProvider><ExpenseDialog open onOpenChange={() => undefined} expense={pendingExpense} /></LanguageProvider>);
+    const bearer = await screen.findByRole("textbox", { name: label });
+    expect(bearer).toHaveProperty("value", "Vehicle supplier snapshot");
+    expect(bearer).toHaveProperty("readOnly", true);
+    const picker = screen.getByRole("combobox", { name: dictionaries[locale].ExpenseServicePayee });
+    fireEvent.click(picker);
+    fireEvent.click(await screen.findByRole("option", { name: "Garage" }));
+    expect(bearer).toHaveProperty("value", "Vehicle supplier snapshot");
+    expect(document.documentElement.dir).toBe(locale === "ar" ? "rtl" : "ltr");
+  });
+
   test.each(["en", "ar"] as const)("%s selects canonical payee and submits no client bearer id", async locale => {
     localStorage.setItem("autoflow-locale", locale);
     network.vehicles = [{ _id: pendingExpense.vehicleId, sourceType: "SOURCED", sourcedSupplierId: "supplier_bearer" as Id<"suppliers">,
