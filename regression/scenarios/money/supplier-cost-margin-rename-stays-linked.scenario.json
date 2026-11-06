@@ -1,0 +1,95 @@
+{
+  "id": "supplier-cost-margin-rename-stays-linked",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.update",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "displayName": "UNKNOWN_SUPPLIER_LITERAL"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "status": "COMPLETED",
+        "route": "DIRECT_TO_SUPPLIER",
+        "salePriceMinor": 12500000,
+        "supplierEntitlementMinor": 9500000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierReceivablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.linkedMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "report.unlinkedMinor",
+      "value": 0
+    },
+    {
+      "observable": "report.marginMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "report.recoveryMinor",
+      "value": 0
+    },
+    {
+      "observable": "report.subledgerBalanceMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "report.glBalanceMinor",
+      "value": 3000000
+    },
+    {
+      "observable": "report.discrepancyMinor",
+      "value": 0
+    },
+    {
+      "observable": "report.changedStorage",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P4a-recovery-identity",
+  "impl": {
+    "file": "convex/supplierReceivablesReconciliation.scrum869.test.ts",
+    "testName": "'margin' stays linked after public rename to 'Unknown supplier'"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4a-rename-linkage",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "19d5faa64723307c0346b52be7575cc831c1e9bc"
+  },
+  "fingerprint": "268fccd3f7977f3411d736121e8ce706453fd8fecf34bfe050020c94b2901e68"
+}

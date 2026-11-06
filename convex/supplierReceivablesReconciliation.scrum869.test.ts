@@ -190,19 +190,18 @@ const insertReceivable = (s: Seed, vehicleId: Id<"vehicles">, saleId: Id<"sales"
 };
 
 describe("SCRUM-868 P4a reconciliation uses canonical supplier identity", () => {
-  test.each([
-    { kind: "recovery", name: "Unknown supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 },
-    { kind: "margin", name: "Unknown supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 },
-    { kind: "recovery", name: "Ordinary supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 },
-    { kind: "margin", name: "Ordinary supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 },
-  ])("$kind stays linked after public rename to $name", async ({ kind, name, marginMinor, recoveryMinor, totalMinor }) => {
+  async function assertRenamedSupplierLinked({ kind, name, marginMinor, recoveryMinor, totalMinor }: {
+    kind: "recovery" | "margin"; name: string; marginMinor: number; recoveryMinor: number; totalMinor: number;
+  }) {
     const s = await seed(`p4a-${kind}`);
     const vehicleId = await addSourcedVehicle(s, `p4a-${kind}`);
     const vehicle = await s.t.run(ctx => ctx.db.get(vehicleId));
     if (!vehicle?.sourcedSupplierId) throw new Error("Linked vehicle fixture missing");
     await s.t.mutation(internal.suppliers.initialiseRegistry, { orgId: s.orgId });
     const supplier = await s.asUser.query(api.suppliers.get, { orgId: s.orgId, supplierId: vehicle.sourcedSupplierId });
-    if (!supplier) throw new Error("Supplier fixture missing");
+    if (!supplier || !("revision" in supplier) || typeof supplier.revision !== "number") {
+      throw new Error("Supplier edit revision missing");
+    }
     await s.asUser.mutation(api.suppliers.update, {
       orgId: s.orgId, supplierId: supplier._id, expectedVersion: supplier.revision,
       displayName: name, reason: "SCRUM-868 rename classification regression",
@@ -220,9 +219,9 @@ describe("SCRUM-868 P4a reconciliation uses canonical supplier identity", () => 
         supplierSettlementRoute: "DIRECT_TO_SUPPLIER", idempotencyKey: "p4a-classification-sale",
       });
     }
-    const stored = await s.t.run(ctx => kind === "recovery"
-      ? ctx.db.query("supplierCostRecoveries").unique()
-      : ctx.db.query("vehicleSupplierReceivables").unique());
+    const stored = await s.t.run(async ctx => kind === "recovery"
+      ? await ctx.db.query("supplierCostRecoveries").unique()
+      : await ctx.db.query("vehicleSupplierReceivables").unique());
     expect(stored).toMatchObject({ supplierId: supplier._id, sourcedFromName: name, status: "OPEN" });
     const before = await s.t.run(async ctx => ({
       receivables: await ctx.db.query("vehicleSupplierReceivables").collect(),
@@ -242,6 +241,20 @@ describe("SCRUM-868 P4a reconciliation uses canonical supplier identity", () => 
       lines: await ctx.db.query("journalLines").collect(),
     }))).toEqual(before);
     expect(r.byCurrency.JOD).toMatchObject({ linkedMinor: totalMinor, unlinkedMinor: 0 });
+  }
+
+  // The scenario library requires literal registrations for its two failing-first bindings.
+  test("'recovery' stays linked after public rename to 'Unknown supplier'", async () => {
+    await assertRenamedSupplierLinked({ kind: "recovery", name: "Unknown supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 });
+  });
+  test("'margin' stays linked after public rename to 'Unknown supplier'", async () => {
+    await assertRenamedSupplierLinked({ kind: "margin", name: "Unknown supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 });
+  });
+  test.each([
+    { kind: "recovery" as const, name: "Ordinary supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 },
+    { kind: "margin" as const, name: "Ordinary supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 },
+  ])("$kind stays linked after public rename to $name", async fixture => {
+    await assertRenamedSupplierLinked(fixture);
   });
 
   test.each(["", "Unknown supplier", "Amman Importer Co"])("legacy recovery without supplierId keeps name classification: %j", async name => {
@@ -353,7 +366,7 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     expect(r.isReconciled).toBe(false);
   });
 
-  test.each(["", "Unknown supplier", "Amman Importer Co"])("legacy margin without supplierId keeps name classification: %j", async name => {
+  async function assertLegacyMarginName(name: string) {
     const s = await seed("unl");
     const { receivable } = await directSale(s, "unl");
     // Current sale completion cannot create an id-less receivable. Model pre-P3 storage only.
@@ -366,6 +379,13 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
       unlinkedMinor: name === "Amman Importer Co" ? 0 : 3000000,
     });
     expect(r.isReconciled).toBe(true);
+  }
+
+  test("rows with no supplier identity fall in the Unlinked bucket and still count toward the total", async () => {
+    await assertLegacyMarginName("Unknown supplier");
+  });
+  test.each(["", "Amman Importer Co"])("legacy margin without supplierId keeps name classification: %j", async name => {
+    await assertLegacyMarginName(name);
   });
 
   test("a CANCELLED receivable and a REVERSED recovery carry no balance", async () => {

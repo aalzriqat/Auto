@@ -122,3 +122,65 @@ convex-test proves harness behavior, not Convex cloud limits or concurrency.
 Rendered EN/AR desktop/mobile verification, the three bug hunters, independent
 review seats, actual-backend certification and Sonar new-code coverage require
 their own evidence. No deployment or pilot certification is claimed here.
+
+## Round 3: reconciliation linkage after rename
+
+SCRUM-868 c24656 is reproduced through public `suppliers.update`, paid
+`expenses.create`, completed `sales.create` and the public reconciliation.
+A linked master renamed `Unknown supplier` must remain linked in both recovery
+and margin buckets. One row classifier now uses stored `supplierId` first, then
+the unchanged normalized-name rule for id-less rows. Money, postings, refusal
+reasons and limits do not change. The two rename scenarios cite test-only commit
+`19d5faa64723307c0346b52be7575cc831c1e9bc`: 2 failed, 10 passed in the focused run.
+The four affected suites pass 168 tests after the fix.
+
+No additional master/org lookup is added to this diagnostic. The report fetches
+both tables through `by_org_status`. Native recovery creation resolves the id
+with `requireSupplierSnapshotForCompletion` in `supplierCostRecoveries.ts`;
+sale preparation does the same before `saleCompletion.ts` passes its resolved
+id to `openSupplierReceivable`. The resolver refuses missing and foreign
+masters. Existing public P4a tests cover those refusals. The bucket reports a
+stored link, not a new certification of master existence or ownership. Extra
+reads would change the bounded report's budget and refusal contract. Id-less
+legacy rows are patched only in test setup because current native writers
+cannot create them. OPENING controls use the public cutover door and stay
+id-less until P5. Blank/default/real names retain the legacy split; OPENING
+controls cover default and real names because public opening validation refuses
+blank counterparties.
+
+The tracked-source census used `git grep -n -E
+"isUnlinkedSupplierName|Unknown supplier|sourcedFromName" -- convex/ components/`
+and inspected production matches. Disposition for SCRUM-879, without changing
+these unrelated decisions:
+
+| Reader | Name use and disposition |
+| --- | --- |
+| accountingReports.ts, both reconciliation loops | Name-only money buckets fixed here. Id-less fallback retained. |
+| utils/saleCompletion.ts, prepareSale | Blank/default intake name refuses even before canonical-id resolution. Follow-up. |
+| financingEconomics.ts, supplier concession eligibility | Blank intake name means ineligible, then supplier id is required. Follow-up. |
+| utils/supplierConcession.ts, concession validation and frozen basis | Blank name and snapshot-name comparisons accompany supplier-id checks. Follow-up. |
+| utils/vehicleSourceShape.ts, assertShapeFor and update checks | Name presence/change enforces source shape. Follow-up. |
+| utils/vehicleSupplierIdentity.ts, resolveSourcedForUpdate | A changed nonblank name without an id refuses through the resolver. Follow-up. |
+| utils/vehicleSupplierIdentity.ts, first-link proof | Name/alias corroboration for id-less vehicle and obligation history; present ids compare by id. Follow-up. |
+| utils/supplierRegistry.ts, supplierNameEvidence | Name/alias evidence corroborates an already selected in-org id. Follow-up. |
+| supplierIdentityRepair.ts, PAYABLES/RECEIVABLES/RECOVERIES phases | Only id-less rows use name/version evidence against a vehicle's resolved id. Follow-up. |
+| vehicles.ts, import supplier-term and sameCreditor comparisons | Uses ids when both exist, otherwise legacy snapshot-name comparison. Follow-up. |
+| utils/openingSupplierBasis.ts and utils/openingSupplierPosting.ts | Name equality proves opening allocation/posting provenance, not a linked money bucket. Preserve; follow-up review with P5. |
+| components/vehicles/VehicleImportDialog.tsx, validateRow | Blank sourcedFromName rejects an import row in the UI. Follow-up. |
+
+Other matches in applications, sales, sourcedAgentImpact, sourcingPayables,
+supplierCostRecoveries, supplierReceivables and the matching components are
+snapshot projection/display, posting memo text, or typed input plumbing.
+`supplierReceivables.outstandingSummary` groups by supplierId, using a per-row
+unresolved key when absent; snapshot-name arrays do not classify money linkage.
+No component match computes the reconciliation buckets.
+
+Sources rechecked on 2026-11-06: [Convex testing](https://docs.convex.dev/testing/convex-test)
+supports authenticated public-function tests with real stored documents in the
+test implementation. [Convex validation](https://docs.convex.dev/functions/validation)
+defines optional ids and runtime argument validation.
+[Oracle supplier numbering](https://docs.oracle.com/cd/E26401_01/doc.122/e48761/T434884T434887.htm)
+uses unique supplier identifiers. Giving the stored id precedence over a mutable
+display name is our application of that identity practice, not an Oracle rule
+about AutoFlow's legacy buckets. These checks do not establish cloud/runtime,
+production, browser or independent-seat certification.

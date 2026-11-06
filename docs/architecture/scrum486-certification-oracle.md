@@ -1274,13 +1274,19 @@ the recovery gap identified in c24646. See the [ADR and impact map](../adr/2026-
 | Rename then same-intent retry | One expense/recovery/posting effect; original supplier snapshot version 3 retained, all rows unchanged by retry | same file, retry control |
 | Inactive linked supplier after a pending cost | Existing obligation remains payable under the P3 completion policy; identity and snapshot retained | same file, inactive control |
 | Terminal legacy id-less recovery, missing vehicle | RECOVERED, due/recovered 200000, remaining 0, vehicleLabel null; repeated reads and committed retry change no rows | same file, historical control |
+| Public rename to Unknown supplier before recovery payment or completed SOURCED sale | Stored supplierId remains linked: recovery 200000 or margin 3000000 JOD minor; unlinked 0; subledger and GL equal those literals, discrepancy 0, storage unchanged. Ordinary names stay linked; id-less blank/default/real names retain legacy classification, including public OPENING controls | supplierReceivablesReconciliation.scrum869.test.ts, SCRUM-868 P4a and legacy/opening controls; failing-first 19d5faa64723307c0346b52be7575cc831c1e9bc |
 | EN/AR expense dialog with unlinked or unavailable vehicle | Explanation before submit; localized coded refusal toast; Arabic RTL; private diagnostic absent | ExpenseDialog.supplierIdentity.test.tsx, real form/provider/translator/toast with network boundary replaced |
 
-The three `supplier-cost-*.scenario.json` records bind literal tests in
+The three original P4a `supplier-cost-*.scenario.json` records bind literal tests in
 `convex/supplierRecoveryIdentity.scrum868.test.ts` to this row. The unresolved
 creation and snapshot-retry regressions cite failing-first commit
 `025516912d24354c824f3267cd19fdefb7a9b7c7` (13 failed, 2 passed). The legacy
 history control is preventive and claims no failing-first defect.
+The two `supplier-cost-{recovery,margin}-rename-stays-linked` records bind the
+rename regressions to this row. At the test-only commit `19d5faa64723307c0346b52be7575cc831c1e9bc`,
+both named cases fail with the full expected amount in unlinkedMinor. Restoring
+only accountingReports.ts from `80a381a80` reproduces both failures. The ordinary,
+id-less and OPENING controls pass before and after the fix.
 Money literals above are integer minor units; the major-unit expense API is
 fed through `fromMinorUnits(200000, "JOD")`.
 
