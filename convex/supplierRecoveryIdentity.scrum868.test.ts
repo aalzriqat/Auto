@@ -42,7 +42,7 @@ async function setup() {
     sourceCost: fromMinorUnits(9500000, "JOD"), sourcedFromName: "Intake snapshot", sourcedSupplierId: supplierId,
   }));
   const args = {
-    orgId, vehicleId, title: "Supplier transport", amount: fromMinorUnits(200000, "JOD"),
+    orgId, vehicleId, vendorSupplierId: supplierId, title: "Supplier transport", amount: fromMinorUnits(200000, "JOD"),
     date: Date.now() - 60000, category: "TRANSPORT" as const, status: "PAID" as const,
     costBearer: "SUPPLIER" as const, paymentMethod: "CASH" as const, idempotencyKey: "p4a-cost",
   };
@@ -89,10 +89,11 @@ describe("SCRUM-868 P4a canonical recovery identity", () => {
     const s = await setup();
     const expenseId = await s.owner.mutation(api.expenses.create, {
       ...s.args, status: "PENDING", costBearer: door === "bearer edit" ? "SHOWROOM" : "SUPPLIER",
+      vendorSupplierId: door === "bearer edit" ? undefined : s.supplierId,
     });
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourcedSupplierId: undefined }));
     await expectIdentityRefusal(s, () => s.owner.mutation(api.expenses.update, {
-      orgId: s.orgId, expenseId,
+      orgId: s.orgId, expenseId, vendorSupplierId: s.supplierId,
       ...(door === "bearer edit" ? { costBearer: "SUPPLIER" as const } : {}),
       ...(door === "vehicle edit" ? { vehicleId: s.vehicleId } : {}),
       ...(door === "pending edit" ? { title: "Edited supplier transport" } : {}),
@@ -105,7 +106,7 @@ describe("SCRUM-868 P4a canonical recovery identity", () => {
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourcedFromName: undefined }));
     const expenseId = await s.owner.mutation(api.expenses.create, { ...s.args, status: door === "create" ? "PAID" : "PENDING" });
     if (door === "pay pending") {
-      await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId, status: "PAID" });
+      await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId, vendorSupplierId: s.supplierId, status: "PAID" });
     }
     const recovery = await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").unique());
     expect(recovery).toMatchObject({
@@ -132,7 +133,7 @@ describe("SCRUM-868 P4a canonical recovery identity", () => {
     const s = await setup();
     const expenseId = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING" });
     await s.t.run(ctx => ctx.db.patch(s.supplierId, { status: "INACTIVE" }));
-    await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId, status: "PAID" });
+    await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId, vendorSupplierId: s.supplierId, status: "PAID" });
     expect(await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").unique())).toMatchObject({
       supplierId: s.supplierId, sourcedFromName: "Canonical supplier", supplierSnapshotVersion: 3, amountDueMinor: 200000,
     });

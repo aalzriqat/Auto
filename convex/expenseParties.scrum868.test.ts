@@ -54,8 +54,10 @@ type Setup = Awaited<ReturnType<typeof setup>>;
 
 async function refused(s: Setup, call: () => Promise<unknown>, code: string) {
   const before = await dbSnapshot(s.t, tables);
+  const scheduled = await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
   await expect(call()).rejects.toMatchObject({ data: { code } });
   expect(await dbSnapshot(s.t, tables)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toEqual(scheduled);
 }
 
 describe("SCRUM-868 P4b expense parties", () => {
@@ -75,7 +77,7 @@ describe("SCRUM-868 P4b expense parties", () => {
     const lines = await s.t.run(ctx => ctx.db.query("journalLines").collect());
     expect(lines.map(line => ({ key: accounts.find(a => a._id === line.accountId)?.systemKey,
       debit: line.debitMinor, credit: line.creditMinor })).sort((a,b) => a.debit-b.debit)).toEqual([
-      { key: "CASH", debit: 0, credit: 200000 },
+      { key: "CASH_ON_HAND", debit: 0, credit: 200000 },
       { key: "RECEIVABLE_FROM_SUPPLIERS", debit: 200000, credit: 0 },
     ]);
     expect(await s.owner.query(api.expenses.totalByVehicle, { orgId: s.orgId, vehicleId: s.vehicleId })).toBe(0);
@@ -186,4 +188,32 @@ describe("SCRUM-868 P4b expense parties", () => {
     expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ vendor: "Office shop", costBearer: "SHOWROOM" });
     expect(await s.t.run(ctx => ctx.db.get(id))).not.toHaveProperty("vendorSupplierId");
   });
+
+  test("pending bearer switch clears both canonical identities without creating a money effect", async () => {
+    const s = await setup();
+    const id = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING" });
+    await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, costBearer: "SHOWROOM" });
+    const row = await s.t.run(ctx => ctx.db.get(id));
+    expect(row).toMatchObject({ costBearer: "SHOWROOM", vendor: "Garage" });
+    expect(row).not.toHaveProperty("costBearerSupplierId");
+    expect(row).not.toHaveProperty("vendorSupplierId");
+    expect(await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").collect())).toEqual([]);
+    await refused(s, () => s.owner.mutation(api.expenses.update, {
+      orgId: s.orgId, expenseId: id, vendorSupplierId: s.payeeId,
+    }), "SUPPLIER_ROLE_CONFLICT");
+  });
+
+  test("inactive payee cannot take a new cost and a stale bearer cannot be paid", async () => {
+    const s = await setup();
+    await s.t.run(ctx => ctx.db.patch(s.payeeId, { status: "INACTIVE" }));
+    await refused(s, () => s.owner.mutation(api.expenses.create, s.args), "SUPPLIER_INACTIVE");
+    await s.t.run(ctx => ctx.db.patch(s.payeeId, { status: "ACTIVE" }));
+    const id = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING" });
+    // Corrupt/stale imported linkage must not silently retarget a pending obligation.
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourcedSupplierId: s.payeeId }));
+    await refused(s, () => s.owner.mutation(api.expenses.update, {
+      orgId: s.orgId, expenseId: id, status: "PAID", vendorSupplierId: s.payeeId,
+    }), "SUPPLIER_IDENTITY_UNRESOLVED");
+  });
+
 });

@@ -12,6 +12,7 @@ export const expenseSchema = z
     vehicleId: z.string().optional(),
     status: z.enum(["PENDING", "PAID"]),
     vendor: z.string().optional(),
+    vendorSupplierId: z.string().optional(),
     payerId: z.string().optional(),
     paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]),
     bankAccountId: z.string().optional(),

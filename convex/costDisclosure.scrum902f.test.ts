@@ -190,7 +190,7 @@ describe("SCRUM-902 c24475 remaining cost disclosures", () => {
     const s = await seed("recovery");
     const expenseId = await s.owner.as.mutation(api.expenses.create, {
       orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic supplier cost", amount: 200, date: Date.now() - 60000,
-      category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER", idempotencyKey: "expense",
+      category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER", vendorSupplierId: s.supplierId, idempotencyKey: "expense",
     });
     const recovery = await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").withIndex("by_org_expense", q => q.eq("orgId", s.orgId).eq("expenseId", expenseId)).unique());
     if (!recovery) throw new Error("Missing fixture recovery");

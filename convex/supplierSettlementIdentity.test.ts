@@ -1369,7 +1369,7 @@ describe("SCRUM-868 P3 review: unresolved legacy rows are never merged by name i
         category: "TRANSPORT",
         status: "PAID",
         paymentMethod: "CASH",
-        costBearer: "SUPPLIER",
+        costBearer: "SUPPLIER", vendorSupplierId: identifiedId,
         idempotencyKey: crypto.randomUUID(),
       });
     }

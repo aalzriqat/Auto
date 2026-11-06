@@ -155,7 +155,7 @@ async function supplierBornePayment(s: Seed, tag: string) {
   const expenseId = (await s.asUser.mutation(api.expenses.create, {
     orgId: s.orgId, vehicleId, title: "Transport from the supplier's yard", amount: SUPPLIER_COST,
     date: Date.now() - 60_000, category: "TRANSPORT" as const, status: "PAID" as const, paymentMethod: "CASH" as const,
-    costBearer: "SUPPLIER" as const, idempotencyKey: crypto.randomUUID(),
+    costBearer: "SUPPLIER" as const, vendorSupplierId: (await s.t.run(ctx => ctx.db.get(vehicleId)))!.sourcedSupplierId, idempotencyKey: crypto.randomUUID(),
   } as never)) as Id<"expenses">;
   const recovery = (await s.t.run((ctx) =>
     ctx.db.query("supplierCostRecoveries").withIndex("by_org_expense", (q) => q.eq("orgId", s.orgId).eq("expenseId", expenseId)).first()
@@ -210,7 +210,7 @@ describe("SCRUM-868 P4a reconciliation uses canonical supplier identity", () => 
       await s.asUser.mutation(api.expenses.create, {
         orgId: s.orgId, vehicleId, title: "Supplier transport", amount: 200,
         date: Date.now() - 60000, category: "TRANSPORT", status: "PAID",
-        paymentMethod: "CASH", costBearer: "SUPPLIER", idempotencyKey: "p4a-classification-cost",
+        paymentMethod: "CASH", costBearer: "SUPPLIER", vendorSupplierId: supplier._id, idempotencyKey: "p4a-classification-cost",
       });
     } else {
       await s.asUser.mutation(api.sales.create, {

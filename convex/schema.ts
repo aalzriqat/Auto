@@ -2569,6 +2569,8 @@ origin:v.optional(v.literal("NATIVE"))}),v.object({...supplierPayableCommon,orig
     /** Physical bank used by a paid transfer, issued cheque or card expense. */
     bankAccountId: v.optional(v.id("bankAccounts")),
     vendor: v.optional(v.string()),
+    vendorSupplierId: v.optional(v.id("suppliers")),
+    costBearerSupplierId: v.optional(v.id("suppliers")),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     // Set once, at posting time (recordPaidExpenseSideEffects), from the same

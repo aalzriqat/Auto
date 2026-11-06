@@ -3806,6 +3806,7 @@ export async function runRehearsalCases(ctx) {
   const supPayCost = async (tag, stamp, vehicleId, amount) => ownerMust("mutation", "expenses:create", {
     orgId, vehicleId, title: `Rehearsal supplier cost ${tag}-${stamp}`, amount, date: Date.now() - 60_000,
     category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER",
+    vendorSupplierId: await supSupplier(`${tag}-garage`, stamp),
     idempotencyKey: `rehearsal-${tag.toLowerCase()}-expense-${stamp}`,
   });
 

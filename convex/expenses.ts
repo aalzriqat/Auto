@@ -3,7 +3,7 @@ import { query, MutationCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
-import { requireTenantAuth, requireOrgMember, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
+import { requireTenantAuth, requireOrgMember, requireOwnedRow, sameOrgOrNull, createOrgUserReader } from "./utils/tenancy";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -31,7 +31,7 @@ import { yearMonthIndex } from "./utils/expenseAmortization";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
 import { expenseCategoryValidator as expenseCategory } from "./utils/expenseCategories";
-import { requireResolvedSupplierId, runGuarded } from "./utils/supplierRegistry";
+import { requireResolvedSupplierId, requireSupplierSnapshotForCompletion, snapshotSupplier, SUPPLIER_ERROR, throwSupplierError, runGuarded } from "./utils/supplierRegistry";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -146,7 +146,7 @@ async function assertCostBearerAllowed(
       args.amount > 0 &&
       fromMinorUnits(toMinorUnits(args.amount, currency), currency) === args.amount,
   });
-  if (refusal) throw new ConvexError(refusal);
+  if (refusal) throwSupplierError(SUPPLIER_ERROR.ROLE_CONFLICT, refusal);
   // A name is only a snapshot. Prove the stored canonical link in this org
   // before create/edit/payment can leave any financial state behind.
   if (vehicle) {
@@ -226,6 +226,13 @@ async function recordPaidExpenseSideEffects(
     taxAmount: args.expense.taxAmount,
     amount: args.expense.amount,
   });
+
+  if (supplierVehicle) {
+    await resolveExpenseParties(ctx, {
+      orgId: args.expense.orgId, bearer: "SUPPLIER", vehicle: supplierVehicle,
+      payeeId: args.expense.vendorSupplierId, previous: args.expense, requireActive: false,
+    });
+  }
 
   // A paid recon cost may debit Vehicle Inventory. A tracked imported car has
   // no acquisition event: its opening journal is the sole original cost basis.
@@ -493,6 +500,7 @@ export const create = mutation({
     category: expenseCategory,
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     vendor: v.optional(v.string()),
+    vendorSupplierId: v.optional(v.id("suppliers")),
     payerId: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
     bankAccountId: v.optional(v.id("bankAccounts")),
@@ -546,6 +554,7 @@ export const create = mutation({
           category: args.category,
           status,
           vendor: args.vendor ?? null,
+          ...(args.vendorSupplierId ? { vendorSupplierId: args.vendorSupplierId } : {}),
           payerId: args.payerId ?? null,
           paymentMethod: paymentMethod ?? null,
           ...(args.bankAccountId ? { bankAccountId: args.bankAccountId } : {}),
@@ -584,7 +593,7 @@ export const create = mutation({
         // Refused before the insert, so a PENDING supplier cost that could
         // never be paid as one is never recorded. A PAID one is re-proved
         // inside recordPaidExpenseSideEffects.
-        await assertCostBearerAllowed(ctx, {
+        const supplierVehicle = await assertCostBearerAllowed(ctx, {
           orgId: args.orgId,
           bearer: args.costBearer,
           vehicleId: args.vehicleId,
@@ -592,6 +601,11 @@ export const create = mutation({
           isPrepaid,
           taxAmount: args.taxAmount,
           amount: args.amount,
+        });
+
+        const parties = await resolveExpenseParties(ctx, {
+          orgId: args.orgId, bearer: args.costBearer, vehicle: supplierVehicle,
+          payeeId: args.vendorSupplierId, requireActive: true,
         });
 
         const id = await ctx.db.insert("expenses", {
@@ -606,7 +620,9 @@ export const create = mutation({
           idempotencyKey: args.idempotencyKey,
           paymentMethod,
           bankAccountId: args.bankAccountId,
-          vendor: args.vendor,
+          vendor: parties?.vendor ?? args.vendor,
+          vendorSupplierId: parties?.vendorSupplierId,
+          costBearerSupplierId: parties?.costBearerSupplierId,
           payerId: args.payerId,
           notes: args.notes,
           isPrepaid,
@@ -655,6 +671,7 @@ export const update = mutation({
     category: v.optional(expenseCategory),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     vendor: v.optional(v.string()),
+    vendorSupplierId: v.optional(v.id("suppliers")),
     payerId: v.optional(v.union(v.id("users"), v.null())),
     paymentMethod: v.optional(paymentMethodValidator),
     bankAccountId: v.optional(v.union(v.id("bankAccounts"), v.null())),
@@ -690,7 +707,7 @@ export const update = mutation({
 
     validateInput(UpdateExpenseSchema, argsToValidate);
 
-    const expense = await ctx.db.get(args.expenseId);
+    const expense = await requireOwnedRow(ctx, args.orgId, "expenses", args.expenseId, "Expense not found.");
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
@@ -740,6 +757,21 @@ export const update = mutation({
         "Who bears a paid expense cannot be changed once it is paid."
       );
     }
+    const payeeChanges = args.vendorSupplierId !== undefined && args.vendorSupplierId !== expense.vendorSupplierId;
+    const effectiveBearer = args.costBearer ?? currentBearer;
+    if (currentBearer === "SUPPLIER" && currentStatus === "PAID" &&
+        (payeeChanges || (args.vendor !== undefined && args.vendor !== expense.vendor))) {
+      throwSupplierError(SUPPLIER_ERROR.LINK_FROZEN, "The payee of a paid expense cannot be changed.");
+    }
+    if (effectiveBearer !== "SUPPLIER" && args.vendorSupplierId) {
+      throwSupplierError(SUPPLIER_ERROR.ROLE_CONFLICT, "A canonical payee is only used for supplier-borne expenses.");
+    }
+    if (willMarkPaid && effectiveBearer === "SUPPLIER" && !args.vendorSupplierId) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "Confirm the service provider before paying this expense.");
+    }
+    if (willMarkPaid && currentBearer === "SUPPLIER" && !expense.costBearerSupplierId) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, "Supplier identity is unresolved for this expense.");
+    }
     const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
     const hasMaterialAccountingChange =
       (args.vehicleId !== undefined && args.vehicleId !== (expense.vehicleId ?? null)) ||
@@ -748,14 +780,13 @@ export const update = mutation({
       (args.taxAmount !== undefined && (args.taxAmount || 0) !== (expense.taxAmount || 0)) ||
       (args.date !== undefined && args.date !== expense.date) ||
       (args.category !== undefined && args.category !== expense.category) ||
-      (args.status !== undefined && args.status !== currentStatus) ||
       (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
       bankChoiceChanged ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
       (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
       (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null)) ||
       bearerChanges;
-    if (hasAccountingExposure && hasMaterialAccountingChange) {
+    if (hasAccountingExposure && (hasMaterialAccountingChange || nextStatus !== currentStatus)) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
       );
@@ -788,18 +819,26 @@ export const update = mutation({
       );
     }
 
-    // The bearer gate against the EFFECTIVE post-update values, so moving a
-    // PENDING supplier cost to a stock car, adding VAT or making it prepaid is
-    // refused here rather than only when it is finally paid.
-    await assertCostBearerAllowed(ctx, {
-      orgId: args.orgId,
-      bearer: args.costBearer ?? expense.costBearer,
-      vehicleId: args.vehicleId === null ? undefined : (args.vehicleId ?? expense.vehicleId),
-      category: args.category ?? expense.category,
-      isPrepaid: normalizedPrepaid ? normalizedPrepaid.isPrepaid : expense.isPrepaid,
-      taxAmount: effectiveTaxAmount,
-      amount: effectiveAmount,
-    });
+    // Metadata never re-resolves historical identities. New exposure and payment do.
+    let parties: ExpenseParties | null = null;
+    const validateParties = hasMaterialAccountingChange || args.vehicleId !== undefined || payeeChanges || willMarkPaid;
+    if (validateParties) {
+      const vehicle = await assertCostBearerAllowed(ctx, {
+        orgId: args.orgId,
+        bearer: effectiveBearer,
+        vehicleId: args.vehicleId === null ? undefined : (args.vehicleId ?? expense.vehicleId),
+        category: args.category ?? expense.category,
+        isPrepaid: normalizedPrepaid ? normalizedPrepaid.isPrepaid : expense.isPrepaid,
+        taxAmount: effectiveTaxAmount,
+        amount: effectiveAmount,
+      });
+      parties = await resolveExpenseParties(ctx, {
+        orgId: args.orgId, bearer: effectiveBearer, vehicle,
+        payeeId: args.vendorSupplierId ?? expense.vendorSupplierId,
+        previous: expense,
+        requireActive: hasMaterialAccountingChange || payeeChanges,
+      });
+    }
 
     // SCRUM-811: a PENDING to PAID transition posts against the EFFECTIVE vehicle, which is
     // the stored one when this call does not name another. Refuse a foreign, missing or
@@ -813,6 +852,11 @@ export const update = mutation({
 
     const patch: Record<string, unknown> = {};
     if (args.costBearer !== undefined) patch.costBearer = args.costBearer;
+    if (parties) Object.assign(patch, parties);
+    if (bearerChanges && effectiveBearer === "SHOWROOM") {
+      patch.vendorSupplierId = undefined;
+      patch.costBearerSupplierId = undefined;
+    }
 
     if (args.vehicleId !== undefined) {
       if (args.vehicleId !== null) {
@@ -827,7 +871,7 @@ export const update = mutation({
     if (args.date !== undefined) patch.date = args.date;
     if (args.category !== undefined) patch.category = args.category;
     if (args.status !== undefined) patch.status = args.status;
-    if (args.vendor !== undefined) patch.vendor = args.vendor;
+    if (args.vendor !== undefined && effectiveBearer !== "SUPPLIER") patch.vendor = args.vendor;
     if (args.paymentMethod !== undefined) patch.paymentMethod = args.paymentMethod;
     if (args.bankAccountId !== undefined) patch.bankAccountId = effectiveBankAccountId;
     if (args.payerId !== undefined) {
@@ -938,7 +982,7 @@ export const remove = mutation({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
-    const expense = await ctx.db.get(args.expenseId);
+    const expense = await requireOwnedRow(ctx, args.orgId, "expenses", args.expenseId, "Expense not found.");
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
@@ -1011,7 +1055,7 @@ export const reverseExpense = mutation({
     const reason = args.reason.trim();
     if (!reason) throw new ConvexError("A reason is required to reverse a posted expense.");
 
-    const expense = await ctx.db.get(args.expenseId);
+    const expense = await requireOwnedRow(ctx, args.orgId, "expenses", args.expenseId, "Expense not found.");
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
@@ -1112,3 +1156,50 @@ export const reverseExpense = mutation({
     });
   },
 });
+
+interface ExpenseParties {
+  vendorSupplierId: Id<"suppliers">;
+  vendor: string;
+  costBearerSupplierId: Id<"suppliers">;
+}
+
+/** Only a selected payee is client authority; the vehicle supplies the bearer. */
+async function resolveExpenseParties(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    bearer: CostBearer | undefined;
+    vehicle: Doc<"vehicles"> | null;
+    payeeId: Id<"suppliers"> | undefined;
+    previous?: Doc<"expenses">;
+    requireActive: boolean;
+  },
+): Promise<ExpenseParties | null> {
+  if (args.bearer !== "SUPPLIER") {
+    if (args.payeeId && !args.previous) {
+      throwSupplierError(SUPPLIER_ERROR.ROLE_CONFLICT, "A canonical payee is only used for supplier-borne expenses.");
+    }
+    return null;
+  }
+  return await runGuarded(async () => {
+    const bearer = await requireSupplierSnapshotForCompletion(ctx, args.orgId, args.vehicle?.sourcedSupplierId);
+    const priorBearer = args.previous?.costBearerSupplierId;
+    if (priorBearer && priorBearer !== bearer.supplierId && args.previous?.vehicleId === args.vehicle?._id) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, "Supplier identity no longer matches this expense.");
+    }
+    if (args.requireActive) await snapshotSupplier(ctx, args.orgId, bearer.supplierId);
+    if (!args.payeeId) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "Select the service provider for this expense.");
+    }
+    const samePayee = args.previous?.vendorSupplierId === args.payeeId;
+    let vendor: string;
+    if (samePayee && !args.requireActive) {
+      await requireSupplierSnapshotForCompletion(ctx, args.orgId, args.payeeId);
+      vendor = args.previous?.vendor ?? "";
+    } else {
+      const payee = await snapshotSupplier(ctx, args.orgId, args.payeeId);
+      vendor = samePayee ? (args.previous?.vendor ?? payee.name) : payee.name;
+    }
+    return { vendorSupplierId: args.payeeId, vendor, costBearerSupplierId: bearer.supplierId };
+  });
+}

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ConvexError } from "convex/values";
-import { Toaster, toast } from "sonner";
+import { toast } from "sonner";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { fromMinorUnits } from "@/convex/utils/money";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
@@ -77,4 +76,21 @@ describe("P4b distinct expense parties", () => {
     const copy = dictionaries[locale] as Record<string, string>;
     expect(screen.queryByRole("combobox", { name: copy.ExpenseServicePayee ?? "Service provider / payee" })).toBeNull();
   });
+
+  test.each(["en", "ar"] as const)("%s locks a paid payee and leaves legacy notes edits free of unchanged vehicle assignment", async locale => {
+    localStorage.setItem("autoflow-locale", locale);
+    network.vehicles = [];
+    network.mutate.mockReset();
+    network.mutate.mockResolvedValue(null);
+    render(<LanguageProvider><ExpenseDialog open onOpenChange={() => undefined} expense={{ ...pendingExpense, status: "PAID", vendor: "Historical garage", vendorSupplierId: "garage_p4b" as Id<"suppliers"> }} /></LanguageProvider>);
+    const copy = dictionaries[locale] as Record<string, string>;
+    const picker = await screen.findByRole("combobox", { name: copy.ExpenseServicePayee });
+    expect(picker.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(copy.ExpensePayeeLocked)).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(copy.AnyExtraDetails), { target: { value: "History note" } });
+    fireEvent.click(screen.getByRole("button", { name: copy.SaveChanges }));
+    await waitFor(() => expect(network.mutate).toHaveBeenCalledTimes(1));
+    expect(network.mutate.mock.calls[0][0]).toMatchObject({ notes: "History note", vehicleId: undefined, paymentMethod: undefined, date: undefined });
+  });
+
 });

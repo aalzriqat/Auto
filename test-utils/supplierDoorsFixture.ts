@@ -117,7 +117,7 @@ export async function openRecovery(s: SupplierDoors, amountMajor: number) {
   const expenseId = (await s.as.mutation(api.expenses.create, {
     orgId: s.orgId, vehicleId: s.vehicleId, title: "Transport from the supplier's yard", amount: amountMajor,
     date: Date.now() - 60_000, category: "TRANSPORT", status: "PAID", paymentMethod: "CASH",
-    costBearer: "SUPPLIER", idempotencyKey: crypto.randomUUID(),
+    costBearer: "SUPPLIER", vendorSupplierId: s.supplierId, idempotencyKey: crypto.randomUUID(),
   } as never)) as Id<"expenses">;
   const recovery = await s.t.run((ctx) =>
     ctx.db.query("supplierCostRecoveries").withIndex("by_org_expense", (q) => q.eq("orgId", s.orgId).eq("expenseId", expenseId)).first()

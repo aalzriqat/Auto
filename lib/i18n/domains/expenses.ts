@@ -1,4 +1,7 @@
 export const expensesEn = {
+  ExpenseServicePayee: "Service provider / payee",
+  ExpenseBearerExplanation: "Recovered from the vehicle supplier, not the payee.",
+  ExpensePayeeLocked: "The recorded payee is fixed once this expense is paid.",
   Expenses: "Expenses",
   TrackExpenses: "Track dealership overhead and individual vehicle repair costs.",
   RecordExpense: "Record Expense",
@@ -181,6 +184,9 @@ export const expensesEn = {
 };
 
 export const expensesAr = {
+  ExpenseServicePayee: "مقدم الخدمة / المستفيد",
+  ExpenseBearerExplanation: "تُسترد من مورّد المركبة، وليس من المستفيد.",
+  ExpensePayeeLocked: "لا يمكن تغيير المستفيد المسجل بعد دفع هذا المصروف.",
   Expenses: "المصروفات",
   TrackExpenses: "تتبع التكاليف التشغيلية للمركز وتكاليف صيانة المركبات الفردية.",
   RecordExpense: "تسجيل مصروف",

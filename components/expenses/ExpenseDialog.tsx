@@ -41,7 +41,7 @@ import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/P
 import { CostBearerSelect } from "@/components/expenses/CostBearerSelect";
 import { useCommandIdentity } from "@/hooks/useCommandIdentity";
 import { getLocalizedErrorMessage, isConvexError } from "@/lib/errors";
-
+import { SupplierSelect } from "@/components/suppliers/SupplierSelect";
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
 /** One create-expense intent per dialog session. */
@@ -89,7 +89,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       category: "OTHER",
       vehicleId: "none",
       status: "PAID",
-      vendor: "",
+      vendor: "", vendorSupplierId: "",
       payerId: "none",
       paymentMethod: "CASH",
       bankAccountId: "",
@@ -148,7 +148,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         category: expense.category as any,
         vehicleId: expense.vehicleId || "none",
         status: expense.status || "PAID",
-        vendor: expense.vendor || "",
+        vendor: expense.vendor || "", vendorSupplierId: expense.vendorSupplierId ?? "",
         payerId: expense.payerId || "none",
         paymentMethod: (expense.paymentMethod || "CASH") as PaymentMethod,
         bankAccountId: expense.bankAccountId ?? "",
@@ -169,7 +169,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         category: "OTHER",
         vehicleId: "none",
         status: "PAID",
-        vendor: "",
+        vendor: "", vendorSupplierId: "",
         payerId: "none",
         paymentMethod: "CASH",
         bankAccountId: "",
@@ -227,13 +227,13 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           // 0 must reach the server: omitting it keeps the stored VAT, which
           // blocks switching a PENDING expense to a SUPPLIER bearer.
           taxAmount: values.taxAmount ?? 0,
-          date: parsedDate,
+          date: values.date === new Date(expense.date).toISOString().split("T")[0] ? undefined : parsedDate,
           category: values.category as any,
-          vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,
+          vehicleId: parsedVehicleId === expense.vehicleId ? undefined : parsedVehicleId ?? null,
           status: values.status,
-          vendor: values.vendor,
+          vendor: values.vendor, vendorSupplierId: isSupplierBorne && values.vendorSupplierId ? values.vendorSupplierId as Id<"suppliers"> : undefined,
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
-          paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
+          paymentMethod: values.status === "PAID" && !unchangedPaidExpense ? values.paymentMethod : undefined,
           bankAccountId: unchangedPaidExpense ? undefined : bankPayment ? values.bankAccountId as Id<"bankAccounts"> : null,
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
@@ -261,7 +261,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           category: values.category as any,
           vehicleId: parsedVehicleId,
           status: values.status,
-          vendor: values.vendor,
+          vendor: values.vendor, vendorSupplierId: isSupplierBorne && values.vendorSupplierId ? values.vendorSupplierId as Id<"suppliers"> : undefined,
           payerId: parsedPayerId,
           paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
           bankAccountId: bankPayment ? values.bankAccountId as Id<"bankAccounts"> : undefined,
@@ -472,6 +472,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 )}
               />
 
+              {isSupplierBorne ? (
+                <ExpensePartyFields form={form} orgId={activeOrgId} locked={paidExpenseLocked} />
+              ) : (
               <FormField
                 control={form.control}
                 name="vendor"
@@ -485,6 +488,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   </FormItem>
                 )}
               />
+
+              )}
 
               {paymentStatus === "PAID" && (
                 <FormField
@@ -698,4 +703,39 @@ function costBearerHint(
   if (supplierIdentityUnavailable) return t("CostBearerSupplierLinkRequired");
   if (isSupplierBorne) return t("CostBearerSupplierHint");
   return null;
+}
+
+function ExpensePartyFields({ form, orgId, locked }: Readonly<{
+  form: ReturnType<typeof useForm<ExpenseFormValues>>;
+  orgId: Id<"organizations"> | null | undefined;
+  locked: boolean;
+}>) {
+  const { t } = useLanguage();
+  return (
+    <FormField
+      control={form.control}
+      name="vendorSupplierId"
+      render={({ field }) => (
+        <FormItem className="md:col-span-2">
+          <FormLabel>{t("ExpenseServicePayee")}</FormLabel>
+          <FormControl>
+            <SupplierSelect
+              orgId={orgId}
+              value={field.value}
+              valueLabel={form.getValues("vendor")}
+              onChange={party => {
+                field.onChange(party.id);
+                form.setValue("vendor", party.displayName);
+              }}
+              disabled={locked}
+              ariaLabel={t("ExpenseServicePayee")}
+            />
+          </FormControl>
+          <p className="text-xs text-muted-foreground">{t("ExpenseBearerExplanation")}</p>
+          {locked && <p className="text-xs text-muted-foreground">{t("ExpensePayeeLocked")}</p>}
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  );
 }
