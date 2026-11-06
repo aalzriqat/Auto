@@ -246,7 +246,16 @@ export function OpeningBalanceCard() {
       creditMinor += line.creditMinor;
     }
     valid = valid && Number.isSafeInteger(debitMinor) && Number.isSafeInteger(creditMinor);
-    return { debitMinor, creditMinor, valid, balanced: valid && debitMinor === creditMinor && debitMinor > 0 };
+    // Owner ruling 2026-11-04: a valid unbalanced set is accepted; the server posts the difference to the
+    // opening-balance suspense account, which stays an open item until it is classified.
+    return {
+      debitMinor,
+      creditMinor,
+      valid,
+      balanced: valid && debitMinor === creditMinor && debitMinor > 0,
+      toSuspense: valid && debitMinor !== creditMinor,
+      differenceMinor: Math.abs(debitMinor - creditMinor),
+    };
   }, [parsedLines]);
 
   const filledLines = parsedLines.filter(
@@ -270,7 +279,7 @@ export function OpeningBalanceCard() {
   );
   const canSubmit =
     Boolean(activeOrgId) &&
-    totals.balanced &&
+    (totals.balanced || totals.toSuspense) &&
     selectedAccountsSupported &&
     allocationsReady &&
     filledLines.length >= 2 &&
@@ -591,6 +600,14 @@ export function OpeningBalanceCard() {
                     </span>
                   </span>
                 </div>
+                {totals.toSuspense && (
+                  <output className="block text-sm text-amber-700 dark:text-amber-300">
+                    {t("OpeningBalanceSuspenseNotice").replace(
+                      "{amount}",
+                      fromMinorUnits(totals.differenceMinor, currency).toFixed(scaleForCurrency(currency)),
+                    )}
+                  </output>
+                )}
                 {(!totals.valid || currencyChanged) && (
                   <p className="text-sm text-amber-700 dark:text-amber-300" role="alert">
                     {currencyChanged ? t("OpeningBalanceCurrencyChanged") : t("OpeningBalanceInvalidAmount")}

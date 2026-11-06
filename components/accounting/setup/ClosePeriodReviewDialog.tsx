@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import { PERMISSIONS } from "@/convex/utils/permissions";
+import { usePermissions } from "@/hooks/use-permissions";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Dialog,
@@ -18,8 +20,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/components/ui/sonner";
 import { DialogFooterActions, errorMessage } from "../AccountingTabShared";
+import { CostAccessNote } from "../CostAccessNote";
 import {
+  SUPPLIER_PAYABLES_RECON_DATE_WARNING,
+  SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
+  OPENING_SUSPENSE_OPEN_WARNING,
+  OPENING_SUSPENSE_UNAVAILABLE_WARNING,
   SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING,
   SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING,
@@ -36,12 +46,26 @@ import { periodLabel } from "./types";
  * as sent.
  */
 const KNOWN_WARNING_KEYS: Readonly<Record<string, string>> = {
+  [SUPPLIER_PAYABLES_RECON_DATE_WARNING]: "ClosePeriodWarnSupplierPayablesReconDate",
+  [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING]: "ClosePeriodWarnSupplierRecoverablesReconFamily",
+  [EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING]: "ClosePeriodWarnEmployeeAdvancesReconFamily",
   [SUPPLIER_PAYABLES_RECON_PENDING_POSTINGS_WARNING]: "ClosePeriodWarnSupplierPayablesReconPending",
   [SUPPLIER_PAYABLES_RECON_OVER_LIMIT_WARNING]: "ClosePeriodWarnSupplierPayablesReconTooMany",
+  // SCRUM-858: opening-balance reconciliation. A difference is reported, never posted away.
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES]: "ClosePeriodWarnOpeningDiffSupplierPayables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningDiffEmployeeAdvances",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningDiffSupplierRecoverables",
+  [OPENING_DIFFERENCE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningDiffPartnerCapital",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.EMPLOYEE_ADVANCES]: "ClosePeriodWarnOpeningReconUnavailableEmployeeAdvances",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.SUPPLIER_RECOVERABLES]: "ClosePeriodWarnOpeningReconUnavailableSupplierRecoverables",
+  [OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL]: "ClosePeriodWarnOpeningReconUnavailablePartnerCapital",
   [SUPPLIER_PAYABLES_RECON_POST_CUTOFF_WARNING]: "ClosePeriodWarnSupplierPayablesReconPostCutoff",
   [SUPPLIER_PAYABLES_RECON_INCONSISTENT_REFERENCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconInconsistentReference",
   [SUPPLIER_PAYABLES_RECON_OPENING_SOURCE_WARNING]: "ClosePeriodWarnSupplierPayablesReconOpeningSource",
   [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING]: "ClosePeriodWarnCustomerDepositsReconUnavailable",
+  // Owner ruling 2026-11-04: the opening difference sits in suspense as an open item, never closed to equity.
+  [OPENING_SUSPENSE_OPEN_WARNING]: "ClosePeriodWarnOpeningSuspenseOpen",
+  [OPENING_SUSPENSE_UNAVAILABLE_WARNING]: "ClosePeriodWarnOpeningSuspenseUnavailable",
 };
 
 function displayWarning(warning: string, t: Translate): string {
@@ -77,9 +101,12 @@ export function ClosePeriodReviewDialog({
   onClosed,
   t,
 }: Readonly<ClosePeriodReviewDialogProps>) {
+  const { hasAllPermissions, isOwner: isOrgOwner, isLoading: permissionsLoading } = usePermissions();
+  const canReadChecklist = isOrgOwner || hasAllPermissions([PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE]);
+  const checklistEnabled = !permissionsLoading && canReadChecklist;
   const checklist = useQuery(
     api.accountingPeriods.closeChecklist,
-    open && period ? { orgId, periodId: period._id } : "skip"
+    open && period && checklistEnabled ? { orgId, periodId: period._id } : "skip"
   );
   const closePeriod = useMutation(api.accountingPeriods.close);
 
@@ -100,12 +127,13 @@ export function ClosePeriodReviewDialog({
   const blockers = checklist?.blockers ?? [];
   const allWarningsAcknowledged = warnings.every((w) => acknowledged.has(w));
   const canSubmit =
+    checklistEnabled &&
     checklist !== undefined &&
     allWarningsAcknowledged &&
     (checklist.canClose || (isOwner && overrideReason.trim().length > 0));
 
   async function handleConfirm() {
-    if (!checklist) return;
+    if (!checklistEnabled || !checklist) return;
     setSubmitting(true);
     try {
       await closePeriod({
@@ -124,6 +152,85 @@ export function ClosePeriodReviewDialog({
     }
   }
 
+  let body: ReactNode;
+  if (!permissionsLoading && !canReadChecklist) {
+    body = <CostAccessNote>{t("FinancialStatementCostAccessRequired")}</CostAccessNote>;
+  } else if (checklist === undefined) {
+    body = <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>;
+  } else {
+    body = (
+      <div className="space-y-4">
+        {blockers.length > 0 && (
+          <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40">
+            <div className="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              {t("ClosePeriodBlockersLabel")}
+            </div>
+            <ul className="space-y-1.5">
+              {blockers.map((blocker) => (
+                <li key={blocker} className="text-sm leading-snug text-red-800 dark:text-red-200">
+                  {blocker}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+            <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {t("ClosePeriodWarningsLabel")}
+            </div>
+            <ul className="space-y-2">
+              {warnings.map((warning) => (
+                <li key={warning} className="flex items-start gap-2">
+                  <Checkbox
+                    checked={acknowledged.has(warning)}
+                    onCheckedChange={(checked) => {
+                      setAcknowledged((prev) => {
+                        const next = new Set(prev);
+                        if (checked === true) next.add(warning);
+                        else next.delete(warning);
+                        return next;
+                      });
+                    }}
+                    className="mt-0.5"
+                  />
+                  <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{displayWarning(warning, t)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {blockers.length === 0 && warnings.length === 0 && (
+          <p className="text-sm text-emerald-700 dark:text-emerald-300">{t("ClosePeriodNoIssues")}</p>
+        )}
+
+        {!checklist.canClose && isOwner && (
+          <div className="space-y-1.5">
+            <Label>{t("ClosePeriodOverrideReasonLabel")}</Label>
+            <Textarea
+              value={overrideReason}
+              onChange={(e) => setOverrideReason(e.target.value)}
+              placeholder={t("ClosePeriodOverrideReasonPlaceholder")}
+            />
+            <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
+          </div>
+        )}
+
+        {/* The backend restricts blocker overrides to the org owner
+            (accountingPeriods.close) — showing the reason input to a
+            MANAGE_FINANCE user who isn't the owner would only let them
+            type a reason and submit, then get rejected server-side. */}
+        {!checklist.canClose && !isOwner && (
+          <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85dvh] overflow-y-auto">
@@ -132,79 +239,7 @@ export function ClosePeriodReviewDialog({
           <DialogDescription>{t("ClosePeriodReviewDesc")}</DialogDescription>
         </DialogHeader>
 
-        {checklist === undefined ? (
-          <p className="text-sm text-muted-foreground py-4">{t("Loading")}</p>
-        ) : (
-          <div className="space-y-4">
-            {blockers.length > 0 && (
-              <div className="space-y-2 rounded-md border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40">
-                <div className="flex items-center gap-2 text-sm font-semibold text-red-800 dark:text-red-200">
-                  <ShieldAlert className="h-4 w-4 shrink-0" />
-                  {t("ClosePeriodBlockersLabel")}
-                </div>
-                <ul className="space-y-1.5">
-                  {blockers.map((blocker) => (
-                    <li key={blocker} className="text-sm leading-snug text-red-800 dark:text-red-200">
-                      {blocker}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {warnings.length > 0 && (
-              <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
-                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  {t("ClosePeriodWarningsLabel")}
-                </div>
-                <ul className="space-y-2">
-                  {warnings.map((warning) => (
-                    <li key={warning} className="flex items-start gap-2">
-                      <Checkbox
-                        checked={acknowledged.has(warning)}
-                        onCheckedChange={(checked) => {
-                          setAcknowledged((prev) => {
-                            const next = new Set(prev);
-                            if (checked === true) next.add(warning);
-                            else next.delete(warning);
-                            return next;
-                          });
-                        }}
-                        className="mt-0.5"
-                      />
-                      <span className="text-sm leading-snug text-amber-900 dark:text-amber-200">{displayWarning(warning, t)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {blockers.length === 0 && warnings.length === 0 && (
-              <p className="text-sm text-emerald-700 dark:text-emerald-300">{t("ClosePeriodNoIssues")}</p>
-            )}
-
-            {!checklist.canClose && isOwner && (
-              <div className="space-y-1.5">
-                <Label>{t("ClosePeriodOverrideReasonLabel")}</Label>
-                <Textarea
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  placeholder={t("ClosePeriodOverrideReasonPlaceholder")}
-                />
-                <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
-              </div>
-            )}
-
-            {/* The backend restricts blocker overrides to the org owner
-                (accountingPeriods.close) — showing the reason input to a
-                MANAGE_FINANCE user who isn't the owner would only let them
-                type a reason and submit, then get rejected server-side. */}
-            {!checklist.canClose && !isOwner && (
-              <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
-            )}
-          </div>
-        )}
+        {body}
 
         <DialogFooter>
           <DialogFooterActions

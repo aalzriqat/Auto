@@ -1,16 +1,23 @@
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
+import { openingVerificationContext, verifyOpeningRead, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { mutation } from "./functions";
 import { Id, Doc } from "./_generated/dataModel";
-import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
+import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import {
+  SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  OPENING_DIFFERENCE_WARNING_BY_FAMILY,
+  OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY,
   CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING,
+  OPENING_SUSPENSE_OPEN_WARNING,
+  OPENING_SUSPENSE_UNAVAILABLE_WARNING,
   supplierPayablesUnavailableWarning,
 } from "./utils/closeWarnings";
 import {
@@ -22,10 +29,67 @@ import {
   computeCommissionPayableReconciliation,
   computeCommissionRecognitionDivergence,
   computePrepaidRecognitionShortfall,
+  computeEmployeeAdvancesReconciliation,
+  computeSupplierRecoverablesReconciliation,
+  computePartnerCapitalReconciliation,
+  orgHasOpeningHistory,
+  openingSuspenseIsOpen,
   CustomerDepositsReconciliationResult,
   GlVsSubledgerResult,
+  OpeningFamilyReconciliationResult,
   SupplierPayablesReconciliationResult,
+  type SharedGlBalances,
 } from "./accountingReports";
+import { getCumulativeBalancesAsOfBounded } from "./accounting/accountSnapshots";
+
+const OPENING_SOURCE_FAMILY_WARNINGS = {
+  EMPLOYEE_ADVANCES: EMPLOYEE_ADVANCES_RECON_FAMILY_WARNING,
+  SUPPLIER_RECOVERABLES: SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING,
+  PARTNER_CAPITAL: OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY.PARTNER_CAPITAL,
+} as const;
+
+type OpeningFamilyKey = keyof typeof OPENING_SOURCE_FAMILY_WARNINGS;
+
+/** Close warnings for the opening-family readers. An "unavailable" reading only warrants a warning where an
+ * opening balance exists to reconcile; elsewhere these families are ordinary current-state subledgers. */
+async function openingFamilyWarnings(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  families: ReadonlyArray<readonly [OpeningFamilyKey, OpeningFamilyReconciliationResult]>,
+): Promise<string[]> {
+  const out: string[] = [];
+  const hasOpeningHistory = families.some(([, recon]) => recon.status === "UNAVAILABLE")
+    ? await orgHasOpeningHistory(ctx, orgId)
+    : "CLEAR";
+  for (const [family, recon] of families) {
+    if (recon.status === "UNAVAILABLE") {
+      if (recon.unavailableReason === "SOURCE_FAMILY_UNSUPPORTED") out.push(OPENING_SOURCE_FAMILY_WARNINGS[family]);
+      else if (hasOpeningHistory !== "CLEAR") out.push(OPENING_RECON_UNAVAILABLE_WARNING_BY_FAMILY[family]);
+    } else if (recon.unexplainedOpeningDifference) out.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY[family]);
+  }
+  return out;
+}
+
+/** Close warnings for sale commissions the ledger does not recognize, or recognizes at a different amount.
+ * Reported separately on purpose: "never recognized" is a migration backlog, "different amount" needs a person. */
+function commissionDivergenceWarnings(
+  d: Awaited<ReturnType<typeof computeCommissionRecognitionDivergence>>,
+): string[] {
+  const out: string[] = [];
+  if (d.unrecognizedCount > 0) {
+    out.push(`${d.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`);
+  }
+  if (d.strandedCount > 0) {
+    out.push(`${d.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`);
+  }
+  if (d.noPeriodCount > 0) {
+    out.push(`${d.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`);
+  }
+  if (d.divergentCount > 0) {
+    out.push(`${d.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`);
+  }
+  return out;
+}
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -391,7 +455,36 @@ export type CloseChecklistResult = {
   supplierPayablesReconciliation: SupplierPayablesReconciliationResult;
   customerDepositsReconciliation: CustomerDepositsReconciliationResult;
   commissionPayableReconciliation: GlVsSubledgerResult;
+  // SCRUM-858: opening-balance families. Differences are reported, never posted away.
+  employeeAdvancesReconciliation: OpeningFamilyReconciliationResult;
+  supplierRecoverablesReconciliation: OpeningFamilyReconciliationResult;
+  partnerCapitalReconciliation: OpeningFamilyReconciliationResult;
 };
+
+function supplierPayablesWarnings(recon: Awaited<ReturnType<typeof computeSupplierPayablesReconciliation>>): string[] {
+  // Could not see everything (too many rows to read, or AP-affecting postings still in flight): never report that
+  // as reconciled, and never as a difference in an empty list of currencies either.
+  if (recon.status === "UNAVAILABLE") return [supplierPayablesUnavailableWarning(recon.unavailableReason)];
+  if (recon.isReconciled) return [];
+  const badCurrencies = recon.currencies.filter((c) => !recon.byCurrency[c].isReconciled);
+  return [`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`];
+}
+
+function customerDepositsWarnings(
+  recon: Awaited<ReturnType<typeof computeCustomerDepositsReconciliation>>,
+  openingBasisUnavailable: boolean,
+): string[] {
+  if (recon.status === "UNAVAILABLE") {
+    // Could not compare as of the period end: never reported as reconciled, and never as a difference
+    // in an empty list of currencies. An unavailable opening liability basis already has its own warning;
+    // an opening deposit row that cannot be dated (its draft is gone) does not, so it is warned here.
+    const covered = recon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE" && openingBasisUnavailable;
+    return covered ? [] : [CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING];
+  }
+  if (recon.isReconciled) return [];
+  const badCurrencies = recon.currencies.filter((c) => !recon.byCurrency[c].isReconciled);
+  return [`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`];
+}
 
 /**
  * Everything that must be true before a period can close. Closing only flips
@@ -401,7 +494,7 @@ export type CloseChecklistResult = {
  * statement line from within the period that's never been matched, all block
  * the close outright rather than silently landing in a later period.
  */
-async function computeCloseChecklist(
+export async function computeCloseChecklist(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   period: Doc<"accountingPeriods">
@@ -432,6 +525,15 @@ async function computeCloseChecklist(
     .query("sales")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
+
+  // The three opening-family readers below compare the whole ledger at this same cutoff. Read it once for all
+  // three: each reading it alone pushed the checklist past the per-transaction document limit.
+  let glRead: ReturnType<SharedGlBalances> | undefined;
+  const sharedGl: SharedGlBalances = (cutoff) => {
+    if (cutoff !== period.endDate) return getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff);
+    glRead ??= getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff);
+    return glRead;
+  };
 
   const pendingOutboxEvents = allPendingOutbox.filter((e) => e.accountingDate <= period.endDate);
   const failedOutboxEvents = allFailedOutbox.filter((e) => e.accountingDate <= period.endDate);
@@ -464,13 +566,10 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
+  const [arReconciliation, vehicleInventoryRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall, commissionRecognitionDivergence] =
     await Promise.all([
-      computeSubledgerReconciliation(ctx, orgId, period.endDate),
-      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
-      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate, {
-        outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
-      }),
+      computeSubledgerReconciliation(ctx, orgId, period.endDate, true),
+      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate, true),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate, { sales: allSales }),
       computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
@@ -479,6 +578,17 @@ async function computeCloseChecklist(
         sales: allSales,
       }),
     ]);
+  // The three opening-family readers run AFTER the readers above, one at a time. Each admits its own reads against the
+  // transaction's remaining read headroom (readBoundedDocuments, measured as they stream), and that headroom is only true once the earlier
+  // readers have finished reading: run beside them, every reader would be admitted against the same untouched budget
+  // and together overrun it (SCRUM-858 PR #710 R11: the readers above already take ~24.6k of the 32,000 documents).
+  const openingCtx = openingVerificationContext(ctx);
+  const supplierPayablesRecon = await computeSupplierPayablesReconciliation(openingCtx, orgId, period.endDate, {
+    outboxEvents: [...allPendingOutbox, ...allFailedOutbox],
+  });
+  const employeeAdvancesRecon = await computeEmployeeAdvancesReconciliation(openingCtx, orgId, period.endDate, sharedGl);
+  const supplierRecoverablesRecon = await computeSupplierRecoverablesReconciliation(openingCtx, orgId, period.endDate, sharedGl);
+  const partnerCapitalRecon = await computePartnerCapitalReconciliation(openingCtx, orgId, period.endDate, sharedGl);
 
   const blockers: string[] = [];
   const warnings: string[] = [];
@@ -520,32 +630,29 @@ async function computeCloseChecklist(
     const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
     warnings.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
-  if (supplierPayablesRecon.status === "UNAVAILABLE") {
-    // Could not see everything (too many rows to read, or AP-affecting postings
-    // still in flight): never report that as reconciled, and never as a
-    // difference in an empty list of currencies either.
-    warnings.push(supplierPayablesUnavailableWarning(supplierPayablesRecon.unavailableReason));
-  } else if (!supplierPayablesRecon.isReconciled) {
-    const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
-    warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
+  warnings.push(...supplierPayablesWarnings(supplierPayablesRecon));
+  // SCRUM-858 (owner ruling 2026-10-28): a labelled opening-balance difference is reported here and
+  // never corrected by a posting. The label text is a fixed constant because close matches it verbatim.
+  if (supplierPayablesRecon.unexplainedOpeningDifference) {
+    warnings.push(OPENING_DIFFERENCE_WARNING_BY_FAMILY.SUPPLIER_PAYABLES);
   }
-  const heldOpeningLiabilities=await readOpeningUnallocatedLiabilities(ctx,orgId,period.endDate);
+  // Owner ruling 2026-11-04: the opening difference sits in suspense as an open item until classified.
+  const suspense = await openingSuspenseIsOpen(openingCtx, orgId, period.endDate);
+  if (suspense === "OPEN") warnings.push(OPENING_SUSPENSE_OPEN_WARNING);
+  if (suspense === "UNAVAILABLE") warnings.push(OPENING_SUSPENSE_UNAVAILABLE_WARNING);
+  const heldOpeningLiabilities = await verifyOpeningRead(openingCtx,
+    guarded => readOpeningUnallocatedLiabilities(guarded, orgId, period.endDate),
+    () => ({ status: "UNAVAILABLE" as const, rows: [] }));
   if(heldOpeningLiabilities.status === "UNAVAILABLE")warnings.push("Opening unallocated liability basis is unavailable. Finance must reconcile the source proof.");
   else if(heldOpeningLiabilities.status === "UNALLOCATED")warnings.push("Opening liabilities include unallocated held pools. Arithmetic reconciliation does not establish beneficial ownership; these pools are not available for customer refunds or credit application.");
-  if (customerDepositsRecon.status === "UNAVAILABLE") {
-    // Could not compare as of the period end: never reported as reconciled, and never as a difference
-    // in an empty list of currencies. An unavailable opening liability basis already has its own warning
-    // above; an opening deposit row that cannot be dated (its draft is gone) does not, so it is warned here.
-    const coveredByOpeningBasisWarning =
-      customerDepositsRecon.unavailableReason === "OPENING_SOURCE_UNAVAILABLE" &&
-      heldOpeningLiabilities.status === "UNAVAILABLE";
-    if (!coveredByOpeningBasisWarning) {
-      warnings.push(CUSTOMER_DEPOSITS_RECON_UNAVAILABLE_WARNING);
-    }
-  } else if (!customerDepositsRecon.isReconciled) {
-    const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
-    warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
-  }
+  warnings.push(
+    ...(await openingFamilyWarnings(openingCtx, orgId, [
+      ["EMPLOYEE_ADVANCES", employeeAdvancesRecon],
+      ["SUPPLIER_RECOVERABLES", supplierRecoverablesRecon],
+      ["PARTNER_CAPITAL", partnerCapitalRecon],
+    ])),
+    ...customerDepositsWarnings(customerDepositsRecon, heldOpeningLiabilities.status === "UNAVAILABLE"),
+  );
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
     // The subledger side sums only what the commission ENTRIES actually
@@ -577,26 +684,7 @@ async function computeCloseChecklist(
   // made an ordinary migration backlog read as ledger corruption — and a
   // warning that must be acknowledged verbatim on every close is exactly how
   // people learn to click through the ones that matter.
-  if (commissionRecognitionDivergence.unrecognizedCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.unrecognizedCount} completed sale commission(s) are not recognized in the ledger at all. Run the commission accrual backfill.`
-    );
-  }
-  if (commissionRecognitionDivergence.strandedCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.strandedCount} completed sale commission(s) are not recognized and sit in a closed or locked period, so the backfill cannot post them. Reopen the period covering them (or set the commission to zero) first.`
-    );
-  }
-  if (commissionRecognitionDivergence.noPeriodCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.noPeriodCount} completed sale commission(s) fall on dates no accounting period covers, so they can never post and will block future closes. Create a period covering those sale dates.`
-    );
-  }
-  if (commissionRecognitionDivergence.divergentCount > 0) {
-    warnings.push(
-      `${commissionRecognitionDivergence.divergentCount} commission(s) are recognized in the ledger at a different amount than the sale records. Review before closing.`
-    );
-  }
+  warnings.push(...commissionDivergenceWarnings(commissionRecognitionDivergence));
 
   return {
     canClose: blockers.length === 0,
@@ -612,6 +700,9 @@ async function computeCloseChecklist(
     supplierPayablesReconciliation: supplierPayablesRecon,
     customerDepositsReconciliation: customerDepositsRecon,
     commissionPayableReconciliation: commissionPayableRecon,
+    employeeAdvancesReconciliation: employeeAdvancesRecon,
+    supplierRecoverablesReconciliation: supplierRecoverablesRecon,
+    partnerCapitalReconciliation: partnerCapitalRecon,
   };
 }
 
@@ -621,7 +712,7 @@ export const closeChecklist = query({
     periodId: v.id("accountingPeriods"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);

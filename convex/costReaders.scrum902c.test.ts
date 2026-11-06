@@ -46,7 +46,27 @@ const NOW = Date.now();
 const RANGE = { startDate: NOW - 86_400_000, endDate: NOW + 86_400_000 };
 const GL_RANGE = { fromDate: NOW - 86_400_000, toDate: NOW + 86_400_000 };
 
+async function checklistFor(tag: string, permissions: string[]) {
+  const s = await seed(tag, permissions);
+  const periodId = await s.t.run((ctx) => ctx.db.insert("accountingPeriods", {
+    orgId: s.orgId, fiscalYear: 2026, periodNumber: 1, startDate: 0, endDate: Date.now() + 86_400_000,
+    status: "OPEN", createdAt: 0,
+  }));
+  return s.as.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId });
+}
+
 describe("SCRUM-902 GL statements and account activity", () => {
+  test("accountingPeriods.closeChecklist: finance without cost is refused (SCRUM-858 merge)", async () => {
+    await expect(checklistFor("closefinance", FINANCE)).rejects.toThrow(NAMES_COST);
+  });
+  test("accountingPeriods.closeChecklist: cost without finance is refused (SCRUM-858 merge negative control)", async () => {
+    await expect(checklistFor("closecost", ["view:cost_price"])).rejects.toThrow(/view:finance/);
+  });
+  test("accountingPeriods.closeChecklist: finance and cost still read (SCRUM-858 merge positive control)", async () => {
+    await expect(checklistFor("closeboth", FINANCE_AND_COST)).resolves.toMatchObject({
+      supplierRecoverablesReconciliation: { status: "AVAILABLE", isReconciled: true },
+    });
+  });
   test("accountingReports.trialBalance: a role with view:finance but without view:cost_price is refused (SCRUM-902)", async () => {
     const s = await seed("tb", FINANCE);
     await expect(s.as.query(api.accountingReports.trialBalance, { orgId: s.orgId })).rejects.toThrow(NAMES_COST);

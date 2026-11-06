@@ -102,6 +102,20 @@ describe("SCRUM-902 reports", () => {
 });
 
 describe("SCRUM-902 reconciliations and journal readers", () => {
+  test("accountingReports.supplierRecoverablesReconciliation: finance without cost is refused (SCRUM-858 merge)", async () => {
+    const s = await seed("rcrecovery", FINANCE);
+    await expect(s.as.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId })).rejects.toThrow(NAMES_COST);
+  });
+  test("accountingReports.supplierRecoverablesReconciliation: finance and cost still read (SCRUM-858 merge positive control)", async () => {
+    const s = await seed("rcrecoveryboth", FINANCE_AND_COST);
+    await expect(s.as.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId })).resolves.toMatchObject({
+      status: "AVAILABLE", isReconciled: true,
+    });
+  });
+  test("accountingReports.supplierRecoverablesReconciliation: cost without finance is refused (SCRUM-858 merge negative control)", async () => {
+    const s = await seed("rcrecoverycost", ["view:cost_price"]);
+    await expect(s.as.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId })).rejects.toThrow(/view:finance/);
+  });
   test("accountingReports.supplierPayablesReconciliation: a role with view:finance but without view:cost_price is refused (SCRUM-902)", async () => {
     const s = await seed("rcpay", FINANCE);
     await expect(s.as.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId })).rejects.toThrow(NAMES_COST);

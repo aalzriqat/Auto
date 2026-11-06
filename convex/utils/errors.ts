@@ -238,6 +238,9 @@ export const AppErrorCode = {
   PAYMENT_LINKS_DISABLED: "PAYMENT_LINKS_DISABLED",
   // SCRUM-795 (SCRUM-50): manual journals are off for the pilot (owner ruling SCRUM-760 c22474).
   MANUAL_JOURNALS_DISABLED: "MANUAL_JOURNALS_DISABLED",
+  // SCRUM-858 (R6 Seat 2): an opening set whose debit or credit total exceeds Number.MAX_SAFE_INTEGER cannot be
+  // balanced exactly in a double. Translated under ServerError_<code>.
+  OPENING_TOTAL_TOO_LARGE: "OPENING_TOTAL_TOO_LARGE",
   // SCRUM-802 (pilot cash-sale containment).
   CASH_SALE_BALANCE_UNPAID_REFUSED: "CASH_SALE_BALANCE_UNPAID_REFUSED",
   CASH_SALE_TAX_FEES_WARRANTY_REFUSED: "CASH_SALE_TAX_FEES_WARRANTY_REFUSED",

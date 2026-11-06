@@ -1,5 +1,6 @@
+import { type OpeningReadCtx } from "./openingSourceIdentity";
 import type { Doc } from "../_generated/dataModel";
-import type { QueryCtx, MutationCtx } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import { resolveSystemAccount } from "../chartOfAccounts";
 import { DEFAULT_CHART, SYSTEM_KEYS, type SystemKey } from "./defaultChart";
 import { isOpeningPartnerAccount } from "../accounting/openingPartnerAllocations";
@@ -79,6 +80,7 @@ const OPENING_POLICIES: Readonly<Record<string, OpeningPolicy | undefined>> = {
   INSURANCE_EXPENSE: "LEDGER_ONLY",
   OWNERSHIP_TRANSFER_EXPENSE: "LEDGER_ONLY",
   SELLING_EXPENSE: "LEDGER_ONLY",
+  OPENING_SUSPENSE: "LEDGER_ONLY",
 } satisfies Record<SystemKey, OpeningPolicy>;
 
 /** The writer and entry UI use one classification authority. A custom equity
@@ -113,8 +115,21 @@ export function isRemainingOpeningKind(
   ].includes(kind);
 }
 
+/** A declared control cannot combine operational families or unidentified pools. Shared by
+ * posting validation and reconciliation so stored declarations cannot invent a writer state. */
+export function openingDeclaredFamilyRefusal(
+  rows: readonly NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number][],
+): string | null {
+  if (rows.length === 0 || new Set(rows.map(row => row.kind)).size !== 1)
+    return "Every opening control needs one explicitly declared allocation family.";
+  if (rows[0].kind === "UNALLOCATED_LIABILITY" &&
+    new Set(rows.map(row => "purpose" in row ? row.purpose : undefined)).size !== 1)
+    return "Unidentified opening pools need separate declared controls.";
+  return null;
+}
+
 export async function openingAccountAllowsFamily(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Doc<"organizations">["_id"],
   account: Doc<"chartOfAccounts">,
   currency: string,

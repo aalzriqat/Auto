@@ -83,6 +83,11 @@ vi.mock("convex/react", async () => {
   const { getFunctionName } = await import("convex/server");
   return {
     useQuery: (reference: never) => stubs.queryResults.get(getFunctionName(reference)),
+    usePaginatedQuery: (reference: never) => ({
+      results: stubs.queryResults.get(getFunctionName(reference)) ?? [],
+      status: "Exhausted",
+      loadMore: vi.fn(),
+    }),
     useMutation: (reference: never) => async (args: Record<string, unknown>) => {
       stubs.mutationCalls.push({ name: getFunctionName(reference), args });
     },
@@ -141,7 +146,7 @@ async function seedQuote(tag: string, rolePermissions: string[] = PERMS_MANAGER)
     ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "Sales" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS_MANAGER })
+    ctx.db.insert("roles", { orgId, name: "Owner", permissions: [...PERMS_MANAGER, "view:cost_price"] })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const managerId = await t.run((ctx) =>

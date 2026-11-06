@@ -1,9 +1,10 @@
+import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
-import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
-import { hasReadHeadroom, type HeadroomCtx } from "./utils/transactionReadHeadroom";
-import { openingPolicyForAccount } from "./utils/openingAccountPolicy";
+import { loadOpeningSourceIdentity, verifyOpeningRead } from "./utils/openingSourceIdentity";
+import { hasReadHeadroom, inTurn, type HeadroomCtx } from "./utils/transactionReadHeadroom";
+import { openingPolicyForAccount, openingAccountAllowsFamily, isRemainingOpeningKind, openingDeclaredFamilyRefusal } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
 /**
@@ -14,9 +15,8 @@ import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
  */
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 // SCRUM-902: supplier and inventory totals are acquisition cost; they need the supplier statement's pair.
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
@@ -25,7 +25,16 @@ import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { liveAppliedMinorForDeposit } from "./utils/depositApplications";
 import { requireFeature } from "./subscriptions";
-import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf, getCumulativeBalancesAsOfChecked } from "./accounting/accountSnapshots";
+import {
+  getControlAccountBalancesAsOf,
+  getCumulativeBalancesAsOf,
+  getCumulativeBalancesAsOfBounded,
+  getCumulativeBalancesAsOfChecked,
+  hasDocumentHeadroom,
+  ReadHeadroomExhausted,
+  readBoundedDocuments,
+  type CumulativeBalance,
+} from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 import { settlementView } from "./utils/supplierSettlement";
@@ -70,8 +79,8 @@ function translateMinor(amountMinor: number, rate: number, fromCurrency: string,
 }
 
 /** Resolve the organization's display currency (defaults to JOD). */
-async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
-  const settings = await ctx.db
+async function getOrgCurrencyForReports(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<string> {
+  const settings = await openingDatabase(ctx)
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .unique();
@@ -177,6 +186,47 @@ export async function getPostedLines(
       (l) => (!excludeSentinel || l.accountingDate !== NO_ACCOUNTING_DATE_SENTINEL) && entryIds.has(l.journalEntryId)
     ),
   ]);
+}
+
+/**
+ * Checklist-only account projection of getPostedLines. AR and inventory discard every other account
+ * anyway; reading those wide descriptions twice concurrently can exhaust bytes before opening checks.
+ * Preserve the READY certificate and the legacy parent/date rules, using the account-leading index.
+ */
+async function getPostedControlLines(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  accounts: ReadonlySet<Id<"chartOfAccounts">>,
+  toDate: number | undefined,
+): Promise<Doc<"journalLines">[]> {
+  if (accounts.size === 0) return [];
+  const eligibility = await ctx.db.query("journalReportEligibility")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+  const parents = eligibility?.phase === "READY" ? null : await postedControlParentIds(ctx, orgId);
+  const included: Doc<"journalLines">[] = [];
+  await inTurn([...accounts], async (accountId) => {
+    const lines = ctx.db.query("journalLines").withIndex("by_org_account_date", (q) => {
+      const scoped = q.eq("orgId", orgId).eq("accountId", accountId);
+      return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
+    });
+    for await (const line of lines) {
+      if (line.accountingDate === NO_ACCOUNTING_DATE_SENTINEL) continue;
+      const posted = parents ? parents.has(line.journalEntryId) : line.reportPosted === true;
+      if (posted) included.push(line);
+    }
+  });
+  return mergeByCreation([included]);
+}
+
+async function postedControlParentIds(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+): Promise<Set<Id<"journalEntries">>> {
+  // Retain the legacy reader's two status ranges. Per-parent gets here would add a range per journal
+  // and could make a large, previously readable AR population take close over the 4,096-range limit.
+  const batches = await Promise.all((["POSTED", "REVERSED"] as const).map((status) => ctx.db
+    .query("journalEntries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)).collect()));
+  return new Set(batches.flat().map((entry) => entry._id));
 }
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
@@ -689,7 +739,8 @@ export type SubledgerReconciliationResult = {
 export async function computeSubledgerReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<SubledgerReconciliationResult> {
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).
@@ -703,7 +754,9 @@ export async function computeSubledgerReconciliation(
       a.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES
     ).map((a) => a._id));
 
-    const lines = await getPostedLines(ctx, orgId, undefined, toDate);
+    const lines = scopeGlToControls
+      ? await getPostedControlLines(ctx, orgId, arAccountIds, toDate)
+      : await getPostedLines(ctx, orgId, undefined, toDate);
     const arLines = lines.filter((l) => arAccountIds.has(l.accountId));
     // Never sum minor units across currencies (JOD fils + USD cents is not a
     // meaningful number) — accumulate each currency's GL balance separately.
@@ -794,7 +847,8 @@ async function computeGlBalanceByCurrency(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   systemKey: SystemKey,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<Map<string, number>> {
   const account = await ctx.db
     .query("chartOfAccounts")
@@ -804,7 +858,10 @@ async function computeGlBalanceByCurrency(
   const glByCurrency = new Map<string, number>();
   if (!account) return glByCurrency;
 
-  const lines = (await getPostedLines(ctx, orgId, undefined, toDate)).filter((l) => l.accountId === account._id);
+  const posted = scopeGlToControls
+    ? await getPostedControlLines(ctx, orgId, new Set([account._id]), toDate)
+    : await getPostedLines(ctx, orgId, undefined, toDate);
+  const lines = posted.filter((l) => l.accountId === account._id);
   for (const l of lines) {
     const delta = account.normalBalance === "DEBIT" ? l.debitMinor - l.creditMinor : l.creditMinor - l.debitMinor;
     glByCurrency.set(l.currency, (glByCurrency.get(l.currency) ?? 0) + delta);
@@ -835,7 +892,8 @@ function combineGlAndSubledger(
 export async function computeVehicleInventoryReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
-  toDate: number | undefined
+  toDate: number | undefined,
+  scopeGlToControls = false,
 ): Promise<GlVsSubledgerResult> {
   const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
   const vehicles = await ctx.db
@@ -858,7 +916,7 @@ export async function computeVehicleInventoryReconciliation(
   const subByCurrency = new Map<string, number>();
   if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
 
-  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, toDate);
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, toDate, scopeGlToControls);
   return combineGlAndSubledger(glByCurrency, subByCurrency);
 }
 
@@ -968,6 +1026,8 @@ export async function computePrepaidRecognitionShortfall(
 export type SupplierPayablesReconciliationResult = GlVsSubledgerResult & {
   status: "AVAILABLE" | "UNAVAILABLE";
   unavailableReason?: SupplierPayablesUnavailableReason;
+  /** Present on AVAILABLE results (SCRUM-858); see OpeningDifferenceReport. */
+  unexplainedOpeningDifference?: OpeningDifferenceReport;
 };
 
 /**
@@ -1080,7 +1140,7 @@ export async function pendingAffectingPostingState(
 }
 
 export async function hasPendingAffectingPosting(
-  ctx: Pick<QueryCtx, "db">,
+  ctx: Pick<QueryCtx, "db"> | OpeningReadCtx,
   events: Array<Doc<"pendingAccountingEvents">>,
   affectingEventTypes: ReadonlySet<string>
 ): Promise<boolean> {
@@ -1099,7 +1159,7 @@ export async function hasPendingAffectingPosting(
     if (!event.originalEventId) return true;
     originalOrgs.set(event.originalEventId, event.orgId);
   }
-  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await ctx.db.get(id) })));
+  const originals = await Promise.all([...originalOrgs].map(async ([id, orgId]) => ({ orgId, original: await openingDatabase(ctx).get(id) })));
   return originals.some(({ orgId, original }) => !original || original.orgId !== orgId || affectingEventTypes.has(original.eventType));
 }
 
@@ -1108,22 +1168,22 @@ export async function hasPendingAffectingPosting(
  * will move the GL when approved, so the comparison is not final. "over" = could not read them all.
  */
 async function pendingControlAccountDraftState(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   readLimit: number,
   controlAccountKey: SystemKey,
   additionalAccounts: ReadonlySet<Id<"chartOfAccounts">> = new Set(),
 ): Promise<"NONE" | "PENDING" | "OVER_LIMIT"> {
   const [apAccount, manual, opening] = await Promise.all([
-    ctx.db
+    openingDatabase(ctx)
       .query("chartOfAccounts")
       .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", controlAccountKey))
       .unique(),
-    ctx.db
+    openingDatabase(ctx)
       .query("manualJournalDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
-    ctx.db
+    openingDatabase(ctx)
       .query("openingBalanceDrafts")
       .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
       .take(readLimit + 1),
@@ -1136,7 +1196,7 @@ async function pendingControlAccountDraftState(
 }
 
 async function supplierPayableOpenBalanceAsOf(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{ orgId: Id<"organizations">; payable: Doc<"vehicleSupplierPayables">; cutoff: number }>,
 ): Promise<
   | { status: "AVAILABLE"; openMinor: number | null; accountId?: Id<"chartOfAccounts"> }
@@ -1147,12 +1207,13 @@ async function supplierPayableOpenBalanceAsOf(
   let basis;
   try {
     basis = await openingPayableBasis(ctx, orgId, p);
-  } catch {
+  } catch (error) {
+    if (error instanceof ReadHeadroomExhausted) throw error;
     return { status: "UNAVAILABLE", reason: "OPENING_SOURCE_UNAVAILABLE" };
   }
   if (basis) {
     if (basis.asOfDate > cutoff) return { status: "AVAILABLE", openMinor: null, accountId: basis.accountId };
-    const payments = await ctx.db
+    const payments = await openingDatabase(ctx)
       .query("openingPayablePayments")
       .withIndex("by_payable", (q) => q.eq("payableId", p._id))
       .take(101);
@@ -1221,7 +1282,7 @@ function cancelledNativePayableMovedAfter(payable: Doc<"vehicleSupplierPayables"
  * `lineLimit` bounds the later lines attributed (one entry read each). More than that is OVER_LIMIT, never assumed explained.
  */
 async function laterApControlActivity(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
   request: Readonly<{
     orgId: Id<"organizations">;
     accountId: Id<"chartOfAccounts">;
@@ -1232,7 +1293,7 @@ async function laterApControlActivity(
   }>,
 ): Promise<"NONE" | "UNEXPLAINED" | "OVER_LIMIT"> {
   const { orgId, accountId, cutoff, hasNativeRow, datedOpeningPayableIds, lineLimit } = request;
-  const lines = await ctx.db
+  const lines = await openingDatabase(ctx)
     .query("journalLines")
     .withIndex("by_org_account_date", (q) => q.eq("orgId", orgId).eq("accountId", accountId).gt("accountingDate", cutoff))
     .take(hasNativeRow ? 1 : lineLimit + 1);
@@ -1240,7 +1301,7 @@ async function laterApControlActivity(
   if (hasNativeRow) return "UNEXPLAINED";
   if (lines.length > lineLimit) return "OVER_LIMIT";
   for (const entryId of new Set(lines.map((line) => line.journalEntryId))) {
-    const entry = await ctx.db.get(entryId);
+    const entry = await openingDatabase(ctx).get(entryId);
     if (!entry || entry.orgId !== orgId) return "UNEXPLAINED";
     if (entry.category === "OPENING_BALANCE") continue;
     if (entry.sourceType === "vehicleSupplierPayables" && datedOpeningPayableIds.has(entry.sourceId)) continue;
@@ -1250,7 +1311,143 @@ async function laterApControlActivity(
 }
 
 export async function computeSupplierPayablesReconciliation(
-  ctx: QueryCtx,
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  opts: {
+    readLimit?: number;
+    /** Byte cap (`getDocumentSize`) of the checked GL read's verification pass (tests); defaults to SUPPLIER_PAYABLES_RECON_READ_BYTES_LIMIT. */
+    readBytesLimit?: number;
+    /** PENDING + FAILED outbox rows the caller already read (period close shares them); read here if omitted. */
+    outboxEvents?: Array<Doc<"pendingAccountingEvents">>;
+  } = {}
+): Promise<SupplierPayablesReconciliationResult> {
+  return verifyOpeningRead<SupplierPayablesReconciliationResult>(ctx, guarded => readSupplierPayablesReconciliation(guarded, orgId, toDate, opts), () => ({
+    status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", currencies: [], byCurrency: {}, isReconciled: false,
+  }));
+}
+
+async function readSupplierPayableRows(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  readLimit: number,
+): Promise<Array<Doc<"vehicleSupplierPayables">> | null> {
+  const rows: Array<Doc<"vehicleSupplierPayables">> = [];
+  let overLimit = false;
+  await inTurn(SUPPLIER_PAYABLE_RECON_READ_STATUSES, async (status) => {
+    if (overLimit) return;
+    const budget = readLimit - rows.length;
+    const batch = await openingDatabase(ctx)
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) {
+      overLimit = true;
+      return;
+    }
+    rows.push(...batch);
+  });
+  return overLimit ? null : rows;
+}
+
+interface SupplierPayableSubledger {
+  subByCurrency: Map<string, number>;
+  controlAccounts: Set<Id<"chartOfAccounts">>;
+  hasNativeRow: boolean;
+  datedOpeningPayableIds: Set<string>;
+}
+
+async function supplierPayablePendingRefusal(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  readLimit: number,
+  suppliedOutboxEvents: Array<Doc<"pendingAccountingEvents">> | undefined,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
+    const [queued, failed] = await Promise.all(
+      (["PENDING", "FAILED"] as const).map((status) =>
+        openingDatabase(ctx)
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+          .take(readLimit + 1)
+      )
+    );
+    return queued.length > readLimit || failed.length > readLimit ? null : [...queued, ...failed];
+  };
+  const [outboxEvents, drafts] = await Promise.all([
+    suppliedOutboxEvents ?? readOutbox(),
+    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
+  ]);
+  if (!outboxEvents) return "OVER_LIMIT";
+  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return "PENDING_POSTINGS";
+  if (drafts === "OVER_LIMIT") return "OVER_LIMIT";
+  if (drafts === "PENDING") return "PENDING_POSTINGS";
+  return null;
+}
+
+async function addSupplierPayableBalance(
+  ctx: OpeningReadCtx,
+  request: { orgId: Id<"organizations">; cutoff: number },
+  p: Doc<"vehicleSupplierPayables">,
+  subledger: SupplierPayableSubledger,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  const { orgId, cutoff } = request;
+  if (p.status === "CANCELLED") {
+    // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
+    if (p.origin === "OPENING") return null;
+    subledger.hasNativeRow = true;
+    if (cancelledNativePayableMovedAfter(p, cutoff)) return "POST_CUTOFF_ACTIVITY";
+    return null;
+  }
+  const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
+  if (balance.status === "UNAVAILABLE") return balance.reason;
+  if (balance.accountId) {
+    subledger.controlAccounts.add(balance.accountId);
+    subledger.datedOpeningPayableIds.add(p._id);
+  } else {
+    // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
+    // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
+    subledger.hasNativeRow = true;
+    if (nativePayableMovedAfter(p, cutoff)) return "POST_CUTOFF_ACTIVITY";
+  }
+  if (balance.openMinor === null) return null;
+  const openMinor = balance.openMinor;
+  subledger.subByCurrency.set(p.currency, (subledger.subByCurrency.get(p.currency) ?? 0) + openMinor);
+  return null;
+}
+
+async function accumulateSupplierPayableBalances(
+  ctx: OpeningReadCtx,
+  request: { orgId: Id<"organizations">; cutoff: number },
+  rows: Array<Doc<"vehicleSupplierPayables">>,
+  subledger: SupplierPayableSubledger,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  let refusal: SupplierPayablesUnavailableReason | null = null;
+  await inTurn(rows, async (p) => {
+    if (refusal) return;
+    refusal = await addSupplierPayableBalance(ctx, request, p, subledger);
+  });
+  if (refusal) return refusal;
+  for (const [currency, minor] of subledger.subByCurrency) {
+    if (minor === 0) subledger.subByCurrency.delete(currency);
+  }
+  return null;
+}
+
+function supplierPayableGlByCurrency(
+  balances: CumulativeBalance[],
+  controlAccounts: ReadonlySet<Id<"chartOfAccounts">>,
+): Map<string, number> {
+  const glByCurrency = new Map<string, number>();
+  for (const balance of balances) {
+    if (!controlAccounts.has(balance.accountId)) continue;
+    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.creditMinor - balance.debitMinor);
+  }
+  return glByCurrency;
+}
+
+async function readSupplierPayablesReconciliation(
+  ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
   toDate: number | undefined,
   opts: {
@@ -1279,40 +1476,15 @@ export async function computeSupplierPayablesReconciliation(
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
   // The outbox and draft reads are independent, so they run together; the verdicts below are
   // still taken in the original order (outbox over-limit, queued posting, drafts).
-  const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
-    const [queued, failed] = await Promise.all(
-      (["PENDING", "FAILED"] as const).map((status) =>
-        ctx.db
-          .query("pendingAccountingEvents")
-          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-          .take(readLimit + 1)
-      )
-    );
-    return queued.length > readLimit || failed.length > readLimit ? null : [...queued, ...failed];
-  };
-  const [outboxEvents, drafts] = await Promise.all([
-    opts.outboxEvents ?? readOutbox(),
-    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
-  ]);
-  if (!outboxEvents) return unavailable("OVER_LIMIT");
-  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return unavailable("PENDING_POSTINGS");
-  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+  const pendingRefusal = await supplierPayablePendingRefusal(ctx, orgId, readLimit, opts.outboxEvents);
+  if (pendingRefusal) return unavailable(pendingRefusal);
 
   // 2. Every payable, under one shared bound. Status is a label, not the balance: a payable leaves
   // PENDING on a partial payment or a dispute while the liability stands. CANCELLED rows are read last
   // (open-status verdicts keep their precedence) and contribute no balance, but a native one cancelled
   // after the cutoff stood for its AP credit at it (SCRUM-876), so they are read under the same bound.
-  const rows: Array<Doc<"vehicleSupplierPayables">> = [];
-  for (const status of SUPPLIER_PAYABLE_RECON_READ_STATUSES) {
-    const budget = readLimit - rows.length;
-    const batch = await ctx.db
-      .query("vehicleSupplierPayables")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .take(budget + 1);
-    if (batch.length > budget) return unavailable("OVER_LIMIT");
-    rows.push(...batch);
-  }
+  const rows = await readSupplierPayableRows(ctx, orgId, readLimit);
+  if (!rows) return unavailable("OVER_LIMIT");
 
   // Signed open balance in minor units. Deliberately NOT clamped: an overpaid row is a real
   // negative that the GL carries (AP in debit), and a legacy PAID row with no amountPaid is read by
@@ -1320,37 +1492,20 @@ export async function computeSupplierPayablesReconciliation(
   // liability does not go away with the car.
   const subByCurrency = new Map<string, number>();
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
-  const canonical = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
+  const canonical = await openingDatabase(ctx).query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
-  let hasNativeRow = false;
   // Opening-basis payables whose balance was rebuilt AS OF the cutoff from their dated payments.
   const datedOpeningPayableIds = new Set<string>();
-  for (const p of rows) {
-    if (p.status === "CANCELLED") {
-      // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
-      if (p.origin === "OPENING") continue;
-      hasNativeRow = true;
-      if (cancelledNativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
-      continue;
-    }
-    const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
-    if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
-    if (balance.accountId) {
-      controlAccounts.add(balance.accountId);
-      datedOpeningPayableIds.add(p._id);
-    } else {
-      // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
-      // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
-      hasNativeRow = true;
-      if (nativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
-    }
-    if (balance.openMinor === null) continue;
-    const openMinor = balance.openMinor;
-    subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
-  }
-  for (const [currency, minor] of subByCurrency) {
-    if (minor === 0) subByCurrency.delete(currency);
-  }
+  const subledger: SupplierPayableSubledger = { subByCurrency, controlAccounts, hasNativeRow: false, datedOpeningPayableIds };
+  const balanceRefusal = await accumulateSupplierPayableBalances(ctx, { orgId, cutoff }, rows, subledger);
+  if (balanceRefusal) return unavailable(balanceRefusal);
+
+  // SCRUM-858: a declared payable control account is known from the immutable opening, not only from
+  // the surviving rows. Otherwise a cancelled or deleted opening payable would take its own control
+  // account out of the comparison and the missing liability would read as "reconciled".
+  const openingControls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_PAYABLE", "OTHER_PAYABLE"]));
+  if (!openingControls) return unavailable("OPENING_SOURCE_UNAVAILABLE");
+  for (const accountId of openingControls) controlAccounts.add(accountId);
 
   // A native payable's AP credit is dated by its sale/acquisition, which can be after the row was written
   // (sales.create accepts a future saleDate). A GL line on the control account dated after the cutoff is
@@ -1360,7 +1515,7 @@ export async function computeSupplierPayablesReconciliation(
   // and the later GL line is then the only evidence left that the native subledger moved (SCRUM-876 round 3).
   if (canonical) {
     const later = await laterApControlActivity(ctx, {
-      orgId, accountId: canonical._id, cutoff, hasNativeRow, datedOpeningPayableIds,
+      orgId, accountId: canonical._id, cutoff, hasNativeRow: subledger.hasNativeRow, datedOpeningPayableIds,
       lineLimit: Math.min(readLimit, SUPPLIER_PAYABLES_RECON_LATER_LINE_LIMIT),
     });
     if (later === "OVER_LIMIT") return unavailable("OVER_LIMIT");
@@ -1373,15 +1528,11 @@ export async function computeSupplierPayablesReconciliation(
   // counted against `readLimit` (documents) and `readBytesLimit` (bytes), and each is admitted against the transaction's own
   // remaining read headroom; it is refused as OVER_LIMIT past any of them. The trial balance and the other
   // readers of getCumulativeBalancesAsOf are deliberately unchanged here.
-  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit);
+  const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit, true);
   if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  const glByCurrency=new Map<string,number>();
-  for(const balance of glRead.balances){
-    if(!controlAccounts.has(balance.accountId))continue;
-    glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
-  }
-  return { ...combineGlAndSubledger(glByCurrency, subByCurrency), status: "AVAILABLE" };
+  const glByCurrency = supplierPayableGlByCurrency(glRead.balances, controlAccounts);
+  return { ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))), status: "AVAILABLE" };
 }
 
 export const supplierPayablesReconciliation = query({
@@ -1393,6 +1544,657 @@ export const supplierPayablesReconciliation = query({
   },
 });
 
+
+/**
+ * SCRUM-858 — subledger-to-GL readers for the opening-balance families that had none: staff
+ * advances, supplier recoverables and partner capital. They follow the supplier-payables pattern
+ * and add the owner-ruled difference label. Past cutoffs are unavailable because these mutable
+ * subledgers cannot reconstruct historical state. A dated GL must not be compared to today's rows.
+ *
+ * Owner ruling 2026-10-28: a difference is REPORTED, never resolved. Nothing here writes; no
+ * journal, plug, clearing line or equity entry is ever created to force the two sides to agree.
+ */
+export type OpeningDifferenceReport = {
+  label: { en: string; ar: string };
+  /** Currencies whose GL and subledger sides disagree. */
+  currencies: string[];
+} | null;
+
+export type OpeningFamilyReconciliationResult = GlVsSubledgerResult & {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  unavailableReason?: "OVER_LIMIT" | "PENDING_POSTINGS" | "OPENING_SOURCE_UNAVAILABLE" | "AS_OF_DATE_UNSUPPORTED" | "SOURCE_FAMILY_UNSUPPORTED";
+  unexplainedOpeningDifference: OpeningDifferenceReport;
+};
+
+export type OpeningCheckState = "OPEN" | "CLEAR" | "UNAVAILABLE";
+
+/** History exists, is absent, or could not be verified. Refusal proves neither side. */
+export async function orgHasOpeningHistory(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<OpeningCheckState> {
+  return verifyOpeningRead(ctx, async guarded => {
+    const source = await loadOpeningSourceIdentity(guarded, orgId);
+    return source.headers.length > 0 || source.status !== "ABSENT" ? "OPEN" : "CLEAR";
+  }, () => "UNAVAILABLE");
+}
+
+/**
+ * Labels a non-zero difference only when the organization has opening history; without one the
+ * difference is still reported in `byCurrency`, but it is not an opening-balance difference.
+ */
+async function withOpeningDifferenceReport<T extends GlVsSubledgerResult>(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  result: T
+): Promise<T & { unexplainedOpeningDifference: OpeningDifferenceReport }> {
+  const currencies = result.currencies.filter((currency) => result.byCurrency[currency].discrepancyMinor !== 0);
+  if (currencies.length === 0) return { ...result, unexplainedOpeningDifference: null };
+  const history = await orgHasOpeningHistory(ctx, orgId);
+  if (history === "UNAVAILABLE") throw new ReadHeadroomExhausted();
+  return {
+    ...result,
+    unexplainedOpeningDifference: history === "OPEN"
+      ? { label: { ...UNEXPLAINED_OPENING_DIFFERENCE_LABEL }, currencies }
+      : null,
+  };
+}
+
+const openingFamilyReconciliationValidator = v.object({
+  attributionStatus: v.optional(v.union(v.literal("ATTRIBUTED"), v.literal("UNALLOCATED"), v.literal("UNAVAILABLE"))),
+  heldOpeningMinor: v.optional(v.record(v.string(), v.number())),
+  currencies: v.array(v.string()),
+  byCurrency: v.record(v.string(), v.object({
+    glBalanceMinor: v.number(), subledgerBalanceMinor: v.number(), discrepancyMinor: v.number(), isReconciled: v.boolean(),
+  })),
+  isReconciled: v.boolean(),
+  status: v.union(v.literal("AVAILABLE"), v.literal("UNAVAILABLE")),
+  unavailableReason: v.optional(v.union(v.literal("OVER_LIMIT"), v.literal("PENDING_POSTINGS"), v.literal("OPENING_SOURCE_UNAVAILABLE"), v.literal("AS_OF_DATE_UNSUPPORTED"), v.literal("SOURCE_FAMILY_UNSUPPORTED"))),
+  unexplainedOpeningDifference: v.union(v.null(), v.object({ label: v.object({ en: v.string(), ar: v.string() }), currencies: v.array(v.string()) })),
+});
+
+function unavailableFamilyResult(
+  unavailableReason: NonNullable<OpeningFamilyReconciliationResult["unavailableReason"]>
+): OpeningFamilyReconciliationResult {
+  return {
+    currencies: [],
+    byCurrency: {},
+    isReconciled: false,
+    status: "UNAVAILABLE",
+    unavailableReason,
+    unexplainedOpeningDifference: null,
+  };
+}
+
+/** Any queued or failed posting means the GL side is about to move; a comparison now is not the truth. */
+async function hasQueuedPosting(ctx: OpeningReadCtx, orgId: Id<"organizations">): Promise<boolean> {
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const row = await openingDatabase(ctx)
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .first();
+    if (row) return true;
+  }
+  return false;
+}
+
+async function openingJournalAccountTotals(
+  ctx: OpeningReadCtx, orgId: Id<"organizations">, journal: Doc<"journalEntries">,
+): Promise<Map<Id<"chartOfAccounts">, number> | null> {
+  const lines = await openingDatabase(ctx).query("journalLines")
+    .withIndex("by_journal_entry", q => q.eq("journalEntryId", journal._id)).take(101);
+  if (lines.length === 0 || lines.length > 100) return null;
+  const totals = new Map<Id<"chartOfAccounts">, number>();
+  for (const line of lines) {
+    if (line.orgId !== orgId || line.currency !== journal.currency || line.accountingDate !== journal.accountingDate ||
+      !Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
+    totals.set(line.accountId, (totals.get(line.accountId) ?? 0) + line.debitMinor - line.creditMinor);
+  }
+  return totals;
+}
+
+type OpeningControlAllocationContext = {
+  orgId: Id<"organizations">;
+  currency: string;
+  account: Doc<"chartOfAccounts">;
+  allocations: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>;
+  results: NonNullable<Doc<"openingBalanceDrafts">["allocationResults"]>;
+};
+
+async function openingAccountAllocationsSupported(ctx: OpeningReadCtx, {
+  orgId, currency, account, allocations, results,
+}: OpeningControlAllocationContext): Promise<boolean> {
+  const policy = openingPolicyForAccount(account, true);
+  for (const row of allocations) {
+    const purpose = "purpose" in row ? row.purpose : undefined;
+    const allowed = isRemainingOpeningKind(row.kind)
+      ? await openingAccountAllowsFamily(ctx, orgId, account, currency, row.kind, purpose)
+      : row.kind === policy;
+    if (!allowed) return false;
+    const matches = results.filter(result => result.rowKey === row.rowKey);
+    if (matches.length !== 1 || matches[0].kind !== row.kind) return false;
+    if (row.kind === "UNALLOCATED_LIABILITY" &&
+      (matches[0].kind !== "UNALLOCATED_LIABILITY" || matches[0].purpose !== row.purpose)) return false;
+  }
+  return !allocations.some(row => isRemainingOpeningKind(row.kind)) || openingDeclaredFamilyRefusal(allocations) === null;
+}
+
+async function openingControlCoverage(ctx: OpeningReadCtx, {
+  orgId, currency, account, allocations: openingAllocations, results, kinds, netMinor,
+}: OpeningControlAllocationContext & { kinds: ReadonlySet<string>; netMinor: number }): Promise<"INCLUDED" | "OUTSIDE" | null> {
+  // Custom equity remains potential capital when its allocation declaration is lost.
+  const policy = openingPolicyForAccount(account, !account.systemKey && account.type === "EQUITY");
+  const allocations = openingAllocations.filter(row => row.accountId === account._id);
+  if (!(await openingAccountAllocationsSupported(ctx, { orgId, currency, account, allocations, results }))) return null;
+  const ambiguousLiability = policy === "DECLARED_LIABILITY" && kinds.has("SUPPLIER_PAYABLE");
+  if (!policy || (!kinds.has(policy) && !ambiguousLiability)) return "OUTSIDE";
+  const allocatedMinor = allocations.reduce((sum, row) => sum + row.amountMinor, 0);
+  const expectedMinor = account.normalBalance === "DEBIT" ? netMinor : -netMinor;
+  if (allocations.length === 0 || allocations.some(row => !Number.isSafeInteger(row.amountMinor) || row.amountMinor <= 0) ||
+    !Number.isSafeInteger(allocatedMinor) || allocatedMinor !== expectedMinor) return null;
+  return allocations.some(row => kinds.has(row.kind)) ? "INCLUDED" : "OUTSIDE";
+}
+
+/**
+ * Discover controls from actual opening journal lines, then prove allocation coverage. Header
+ * allocations alone cannot establish completeness: losing an allocation and its materialized row
+ * must not hide the retained GL account. Ambiguous custom liabilities require coverage by every
+ * declared family before selecting the payable subset. Null means classification is unverifiable.
+ */
+async function openingAllocationAccounts(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  kinds: ReadonlySet<string>
+): Promise<Set<Id<"chartOfAccounts">> | null> {
+  // GL-side source authority survives deletion of both the subledger row and draft header.
+  // A retained header without its live opening journal is equally unverifiable.
+  const source = await loadOpeningSourceIdentity(ctx, orgId);
+  if (source.status === "UNAVAILABLE" || (source.status === "ABSENT" && source.headers.length > 0)) return null;
+  const accounts = new Set<Id<"chartOfAccounts">>();
+  if (source.status !== "AVAILABLE") return accounts;
+  if (!source.journal.currency) return null;
+  const totals = await openingJournalAccountTotals(ctx, orgId, source.journal);
+  if (!totals) return null;
+  for (const [accountId, netMinor] of totals) {
+    const account = await openingDatabase(ctx).get(accountId);
+    if (!account || account.orgId !== orgId) return null;
+    const coverage = await openingControlCoverage(ctx, { orgId, currency: source.journal.currency, account,
+      allocations: source.parent.allocations ?? [], results: source.parent.allocationResults ?? [], kinds, netMinor });
+    if (coverage === null) return null;
+    if (coverage === "INCLUDED") accounts.add(accountId);
+  }
+  return accounts;
+}
+
+/** Current mutable subledgers cannot be restated. Future effective activity is just as unsafe as
+ * a past request: the GL excludes it while the current subledger already includes it. This indexed
+ * probe conservatively refuses even future drafts; it is not a scan of the whole ledger. */
+async function reconciliationDateUnsupported(ctx: OpeningReadCtx, orgId: Id<"organizations">, cutoff: number, now: number): Promise<boolean> {
+  if (!Number.isFinite(cutoff) || cutoff < now) return true;
+  return (await openingDatabase(ctx).query("journalEntries").withIndex("by_org_date", q => q.eq("orgId", orgId).gt("accountingDate", cutoff)).first()) !== null;
+}
+
+type ReconciliationControlFamily = "SUPPLIER_RECOVERABLE" | "EMPLOYEE_ADVANCE";
+
+function reconciliationEventFamilySupported(event: Doc<"accountingEvents">, family: ReconciliationControlFamily): boolean {
+  if (family === "EMPLOYEE_ADVANCE") return (
+    ((event.eventType === "EMPLOYEE_ADVANCE_PAID" || event.eventType === "EMPLOYEE_ADVANCE_RECOVERED") && event.sourceType === "employeeAdvances") ||
+    (event.eventType === "PAYROLL_PAID" && event.sourceType === "payrollItems"));
+  return (event.eventType === "EXPENSE_POSTED" && event.sourceType === "expenses") ||
+    (event.eventType === "SUPPLIER_COST_RECOVERY_RECEIVED" && event.sourceType === "supplierCostRecoveryReceipts");
+}
+
+const SUPPORTED_SOURCE_FAMILIES: Record<
+  ReconciliationControlFamily,
+  {
+    journalSourceTypes: readonly string[];
+    eventSourceTypes: readonly string[];
+  }
+> = {
+  EMPLOYEE_ADVANCE: {
+    journalSourceTypes: ["employeeAdvances", "payrollItems", "cutover"],
+    eventSourceTypes: ["employeeAdvances", "payrollItems"],
+  },
+  SUPPLIER_RECOVERABLE: {
+    journalSourceTypes: ["supplierCostRecoveryReceipts", "cutover", "expenses"],
+    eventSourceTypes: ["supplierCostRecoveryReceipts", "expenses"],
+  },
+};
+
+/** Read budget for the per-id provenance strategy: index ranges one reader may spend. Convex allows 4,096
+ * ranges per function and the close checklist runs two readers in one function, so each gets well under half.
+ * https://docs.convex.dev/production/state/limits (harness evidence only: convex-test enforces no limit). */
+export const PROVENANCE_RANGE_BUDGET = 1500;
+/** Document budget for the batch strategy (journals plus events). Convex allows 32,000 documents scanned per
+ * function; the control lines (4,000) and the subledger rows each reader already reads sit on top of this. */
+export const PROVENANCE_BATCH_DOC_BUDGET = 6000;
+
+type ProvenanceVerdict = "OVER_LIMIT" | "SOURCE_FAMILY_UNSUPPORTED" | null;
+
+/** One evaluator for both read strategies, so they cannot disagree. Every distinct control journal must be a
+ * POSTED or REVERSED journal of the family (a reversal is judged by its original), apart from the organization's
+ * own OPENING_BALANCE cutover, and its original's accounting event must be a supported event of the family. */
+async function evaluateControlProvenance(
+  orgId: Id<"organizations">,
+  distinctJournalIds: ReadonlySet<Id<"journalEntries">>,
+  family: ReconciliationControlFamily,
+  getJournal: (id: Id<"journalEntries">) => Promise<Doc<"journalEntries"> | null>,
+  getEvent: (id: Id<"accountingEvents">) => Promise<Doc<"accountingEvents"> | null>,
+): Promise<ProvenanceVerdict> {
+  const neededOriginals = await collectNeededOriginals(orgId, distinctJournalIds, family, getJournal);
+  if (neededOriginals === null) return "SOURCE_FAMILY_UNSUPPORTED";
+  for (const original of neededOriginals.values()) {
+    const event = original.accountingEventId ? await getEvent(original.accountingEventId) : null;
+    if (!eventConfirmsOriginal(event, original, orgId, family)) return "SOURCE_FAMILY_UNSUPPORTED";
+  }
+  return null;
+}
+
+/** The distinct original journals whose accounting event must be checked, or null when any control journal falls
+ * outside the family. The organization's own OPENING_BALANCE cutover needs no event. */
+async function collectNeededOriginals(
+  orgId: Id<"organizations">,
+  distinctJournalIds: ReadonlySet<Id<"journalEntries">>,
+  family: ReconciliationControlFamily,
+  getJournal: (id: Id<"journalEntries">) => Promise<Doc<"journalEntries"> | null>,
+): Promise<Map<Id<"journalEntries">, Doc<"journalEntries">> | null> {
+  const config = SUPPORTED_SOURCE_FAMILIES[family];
+  const inFamily = (journal: Doc<"journalEntries"> | null): journal is Doc<"journalEntries"> =>
+    journal !== null && journal.orgId === orgId && config.journalSourceTypes.includes(journal.sourceType ?? "");
+  const neededOriginals = new Map<Id<"journalEntries">, Doc<"journalEntries">>();
+  for (const journalId of distinctJournalIds) {
+    const journal = await getJournal(journalId);
+    if (!inFamily(journal)) return null;
+    if (journal.status !== "POSTED" && journal.status !== "REVERSED") continue;
+    const original = journal.reversalOfJournalEntryId ? await getJournal(journal.reversalOfJournalEntryId) : journal;
+    if (!inFamily(original)) return null;
+    if (original.category === "OPENING_BALANCE" && original.sourceType === "cutover" && original.sourceId === String(orgId)) continue;
+    if (!original.accountingEventId) return null;
+    neededOriginals.set(original._id, original);
+  }
+  return neededOriginals;
+}
+
+function eventConfirmsOriginal(
+  event: Doc<"accountingEvents"> | null,
+  original: Doc<"journalEntries">,
+  orgId: Id<"organizations">,
+  family: ReconciliationControlFamily,
+): boolean {
+  return (
+    event !== null &&
+    event.orgId === orgId &&
+    event.journalEntryId === original._id &&
+    event.sourceType === original.sourceType &&
+    event.sourceId === original.sourceId &&
+    reconciliationEventFamilySupported(event, family)
+  );
+}
+
+/** Prove family coverage independently of surviving subledger rows. All cumulative lines count, including
+ * REVERSED originals; a net-zero foreign family still cannot certify this subledger.
+ *
+ * Two strategies, one evaluator. Per-id (`db.get`) touches only the control journals and their events, so
+ * organization-wide history of other families costs nothing; each journal needs at most three ranges
+ * (journal, original, event), so it is used while 3 x distinct journals fits PROVENANCE_RANGE_BUDGET. Larger
+ * histories batch by indexed source type under one shared PROVENANCE_BATCH_DOC_BUDGET and honestly report
+ * OVER_LIMIT beyond it. Worst case per call: control lines <= SUPPLIER_PAYABLES_RECON_READ_LIMIT documents,
+ * then either <= PROVENANCE_RANGE_BUDGET ranges or <= PROVENANCE_BATCH_DOC_BUDGET documents in <= 6 ranges. */
+async function controlSourceFamilyRefusal(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  controls: ReadonlySet<Id<"chartOfAccounts">>,
+  family: ReconciliationControlFamily,
+): Promise<ProvenanceVerdict> {
+  const distinctJournalIds = await readControlJournalIds(ctx, orgId, controls);
+  if (distinctJournalIds === "OVER_LIMIT") return "OVER_LIMIT";
+  if (distinctJournalIds.size === 0) return null;
+
+  if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
+    // Each point read asks the transaction for headroom first; running out answers OVER_LIMIT, never a platform error.
+    const requireHeadroom = async () => {
+      if (!(await hasDocumentHeadroom(ctx))) throw new ReadHeadroomExhausted();
+    };
+    const journals = new Map<Id<"journalEntries">, Doc<"journalEntries"> | null>();
+    try {
+      return await evaluateControlProvenance(
+        orgId, distinctJournalIds, family,
+        async (id) => {
+          if (!journals.has(id)) {
+            await requireHeadroom();
+            journals.set(id, await openingDatabase(ctx).get(id));
+          }
+          return journals.get(id) ?? null;
+        },
+        async (id) => {
+          await requireHeadroom();
+          return openingDatabase(ctx).get(id);
+        },
+      );
+    } catch (error) {
+      if (error instanceof ReadHeadroomExhausted) return "OVER_LIMIT";
+      throw error;
+    }
+  }
+
+  const config = SUPPORTED_SOURCE_FAMILIES[family];
+  let docsLeft = PROVENANCE_BATCH_DOC_BUDGET;
+  const journalBatches = await readSourceBatches(ctx, config.journalSourceTypes, docsLeft, (sourceType) =>
+    openingDatabase(ctx).query("journalEntries").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
+  if (journalBatches === "OVER_LIMIT") return "OVER_LIMIT";
+  docsLeft -= journalBatches.size;
+  const eventBatches = await readSourceBatches(ctx, config.eventSourceTypes, docsLeft, (sourceType) =>
+    openingDatabase(ctx).query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", sourceType)));
+  if (eventBatches === "OVER_LIMIT") return "OVER_LIMIT";
+  return evaluateControlProvenance(
+    orgId, distinctJournalIds, family,
+    (id) => Promise.resolve(journalBatches.get(id) ?? null),
+    (id) => Promise.resolve(eventBatches.get(id) ?? null),
+  );
+}
+
+/** Distinct journal ids on the control accounts, or OVER_LIMIT past the shared control-line read limit. */
+async function readControlJournalIds(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  controls: ReadonlySet<Id<"chartOfAccounts">>,
+): Promise<Set<Id<"journalEntries">> | "OVER_LIMIT"> {
+  let remaining = SUPPLIER_PAYABLES_RECON_READ_LIMIT;
+  const distinctJournalIds = new Set<Id<"journalEntries">>();
+  for (const accountId of controls) {
+    const lines = await readBoundedDocuments(
+      ctx,
+      openingDatabase(ctx).query("journalLines").withIndex("by_org_account", (q) => q.eq("orgId", orgId).eq("accountId", accountId)),
+      remaining,
+    );
+    if (lines === "OVER_LIMIT") return "OVER_LIMIT";
+    remaining -= lines.length;
+    for (const line of lines) distinctJournalIds.add(line.journalEntryId);
+  }
+  return distinctJournalIds;
+}
+
+/** Every row of `table` for the given indexed source types, or OVER_LIMIT once `budget` documents are exceeded. */
+async function readSourceBatches<Row extends { _id: Id<"journalEntries"> | Id<"accountingEvents"> }>(
+  ctx: OpeningReadCtx,
+  sourceTypes: readonly string[],
+  budget: number,
+  readBatch: (sourceType: string) => AsyncIterable<Row>,
+): Promise<Map<Row["_id"], Row> | "OVER_LIMIT"> {
+  let left = budget;
+  const byId = new Map<Row["_id"], Row>();
+  for (const sourceType of sourceTypes) {
+    const batch = await readBoundedDocuments(ctx, readBatch(sourceType), left);
+    if (batch === "OVER_LIMIT") return "OVER_LIMIT";
+    left -= batch.length;
+    for (const row of batch) byId.set(row._id, row);
+  }
+  return byId;
+}
+async function addSystemAccount(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  accounts: Set<Id<"chartOfAccounts">>,
+  systemKey: SystemKey
+): Promise<void> {
+  const account = await openingDatabase(ctx)
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .unique();
+  if (account) accounts.add(account._id);
+}
+
+/** One complete, bounded GL read shared by the opening readers in a transaction. Both success and refusal
+ * are cached: every GL period, snapshot, entry and line read checks live headroom and charges the same
+ * document/byte budget. Earlier provenance work therefore cannot leave an unguarded GL scan (R15d). */
+export type SharedGlBalances = (cutoff: number) => ReturnType<typeof getCumulativeBalancesAsOfBounded>;
+
+async function glNetByAccounts(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  cutoff: number,
+  accounts: ReadonlySet<Id<"chartOfAccounts">>,
+  normalSide: "DEBIT" | "CREDIT",
+  shared?: SharedGlBalances,
+): Promise<Map<string, number> | "OVER_LIMIT"> {
+  const read = await (shared ? shared(cutoff) : getCumulativeBalancesAsOfBounded(ctx, orgId, cutoff));
+  if (read.status === "OVER_LIMIT") return "OVER_LIMIT";
+  const byCurrency = new Map<string, number>();
+  for (const balance of read.balances) {
+    if (!accounts.has(balance.accountId)) continue;
+    const net = normalSide === "DEBIT" ? balance.debitMinor - balance.creditMinor : balance.creditMinor - balance.debitMinor;
+    byCurrency.set(balance.currency, (byCurrency.get(balance.currency) ?? 0) + net);
+  }
+  return byCurrency;
+}
+
+/** Documents the suspense balance read may scan: one snapshot per period plus the open period's lines. */
+const OPENING_SUSPENSE_READ_LIMIT = 2000;
+
+/** A statement about suspense requires a complete balance. Unknown remains a separate warning. */
+export async function openingSuspenseIsOpen(ctx: OpeningReadCtx, orgId: Id<"organizations">, cutoff: number): Promise<OpeningCheckState> {
+  return verifyOpeningRead(ctx, async guarded => {
+    const account = await openingDatabase(guarded).query("chartOfAccounts")
+      .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.OPENING_SUSPENSE)).first();
+    if (!account) return "CLEAR";
+    const gl = await getControlAccountBalancesAsOf(guarded, orgId, [account._id], cutoff, OPENING_SUSPENSE_READ_LIMIT, true);
+    if (gl.status !== "OK") return "UNAVAILABLE";
+    return gl.balances.some(balance => balance.debitMinor !== balance.creditMinor) ? "OPEN" : "CLEAR";
+  }, () => "UNAVAILABLE");
+}
+
+/** Employee Advances asset (GL, debit-normal) vs the unrecovered remainder of every live advance. */
+export async function computeEmployeeAdvancesReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readEmployeeAdvancesReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readEmployeeAdvancesReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const rows = await readBoundedDocuments(
+    ctx,
+    openingDatabase(ctx).query("employeeAdvances").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+  );
+  if (rows === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+  const subByCurrency = new Map<string, number>();
+  for (const row of rows) {
+    if (row.date > cutoff || row.updatedAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+    // A deleted row is no longer a receivable; a written-off one has left the asset. Neither is
+    // clamped away if the GL still carries it — that stays visible as a difference.
+    if (row.isDeleted || row.status === "WRITTEN_OFF") continue;
+    subByCurrency.set(row.currency, (subByCurrency.get(row.currency) ?? 0) + row.amountMinor - row.recoveredMinor);
+  }
+  // The opening writer only allows an advance on the system Employee Advances account (a declared
+  // custom asset account is classified as a supplier recoverable), so that account is the whole control set.
+  const controls = new Set<Id<"chartOfAccounts">>();
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.EMPLOYEE_ADVANCES);
+  const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "EMPLOYEE_ADVANCE");
+  if (familyRefusal) return unavailableFamilyResult(familyRefusal);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const employeeAdvancesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
+  handler: async (ctx, args) => {
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeEmployeeAdvancesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Employee advances reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+/** Receivable from Suppliers (system and declared opening controls) vs the unrecovered supplier claims. */
+export async function computeSupplierRecoverablesReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readSupplierRecoverablesReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readSupplierRecoverablesReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const rows: Array<Doc<"supplierCostRecoveries">> = [];
+  // REVERSED is the one status whose source posting was reversed out of the GL, so it is excluded.
+  for (const status of ["OPEN", "PARTIALLY_RECOVERED", "RECOVERED"] as const) {
+    const batch = await readBoundedDocuments(
+      ctx,
+      openingDatabase(ctx).query("supplierCostRecoveries").withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status)),
+      SUPPLIER_PAYABLES_RECON_READ_LIMIT - rows.length,
+    );
+    if (batch === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+    rows.push(...batch);
+  }
+  const subByCurrency = new Map<string, number>();
+  for (const row of rows) {
+    if (row.createdAt > cutoff || row.updatedAt > cutoff) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+    subByCurrency.set(row.currency, (subByCurrency.get(row.currency) ?? 0) + row.amountDueMinor - row.amountRecoveredMinor);
+  }
+  const controls = await openingAllocationAccounts(ctx, orgId, new Set(["SUPPLIER_RECOVERABLE"]));
+  if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS);
+  const familyRefusal = await controlSourceFamilyRefusal(ctx, orgId, controls, "SUPPLIER_RECOVERABLE");
+  if (familyRefusal) return unavailableFamilyResult(familyRefusal);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "DEBIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const supplierRecoverablesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
+  handler: async (ctx, args) => {
+    try {
+      await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computeSupplierRecoverablesReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Supplier recoverables reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
+
+function addDatedPartnerMovements(
+  balances: Map<string, number>, movements: readonly Doc<"partnerEquityTransactions">[], cutoff: number,
+): boolean {
+  for (const movement of movements) {
+    if (movement.occurredAt > cutoff) return false;
+    const amountMinor = movement.type === "DRAW" ? -movement.amountMinor : movement.amountMinor;
+    balances.set(movement.currency, (balances.get(movement.currency) ?? 0) + amountMinor);
+  }
+  return true;
+}
+
+/**
+ * Partner equity (GL: capital and declared capital controls, net of drawings) vs the sum of the live
+ * partners' balances. The subledger side is read raw — opening base plus signed movements — and is
+ * deliberately NOT routed through the partner-basis validation: a tampered base must surface as a
+ * difference here, not turn the whole comparison into "unavailable".
+ */
+export async function computePartnerCapitalReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  return verifyOpeningRead(ctx, guarded => readPartnerCapitalReconciliation(guarded, orgId, toDate, shared), () => unavailableFamilyResult("OVER_LIMIT"));
+}
+
+async function readPartnerCapitalReconciliation(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined,
+  shared?: SharedGlBalances,
+): Promise<OpeningFamilyReconciliationResult> {
+  const now = Date.now();
+  const cutoff = toDate ?? now;
+  if (await reconciliationDateUnsupported(ctx, orgId, cutoff, now)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  if (await hasQueuedPosting(ctx, orgId)) return unavailableFamilyResult("PENDING_POSTINGS");
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const partners = await readBoundedDocuments(
+    ctx,
+    openingDatabase(ctx).query("partnerEquity").withIndex("by_org", (q) => q.eq("orgId", orgId)),
+    SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+  );
+  if (partners === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+  const subByCurrency = new Map<string, number>();
+  const add = (currency: string, minor: number) => subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+  for (const partner of partners) {
+    if (partner.isDeleted) continue;
+    add(orgCurrency, partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency));
+    const movements = await readBoundedDocuments(
+      ctx,
+      openingDatabase(ctx)
+        .query("partnerEquityTransactions")
+        .withIndex("by_org_partner_time", (q) => q.eq("orgId", orgId).eq("partnerId", partner._id)),
+      SUPPLIER_PAYABLES_RECON_READ_LIMIT,
+    );
+    if (movements === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+    if (!addDatedPartnerMovements(subByCurrency, movements, cutoff)) return unavailableFamilyResult("AS_OF_DATE_UNSUPPORTED");
+  }
+  const controls = await openingAllocationAccounts(ctx, orgId, new Set(["PARTNER_CAPITAL"]));
+  if (!controls) return unavailableFamilyResult("OPENING_SOURCE_UNAVAILABLE");
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_CAPITAL);
+  // Draws debit Partner Drawings, a separate account that lowers each partner's balance.
+  await addSystemAccount(ctx, orgId, controls, SYSTEM_KEYS.PARTNER_DRAWINGS);
+  const glByCurrency = await glNetByAccounts(ctx, orgId, cutoff, controls, "CREDIT", shared);
+  if (glByCurrency === "OVER_LIMIT") return unavailableFamilyResult("OVER_LIMIT");
+  return {
+    ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))),
+    status: "AVAILABLE",
+  };
+}
+
+export const partnerCapitalReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  returns: openingFamilyReconciliationValidator,
+  handler: async (ctx, args) => {
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await computePartnerCapitalReconciliation(ctx, args.orgId, args.toDate);
+    } catch (error) {
+      if (error instanceof ConvexError) throw error;
+      console.error("Partner capital reconciliation failed", error);
+      throw new ConvexError("An unexpected error occurred. Please try again later.");
+    }
+  },
+});
 /**
  * SCRUM-869 (S2, owner ruling SCRUM-869#c23881, design c23880). The supplier RECEIVABLES subledger
  * reconciled to GL 1240 (Receivable from Suppliers), per currency.

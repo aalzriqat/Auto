@@ -206,22 +206,26 @@ describe("Phase 17 — opening balance journal", () => {
     expect(redrafted.draftId).toBeTruthy();
   });
 
-  test("rejects an unbalanced opening balance", async () => {
+  test("an unbalanced opening balance drafts with the difference on the suspense account (owner ruling 2026-11-04)", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
     const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
-    await expect(
-      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
-        orgId: ctx.orgId,
-        expectedCurrency: "JOD",
-        asOfDate: Date.now(),
-        lines: [
-          { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
-          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 900 },
-        ],
-      })
-    ).rejects.toThrow(/unbalanced/i);
+    const { draftId } = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      expectedCurrency: "JOD",
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 900 },
+      ],
+    });
+    const draft = await ctx.t.run((c) => c.db.get("openingBalanceDrafts", draftId as Id<"openingBalanceDrafts">));
+    const suspense = await ctx.t.run((c) =>
+      c.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", ctx.orgId).eq("systemKey", "OPENING_SUSPENSE")).first(),
+    );
+    expect(draft?.lines).toHaveLength(3);
+    expect(draft?.lines.find((line) => line.accountId === suspense?._id)).toMatchObject({ debitMinor: 0, creditMinor: 100 });
   });
 
   test("rejects an opening balance dated outside any open period", async () => {
@@ -1439,25 +1443,29 @@ describe("Phase 17 — owner-only direct opening balance", () => {
     ).rejects.toThrow(/already been posted/i);
   });
 
-  test("the owner route still refuses unbalanced lines", async () => {
-    // Skipping the approver must not mean skipping the accounting.
+  test("the owner route posts an unbalanced set balanced, with the difference on suspense (owner ruling 2026-11-04)", async () => {
+    // Skipping the approver must not mean skipping the accounting: the journal still balances.
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
     const syntheticOffset = account(ctx, "RETAINED_EARNINGS");
 
-    await expect(
-      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
-        orgId: ctx.orgId,
-        expectedCurrency: "JOD",
-        asOfDate: Date.now(),
-        lines: [
-          { accountId: cash._id, debitMinor: 900_000, creditMinor: 0 },
-          { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 100_000 },
-        ],
-      })
-    ).rejects.toThrow(/unbalanced/i);
-
-    expect(await ctx.t.run((c) => c.db.query("journalEntries").collect())).toHaveLength(0);
+    const { journalId } = await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
+      orgId: ctx.orgId,
+      expectedCurrency: "JOD",
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cash._id, debitMinor: 900_000, creditMinor: 0 },
+        { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 100_000 },
+      ],
+    });
+    const posted = await ctx.t.run((c) =>
+      c.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", journalId as Id<"journalEntries">)).collect(),
+    );
+    const suspense = await ctx.t.run((c) =>
+      c.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", ctx.orgId).eq("systemKey", "OPENING_SUSPENSE")).first(),
+    );
+    expect(posted.reduce((sum, line) => sum + line.debitMinor, 0)).toBe(posted.reduce((sum, line) => sum + line.creditMinor, 0));
+    expect(posted.find((line) => line.accountId === suspense?._id)).toMatchObject({ debitMinor: 0, creditMinor: 800_000 });
   });
 });
 

@@ -42,7 +42,7 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { materializeOpeningAllocations, openingPolicyForAccount, prepareOpeningAllocations } from "./accounting/openingAllocations";
 import type { OpeningAllocationPlan } from "./accounting/openingAllocations";
 import { isOpeningPartnerAccount } from "./accounting/openingPartnerAllocations";
-import { resolveSystemAccount } from "./chartOfAccounts";
+import { ensureOpeningSuspenseAccount, resolveSystemAccount } from "./chartOfAccounts";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
@@ -262,6 +262,84 @@ function refuseOpeningAfterLedgerActivity(): never {
   throwAppError(AppErrorCode.OPENING_BALANCE_AFTER_LEDGER_ACTIVITY, POSTED_LEDGER_ACTIVITY_MESSAGE);
 }
 
+type OpeningEntryLine = {
+  accountId: Id<"chartOfAccounts">;
+  debitMinor: number;
+  creditMinor: number;
+  description?: string;
+  bankAccountId?: Id<"bankAccounts">;
+};
+
+/** English text equals `ServerError_OPENING_TOTAL_TOO_LARGE` in lib/i18n/domains/common.ts. */
+export const OPENING_TOTAL_TOO_LARGE_MESSAGE =
+  "The opening balances are too large to post exactly: the debit or credit total exceeds the largest amount that can be stored safely. Nothing has been changed. Check the amounts and enter them in smaller units.";
+
+/** Exact debit and credit totals of the entered lines, or null when a line amount is not a safe integer. */
+function exactOpeningTotals(lines: readonly OpeningEntryLine[]): { debit: bigint; credit: bigint } | null {
+  let debit = 0n;
+  let credit = 0n;
+  for (const line of lines) {
+    if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) return null;
+    debit += BigInt(line.debitMinor);
+    credit += BigInt(line.creditMinor);
+  }
+  return { debit, credit };
+}
+
+/**
+ * Owner ruling 2026-11-04 (SCRUM-858/852, "Suspense account"): when the entered opening lines do not balance,
+ * the difference is posted to the opening-balance suspense account, never to owner's capital, and stays there
+ * as an open item (the close checklist reports it) until an accountant classifies it. The line is added to the
+ * stored draft, so the approver reads exactly what will post. A line amount that is not a safe integer is
+ * returned unchanged: `validateManualJournalLines` then refuses it by line, as before.
+ *
+ * The totals are summed exactly (BigInt), never in a double. `validateManualJournalLines` compares double totals,
+ * and a double cannot hold an integer above Number.MAX_SAFE_INTEGER exactly, so a total above it could round to
+ * "balanced" while the journal is a minor unit out. Such a set is refused (OPENING_TOTAL_TOO_LARGE) on every door.
+ */
+/**
+ * The exact aggregate and balance check, repeated in the shared posting preflight so a stored draft is refused
+ * before any write however it was prepared (SCRUM-858 R11 Seat 2: a draft written by the earlier float
+ * arithmetic carried debit 9,007,199,254,740,991 + 2 against credit 9,007,199,254,740,991 + suspense 1, one
+ * minor unit out, and approval accepted it because the validator compares doubles). Reviewed lines are never
+ * rewritten here; an unsafe draft is refused and must be re-entered.
+ */
+function assertExactOpeningBalance(lines: readonly OpeningEntryLine[]): void {
+  const totals = exactOpeningTotals(lines);
+  if (!totals) return; // a non-safe-integer amount is refused by line in validateManualJournalLines
+  assertTotalsWithinSafeRange(totals);
+  if (totals.debit !== totals.credit) {
+    throw new ConvexError(`Manual journal is unbalanced: debits=${totals.debit} credits=${totals.credit}.`);
+  }
+}
+
+/** Refuses an opening whose debit or credit total cannot be held exactly as a JS number. */
+function assertTotalsWithinSafeRange(totals: { debit: bigint; credit: bigint }): void {
+  if (totals.debit > BigInt(Number.MAX_SAFE_INTEGER) || totals.credit > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throwAppError(AppErrorCode.OPENING_TOTAL_TOO_LARGE, OPENING_TOTAL_TOO_LARGE_MESSAGE);
+  }
+}
+
+async function withSuspenseBalancing(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  lines: OpeningEntryLine[],
+): Promise<OpeningEntryLine[]> {
+  const totals = exactOpeningTotals(lines);
+  if (!totals) return lines;
+  assertTotalsWithinSafeRange(totals);
+  const difference = Number(totals.debit - totals.credit);
+  if (difference === 0) return lines;
+  const accountId = await ensureOpeningSuspenseAccount(ctx, orgId, actorId);
+  return [...lines, {
+    accountId,
+    debitMinor: Math.max(-difference, 0),
+    creditMinor: Math.max(difference, 0),
+    description: "Opening balance difference (suspense)",
+  }];
+}
+
 export const draftOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -297,7 +375,8 @@ export const draftOpeningBalance = mutation({
       refuseOpeningAfterLedgerActivity();
     }
 
-    validateManualJournalLines(args.lines as ManualJournalLine[]);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    validateManualJournalLines(lines as ManualJournalLine[]);
 
     // Every account must belong to this org — an opening balance is a
     // direct-lines insert (no applyPostingRule resolution in between), so
@@ -309,26 +388,26 @@ export const draftOpeningBalance = mutation({
     // though — seeding a starting balance into an account the org has retired
     // is always a mistake, and (unlike system accounts) a custom account can be
     // deactivated while still technically allowing manual posting.
-    for (const line of args.lines) {
+    for (const line of lines) {
       const account = await requireOwnedRow(ctx, args.orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
       if (!account.active) {
         throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
 
-    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
+    await assertOpeningBankIdentities(ctx, args.orgId, lines, args.expectedCurrency);
 
     if (!(await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate))) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
 
-    await prepareOpeningAllocations(ctx, { ...args, currency: args.expectedCurrency, actorId: user._id });
+    await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
       status: "PENDING_APPROVAL",
-      lines: args.lines,
+      lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
       allocations: args.allocations,
@@ -350,8 +429,8 @@ export const draftOpeningBalance = mutation({
       actionType: "CREATE_MANUAL_JOURNAL_DRAFT",
       resourceType: "openingBalanceDrafts",
       resourceId: draftId.toString(),
-      description: `Opening balance draft submitted for approval: ${args.lines.length} lines.`,
-      after: { lines: args.lines.length },
+      description: `Opening balance draft submitted for approval: ${lines.length} lines.`,
+      after: { lines: lines.length },
     });
 
     return { draftId: draftId.toString() };
@@ -451,7 +530,10 @@ async function inspectOpeningPreflight(ctx: QueryCtx | MutationCtx, args: {
   await preflightStep("LEDGER_ACTIVITY", async () => {
     if (await hasPostedLedgerActivity(ctx, orgId)) refuseOpeningAfterLedgerActivity();
   });
-  const totalDebits = await preflightStep("LINES", () => validateManualJournalLines(draft.lines as ManualJournalLine[]));
+  const totalDebits = await preflightStep("LINES", () => {
+    assertExactOpeningBalance(draft.lines);
+    return validateManualJournalLines(draft.lines as ManualJournalLine[]);
+  });
   await preflightStep("ACCOUNT", async () => {
     for (const line of draft.lines) {
       const account = await requireOwnedRow(ctx, orgId, "chartOfAccounts", line.accountId, "Opening account not found in this organization.");
@@ -648,10 +730,11 @@ export const postOpeningBalanceDirect = mutation({
       refuseOpeningAfterLedgerActivity();
     }
 
-    validateManualJournalLines(args.lines as ManualJournalLine[]);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    validateManualJournalLines(lines as ManualJournalLine[]);
 
     // Before the draft insert: a refused bank identity must leave no row behind.
-    await assertOpeningBankIdentities(ctx, args.orgId, args.lines, args.expectedCurrency);
+    await assertOpeningBankIdentities(ctx, args.orgId, lines, args.expectedCurrency);
 
     // The denomination to stamp on the row. Already proved vouchable AND equal
     // to what the caller converted under by the assertion above, which is why
@@ -659,13 +742,13 @@ export const postOpeningBalanceDirect = mutation({
     // at the boundary. (The shared poster re-checks vouchability independently
     // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
-    await prepareOpeningAllocations(ctx, { ...args, currency: orgDenomination, actorId: user._id });
+    await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
       orgId: args.orgId,
       status: "PENDING_APPROVAL",
-      lines: args.lines,
+      lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
       createdBy: user._id,

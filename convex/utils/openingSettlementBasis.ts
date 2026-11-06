@@ -1,6 +1,8 @@
+import { openingDatabase, type OpeningReadCtx } from "./openingSourceIdentity";
 import { orgResetState } from "./orgResetGeneration";
+import { openingVerificationSource } from "./openingSourceIdentity";
 import type { Doc, Id } from "../_generated/dataModel";
-import type { QueryCtx, MutationCtx } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 import { ConvexError } from "convex/values";
 import {
   openingAccountAllowsFamily,
@@ -40,7 +42,7 @@ const unavailable = (): OpeningSettlementBasis => ({
 /** Read-only proof shared by source consumers; the embedded result is not an
  * account override. Every domain also proves its actual economic occurrence. */
 const readerIdentity = Symbol("opening settlement request reader");
-type ReadCtx = QueryCtx | MutationCtx;
+type ReadCtx = OpeningReadCtx | MutationCtx;
 export type OpeningSettlementReader = {
   readonly [readerIdentity]: true;
   readonly ctx: ReadCtx;
@@ -56,6 +58,7 @@ export function createOpeningSettlementReader(
   ctx: ReadCtx,
   orgId: Id<"organizations">,
 ): OpeningSettlementReader {
+  const source = openingVerificationSource(ctx, orgId);
   const parents = new Map<
     Id<"openingBalanceDrafts">,
     Promise<Doc<"openingBalanceDrafts"> | null>
@@ -68,7 +71,7 @@ export function createOpeningSettlementReader(
     parent(id) {
       let value = parents.get(id);
       if (!value) {
-        value = ctx.db.get(id);
+        value = source ? source.then(identity => identity.headers.find(header => header._id === id) ?? null) : openingDatabase(ctx).get(id);
         parents.set(id, value);
       }
       return value;
@@ -76,7 +79,7 @@ export function createOpeningSettlementReader(
     lines(id) {
       let value = lines.get(id);
       if (!value) {
-        value = ctx.db
+        value = openingDatabase(ctx)
           .query("journalLines")
           .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", id))
           .take(201);
@@ -86,9 +89,14 @@ export function createOpeningSettlementReader(
     },
   };
 }
-async function hasCurrentOpeningJournal(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">,
+async function hasCurrentOpeningJournal(ctx: OpeningReadCtx | MutationCtx, orgId: Id<"organizations">,
   journalId: Id<"journalEntries"> | undefined): Promise<boolean> {
-  const postedJournals = await ctx.db.query("journalEntries")
+  const source = openingVerificationSource(ctx, orgId);
+  if (source) {
+    const identity = await source;
+    return identity.status === "AVAILABLE" && identity.journal._id === journalId;
+  }
+  const postedJournals = await openingDatabase(ctx).query("journalEntries")
     .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover").eq("sourceId", String(orgId)))
     .take(101);
   const liveJournals = postedJournals.filter(entry => entry.status === "POSTED" && entry.category === "OPENING_BALANCE");
@@ -103,13 +111,13 @@ function matchesOpeningSettlementJournal(journal: Doc<"journalEntries"> | null,
 }
 
 export async function resolveOpeningSettlementBasis(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Id<"organizations">,
   ref: OpeningSourceRef,
   expectedKind: RemainingOpeningKind,
   reader?: OpeningSettlementReader,
 ): Promise<OpeningSettlementBasis> {
-  const org = await ctx.db.get(orgId);
+  const org = await openingDatabase(ctx).get(orgId);
   if (!org || orgResetState(org).inProgress) return unavailable();
   if (
     reader &&
@@ -154,7 +162,7 @@ export async function resolveOpeningSettlementBasis(
     allocation.amountMinor <= 0
   )
     return unavailable();
-  const account = await ctx.db.get(allocation.accountId);
+  const account = await openingDatabase(ctx).get(allocation.accountId);
   const purpose = "purpose" in allocation ? allocation.purpose : undefined;
   if (
     !account ||
@@ -169,7 +177,7 @@ export async function resolveOpeningSettlementBasis(
   )
     return unavailable();
   const journal = draft.journalEntryId
-    ? await ctx.db.get(draft.journalEntryId)
+    ? await openingDatabase(ctx).get(draft.journalEntryId)
     : null;
   if (!matchesOpeningSettlementJournal(journal, orgId, draft)) return unavailable();
   const siblings =
@@ -223,7 +231,7 @@ export async function resolveOpeningSettlementBasis(
 }
 
 export async function requireOpeningSettlementBasis(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Id<"organizations">,
   ref: OpeningSourceRef,
   expectedKind: RemainingOpeningKind,

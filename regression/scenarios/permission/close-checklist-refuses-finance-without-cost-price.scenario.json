@@ -1,0 +1,47 @@
+{
+  "id": "close-checklist-refuses-finance-without-cost-price",
+  "fingerprint": "b5fb7fa699caf677dfbf8fbfa01a028af7b83bafed539fe29601a87ef2426d98",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum858-merge766-permission-check",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "custom-finance-only",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "result",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "missingPermission",
+      "value": "view:cost_price"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-886#c24358",
+      "digest": "fcf9701ed56563d0a68a99163aba77f50e1e264fe6609036278dc46f09054bef"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/costReaders.scrum902c.test.ts",
+    "testName": "accountingPeriods.closeChecklist: finance without cost is refused (SCRUM-858 merge)"
+  },
+  "matrixRow": "SCRUM-902-COST-READERS"
+}

@@ -1,0 +1,67 @@
+{
+  "id": "opening-zero-suspense-headroom-unavailable",
+  "fingerprint": "720a11bcfb6c1a85ca77af79a2030c606537ff1465a1b726fe7643469c93931e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-r15f",
+    "firstSeen": "2026-11-05"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.seedOpeningHistory",
+      "input": {
+        "reversalPairs": 20,
+        "descriptionBytes": [
+          160000,
+          240000
+        ],
+        "suspenseLines": 0,
+        "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "warnings.suspenseBalanceOpen",
+      "value": false
+    },
+    {
+      "observable": "warnings.suspenseUnavailable",
+      "value": true
+    },
+    {
+      "observable": "period.closeAcknowledged",
+      "value": "CLOSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "R15f exhausted close headroom reports unverified suspense rather than an open balance"
+  },
+  "matrixRow": "SCRUM-858-opening-read-headroom-class",
+  "bugRef": {
+    "key": "SCRUM-858",
+    "failingFirst": "66bb1825b7949ee517fb4ed384144e0fcc11b2ba"
+  }
+}
