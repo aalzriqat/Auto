@@ -15,7 +15,7 @@
       "rationale": "The row source ID is typed string and asserted to a Convex ID in the APPLICATION arm. Preserving the ternary alternatives proves the branch shape and literal, but does not prove the ID table. Keep that value proof debt UNKNOWN; this entry does not certify runtime data or authorization.",
       "issue": "SCRUM-920",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-920 local source review at analyzer head ded7cd49a0a58506969779afc1d439770f1f814f: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts; the local native-spec CLI found no breaks at this call and exactly these two unbranded-ID paths. The supplied local spec is incomplete elsewhere and is not production evidence; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
+      "renewal": "SCRUM-920 local source review: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts. The 2026-11-06 offline CLI against the saved complete 1,078-function spec (sha256 b7657a8e242508352634d8f5df5f45c83d23403df4c4cde614507bf22c9b8c4b) returned exit 0, UNKNOWN, zero breaks or drift and 943 baseline matches, including these two unbranded-ID paths. This saved-spec comparison is not a fresh production read; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
     },
     {
       "surface": "web",
@@ -30,7 +30,7 @@
       "rationale": "The row source ID is typed string and asserted to a Convex ID in the SALE arm. Preserving the ternary alternatives proves the branch shape and literal, but does not prove the ID table. Keep that value proof debt UNKNOWN; this entry does not certify runtime data or authorization.",
       "issue": "SCRUM-920",
       "expires": "2026-12-01",
-      "renewal": "SCRUM-920 local source review at analyzer head ded7cd49a0a58506969779afc1d439770f1f814f: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts; the local native-spec CLI found no breaks at this call and exactly these two unbranded-ID paths. The supplied local spec is incomplete elsewhere and is not production evidence; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
+      "renewal": "SCRUM-920 local source review: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts. The 2026-11-06 offline CLI against the saved complete 1,078-function spec (sha256 b7657a8e242508352634d8f5df5f45c83d23403df4c4cde614507bf22c9b8c4b) returned exit 0, UNKNOWN, zero breaks or drift and 943 baseline matches, including these two unbranded-ID paths. This saved-spec comparison is not a fresh production read; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
     }
   ]
 }
