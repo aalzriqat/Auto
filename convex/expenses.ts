@@ -766,26 +766,27 @@ export const update = mutation({
     if (effectiveBearer !== "SUPPLIER" && args.vendorSupplierId) {
       throwSupplierError(SUPPLIER_ERROR.ROLE_CONFLICT, "A canonical payee is only used for supplier-borne expenses.");
     }
-    if (willMarkPaid && effectiveBearer === "SUPPLIER" && !args.vendorSupplierId) {
-      throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "Confirm the service provider before paying this expense.");
-    }
-    if (willMarkPaid && currentBearer === "SUPPLIER" && !expense.costBearerSupplierId) {
-      throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, "Supplier identity is unresolved for this expense.");
-    }
     const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
-    const hasMaterialAccountingChange =
+    const hasSupplierTermsChange =
       (args.vehicleId !== undefined && args.vehicleId !== (expense.vehicleId ?? null)) ||
       (args.title !== undefined && args.title !== expense.title) ||
       (args.amount !== undefined && args.amount !== expense.amount) ||
       (args.taxAmount !== undefined && (args.taxAmount || 0) !== (expense.taxAmount || 0)) ||
       (args.date !== undefined && args.date !== expense.date) ||
       (args.category !== undefined && args.category !== expense.category) ||
-      (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
-      bankChoiceChanged ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
       (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
       (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null)) ||
       bearerChanges;
+    const hasMaterialAccountingChange = hasSupplierTermsChange ||
+      (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) || bankChoiceChanged;
+    const validateParties = hasMaterialAccountingChange || args.vehicleId !== undefined || payeeChanges || willMarkPaid;
+    if (effectiveBearer === "SUPPLIER" && validateParties && !args.vendorSupplierId) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_REQUIRED, "Confirm the service provider before changing this expense.");
+    }
+    if (willMarkPaid && currentBearer === "SUPPLIER" && !expense.costBearerSupplierId) {
+      throwSupplierError(SUPPLIER_ERROR.IDENTITY_UNRESOLVED, "Supplier identity is unresolved for this expense.");
+    }
     if (hasAccountingExposure && (hasMaterialAccountingChange || nextStatus !== currentStatus)) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
@@ -821,7 +822,6 @@ export const update = mutation({
 
     // Metadata never re-resolves historical identities. New exposure and payment do.
     let parties: ExpenseParties | null = null;
-    const validateParties = hasMaterialAccountingChange || args.vehicleId !== undefined || payeeChanges || willMarkPaid;
     if (validateParties) {
       const vehicle = await assertCostBearerAllowed(ctx, {
         orgId: args.orgId,
@@ -836,7 +836,8 @@ export const update = mutation({
         orgId: args.orgId, bearer: effectiveBearer, vehicle,
         payeeId: args.vendorSupplierId ?? expense.vendorSupplierId,
         previous: expense,
-        requireActive: hasMaterialAccountingChange || payeeChanges,
+        // Choosing how to pay an accepted obligation does not increase supplier exposure.
+        requireActive: hasSupplierTermsChange || payeeChanges || (!willMarkPaid && (methodChanged || bankChoiceChanged)),
       });
     }
 

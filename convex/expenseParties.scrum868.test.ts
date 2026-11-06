@@ -255,4 +255,21 @@ describe("SCRUM-868 P4b expense parties", () => {
     expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ amount: fromMinorUnits(300000, "JOD"), costBearerSupplierId: s.supplierId });
   });
 
+
+  test("supplier economic edit doors share the explicit payee confirmation gate", async () => {
+    const s = await setup();
+    const id = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING", paymentMethod: undefined });
+    // Literal door census, independent of the production predicate. Design missed payment;
+    // the first implementation then missed amount edits (SCRUM-868 P4b advisory review).
+    const edits = [
+      { amount: fromMinorUnits(300000, "JOD") }, { title: "Changed title" },
+      { category: "REPAIR" }, { date: s.args.date + 86400000 }, { taxAmount: 1 },
+      { vehicleId: null }, { paymentMethod: "BANK_TRANSFER" }, { status: "PAID" },
+      { isPrepaid: true, amortizationMonths: 2 }, { amortizationMonths: 2 },
+    ] as const;
+    for (const edit of edits) {
+      await refused(s, () => s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, ...edit }), "SUPPLIER_IDENTITY_REQUIRED");
+    }
+  });
+
 });
