@@ -163,7 +163,7 @@ test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership 
     }
   });
   // Full public wire response: foreign, missing and deleted are indistinguishable.
-  expect(await s.asOwner.query(api.dealListRow.figures, args)).toEqual(null);
+  expect(await s.asOwner.query(api.dealListRow.figures, args)).toBeNull();
 
   // Instrument the Convex query-dispatch boundary over the real authenticated
   // harness DB. Even if a downstream reader refuses today, this public wrapper
@@ -176,7 +176,7 @@ test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership 
     delegated += 1;
     throw new Error("Unexpected downstream delegation");
   };
-  expect(await s.asOwner.run((ctx) => invoke({ ...ctx, runQuery }, args))).toEqual(null);
+  expect(await s.asOwner.run((ctx) => invoke({ ...ctx, runQuery }, args))).toBeNull();
   expect(delegated).toBe(0);
 });
 
