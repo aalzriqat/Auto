@@ -1,6 +1,9 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import type { FunctionArgs } from "convex/server";
 import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 import { api } from "./_generated/api";
+import { figures } from "./dealListRow";
+import type { QueryCtx } from "./_generated/server";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -41,7 +44,8 @@ test.each(VARIANTS)(
     await setPermissions(s, [...base, "view:cost_price"]);
     const cockpit = await s.read();
     if (!cockpit?.available) throw new Error("Expected the cockpit to publish a net profit");
-    expect(await readRow(s, financed)).toMatchObject({
+    const withCost = await readRow(s, financed);
+    expect(withCost).toMatchObject({
       netProfitMinor: cockpit.amountMinor,
       netProfitReason: null,
       currency: "JOD",
@@ -49,7 +53,7 @@ test.each(VARIANTS)(
 
     await setPermissions(s, base);
     const withheld = await readRow(s, financed);
-    expect(withheld).toMatchObject({ netProfitMinor: null, netProfitReason: "CostAccessRequired" });
+    expect(withheld).toEqual({ ...withCost, netProfitMinor: null, netProfitReason: "CostAccessRequired" });
     // Not on the wire in any field: the figure, its operands, or a zero in its place.
     const wire = JSON.stringify(withheld);
     expect(wire).not.toContain(String(cockpit.amountMinor));
@@ -70,8 +74,19 @@ test.each(VARIANTS)(
     const s = await seedDealNetProfit(modules, sourceType, financed);
     await setPermissions(s, ["view:sales"]);
     const row = await readRow(s, financed);
-    expect(row).toMatchObject({ netProfitMinor: null, sellingPriceMinor: null });
-    expect(row?.netProfitReason).not.toBeNull();
+    const cockpit = financed
+      ? await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId })
+      : await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+    expect(row).toEqual({
+      photoUrl: null,
+      consigned: cockpit?.vehicle?.consigned ?? null,
+      stages: cockpit?.stages.map(({ key, state }) => ({ key, state })) ?? [],
+      sellingPriceMinor: null,
+      sellingPriceReason: financed ? "FinanceAccessRequired" : null,
+      netProfitMinor: null,
+      netProfitReason: "CostAccessRequired",
+      currency: null,
+    });
     // A financed price is the cockpit's, served with finance access only; a sale's is on its list row.
     expect(row?.sellingPriceReason).toBe(financed ? "FinanceAccessRequired" : null);
     expect(row?.stages.length).toBeGreaterThan(0);
@@ -89,6 +104,62 @@ test("deals list: the financed row's selling price is the cockpit's customer sal
   const row = await readRow(s, true);
   expect(row?.sellingPriceMinor).toBe(overview?.financialSummary?.customerSalePrice?.amountMinor ?? null);
   expect(row?.consigned).toBe(true);
+});
+
+test.each([false, true])("SCRUM-917 financed=%s: finance gate with cost access preserves the complete public response", async (financed) => {
+  const s = await seedDealNetProfit(modules, "STOCK", financed);
+  await setPermissions(s, ["view:sales", "view:cost_price"]);
+  const cockpit = financed
+    ? await s.asOwner.query(api.applications.dealCockpit, { orgId: s.orgId, applicationId: s.applicationId })
+    : await s.asOwner.query(api.sales.dealCockpit, { orgId: s.orgId, saleId: s.saleId });
+  expect(await readRow(s, financed)).toEqual({
+    photoUrl: null,
+    consigned: cockpit?.vehicle?.consigned ?? null,
+    stages: cockpit?.stages.map(({ key, state }) => ({ key, state })) ?? [],
+    sellingPriceMinor: null,
+    sellingPriceReason: financed ? "FinanceAccessRequired" : null,
+    netProfitMinor: null,
+    netProfitReason: "FinanceAccessRequired",
+    currency: null,
+  });
+});
+
+const unreadableRows = ([false, true] as const).flatMap((financed) =>
+  (["foreign", "missing", "deleted"] as const).map((state) => ({ financed, state }))
+);
+
+test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership refuses before delegation", async ({ financed, state }) => {
+  const s = await seedDealNetProfit(modules, "STOCK", financed);
+  expect(await readRow(s, financed)).not.toBeNull();
+  await s.t.run(async (ctx) => {
+    const id = financed ? s.applicationId : s.saleId;
+    if (state === "foreign") {
+      const orgId = await ctx.db.insert("organizations", { name: "Synthetic foreign row", createdAt: 1 });
+      await ctx.db.patch(id, { orgId });
+    } else if (state === "deleted" && !financed) {
+      await ctx.db.patch(s.saleId, { isDeleted: true });
+    } else {
+      // Applications have no soft-delete field in the schema. Exercise an
+      // actually deleted application, not a fabricated isDeleted property.
+      await ctx.db.delete(id);
+    }
+  });
+  // Full public wire response: foreign, missing and deleted are indistinguishable.
+  expect(await readRow(s, financed)).toEqual(null);
+
+  // Instrument the Convex query-dispatch boundary over the real authenticated
+  // harness DB. Even if a downstream reader refuses today, this public wrapper
+  // must refuse before delegating caller-supplied ids (TEN-1).
+  const handler: unknown = Reflect.get(figures, "_handler");
+  if (typeof handler !== "function") throw new Error("Registered figures handler unavailable");
+  const invoke = handler as (ctx: QueryCtx, args: FunctionArgs<typeof api.dealListRow.figures>) => Promise<unknown>;
+  const runQuery = vi.fn<QueryCtx["runQuery"]>().mockRejectedValue(new Error("Unexpected downstream delegation"));
+  const args: FunctionArgs<typeof api.dealListRow.figures> = {
+    orgId: s.orgId,
+    deal: financed ? { kind: "APPLICATION", applicationId: s.applicationId } : { kind: "SALE", saleId: s.saleId },
+  };
+  expect(await s.asOwner.run((ctx) => invoke({ ...ctx, runQuery }, args))).toEqual(null);
+  expect(runQuery.mock.calls.length).toBe(0);
 });
 
 test("deals list: a caller from another organization cannot read a row", async () => {
