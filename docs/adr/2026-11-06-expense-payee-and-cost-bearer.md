@@ -30,7 +30,7 @@ source reads establish the paths. Generic admin/reset writers are included below
 | Door or consumer | Identity gated? | Treatment |
 | --- | --- | --- |
 | expenses.create, PENDING or PAID | Yes | Require selected payee; resolve bearer from live org vehicle before insert; new parties must be ACTIVE |
-| expenses.update, bearer/vehicle/economic edit | Yes | Recheck effective SCRUM-389 shape and identities; changing bearer clears/sets canonical fields; never post from identity-only edit |
+| expenses.update, bearer/vehicle/economic edit | Yes | Explicit payee confirmation for supplier economic edits; recheck effective SCRUM-389 shape and identities; changing bearer clears/sets canonical fields; never post from identity-only edit |
 | expenses.update, notes/payer or unchanged fields | No new party gate | Preserve historical ids/snapshots; do not strand notes when linked supplier/car disappears |
 | PENDING to PAID, recordPaidExpenseSideEffects | Yes | Require explicit payee-id confirmation plus stored payee/bearer; prove bearer still matches vehicle; allow inactive parties already accepted on this expense |
 | openSupplierCostRecovery | Yes | Resolve name/version from expense bearer id, not the payee; no second financial authority |
@@ -52,7 +52,7 @@ source reads establish the paths. Generic admin/reset writers are included below
 
 The auth token currently supplies no trusted device discriminator. A forged full
 web-shaped request cannot be distinguished from web by adding a caller flag.
-Every supplier payment requires an explicit canonical payee id in the invocation,
+Every supplier economic edit or payment requires an explicit canonical payee id in the invocation,
 which the mobile facade cannot supply. This slice refuses unsupported mobile-shaped
 supplier money writes; it does not claim device attestation. Independent runtime evidence
 is required before claiming the stronger interpretation of OQ-6.
@@ -84,6 +84,9 @@ Any economic edit beyond unchanged payment completion requires active parties;
 an inactive pending obligation cannot have its amount increased. Same-id payee
 confirmation validates ownership but preserves the accepted vendor snapshot,
 including after a master rename. It is not a name refresh.
+First selection of payment method and bank completes the accepted obligation;
+it does not create supplier exposure. Changed amount, vehicle, bearer, payee,
+date or other supplier terms still require active parties at that payment.
 
 Narrow the over-broad update gate to relevant economic changes, explicit vehicle
 assignment and payment, plus payee changes. Notes/payer and unchanged fields do
@@ -166,3 +169,37 @@ metadata submission, so it does not accidentally request a new economic edit.
 Not measured here: real-backend execution/OCC, authenticated EN/AR browser at
 phone/desktop, screen audit/explorer swarm, remote Sonar, CodeRabbit, independent
 money review seats, deployment or production. None is claimed as passed.
+
+## Validated advisory remediation
+
+The standards/spec checks at frozen `e2730aa9b` found two introduced money gaps,
+not test-only findings. Public tests at `e7dee3c8b` failed twice, with 13 passes:
+the actual web PENDING payload has no method, so its first payment after supplier
+deactivation was wrongly refused; a mobile-shaped amount-only edit increased
+200000 to 300000 minor units without party confirmation.
+
+The violated invariant is that accepted exposure remains serviceable while
+unsupported invocations cannot create or change supplier exposure. Both paths
+are expenses.update, shared with the dialog and mobile facade. The source is
+still the expense; journal and recovery rules do not change.
+
+Candidate A adds separate exceptions/confirmation checks to the two branches.
+Candidate B separates supplier terms from payment routing and uses the same
+validateParties predicate for confirmation and identity validation. Choose B,
+implemented in `67f08bb80`. First payment routing allows inactive completion;
+changed supplier terms/payee require active parties. Metadata remains outside
+the gate. Posting locks still treat method/bank changes as accounting changes.
+
+The recurrence check (`correct` skill) records two distinct missed doors: the
+initial design omitted mobile status-only payment; the first implementation
+omitted mobile amount-only edit. The shared predicate is the structural fix.
+A literal door census, independent of that predicate, exercises amount, title,
+category, date, tax, vehicle, method, status and prepaid changes. Restoring the
+old payment-only gate caused 2 failures/14 passes, proving the prevention can
+detect the real earlier mistake. The source was restored by file copy.
+
+The remediation floor passed 77 tests in five named files, including the exact
+web CASH/BANK_TRANSFER completion shapes and tenantWriteGuard. Separate active
+web amount-edit and inactive amount-increase controls pin both sides of the
+policy. Seven scenario records now bind this row, including the two new
+failing-first cases. Independent review seats and runtime proof remain pending.

@@ -1315,9 +1315,19 @@ distinct master rows, even if their names could coincide.
 | Retry and caller compatibility | Same create intent after rename/deactivation returns original expense and changes no rows; SHOWROOM keeps free-text payee; pending bearer switch clears canonical fields without posting | same suite, retry/showroom/bearer-switch controls |
 | EN/AR web form | Existing SupplierSelect selects and sends the payee id; no client bearer id; Arabic RTL; paid picker locked; metadata submit omits unchanged vehicle/date/paid method | components/expenses/ExpenseDialog.parties.test.tsx; real form/provider/picker with network boundary replaced |
 
-The five `expense-parties-*.scenario.json` records bind the public backend tests
+The seven `expense-parties-*.scenario.json` records bind the public backend tests
 to this matrix row. Failing-first commit `794a6c850` contains the named tests:
 10 backend failures and 2 EN/AR picker failures before implementation. Additional
 inactive-payee, bearer-clear and paid-picker controls are preventive. Harness
 results do not certify real-backend OCC, cloud behavior, authenticated browser
 rendering, independent seats, Sonar or pilot readiness.
+
+Advisory review at `e2730aa9b` found two additional production invocation gaps.
+Failing-first `e7dee3c8b` proves both, 2 failed/13 passed. The first-payment
+scenario creates PENDING with method omitted, deactivates both parties, then
+completes 200000 minor via first CASH or BANK_TRANSFER selection. The mobile
+amount-edit scenario refuses unconfirmed 200000-to-300000 exposure, preserving
+all rows/scheduler state; the explicit-payee web control accepts 300000.
+A literal table also refuses unconfirmed amount/title/category/date/tax/vehicle/
+method/status/prepaid edits. Restoring the payment-only confirmation predicate
+kills two tests. These are money findings, not deferred test-only follow-ups.

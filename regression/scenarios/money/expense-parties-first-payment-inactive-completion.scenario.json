@@ -1,0 +1,78 @@
+{
+  "id": "expense-parties-first-payment-inactive-completion",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "status": "PENDING",
+        "payee": "GARAGE",
+        "costBearer": "SUPPLIER",
+        "paymentMethodOmitted": true,
+        "amountMinor": 200000
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "status": "PAID",
+        "payee": "GARAGE",
+        "bearerAndPayeeInactive": true,
+        "firstMethods": [
+          "CASH",
+          "BANK_TRANSFER"
+        ],
+        "bank": "ACTIVE_JOD_FOR_TRANSFER"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "expense.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "expense.amountMinor",
+      "value": 200000
+    },
+    {
+      "observable": "recovery.amountDueMinor",
+      "value": 200000
+    },
+    {
+      "observable": "expense.vendor",
+      "value": "Garage"
+    }
+  ],
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "web first payment completes an accepted inactive obligation with its first method and bank choice"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4b-advisory-remediation",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "e7dee3c8b69891eb0f6ecdafafaccfc19d881124"
+  },
+  "fingerprint": "32c1ac47af7a6f4030b0de020c81157aa3a7dcd23d6ef216038c8ee8a1259718"
+}
