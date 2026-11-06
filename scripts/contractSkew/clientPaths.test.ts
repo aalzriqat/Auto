@@ -155,6 +155,54 @@ describe("SCRUM-920 spread alternative budget", () => {
     const middle = Math.floor(leaves.length / 2);
     return `c ? ${choices(leaves.slice(0, middle))} : ${choices(leaves.slice(middle))}`;
   }
+
+  const bogusChoices = choices(Array.from({ length: 129 }, (_, i) =>
+    `{ value: ${i}${i === 128 ? ", bogus: 1" : ""} }`));
+  const extraChoices = (count: number) => choices(Array.from({ length: count }, (_, i) => `{ extra: ${i} }`));
+  const bitFields = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`bit${i}`, v.number()]));
+  const overflowCases = [
+    { name: "129 arms before required field", source: `{ ...(${bogusChoices}), value: 1 }`,
+      fields: { value: v.number() }, path: "bogus" },
+    { name: "conditional of sibling products", source: `{ ...(c ? { ${siblings(7)} } : { ${siblings(7)}, bogus: 1 }), value: 1 }`,
+      fields: { ...bitFields, value: v.number() }, path: "bogus" },
+    { name: "129 distinct undeclared fields", source: `{ ...(${extraChoices(129)}), required: 1 }`,
+      fields: { required: v.number() }, path: "extra" },
+    { name: "required field before 129 arms", source: `{ value: 1, ...(${bogusChoices}) }`,
+      fields: { value: v.number() }, path: "bogus" },
+    { name: "empty validator", source: `{ ...(${extraChoices(129)}) }`, fields: {}, path: "extra" },
+    { name: "all optional validator", source: `{ ...(${extraChoices(129)}) }`,
+      fields: { required: v.optional(v.number()) }, path: "extra" },
+    { name: "256 distinct undeclared fields", source: `{ ...(${extraChoices(256)}), required: 1 }`,
+      fields: { required: v.number() }, path: "extra" },
+  ];
+
+  // Recorded 2026-11-06: these seven controls pass with fc7327b3d's extractor
+  // (vitest -t "F3 main detection floor", exit 0). Keep that detection floor
+  // without importing a historical implementation into the permanent tests.
+  test.each(overflowCases)("F3 main detection floor: $name", ({ source, fields, path: fieldPath }) => {
+    const { payload } = extract(source);
+    expect(compare(payload, fields).findings).toContainEqual(expect.objectContaining({
+      severity: "BREAKING", path: fieldPath, dimension: "SHAPE",
+    }));
+  });
+
+  test.each(overflowCases)("F3 retains explicit budget uncertainty: $name", ({ source }) => {
+    const { call, payload } = extract(source);
+    expect(arms(payload).length).toBeLessThanOrEqual(128);
+    expect(call.unknowns.filter((reason) => reason.includes("alternative budget 128 exceeded"))).toHaveLength(1);
+  });
+
+  test.each([false, true])("F3 128-arm boundary stays exact (bad=%s)", (bad) => {
+    const leaves = Array.from({ length: 128 }, (_, i) =>
+      `{ choice: ${i}, value: ${bad && i === 127 ? '"wrong"' : "1"} }`);
+    const { call, payload } = extract(`{ ...(${choices(leaves)}) }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(128);
+    expect(arms(payload).every((arm) => arm.kind === "object" && arm.keysComplete)).toBe(true);
+    const findings = compare(payload, { choice: v.number(), value: v.number() }).findings;
+    if (bad) expect(findings).toContainEqual(expect.objectContaining({ severity: "BREAKING", path: "value" }));
+    else expect(findings).toEqual([]);
+  });
   test.each([
     { name: "valid branches", bad: false, overwrite: false },
     { name: "invalid last sibling", bad: true, overwrite: false },
