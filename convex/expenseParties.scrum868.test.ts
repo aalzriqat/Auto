@@ -76,7 +76,7 @@ describe("SCRUM-868 P4b expense parties", () => {
       taxAmount: kind === "VAT" ? fromMinorUnits(1000, "JOD") : undefined,
       isPrepaid: kind === "prepaid",
       amortizationMonths: kind === "prepaid" ? 2 : undefined,
-      amount: kind === "precision" ? 200.0001 : s.args.amount,
+      amount: kind === "precision" ? fromMinorUnits(200000.1, "JOD") : s.args.amount,
     })).rejects.toMatchObject({ data: reason });
     expect(await dbSnapshot(s.t, tables)).toEqual(before);
   });
