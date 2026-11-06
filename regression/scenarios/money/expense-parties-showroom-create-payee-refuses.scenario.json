@@ -51,9 +51,5 @@
       "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
     }
   ],
-  "bugRef": {
-    "key": "SCRUM-868",
-    "failingFirst": "079f2a7127e9cf6f34714474f32e48f664fac086"
-  },
   "fingerprint": "4b31df1d62e1b48c3771dec8128b48197d28b414a5a444ba85434ec47ed662ad"
 }
