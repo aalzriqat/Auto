@@ -760,7 +760,7 @@ export const update = mutation({
     const payeeChanges = args.vendorSupplierId !== undefined && args.vendorSupplierId !== expense.vendorSupplierId;
     const effectiveBearer = args.costBearer ?? currentBearer;
     if (currentBearer === "SUPPLIER" && currentStatus === "PAID" &&
-        (payeeChanges || (args.vendor !== undefined && args.vendor !== expense.vendor))) {
+        (payeeChanges || (args.vendor !== undefined && args.vendor !== (expense.vendor ?? "")))) {
       throwSupplierError(SUPPLIER_ERROR.LINK_FROZEN, "The payee of a paid expense cannot be changed.");
     }
     if (effectiveBearer !== "SUPPLIER" && args.vendorSupplierId) {
