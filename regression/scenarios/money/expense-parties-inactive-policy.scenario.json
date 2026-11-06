@@ -26,7 +26,8 @@
       "input": {
         "expense": "ACCEPTED_PENDING",
         "bearerStatus": "INACTIVE",
-        "amountMinor": 300000
+        "amountMinor": 300000,
+        "payee": "GARAGE"
       }
     },
     {
@@ -82,5 +83,5 @@
     "key": "SCRUM-868",
     "failingFirst": "794a6c850ec4522add2ebf1ad36fdbcb93bb66a9"
   },
-  "fingerprint": "c7d93f630feb8bf19e558790e931795959dff29a06476e6e7d0e1ddf4e2a5373"
+  "fingerprint": "47f7dbdb746917505e891e84a1a996d750f59c8b8f457d9658281c3316281195"
 }

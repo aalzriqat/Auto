@@ -1308,6 +1308,7 @@ distinct master rows, even if their names could coincide.
 | PENDING/PAID supplier expense | Expense vendorSupplierId is the selected garage; vendor is the server-read Garage snapshot; costBearerSupplierId is the vehicle supplier; recovery supplierId is that bearer | convex/expenseParties.scrum868.test.ts, distinct-parties public mutation cases |
 | Money recognition | Dr RECEIVABLE_FROM_SUPPLIERS 200000, Cr CASH_ON_HAND 200000; supplier payables empty; showroom vehicle expense total 0 | same cases, literal journal/subledger/public-total assertions |
 | Spoof, missing or foreign identity | Client bearer field rejected; foreign/deleted bearer returns SUPPLIER_IDENTITY_UNRESOLVED; foreign/deleted payee returns SUPPLIER_NOT_FOUND; refused writes preserve stored rows and scheduler state | same suite, public create/update refusal cases |
+| SHOWROOM create with canonical payee | Explicit vendorSupplierId returns SUPPLIER_ROLE_CONFLICT; every application table and the scheduler remain unchanged | same suite, showroom create refusal case; create-only guard mutant fails |
 | Mobile-shaped supplier create/payment | Missing payee id on create or status-only payment of a canonical pending expense returns SUPPLIER_IDENTITY_REQUIRED; no financial effect | same suite, mobile-shaped case; invocation proof, not device attestation |
 | Inactive policy | New inactive bearer or payee refuses SUPPLIER_INACTIVE; accepted pending 200000 cost completes unchanged after deactivation; 300000 increase refuses; Garage snapshot survives rename | same suite, inactive policy cases |
 | Identity-only edit and paid lock | Pending payee edit changes no transaction, recovery, journal, event or outbox; bearer remains SUPPLIER; paid payee/name edits refuse SUPPLIER_LINK_FROZEN | same suite, payee-only edit case |
@@ -1315,8 +1316,10 @@ distinct master rows, even if their names could coincide.
 | Retry and caller compatibility | Same create intent after rename/deactivation returns original expense and changes no rows; SHOWROOM keeps free-text payee; pending bearer switch clears canonical fields without posting | same suite, retry/showroom/bearer-switch controls |
 | EN/AR web form | Existing SupplierSelect selects and sends the payee id; no client bearer id; Arabic RTL; paid picker locked; metadata submit omits unchanged vehicle/date/paid method | components/expenses/ExpenseDialog.parties.test.tsx; real form/provider/picker with network boundary replaced |
 
-The seven `expense-parties-*.scenario.json` records bind the public backend tests
-to this matrix row. Failing-first commit `794a6c850` contains the named tests:
+The eight `expense-parties-*.scenario.json` records bind the public backend tests
+to this matrix row. Commit `079f2a712` adds the showroom create case: disabling
+only that refusal produced 1 failed/21 passed; byte-for-byte restoration of
+`expenses.ts` produced 22/22 passed. Failing-first commit `794a6c850` contains the original tests:
 10 backend failures and 2 EN/AR picker failures before implementation. Additional
 inactive-payee, bearer-clear and paid-picker controls are preventive. Harness
 results do not certify real-backend OCC, cloud behavior, authenticated browser

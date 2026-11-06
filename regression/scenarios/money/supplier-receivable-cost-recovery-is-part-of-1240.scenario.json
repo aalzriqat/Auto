@@ -1,6 +1,6 @@
 {
   "id": "supplier-receivable-cost-recovery-is-part-of-1240",
-  "fingerprint": "4b4a57066728d9e7f3b1123e1f9c43a4a7307983986e35f86ca84c3503465296",
+  "fingerprint": "97068136ff431e1c11a2f91bddfd1a8b2f3224f141d39855b0c1e8bb19c2bfcd",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -18,7 +18,8 @@
       "action": "expenses.create",
       "input": {
         "costBearer": "SUPPLIER",
-        "cost": 200
+        "cost": 200,
+        "vendorSupplierId": "VEHICLE_SUPPLIER"
       }
     },
     {
