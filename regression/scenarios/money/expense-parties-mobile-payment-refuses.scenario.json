@@ -1,0 +1,64 @@
+{
+  "id": "expense-parties-mobile-payment-refuses",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "costBearer": "SUPPLIER",
+        "amountMinor": 200000,
+        "canonicalPayeeOmitted": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "expense": "CANONICAL_PENDING_SUPPLIER_COST",
+        "status": "PAID",
+        "canonicalPayeeOmitted": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SUPPLIER_IDENTITY_REQUIRED"
+    },
+    {
+      "observable": "storage.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "mobile-shaped name-only create and status-only supplier payment refuse server-side"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4b-expense-parties",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "794a6c850ec4522add2ebf1ad36fdbcb93bb66a9"
+  },
+  "fingerprint": "f1dcd68a2b24626ccff577df799c9a32ec7bbdd76b9a3af23fed0c324d94ea8c"
+}

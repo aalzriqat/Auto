@@ -131,3 +131,38 @@ distinguishes payee identity from invoice supplier identity.
 [IAS 37 paragraphs 53-56](https://www.ifrs.org/content/dam/ifrs/publications/pdf-standards/english/2021/issued/part-a/ias-37-provisions-contingent-liabilities-and-contingent-assets.pdf?bypass=on)
 separates reimbursement assets from the underlying obligation. These support
 separate roles; SCRUM-389 supplies AutoFlow's actual recognition conditions.
+
+## Implementer closure evidence
+
+ADR first: `6182b5ddd`. Failing tests: `794a6c850`, 10 backend failures/1 pass
+and 2 EN/AR picker failures/2 passes. Implementation: `90fa950ed`.
+The broad named-file run passed 573 tests in 14 files; the final focused run
+passed 23 tests in three files, and the shared supplier-door fixture consumers
+passed 43 tests in four files. The regression-record validator and backend suite
+passed 83 tests in two files. These runs overlap and must not be summed.
+
+Changing resolveExpenseParties to store the payee id as the bearer killed the
+mutant with 5 failures/6 passes; the original source was restored by file copy.
+Local V8 evidence over the two new suites measured 145/170 changed executable
+line/condition opportunities, 85.29%, against the base. This is a local diff
+calculation, not a Sonar measurement. That narrow coverage invocation failed
+the existing whole-file thresholds because it did not run the full legacy
+expense/dialog coverage set. No threshold was changed.
+
+Root and Convex typechecks passed separately. Root excludes convex; the second
+uses convex/tsconfig.json. ESLint reported no errors and existing warnings.
+Baseline identity matched 943 entries. The supplied renewal command refused
+without the CLI-required --reviewed argument; adding the same base as --reviewed
+checked 943 entries with zero stale, malformed or missing evidence. Twenty-one
+entries were refreshed in five shards, with their UNKNOWN status unchanged.
+
+Lifecycle closure: create, payment, pending party edit, unchanged completion,
+retry, historical read, metadata, permission/tenant boundaries and the journal
+route have harness evidence. Partial receipts and excluded reversals retain
+their existing suites and pilot refusals. No new spending or cancellation door
+exists. The web dialog also omits unchanged vehicle, date and paid method on
+metadata submission, so it does not accidentally request a new economic edit.
+
+Not measured here: real-backend execution/OCC, authenticated EN/AR browser at
+phone/desktop, screen audit/explorer swarm, remote Sonar, CodeRabbit, independent
+money review seats, deployment or production. None is claimed as passed.

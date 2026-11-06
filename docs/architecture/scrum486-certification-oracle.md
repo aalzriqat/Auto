@@ -1294,3 +1294,30 @@ Evidence boundary: convex-test is serial harness evidence, not platform/OCC or
 production certification. jsdom checks content and direction, not browser
 layout. The id-less terminal production recovery, release count/repair,
 openings (P5), expense payee/bearer fields (P4b), and posting rules are unchanged.
+
+### SCRUM868-P4b-expense-parties
+
+SCRUM-868 item 3 and c23873 OQ-3 separate the payee from the economic bearer.
+See [the P4b ADR](../adr/2026-11-06-expense-payee-and-cost-bearer.md).
+The independent example is a garage paid 200000 JOD minor units for a cost
+recoverable from the linked consignment supplier. The garage and supplier are
+distinct master rows, even if their names could coincide.
+
+| Case | Independent expected result | Executable evidence |
+| --- | --- | --- |
+| PENDING/PAID supplier expense | Expense vendorSupplierId is the selected garage; vendor is the server-read Garage snapshot; costBearerSupplierId is the vehicle supplier; recovery supplierId is that bearer | convex/expenseParties.scrum868.test.ts, distinct-parties public mutation cases |
+| Money recognition | Dr RECEIVABLE_FROM_SUPPLIERS 200000, Cr CASH_ON_HAND 200000; supplier payables empty; showroom vehicle expense total 0 | same cases, literal journal/subledger/public-total assertions |
+| Spoof, missing or foreign identity | Client bearer field rejected; foreign/deleted bearer returns SUPPLIER_IDENTITY_UNRESOLVED; foreign/deleted payee returns SUPPLIER_NOT_FOUND; refused writes preserve stored rows and scheduler state | same suite, public create/update refusal cases |
+| Mobile-shaped supplier create/payment | Missing payee id on create or status-only payment of a canonical pending expense returns SUPPLIER_IDENTITY_REQUIRED; no financial effect | same suite, mobile-shaped case; invocation proof, not device attestation |
+| Inactive policy | New inactive bearer or payee refuses SUPPLIER_INACTIVE; accepted pending 200000 cost completes unchanged after deactivation; 300000 increase refuses; Garage snapshot survives rename | same suite, inactive policy cases |
+| Identity-only edit and paid lock | Pending payee edit changes no transaction, recovery, journal, event or outbox; bearer remains SUPPLIER; paid payee/name edits refuse SUPPLIER_LINK_FROZEN | same suite, payee-only edit case |
+| Legacy and metadata | Repeated historical read changes no rows; notes edit keeps both ids absent; new payment refuses unresolved identity; no automatic migration | same suite, legacy case |
+| Retry and caller compatibility | Same create intent after rename/deactivation returns original expense and changes no rows; SHOWROOM keeps free-text payee; pending bearer switch clears canonical fields without posting | same suite, retry/showroom/bearer-switch controls |
+| EN/AR web form | Existing SupplierSelect selects and sends the payee id; no client bearer id; Arabic RTL; paid picker locked; metadata submit omits unchanged vehicle/date/paid method | components/expenses/ExpenseDialog.parties.test.tsx; real form/provider/picker with network boundary replaced |
+
+The five `expense-parties-*.scenario.json` records bind the public backend tests
+to this matrix row. Failing-first commit `794a6c850` contains the named tests:
+10 backend failures and 2 EN/AR picker failures before implementation. Additional
+inactive-payee, bearer-clear and paid-picker controls are preventive. Harness
+results do not certify real-backend OCC, cloud behavior, authenticated browser
+rendering, independent seats, Sonar or pilot readiness.

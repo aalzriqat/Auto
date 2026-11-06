@@ -148,6 +148,8 @@ describe("SCRUM-868 P4b expense parties", () => {
     expect(await dbSnapshot(s.t, moneyTables)).toEqual(before);
     expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ vendor: "Second garage", costBearer: "SUPPLIER", costBearerSupplierId: s.supplierId });
     await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, status: "PAID", vendorSupplierId: newPayee });
+    expect(await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").unique())).toMatchObject({ supplierId: s.supplierId, amountDueMinor: 200000 });
+    expect(await s.t.run(ctx => ctx.db.query("vehicleSupplierPayables").collect())).toEqual([]);
     await refused(s, () => s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, vendorSupplierId: s.payeeId }), "SUPPLIER_LINK_FROZEN");
     await refused(s, () => s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, vendor: "Rewritten" }), "SUPPLIER_LINK_FROZEN");
   });
