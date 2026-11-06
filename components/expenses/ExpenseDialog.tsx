@@ -130,6 +130,10 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   // prove a supplier here, including older pending expenses outside this list.
   const supplierIdentityUnavailable = !selectedVehicle?.sourcedSupplierId;
   const isSupplierBorne = showCostBearer && costBearer === "SUPPLIER";
+  let costBearerHint: string | null = null;
+  if (paidExpenseLocked) costBearerHint = t("CostBearerLockedHint" as any);
+  else if (supplierIdentityUnavailable) costBearerHint = t("CostBearerSupplierLinkRequired");
+  else if (isSupplierBorne) costBearerHint = t("CostBearerSupplierHint" as any);
 
   useEffect(() => {
     if (!showCostBearer && form.getValues("costBearer") !== "SHOWROOM") {
@@ -442,13 +446,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         }}
                       />
                       <p className="text-xs text-muted-foreground">
-                        {paidExpenseLocked
-                          ? t("CostBearerLockedHint" as any)
-                          : supplierIdentityUnavailable
-                            ? t("CostBearerSupplierLinkRequired")
-                            : isSupplierBorne
-                              ? t("CostBearerSupplierHint" as any)
-                              : null}
+                        {costBearerHint}
                       </p>
                       <FormMessage />
                     </FormItem>
