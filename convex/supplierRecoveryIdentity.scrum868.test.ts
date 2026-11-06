@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
 import { renameSupplier, seedSupplier } from "../test-utils/supplierFixture";
@@ -9,6 +9,11 @@ import { fromMinorUnits } from "./utils/money";
 
 const modules = import.meta.glob("./**/*.ts");
 const tables = Object.keys(schema.tables);
+
+// Freeze the scheduler clock so pre-existing jobs cannot change state while
+// a refusal's no-write snapshot is measured. No application module is mocked.
+beforeEach(() => { vi.useFakeTimers(); });
+afterEach(() => { vi.useRealTimers(); });
 
 async function setup() {
   const t = convexTestWithComponents(schema, modules);
@@ -48,8 +53,10 @@ type Setup = Awaited<ReturnType<typeof setup>>;
 
 async function expectIdentityRefusal(s: Setup, call: () => Promise<unknown>) {
   const before = await dbSnapshot(s.t, tables);
+  const scheduledBefore = await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
   await expect(call()).rejects.toMatchObject({ data: { code: "SUPPLIER_IDENTITY_UNRESOLVED" } });
   expect(await dbSnapshot(s.t, tables)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toEqual(scheduledBefore);
 }
 
 describe("SCRUM-868 P4a canonical recovery identity", () => {

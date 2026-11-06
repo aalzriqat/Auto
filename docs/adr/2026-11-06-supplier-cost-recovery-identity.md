@@ -38,6 +38,7 @@ The table distinguishes proposed identity gates from existing containment.
 | openingAllocations supplier-recoverable insert | Not identity-gated by P4a; P5 explicitly owns OPENING |
 | supplierIdentityRepair repairPage/countPage | Existing explicit link/name proof and unresolved count; unchanged, including terminal rows |
 | orgFinancialReset/adminOrgs deletion and openingResetCleanup | Administrative destructive cleanup, not new money; existing auth/reset gates unchanged |
+| adminData generic table writes | expenses blocked by assertAdminMayMutateTable; supplierCostRecoveries outside ADMIN_TABLES; unchanged |
 | Supplier recovery list/listReceipts/listReceiptBankOptions | Existing tenant and finance/cost access; no new identity gate on historical reads |
 | supplierReceivables, accountingReports, supplierStatement via supplierObligationDue | Existing bounded tenant/cost readers; legacy unlinked history remains readable |
 | vehicleSupplierIdentity and costBearer conversion refusal | Existing link freeze and open-recovery conversion block; unchanged |
@@ -70,7 +71,7 @@ Retries keep the first stored snapshot. No migration runs on release.
 Keep costBearer's schema-imported module a leaf. Its pure predicate handles
 shape restrictions; the async backend resolver handles identity. Expected
 identity errors use ConvexError; unexpected lookup failures are logged only on
-the server and rethrown as generic coded errors. Never catch and return after
+the server and rethrown as generic errors. Never catch and return after
 financial writes. Existing doors without catches retain rollback semantics.
 
 ## Explicit exclusions
@@ -95,6 +96,14 @@ financial writes. Existing doors without catches retain rollback semantics.
 5. Legacy history becomes unreadable or repaired on read: read a terminal
    id-less recovery with a missing vehicle twice and assert unchanged storage;
    existing receipt/reversal containment stays in force.
+
+Pre-code advisory design attack (separate agent): accepted the finding that the
+old intake-name predicate must be removed, including the missing-id/missing-name
+case. Public tests pin both that refusal and valid-id/empty-name acceptance.
+The resolver receives only `{supplierId}`, never an OPENING origin. Added
+inactive-link and committed legacy retry controls. The expense picker treats
+an unavailable vehicle as unproven and explains this before submission.
+Supplier ids survive vehicle cost redaction (`vehicleCostVisibility.ts`).
 
 ## Sources and evidence boundary
 

@@ -126,6 +126,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   const showCostBearer = selectedVehicle?.sourceType === "SOURCED" || expense?.costBearer === "SUPPLIER";
   // Immutable once PAID — the server refuses the change; the control says so first.
   const paidExpenseLocked = !!expense && (expense.status ?? "PAID") === "PAID";
+  // The server resolves this link again. An unavailable vehicle also cannot
+  // prove a supplier here, including older pending expenses outside this list.
+  const supplierIdentityUnavailable = !selectedVehicle?.sourcedSupplierId;
   const isSupplierBorne = showCostBearer && costBearer === "SUPPLIER";
 
   useEffect(() => {
@@ -426,6 +429,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         testId="expense-cost-bearer"
                         value={field.value ?? "SHOWROOM"}
                         disabled={paidExpenseLocked}
+                        supplierDisabled={supplierIdentityUnavailable}
                         onValueChange={(value) => {
                           field.onChange(value);
                           // A supplier-borne cost carries no VAT and is never
@@ -440,9 +444,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                       <p className="text-xs text-muted-foreground">
                         {paidExpenseLocked
                           ? t("CostBearerLockedHint" as any)
-                          : isSupplierBorne
-                            ? t("CostBearerSupplierHint" as any)
-                            : null}
+                          : supplierIdentityUnavailable
+                            ? t("CostBearerSupplierLinkRequired")
+                            : isSupplierBorne
+                              ? t("CostBearerSupplierHint" as any)
+                              : null}
                       </p>
                       <FormMessage />
                     </FormItem>

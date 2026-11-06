@@ -1,5 +1,5 @@
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
-import { requireResolvedSupplierId } from "./utils/supplierRegistry";
+import { requireResolvedSupplierId, requireSupplierSnapshotForCompletion, runGuarded } from "./utils/supplierRegistry";
 import { openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
@@ -76,27 +76,31 @@ export async function openSupplierCostRecovery(
     actorId: Id<"users">;
   }
 ): Promise<Id<"supplierCostRecoveries">> {
-  const existing = await ctx.db
-    .query("supplierCostRecoveries")
-    .withIndex("by_org_expense", (q) => q.eq("orgId", args.expense.orgId).eq("expenseId", args.expense._id))
-    .first();
-  if (existing) return existing._id;
-  const now = Date.now();
-  return await ctx.db.insert("supplierCostRecoveries", {
-    orgId: args.expense.orgId,
-    vehicleId: args.vehicle._id,
-    expenseId: args.expense._id,
-    supplierId: args.vehicle.sourcedSupplierId,
-    sourcedFromName: (args.vehicle.sourcedFromName ?? "").trim(),
-    amountDueMinor: toMinorUnits(args.expense.amount, args.currency),
-    amountRecoveredMinor: 0,
-    currency: args.currency,
-    receiptSeq: 0,
-    sourceEventKey: expensePostedKey(args.expense._id),
-    status: "OPEN",
-    createdBy: args.actorId,
-    createdAt: now,
-    updatedAt: now,
+  return await runGuarded(async () => {
+    const existing = await ctx.db
+      .query("supplierCostRecoveries")
+      .withIndex("by_org_expense", (q) => q.eq("orgId", args.expense.orgId).eq("expenseId", args.expense._id))
+      .first();
+    if (existing) return existing._id;
+    const supplier = await requireSupplierSnapshotForCompletion(ctx, args.expense.orgId, args.vehicle.sourcedSupplierId);
+    const now = Date.now();
+    return await ctx.db.insert("supplierCostRecoveries", {
+      orgId: args.expense.orgId,
+      vehicleId: args.vehicle._id,
+      expenseId: args.expense._id,
+      supplierId: supplier.supplierId,
+      sourcedFromName: supplier.supplierSnapshotName,
+      supplierSnapshotVersion: supplier.supplierSnapshotVersion,
+      amountDueMinor: toMinorUnits(args.expense.amount, args.currency),
+      amountRecoveredMinor: 0,
+      currency: args.currency,
+      receiptSeq: 0,
+      sourceEventKey: expensePostedKey(args.expense._id),
+      status: "OPEN",
+      createdBy: args.actorId,
+      createdAt: now,
+      updatedAt: now,
+    });
   });
 }
 

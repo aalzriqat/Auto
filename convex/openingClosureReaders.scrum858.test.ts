@@ -8,6 +8,7 @@
 import { expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { settleScheduledOnly, withFrozenScheduler } from "../test-utils/outboxWork";
+import { supplierIdInCtx } from "../test-utils/supplierFixture";
 import { api } from "./_generated/api";
 import schema from "./schema";
 import type { MutationCtx } from "./_generated/server";
@@ -699,9 +700,10 @@ test("ordinary advances, supplier costs and partner contributions reconcile with
   const [period] = await owner.query(api.accountingPeriods.list, { orgId });
   if (!period) throw new Error("Missing synthetic period");
   await owner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
-  const vehicleId = await t.run((ctx) => ctx.db.insert("vehicles", { orgId, vin: "VINCLOSURE858", make: "Toyota", model: "Camry",
+  const vehicleId = await t.run(async (ctx) => ctx.db.insert("vehicles", { orgId, vin: "VINCLOSURE858", make: "Toyota", model: "Camry",
     year: 2024, mileage: 10, color: "White", fuelType: "Gas", transmission: "Auto", sellingPrice: 12_500, status: "AVAILABLE",
-    sourceType: "SOURCED", sourcedFromName: "Synthetic supplier", sourceCost: 9_500 } as never));
+    sourceType: "SOURCED", sourcedFromName: "Synthetic supplier", sourceCost: 9_500,
+    sourcedSupplierId: await supplierIdInCtx(ctx, orgId, "Synthetic supplier") } as never));
   const partnerId = await owner.mutation(api.partnerEquity.add, { orgId, partnerName: "Synthetic ordinary", idempotencyKey: "closure-ordinary-partner" });
   await owner.mutation(api.payroll.recordAdvance, { orgId, userId: employeeId, amount: 25, method: "CASH", idempotencyKey: "closure-ordinary-advance" });
   await owner.mutation(api.expenses.create, { orgId, vehicleId, title: "Synthetic supplier-borne cost", amount: 200,

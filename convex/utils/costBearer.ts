@@ -50,8 +50,8 @@ export function isCashOutExpense(row: { status?: "PENDING" | "PAID" }): boolean 
  * resolves the vehicle; `vehicle === null` means missing, deleted or foreign.
  *
  * SUPPLIER requires ALL of:
- *   - a vehicle owned by this org, SOURCED, with a named supplier — a
- *     recovery claim against nobody cannot be collected;
+ *   - a vehicle owned by this org and SOURCED; the backend caller also resolves
+ *     its canonical supplier id in this org, never using a name as authority;
  *   - not prepaid — a prepaid is a balance-sheet asset amortized to an expense
  *     account, and a recoverable cost is neither;
  *   - no input tax — VAT on a recoverable cost is an open dealer question, and
@@ -61,7 +61,7 @@ export function isCashOutExpense(row: { status?: "PENDING" | "PAID" }): boolean 
  */
 export function supplierBearerRefusal(args: {
   orgId: Id<"organizations">;
-  vehicle: Pick<Doc<"vehicles">, "orgId" | "isDeleted" | "sourceType" | "sourcedFromName"> | null;
+  vehicle: Pick<Doc<"vehicles">, "orgId" | "isDeleted" | "sourceType"> | null;
   category: string;
   isPrepaid: boolean | undefined;
   taxAmount: number | undefined;
@@ -73,9 +73,6 @@ export function supplierBearerRefusal(args: {
   }
   if (vehicle.sourceType !== "SOURCED") {
     return "Only a sourced (consigned) vehicle's cost can be borne by the supplier.";
-  }
-  if (!vehicle.sourcedFromName?.trim()) {
-    return "This sourced vehicle has no supplier name, so a supplier-borne cost could not be recovered from anyone.";
   }
   if (args.isPrepaid === true || args.category === "PREPAID") {
     return "A prepaid expense cannot be borne by the supplier.";

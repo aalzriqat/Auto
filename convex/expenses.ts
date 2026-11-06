@@ -31,6 +31,7 @@ import { yearMonthIndex } from "./utils/expenseAmortization";
 import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAccountGuards";
 import { assertOpeningVehicleBasis } from "./utils/openingVehicleBasis";
 import { expenseCategoryValidator as expenseCategory } from "./utils/expenseCategories";
+import { requireResolvedSupplierId, runGuarded } from "./utils/supplierRegistry";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -146,6 +147,11 @@ async function assertCostBearerAllowed(
       fromMinorUnits(toMinorUnits(args.amount, currency), currency) === args.amount,
   });
   if (refusal) throw new ConvexError(refusal);
+  // A name is only a snapshot. Prove the stored canonical link in this org
+  // before create/edit/payment can leave any financial state behind.
+  if (vehicle) {
+    await runGuarded(() => requireResolvedSupplierId(ctx, args.orgId, { supplierId: vehicle.sourcedSupplierId }));
+  }
   return vehicle;
 }
 
