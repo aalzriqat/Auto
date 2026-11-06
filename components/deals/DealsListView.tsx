@@ -794,9 +794,7 @@ export function DealsListView({
         </div>
 
         {rows === undefined || loading ? (
-          <p className="p-6 text-center text-sm text-muted-foreground" role="status">
-            {t("LoadingDeals")}
-          </p>
+          <output className="block p-6 text-center text-sm text-muted-foreground">{t("LoadingDeals")}</output>
         ) : visible.length === 0 ? (
           <p className="p-6 text-center text-sm text-muted-foreground">{t(emptyKey)}</p>
         ) : (
