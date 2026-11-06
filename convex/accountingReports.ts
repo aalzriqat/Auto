@@ -2247,9 +2247,9 @@ export type SupplierReceivablesReconciliationResult = Omit<GlVsSubledgerResult, 
       marginMinor: number;
       /** Open supplier-borne cost recoveries (minor units, signed). */
       recoveryMinor: number;
-      /** The part of the subledger attributable to a named supplier. */
+      /** Rows with supplierId, or id-less rows with a real supplier name. */
       linkedMinor: number;
-      /** The part with no supplier identity (blank or the "Unknown supplier" default). */
+      /** Rows without supplierId whose name is blank or the "Unknown supplier" default. */
       unlinkedMinor: number;
     }
   >;
@@ -2356,9 +2356,10 @@ const SUPPLIER_RECEIVABLE_AFFECTING_EVENT_TYPES: ReadonlySet<string> = new Set(
     .map(([eventType]) => eventType)
 );
 
-/** There is no supplier master data yet: a row is "linked" only when it carries a real supplier name. */
-export function isUnlinkedSupplierName(name: string | undefined): boolean {
-  const normalized = (name ?? "").trim().toLowerCase();
+/** Stored identity takes precedence; legacy and opening rows without an id retain the name rule. */
+function isUnlinkedSupplier(row: Pick<Doc<"vehicleSupplierReceivables">, "supplierId" | "sourcedFromName">): boolean {
+  if (row.supplierId !== undefined) return false;
+  const normalized = (row.sourcedFromName ?? "").trim().toLowerCase();
   return normalized === "" || normalized === "unknown supplier";
 }
 
@@ -2650,7 +2651,7 @@ export async function computeSupplierReceivablesReconciliation(
   for (const row of receivables) {
     const openMinor = toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency);
     add(margin, row.currency, openMinor);
-    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+    add(isUnlinkedSupplier(row) ? unlinked : linked, row.currency, openMinor);
   }
   for (const row of recoveries) {
     if (row.origin !== "OPENING") {
@@ -2674,7 +2675,7 @@ export async function computeSupplierReceivablesReconciliation(
     }
     const openMinor = row.amountDueMinor - row.amountRecoveredMinor;
     add(recovery, row.currency, openMinor);
-    add(isUnlinkedSupplierName(row.sourcedFromName) ? unlinked : linked, row.currency, openMinor);
+    add(isUnlinkedSupplier(row) ? unlinked : linked, row.currency, openMinor);
   }
 
   const subByCurrency = new Map<string, number>();
