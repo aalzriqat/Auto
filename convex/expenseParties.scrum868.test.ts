@@ -174,6 +174,28 @@ describe("SCRUM-868 P4b expense parties", () => {
     await refused(s, () => s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, vendor: "Rewritten" }), "SUPPLIER_LINK_FROZEN");
   });
 
+  test("paid supplier expense without a vendor accepts a web notes-only edit without other changes", async () => {
+    const s = await setup();
+    const id = await s.owner.mutation(api.expenses.create, s.args);
+    await s.t.run(ctx => ctx.db.patch(id, { vendor: undefined }));
+    const before = await dbSnapshot(s.t, tables);
+    const scheduled = await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+    await s.owner.mutation(api.expenses.update, {
+      orgId: s.orgId, expenseId: id, vendor: "", notes: "Retained history",
+    });
+    const after = await dbSnapshot(s.t, tables);
+    expect(after).toEqual({
+      ...before,
+      expenses: before.expenses.map(row => {
+        if (typeof row === "object" && row !== null && "_id" in row && row._id === id) {
+          return { ...row, notes: "Retained history" };
+        }
+        return row;
+      }),
+    });
+    expect(await s.t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toEqual(scheduled);
+  });
+
   test("legacy read and notes edit preserve absent identity while new payment refuses", async () => {
     const s = await setup();
     const id = await s.t.run(ctx => ctx.db.insert("expenses", {
