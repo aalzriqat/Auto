@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "file": "app/(dashboard)/[orgId]/deals/client.tsx",
+  "entries": [
+    {
+      "surface": "web",
+      "file": "app/(dashboard)/[orgId]/deals/client.tsx",
+      "callSiteId": "app/(dashboard)/[orgId]/deals/client.tsx:34:19",
+      "functionId": "dealListRow:figures",
+      "contractPath": "deal.applicationId",
+      "kind": "TYPE_UNKNOWN",
+      "cause": "client sends an unbranded string where the backend declares id: it is a string, but NOT verified as a document id for this table",
+      "fingerprint": "aa5757906d6d9aef",
+      "multiplicity": 1,
+      "rationale": "The row source ID is typed string and asserted to a Convex ID in the APPLICATION arm. Preserving the ternary alternatives proves the branch shape and literal, but does not prove the ID table. Keep that value proof debt UNKNOWN; this entry does not certify runtime data or authorization.",
+      "issue": "SCRUM-920",
+      "expires": "2026-12-01",
+      "renewal": "SCRUM-920 local source review at analyzer head ded7cd49a0a58506969779afc1d439770f1f814f: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts; the local native-spec CLI found no breaks at this call and exactly these two unbranded-ID paths. The supplied local spec is incomplete elsewhere and is not production evidence; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
+    },
+    {
+      "surface": "web",
+      "file": "app/(dashboard)/[orgId]/deals/client.tsx",
+      "callSiteId": "app/(dashboard)/[orgId]/deals/client.tsx:34:19",
+      "functionId": "dealListRow:figures",
+      "contractPath": "deal.saleId",
+      "kind": "TYPE_UNKNOWN",
+      "cause": "client sends an unbranded string where the backend declares id: it is a string, but NOT verified as a document id for this table",
+      "fingerprint": "aa5757906d6d9aef",
+      "multiplicity": 1,
+      "rationale": "The row source ID is typed string and asserted to a Convex ID in the SALE arm. Preserving the ternary alternatives proves the branch shape and literal, but does not prove the ID table. Keep that value proof debt UNKNOWN; this entry does not certify runtime data or authorization.",
+      "issue": "SCRUM-920",
+      "expires": "2026-12-01",
+      "renewal": "SCRUM-920 local source review at analyzer head ded7cd49a0a58506969779afc1d439770f1f814f: inspected the useLiveRowFigures ternary in app/(dashboard)/[orgId]/deals/client.tsx and the figures argument validator in convex/dealListRow.ts; the local native-spec CLI found no breaks at this call and exactly these two unbranded-ID paths. The supplied local spec is incomplete elsewhere and is not production evidence; evidence-blobs [[\"app/(dashboard)/[orgId]/deals/client.tsx\",\"698b34c91f7a781338d58d63ae8abc53e5f1115e\"],[\"convex/dealListRow.ts\",\"1f7f330c54d879afb2c118d4146af3401747426f\"]]"
+    }
+  ]
+}
