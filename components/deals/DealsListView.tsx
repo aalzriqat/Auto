@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode, type RefCallback } from "react";
 import Link from "next/link";
 import { AlertTriangle, Banknote, CarFront, ChevronRight, Lock, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { formatExactMinorAmount } from "@/lib/moneyDisplay";
 import { cn } from "@/lib/utils";
 import { formatDealNumber, parseDealNumberQuery } from "@/convex/utils/dealNumberFormat";
 import type { DealListRowFigures } from "@/convex/dealListRow";
+import { MoneySurfaceErrorBoundary } from "@/components/accounting/MoneySurfaceErrorBoundary";
 import { currentDealStep, type DealStep } from "./dealRows";
 
 /**
@@ -89,6 +90,17 @@ const useNoRowFigures: UseDealRowFigures = () => null;
 
 export const DealRowFiguresContext = createContext<UseDealRowFigures>(useNoRowFigures);
 
+/** A failed subscription uses the same localized row state as a null response. */
+function RowFiguresBoundary({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <MoneySurfaceErrorBoundary
+      fallback={<DealRowFiguresContext.Provider value={useNoRowFigures}>{children}</DealRowFiguresContext.Provider>}
+    >
+      {children}
+    </MoneySurfaceErrorBoundary>
+  );
+}
+
 /** Turns a cockpit minor amount into display text; the page supplies the org's formatter. */
 export type FormatMinor = (amountMinor: number, currency: string) => string;
 
@@ -100,7 +112,7 @@ const defaultFormatMinor: FormatMinor = (amountMinor, currency) =>
  * scrolled past keeps its subscription rather than re-reading on every scroll.
  * Without IntersectionObserver (a test DOM, an old engine) every row is near.
  */
-function useNearViewport<T extends Element>(): [(node: T | null) => void, boolean] {
+function useNearViewport<T extends Element>(): [RefCallback<T>, boolean] {
   const [near, setNear] = useState(() => typeof IntersectionObserver === "undefined");
   const ref = useCallback(
     (node: T | null) => {
@@ -115,6 +127,7 @@ function useNearViewport<T extends Element>(): [(node: T | null) => void, boolea
         { rootMargin: "200px" }
       );
       observer.observe(node);
+      return () => observer.disconnect();
     },
     [near]
   );
@@ -791,7 +804,9 @@ export function DealsListView({
             {/* Cards on a phone, a table above it: the same rows, one source. */}
             <ul className="divide-y @3xl:hidden" data-testid="deals-cards">
               {visible.map((row) => (
-                <DealCard key={row.key} row={row} {...rowProps} />
+                <RowFiguresBoundary key={`${row.href}:${row.key}`}>
+                  <DealCard row={row} {...rowProps} />
+                </RowFiguresBoundary>
               ))}
             </ul>
             <div className="hidden @3xl:block">
@@ -823,7 +838,9 @@ export function DealsListView({
                 </TableHeader>
                 <TableBody>
                   {visible.map((row) => (
-                    <DealTableRow key={row.key} row={row} {...rowProps} />
+                    <RowFiguresBoundary key={`${row.href}:${row.key}`}>
+                      <DealTableRow row={row} {...rowProps} />
+                    </RowFiguresBoundary>
                   ))}
                 </TableBody>
               </Table>

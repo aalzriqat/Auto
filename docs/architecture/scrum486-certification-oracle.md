@@ -432,7 +432,11 @@ SCRUM-917 (owner rich-row direction, 2026-11-05): each Deals list row reads its 
 | Owner | the cockpit's figure | `deals list financed=%s %s: the owner reads the cockpit's figure` |
 | view:sales only | step rail served; no price, no profit (each with a reason), no photo | `deals list financed=%s %s: a sales-only caller sees the step but no money` |
 | Financed deal with view:finance | selling price equals the overview's `customerSalePrice`; a SOURCED car reads `consigned: true` | `deals list: the financed row's selling price is the cockpit's customer sale price` |
-| Another organisation | its own org id with a foreign sale reads null; the foreign org id is refused | `deals list: a caller from another organization cannot read a row` |
+| Another organisation, sale and application | its own org id with a foreign row reads null; the foreign org id is refused | `deals list financed=%s: a caller from another organization cannot read a row` |
+| Foreign, missing or deleted sale/application | complete response is null, before any downstream query; a sale's soft-delete flag is honoured; applications have no soft-delete field, so their deletion case is a hard delete | `SCRUM-917 financed=$financed $state: local ownership refuses before delegation` |
+| view:sales + view:cost_price, no view:finance; sale and application | complete response keeps the cockpit's non-financial facts, null amounts and currency, and `FinanceAccessRequired` for profit; a financed price has the same reason | `SCRUM-917 financed=%s: finance gate with cost access preserves the complete public response` |
+
+Round 2 verification is local serial `convex-test` evidence, not Convex platform, concurrency or production certification. The row UI tests in `components/deals/DealsListView.queryFailure.test.tsx` cover missing-endpoint and ordinary thrown errors, loading, null and success in EN/AR for cards and table rows, plus failure followed by an org switch. A failed figures subscription renders the existing localized unavailable state without removing the list.
 
 ## SCRUM-869-DUE-ALERTS
 

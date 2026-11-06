@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import type { FunctionArgs } from "convex/server";
 import { seedDealNetProfit } from "../test-utils/dealNetProfitFixture";
 import { api } from "./_generated/api";
@@ -131,9 +131,27 @@ const unreadableRows = ([false, true] as const).flatMap((financed) =>
 test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership refuses before delegation", async ({ financed, state }) => {
   const s = await seedDealNetProfit(modules, "STOCK", financed);
   expect(await readRow(s, financed)).not.toBeNull();
+  const args: FunctionArgs<typeof api.dealListRow.figures> = {
+    orgId: s.orgId,
+    deal: financed ? { kind: "APPLICATION", applicationId: s.applicationId } : { kind: "SALE", saleId: s.saleId },
+  };
   await s.t.run(async (ctx) => {
     const id = financed ? s.applicationId : s.saleId;
-    if (state === "foreign") {
+    if (state === "missing") {
+      // convex-test ids encode their table suffix. Normalize a never-issued id
+      // and confirm absence, separately from deleting an existing fixture row.
+      if (financed) {
+        const applicationId = ctx.db.normalizeId("financeApplications", "99999financeApplications");
+        if (applicationId === null) throw new Error("Missing application fixture id is invalid");
+        expect(await ctx.db.get(applicationId)).toBeNull();
+        args.deal = { kind: "APPLICATION", applicationId };
+      } else {
+        const saleId = ctx.db.normalizeId("sales", "99999sales");
+        if (saleId === null) throw new Error("Missing sale fixture id is invalid");
+        expect(await ctx.db.get(saleId)).toBeNull();
+        args.deal = { kind: "SALE", saleId };
+      }
+    } else if (state === "foreign") {
       const orgId = await ctx.db.insert("organizations", { name: "Synthetic foreign row", createdAt: 1 });
       await ctx.db.patch(id, { orgId });
     } else if (state === "deleted" && !financed) {
@@ -145,7 +163,7 @@ test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership 
     }
   });
   // Full public wire response: foreign, missing and deleted are indistinguishable.
-  expect(await readRow(s, financed)).toEqual(null);
+  expect(await s.asOwner.query(api.dealListRow.figures, args)).toEqual(null);
 
   // Instrument the Convex query-dispatch boundary over the real authenticated
   // harness DB. Even if a downstream reader refuses today, this public wrapper
@@ -153,17 +171,17 @@ test.each(unreadableRows)("SCRUM-917 financed=$financed $state: local ownership 
   const handler: unknown = Reflect.get(figures, "_handler");
   if (typeof handler !== "function") throw new Error("Registered figures handler unavailable");
   const invoke = handler as (ctx: QueryCtx, args: FunctionArgs<typeof api.dealListRow.figures>) => Promise<unknown>;
-  const runQuery = vi.fn<QueryCtx["runQuery"]>().mockRejectedValue(new Error("Unexpected downstream delegation"));
-  const args: FunctionArgs<typeof api.dealListRow.figures> = {
-    orgId: s.orgId,
-    deal: financed ? { kind: "APPLICATION", applicationId: s.applicationId } : { kind: "SALE", saleId: s.saleId },
+  let delegated = 0;
+  const runQuery: QueryCtx["runQuery"] = async () => {
+    delegated += 1;
+    throw new Error("Unexpected downstream delegation");
   };
   expect(await s.asOwner.run((ctx) => invoke({ ...ctx, runQuery }, args))).toEqual(null);
-  expect(runQuery.mock.calls.length).toBe(0);
+  expect(delegated).toBe(0);
 });
 
-test("deals list: a caller from another organization cannot read a row", async () => {
-  const s = await seedDealNetProfit(modules, "STOCK", false);
+test.each([false, true])("deals list financed=%s: a caller from another organization cannot read a row", async (financed) => {
+  const s = await seedDealNetProfit(modules, "STOCK", financed);
   const foreign = await s.t.run(async (ctx) => {
     const orgId = await ctx.db.insert("organizations", { name: "Synthetic other dealership", createdAt: 1 });
     const userId = await ctx.db.insert("users", { clerkId: "other-reader", email: "other@example.invalid" });
@@ -177,13 +195,16 @@ test("deals list: a caller from another organization cannot read a row", async (
     return orgId;
   });
   const other = s.t.withIdentity({ subject: "other-reader" });
+  const deal: FunctionArgs<typeof api.dealListRow.figures>["deal"] = financed
+    ? { kind: "APPLICATION", applicationId: s.applicationId }
+    : { kind: "SALE", saleId: s.saleId };
   // Its own org id with the first org's sale: not found, never the figures.
   expect(
-    await other.query(api.dealListRow.figures, { orgId: foreign, deal: { kind: "SALE", saleId: s.saleId } })
+    await other.query(api.dealListRow.figures, { orgId: foreign, deal })
   ).toBeNull();
   // The first org's id: refused by tenancy.
   await expect(
-    other.query(api.dealListRow.figures, { orgId: s.orgId, deal: { kind: "SALE", saleId: s.saleId } })
+    other.query(api.dealListRow.figures, { orgId: s.orgId, deal })
   ).rejects.toThrow();
 });
 

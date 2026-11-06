@@ -2,7 +2,7 @@ import { v, type Infer } from "convex/values";
 import { query } from "./_generated/server";
 import { api } from "./_generated/api";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import type { DealProfit } from "./utils/financingEconomics";
 
@@ -25,8 +25,8 @@ import type { DealProfit } from "./utils/financingEconomics";
  * Authority: `view:sales` to read the row at all (the cockpits' own floor); the
  * money is whatever the cockpit serves this caller (`view:finance`); the net
  * profit also needs `view:cost_price` (SCRUM-902 c24475). Without it the
- * profit is `null` with a reason — never 0 — and the cost-bearing overview is
- * not even read for it.
+ * profit is `null` with a reason — never 0. The financed overview is still read
+ * for the selling price when the cockpit serves money; its profit is withheld.
  */
 
 const stageState = v.union(
@@ -108,6 +108,9 @@ export const figures = query({
 
     try {
       if (args.deal.kind === "SALE") {
+        // TEN-1: this public reader owns its guard, before any delegation.
+        const sale = await requireOwnedRow(ctx, args.orgId, "sales", args.deal.saleId);
+        if (sale.isDeleted) return null;
         // Null for a missing, deleted or foreign sale.
         const cockpit = await ctx.runQuery(api.sales.dealCockpit, { orgId: args.orgId, saleId: args.deal.saleId });
         if (cockpit === null) return null;
@@ -124,7 +127,9 @@ export const figures = query({
         };
       }
 
-      // Null for a missing or foreign application.
+      // Applications have no soft-delete field; missing and foreign rows use
+      // the same generic null response via the catch below.
+      await requireOwnedRow(ctx, args.orgId, "financeApplications", args.deal.applicationId);
       const cockpit = await ctx.runQuery(api.applications.dealCockpit, {
         orgId: args.orgId,
         applicationId: args.deal.applicationId,
