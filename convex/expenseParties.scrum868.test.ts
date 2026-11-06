@@ -186,6 +186,12 @@ describe("SCRUM-868 P4b expense parties", () => {
     const after = await dbSnapshot(s.t, tables);
     expect(after).toEqual({
       ...before,
+      notifications: [...before.notifications, {
+        _id: expect.any(String), _creationTime: expect.any(Number),
+        orgId: s.orgId, userId: s.userId, type: "expense.updated",
+        category: "finance", priority: "low", isRead: false,
+        link: `/${s.orgId}/expenses?highlightId=${id}`, data: { actorName: "Owner" },
+      }],
       expenses: before.expenses.map(row => {
         if (typeof row === "object" && row !== null && "_id" in row && row._id === id) {
           return { ...row, notes: "Retained history" };
