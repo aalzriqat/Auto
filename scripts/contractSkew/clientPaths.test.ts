@@ -64,6 +64,9 @@ describe("SCRUM-920 discriminated object union payloads", () => {
     { name: "literal absent from every branch", deal: '{ kind: "OTHER" as const, saleId }', rejected: true },
     { name: "second branch has wrong ID table", deal: '{ kind: "SALE" as const, saleId: applicationId }', rejected: true },
     { name: "bad ternary sibling is retained", deal: 'application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, applicationId }', rejected: true },
+    { name: "spread keeps the selected branch", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }) }', rejected: false },
+    { name: "spread cannot hide a bad sibling", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, applicationId }) }', rejected: true },
+    { name: "later field overwrites every spread arm", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }), kind: "OTHER" as const }', rejected: true },
   ])("$name", ({ deal, rejected }) => {
     const file = path.resolve("components/__virtual_contract_controls__/union/deal.ts");
     const source = `declare function useQuery(fn: unknown, args: unknown): unknown;
