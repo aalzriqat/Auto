@@ -56,6 +56,204 @@ const isolatedCompilerOptions: ts.CompilerOptions = {
   lib: ["lib.es2022.d.ts"], types: [], strict: true,
 };
 
+describe("SCRUM-920 discriminated object union payloads", () => {
+  test.each([
+    { name: "second branch alone", deal: '{ kind: "SALE" as const, saleId }', rejected: false },
+    { name: "ternary preserves both complete branches", deal: 'application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }', rejected: false },
+    { name: "field from the other branch", deal: '{ kind: "SALE" as const, applicationId }', rejected: true },
+    { name: "literal absent from every branch", deal: '{ kind: "OTHER" as const, saleId }', rejected: true },
+    { name: "second branch has wrong ID table", deal: '{ kind: "SALE" as const, saleId: applicationId }', rejected: true },
+    { name: "bad ternary sibling is retained", deal: 'application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, applicationId }', rejected: true },
+    { name: "spread keeps the selected branch", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }) }', rejected: false },
+    { name: "spread cannot hide a bad sibling", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, applicationId }) }', rejected: true },
+    { name: "later field overwrites every spread arm", deal: '{ ...(application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }), kind: "OTHER" as const }', rejected: true },
+  ])("$name", ({ deal, rejected }) => {
+    const file = path.resolve("components/__virtual_contract_controls__/union/deal.ts");
+    const source = `declare function useQuery(fn: unknown, args: unknown): unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      type Id<T extends string> = string & { __tableName: T };
+      declare const application: boolean;
+      declare const applicationId: Id<"financeApplications">;
+      declare const saleId: Id<"sales">;
+      export function run() {
+        return useQuery(api.dealListRow.figures, { deal: ${deal} });
+      }`;
+    const extracted = extractClientCalls([file], "tsconfig.json", {
+      program: virtualProgram(new Map([[file, source]]), isolatedCompilerOptions),
+    });
+    expect(extracted.calls).toHaveLength(1);
+    const call = extracted.calls[0];
+    if (!call.payload) throw new Error("Union payload not extracted");
+    const validator = v.object({ deal: v.union(
+      v.object({ kind: v.literal("APPLICATION"), applicationId: v.id("financeApplications") }),
+      v.object({ kind: v.literal("SALE"), saleId: v.id("sales") }),
+    ) });
+    if (!("json" in validator)) throw new Error("Native validator metadata unavailable");
+    const compared = compareNode(call.payload, validatorTree(validator.json), "", {
+      site: { identifier: call.identifier, file: call.file, line: call.line },
+    });
+    if (rejected) {
+      expect(compared.compatible).toBe(false);
+      expect(compared.findings.some((finding) => finding.severity === "BREAKING")).toBe(true);
+    } else {
+      expect(compared.findings).toEqual([]);
+    }
+  });
+});
+
+describe("SCRUM-920 spread alternative budget", () => {
+  function extract(payload: string) {
+    const file = path.resolve("components/__virtual_contract_controls__/union/budget.ts");
+    const source = `declare function useQuery(fn: unknown, args: unknown): unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      declare const c: boolean;
+      declare const opaque: any;
+      export function run() { return useQuery(api.budget.check, ${payload}); }`;
+    const result = extractClientCalls([file], "tsconfig.json", {
+      program: virtualProgram(new Map([[file, source]]), isolatedCompilerOptions),
+    });
+    expect(result.calls).toHaveLength(1);
+    const call = result.calls[0];
+    if (!call.payload) throw new Error("Budget payload not extracted");
+    return { call, payload: call.payload };
+  }
+
+  const siblings = (count: number) => Array.from({ length: count }, (_, i) =>
+    `...(c ? { bit${i}: 0 } : { bit${i}: 1 })`).join(", ");
+  const arms = (payload: ReturnType<typeof extract>["payload"]) =>
+    payload.kind === "variants" ? payload.nodes : [payload];
+  function compare(payload: ReturnType<typeof extract>["payload"], fields: Parameters<typeof v.object>[0]) {
+    const validator = v.object(fields);
+    if (!("json" in validator)) throw new Error("Native validator metadata unavailable");
+    return compareNode(payload, validatorTree(validator.json), "", {
+      site: { identifier: "budget:check", file: "budget.ts", line: 1 },
+    });
+  }
+
+  test.each([false, true])("many distinct sibling spreads are explicitly unproven (nested=%s)", (nested) => {
+    // 4,096 alternatives without a bound: a safe size control, never an OOM probe.
+    const literal = `{ before: 1, ${siblings(12)}, after: 2 }`;
+    const { call, payload } = extract(nested ? `{ ...${literal}, after: 2 }` : literal);
+    expect(arms(payload).length).toBeLessThanOrEqual(128);
+    expect(call.unknowns.filter((reason) => reason.includes("unresolvable spread"))).toHaveLength(5);
+    for (const arm of arms(payload)) {
+      expect(arm.kind).toBe("object");
+      if (arm.kind !== "object") throw new Error("Expected object alternative");
+      expect(arm.keysComplete).toBe(true);
+      expect(arm.fields.get("before")?.node).toEqual({ kind: "literal", values: new Set([1]) });
+      expect(arm.fields.get("after")?.node).toEqual({ kind: "literal", values: new Set([2]) });
+    }
+    const fields = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`bit${i}`, v.optional(v.number())]));
+    const findings = compare(payload, { before: v.number(), after: v.number(), ...fields }).findings;
+    expect(findings).toEqual([]);
+  });
+
+  // A balanced ternary reaches 127 distinct arms without hitting MAX_DEPTH.
+  function choices(leaves: string[]): string {
+    if (leaves.length === 1) return leaves[0];
+    const middle = Math.floor(leaves.length / 2);
+    return `c ? ${choices(leaves.slice(0, middle))} : ${choices(leaves.slice(middle))}`;
+  }
+
+  const bogusChoices = choices(Array.from({ length: 129 }, (_, i) =>
+    `{ value: ${i}${i === 128 ? ", bogus: 1" : ""} }`));
+  const extraChoices = (count: number) => choices(Array.from({ length: count }, (_, i) => `{ extra: ${i} }`));
+  const bitFields = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`bit${i}`, v.number()]));
+  const overflowCases: {
+    name: string;
+    source: string;
+    fields: Parameters<typeof v.object>[0];
+    path: string;
+  }[] = [
+    { name: "129 arms before required field", source: `{ ...(${bogusChoices}), value: 1 }`,
+      fields: { value: v.number() }, path: "bogus" },
+    { name: "conditional of sibling products", source: `{ ...(c ? { ${siblings(7)} } : { ${siblings(7)}, bogus: 1 }), value: 1 }`,
+      fields: { ...bitFields, value: v.number() }, path: "bogus" },
+    { name: "129 distinct undeclared fields", source: `{ ...(${extraChoices(129)}), required: 1 }`,
+      fields: { required: v.number() }, path: "extra" },
+    { name: "required field before 129 arms", source: `{ value: 1, ...(${bogusChoices}) }`,
+      fields: { value: v.number() }, path: "bogus" },
+    { name: "empty validator", source: `{ ...(${extraChoices(129)}) }`, fields: {}, path: "extra" },
+    { name: "all optional validator", source: `{ ...(${extraChoices(129)}) }`,
+      fields: { required: v.optional(v.number()) }, path: "extra" },
+    { name: "256 distinct undeclared fields", source: `{ ...(${extraChoices(256)}), required: 1 }`,
+      fields: { required: v.number() }, path: "extra" },
+  ];
+
+  // Recorded 2026-11-06: these seven controls pass with fc7327b3d's extractor
+  // (vitest -t "F3 main detection floor", exit 0). Keep that detection floor
+  // without importing a historical implementation into the permanent tests.
+  test.each(overflowCases)("F3 main detection floor: $name", ({ source, fields, path: fieldPath }) => {
+    const { payload } = extract(source);
+    expect(compare(payload, fields).findings).toContainEqual(expect.objectContaining({
+      severity: "BREAKING", path: fieldPath, dimension: "SHAPE",
+    }));
+  });
+
+  test.each(overflowCases)("F3 retains explicit budget uncertainty: $name", ({ source }) => {
+    const { call, payload } = extract(source);
+    expect(arms(payload).length).toBeLessThanOrEqual(128);
+    expect(call.unknowns.filter((reason) => reason.includes("alternative budget 128 exceeded"))).toHaveLength(1);
+  });
+
+  test.each([false, true])("F3 128-arm boundary stays exact (bad=%s)", (bad) => {
+    const leaves = Array.from({ length: 128 }, (_, i) =>
+      `{ choice: ${i}, value: ${bad && i === 127 ? '"wrong"' : "1"} }`);
+    const { call, payload } = extract(`{ ...(${choices(leaves)}) }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(128);
+    expect(arms(payload).every((arm) => arm.kind === "object" && arm.keysComplete)).toBe(true);
+    const findings = compare(payload, { choice: v.number(), value: v.number() }).findings;
+    if (bad) expect(findings).toContainEqual(expect.objectContaining({ severity: "BREAKING", path: "value" }));
+    else expect(findings).toEqual([]);
+  });
+  test.each([
+    { name: "valid branches", bad: false, overwrite: false },
+    { name: "invalid last sibling", bad: true, overwrite: false },
+    { name: "later overwrite repairs every branch", bad: true, overwrite: true },
+  ])("127 alternatives stay exact: $name", ({ bad, overwrite }) => {
+    const leaves = Array.from({ length: 127 }, (_, i) =>
+      `{ choice: ${i}, value: ${bad && i === 126 ? '"wrong"' : "1"} }`);
+    const { call, payload } = extract(`{ ...(${choices(leaves)}), ${overwrite ? "value: 2" : ""} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(127);
+    expect(arms(payload).every((arm) => arm.kind === "object" && arm.keysComplete)).toBe(true);
+    const findings = compare(payload, { choice: v.number(), value: v.number() }).findings;
+    if (bad && !overwrite) expect(findings.some((finding) => finding.severity === "BREAKING" && finding.path === "value")).toBe(true);
+    else expect(findings).toEqual([]);
+  });
+
+  test("the budget boundary retains every independent combination", () => {
+    const { call, payload } = extract(`{ ${siblings(7)} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(128);
+    const signatures = arms(payload).map((arm) => {
+      if (arm.kind !== "object") throw new Error("Expected object alternative");
+      expect(arm.keysComplete).toBe(true);
+      return Array.from({ length: 7 }, (_, i) => {
+        const bit = arm.fields.get(`bit${i}`)?.node;
+        if (bit?.kind !== "literal") throw new Error("Expected exact bit");
+        return [...bit.values][0];
+      }).join("");
+    });
+    expect(new Set(signatures).size).toBe(128);
+  });
+
+  test("structurally identical spread arms do not consume the budget", () => {
+    const repeated = Array.from({ length: 12 }, () => '...(c ? { value: 1 } : { value: 1 })').join(", ");
+    const { call, payload } = extract(`{ ${repeated} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(1);
+    expect(compare(payload, { value: v.number() }).findings).toEqual([]);
+  });
+
+  test("an opaque spread records uncertainty once after many prior alternatives", () => {
+    const { call, payload } = extract(`{ ${siblings(7)}, ...opaque }`);
+    expect(call.unknowns.filter((reason) => reason.includes("unresolvable spread"))).toHaveLength(1);
+    expect(arms(payload).every((arm) => arm.kind === "object" && !arm.keysComplete)).toBe(true);
+  });
+});
+
 describe("local const primitive fallthrough proof", () => {
   test("a direct negative typeof guard proves the transmitted primitive against native metadata", () => {
     const file = path.resolve("components/__virtual_contract_controls__/typeof/direct.ts");

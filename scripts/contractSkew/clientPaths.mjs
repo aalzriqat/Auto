@@ -32,6 +32,7 @@
  */
 import ts from "typescript";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { clientNode, mergeClientNodes } from "./contractTree.mjs";
 import { normalizeSurfacePath } from "./clientFiles.mjs";
 
@@ -150,6 +151,11 @@ function calleeName(expression) {
 }
 
 const MAX_DEPTH = 12;
+// Largest measured real payload: 60 alternatives. Keep >2x headroom while
+// bounding each Cartesian product to 128 field maps, independent of siblings.
+// Like TypeScript's checkCrossProductUnion, refuse BEFORE allocating a product:
+// https://github.com/microsoft/TypeScript/blob/v5.9.3/src/compiler/checker.ts
+const MAX_OBJECT_ALTERNATIVES = 128;
 const NATIVE_DATA_CONSTRUCTORS = new Set(["Number", "String", "BigInt", "Set", "Date", "Object"]);
 
 /**
@@ -978,24 +984,35 @@ function collectFromExpression(expr, context) {
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    const fields = new Map();
     // The key set of an object LITERAL is knowable by construction. It stops
     // being knowable the moment a computed key or an unresolvable spread joins
     // it — and that distinction is the whole basis of the missing-required-
     // field direction, so it is tracked here rather than guessed later.
-    let keysComplete = true;
+    let alternatives = [{ fields: new Map(), keysComplete: true }];
 
     for (const prop of node.properties) {
       if (ts.isSpreadAssignment(prop)) {
         // A spread's asserted target is not its runtime shape. Read the source
         // expression and unwrap only transparent TYPE_CLAIM wrappers.
-        const spread = unwrapTypeClaims(
+        let spreads = objectSpreadAlternatives(
           collectFromExpression(prop.expression, nested())
         );
-        if (spread.kind === "object") {
-          applySpread(fields, spread);
-          if (!spread.keysComplete) keysComplete = false;
-        } else {
+        if (alternatives.length > MAX_OBJECT_ALTERNATIVES / spreads.length) {
+          // Fall back to main's field-wise merge, retaining observed keys and
+          // values. Opaque widening loses undeclared-field breaks when later
+          // fields satisfy the validator; call.unknowns alone cannot prevent it.
+          // Correlations may be lost (and false breaks restored) past the cap.
+          acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread: alternative budget ${MAX_OBJECT_ALTERNATIVES} exceeded)`);
+          spreads = [spreads.slice(1).reduce((merged, spread) => mergeClientNodes(merged, spread), spreads[0])];
+        } else if (spreads.some((spread) => spread.kind !== "object")) {
+          acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
+        }
+        alternatives = alternatives.flatMap((prior) => spreads.map((spread) => {
+          const fields = new Map(prior.fields);
+          if (spread.kind === "object") {
+            applySpread(fields, spread);
+            return { fields, keysComplete: prior.keysComplete && spread.keysComplete };
+          }
           // ⚠️ ANY OTHER SPREAD WITHDRAWS KEY COMPLETENESS, INCLUDING
           // `unresolved`. The previous condition excluded `unresolved`
           // explicitly, so the ONE case where we know least about what is being
@@ -1007,10 +1024,9 @@ function collectFromExpression(expr, context) {
           // every required backend field of a key-complete object, and
           // Direction 1 reports an undeclared field as BREAKING. Fail-open in
           // one, fabricated in the other.
-          acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
           obscureOverwritableValues(fields);
-          keysComplete = false;
-        }
+          return { fields, keysComplete: false };
+        }));
         continue;
       }
       const name = propertyName(prop);
@@ -1018,7 +1034,7 @@ function collectFromExpression(expr, context) {
         // Computed key: the field name is not statically knowable, so this
         // object may carry keys we cannot see.
         acc.unknowns.push(`${prefix ? `${prefix}.` : ""}[computed]`);
-        keysComplete = false;
+        for (const alternative of alternatives) alternative.keysComplete = false;
         continue;
       }
       const childPath = prefix ? `${prefix}.${name}` : name;
@@ -1031,9 +1047,11 @@ function collectFromExpression(expr, context) {
               nested(childPath),
             )
           : clientNode.unresolved();
-      fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
+      for (const alternative of alternatives) {
+        alternative.fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
+      }
     }
-    return clientNode.object(fields, keysComplete);
+    return clientNode.variants(alternatives.map(({ fields, keysComplete }) => clientNode.object(fields, keysComplete)));
   }
 
   if (ts.isArrayLiteralExpression(node)) {
@@ -1076,7 +1094,14 @@ function collectFromExpression(expr, context) {
     );
     const whenTrue = collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements));
     const whenFalse = collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements));
-    return context.opaqueSymbols?.size ? clientNode.variants([whenTrue, whenFalse]) : mergeClientNodes(whenTrue, whenFalse);
+    // Object arms carry correlated discriminants, fields and values. Keep each
+    // complete shape for union matching; retain the existing opacity merge for
+    // alternatives whose shape is unproven.
+    if (context.opaqueSymbols?.size ||
+        (unwrapTypeClaims(whenTrue).kind === "object" && unwrapTypeClaims(whenFalse).kind === "object")) {
+      return clientNode.variants([whenTrue, whenFalse]);
+    }
+    return mergeClientNodes(whenTrue, whenFalse);
   }
 
   // A derived expression cannot manufacture evidence for an opaque map element.
@@ -2036,6 +2061,21 @@ function routeSegmentKind(fileName, parameterName) {
   if (segments.includes(`[...${parameterName}]`)) return "catchAll";
   if (segments.includes(`[${parameterName}]`)) return "single";
   return null;
+}
+
+/** @param {import("./contractTree.mjs").ClientNode} node
+ * @returns {import("./contractTree.mjs").ClientNode[]} */
+function objectSpreadAlternatives(node) {
+  const source = unwrapTypeClaims(node);
+  if (source.kind !== "variants") return [source];
+  const alternatives = source.nodes.flatMap(objectSpreadAlternatives);
+  // Above the cap the caller merges the whole list. Avoid quadratic equality
+  // work on a list that cannot be expanded exactly within the budget anyway.
+  if (alternatives.length > MAX_OBJECT_ALTERNATIVES) return alternatives;
+  // Native structural equality preserves Maps, Sets, undefined, optionality,
+  // provenance and assertion effects. Do not merge merely compatible shapes.
+  return alternatives.filter((alternative, index) =>
+    alternatives.findIndex((prior) => isDeepStrictEqual(prior, alternative)) === index);
 }
 
 /** Apply a spread in source order; later properties overwrite earlier ones. */
