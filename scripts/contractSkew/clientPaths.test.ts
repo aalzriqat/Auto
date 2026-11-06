@@ -56,6 +56,47 @@ const isolatedCompilerOptions: ts.CompilerOptions = {
   lib: ["lib.es2022.d.ts"], types: [], strict: true,
 };
 
+describe("SCRUM-920 discriminated object union payloads", () => {
+  test.each([
+    { name: "second branch alone", deal: '{ kind: "SALE" as const, saleId }', rejected: false },
+    { name: "ternary preserves both complete branches", deal: 'application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, saleId }', rejected: false },
+    { name: "field from the other branch", deal: '{ kind: "SALE" as const, applicationId }', rejected: true },
+    { name: "literal absent from every branch", deal: '{ kind: "OTHER" as const, saleId }', rejected: true },
+    { name: "second branch has wrong ID table", deal: '{ kind: "SALE" as const, saleId: applicationId }', rejected: true },
+    { name: "bad ternary sibling is retained", deal: 'application ? { kind: "APPLICATION" as const, applicationId } : { kind: "SALE" as const, applicationId }', rejected: true },
+  ])("$name", ({ deal, rejected }) => {
+    const file = path.resolve("components/__virtual_contract_controls__/union/deal.ts");
+    const source = `declare function useQuery(fn: unknown, args: unknown): unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      type Id<T extends string> = string & { __tableName: T };
+      declare const application: boolean;
+      declare const applicationId: Id<"financeApplications">;
+      declare const saleId: Id<"sales">;
+      export function run() {
+        return useQuery(api.dealListRow.figures, { deal: ${deal} });
+      }`;
+    const extracted = extractClientCalls([file], "tsconfig.json", {
+      program: virtualProgram(new Map([[file, source]]), isolatedCompilerOptions),
+    });
+    expect(extracted.calls).toHaveLength(1);
+    const call = extracted.calls[0];
+    if (!call.payload) throw new Error("Union payload not extracted");
+    const validator = v.object({ deal: v.union(
+      v.object({ kind: v.literal("APPLICATION"), applicationId: v.id("financeApplications") }),
+      v.object({ kind: v.literal("SALE"), saleId: v.id("sales") }),
+    ) });
+    const compared = compareNode(call.payload, validatorTree(validator.json), "", {
+      site: { identifier: call.identifier, file: call.file, line: call.line },
+    });
+    if (rejected) {
+      expect(compared.compatible).toBe(false);
+      expect(compared.findings.some((finding) => finding.severity === "BREAKING")).toBe(true);
+    } else {
+      expect(compared.findings).toEqual([]);
+    }
+  });
+});
+
 describe("local const primitive fallthrough proof", () => {
   test("a direct negative typeof guard proves the transmitted primitive against native metadata", () => {
     const file = path.resolve("components/__virtual_contract_controls__/typeof/direct.ts");
