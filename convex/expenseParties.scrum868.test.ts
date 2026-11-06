@@ -62,6 +62,13 @@ async function refused(s: Setup, call: () => Promise<unknown>, code: string) {
 }
 
 describe("SCRUM-868 P4b expense parties", () => {
+  test("showroom create with a canonical payee refuses without changing database or scheduler", async () => {
+    const s = await setup();
+    await refused(s, () => s.owner.mutation(api.expenses.create, {
+      ...s.args, costBearer: "SHOWROOM",
+    }), "SUPPLIER_ROLE_CONFLICT");
+  });
+
   test.each([
     ["VAT", "A supplier-borne cost cannot carry VAT."],
     ["prepaid", "A prepaid expense cannot be borne by the supplier."],
