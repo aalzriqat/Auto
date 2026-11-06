@@ -101,6 +101,105 @@ describe("SCRUM-920 discriminated object union payloads", () => {
   });
 });
 
+describe("SCRUM-920 spread alternative budget", () => {
+  function extract(payload: string) {
+    const file = path.resolve("components/__virtual_contract_controls__/union/budget.ts");
+    const source = `declare function useQuery(fn: unknown, args: unknown): unknown;
+      declare const api: Record<string, Record<string, unknown>>;
+      declare const c: boolean;
+      declare const opaque: any;
+      export function run() { return useQuery(api.budget.check, ${payload}); }`;
+    const result = extractClientCalls([file], "tsconfig.json", {
+      program: virtualProgram(new Map([[file, source]]), isolatedCompilerOptions),
+    });
+    expect(result.calls).toHaveLength(1);
+    const call = result.calls[0];
+    if (!call.payload) throw new Error("Budget payload not extracted");
+    return { call, payload: call.payload };
+  }
+
+  const siblings = (count: number) => Array.from({ length: count }, (_, i) =>
+    `...(c ? { bit${i}: 0 } : { bit${i}: 1 })`).join(", ");
+  const arms = (payload: ReturnType<typeof extract>["payload"]) =>
+    payload.kind === "variants" ? payload.nodes : [payload];
+  function compare(payload: ReturnType<typeof extract>["payload"], fields: Parameters<typeof v.object>[0]) {
+    const validator = v.object(fields);
+    if (!("json" in validator)) throw new Error("Native validator metadata unavailable");
+    return compareNode(payload, validatorTree(validator.json), "", {
+      site: { identifier: "budget:check", file: "budget.ts", line: 1 },
+    });
+  }
+
+  test.each([false, true])("many distinct sibling spreads are explicitly unproven (nested=%s)", (nested) => {
+    // 4,096 alternatives without a bound: a safe size control, never an OOM probe.
+    const literal = `{ before: 1, ${siblings(12)}, after: 2 }`;
+    const { call, payload } = extract(nested ? `{ ...${literal}, after: 2 }` : literal);
+    expect(arms(payload).length).toBeLessThanOrEqual(128);
+    expect(call.unknowns.filter((reason) => reason.includes("unresolvable spread"))).toHaveLength(5);
+    for (const arm of arms(payload)) {
+      expect(arm.kind).toBe("object");
+      if (arm.kind !== "object") throw new Error("Expected object alternative");
+      expect(arm.keysComplete).toBe(false);
+      expect(arm.fields.get("before")?.node.kind).toBe("opaqueValue");
+      expect(arm.fields.get("after")?.node).toEqual({ kind: "literal", values: new Set([2]) });
+    }
+    expect(compare(payload, { before: v.number(), after: v.number() }).findings.some(
+      (finding) => finding.severity === "UNKNOWN")).toBe(true);
+  });
+
+  // A balanced ternary reaches 127 distinct arms without hitting MAX_DEPTH.
+  function choices(leaves: string[]): string {
+    if (leaves.length === 1) return leaves[0];
+    const middle = Math.floor(leaves.length / 2);
+    return `c ? ${choices(leaves.slice(0, middle))} : ${choices(leaves.slice(middle))}`;
+  }
+  test.each([
+    { name: "valid branches", bad: false, overwrite: false },
+    { name: "invalid last sibling", bad: true, overwrite: false },
+    { name: "later overwrite repairs every branch", bad: true, overwrite: true },
+  ])("127 alternatives stay exact: $name", ({ bad, overwrite }) => {
+    const leaves = Array.from({ length: 127 }, (_, i) =>
+      `{ choice: ${i}, value: ${bad && i === 126 ? '"wrong"' : "1"} }`);
+    const { call, payload } = extract(`{ ...(${choices(leaves)}), ${overwrite ? "value: 2" : ""} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(127);
+    expect(arms(payload).every((arm) => arm.kind === "object" && arm.keysComplete)).toBe(true);
+    const findings = compare(payload, { choice: v.number(), value: v.number() }).findings;
+    if (bad && !overwrite) expect(findings.some((finding) => finding.severity === "BREAKING" && finding.path === "value")).toBe(true);
+    else expect(findings).toEqual([]);
+  });
+
+  test("the budget boundary retains every independent combination", () => {
+    const { call, payload } = extract(`{ ${siblings(7)} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(128);
+    const signatures = arms(payload).map((arm) => {
+      if (arm.kind !== "object") throw new Error("Expected object alternative");
+      expect(arm.keysComplete).toBe(true);
+      return Array.from({ length: 7 }, (_, i) => {
+        const bit = arm.fields.get(`bit${i}`)?.node;
+        if (bit?.kind !== "literal") throw new Error("Expected exact bit");
+        return [...bit.values][0];
+      }).join("");
+    });
+    expect(new Set(signatures).size).toBe(128);
+  });
+
+  test("structurally identical spread arms do not consume the budget", () => {
+    const repeated = Array.from({ length: 12 }, () => '...(c ? { value: 1 } : { value: 1 })').join(", ");
+    const { call, payload } = extract(`{ ${repeated} }`);
+    expect(call.unknowns).toEqual([]);
+    expect(arms(payload)).toHaveLength(1);
+    expect(compare(payload, { value: v.number() }).findings).toEqual([]);
+  });
+
+  test("an opaque spread records uncertainty once after many prior alternatives", () => {
+    const { call, payload } = extract(`{ ${siblings(7)}, ...opaque }`);
+    expect(call.unknowns.filter((reason) => reason.includes("unresolvable spread"))).toHaveLength(1);
+    expect(arms(payload).every((arm) => arm.kind === "object" && !arm.keysComplete)).toBe(true);
+  });
+});
+
 describe("local const primitive fallthrough proof", () => {
   test("a direct negative typeof guard proves the transmitted primitive against native metadata", () => {
     const file = path.resolve("components/__virtual_contract_controls__/typeof/direct.ts");
