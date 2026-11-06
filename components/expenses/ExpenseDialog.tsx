@@ -473,7 +473,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
               />
 
               {isSupplierBorne ? (
-                <ExpensePartyFields form={form} orgId={activeOrgId} locked={paidExpenseLocked} />
+                <ExpensePartyFields form={form} orgId={activeOrgId} locked={paidExpenseLocked} bearerName={selectedVehicle?.sourcedFromName} />
               ) : (
               <FormField
                 control={form.control}
@@ -705,10 +705,11 @@ function costBearerHint(
   return null;
 }
 
-function ExpensePartyFields({ form, orgId, locked }: Readonly<{
+function ExpensePartyFields({ form, orgId, locked, bearerName }: Readonly<{
   form: ReturnType<typeof useForm<ExpenseFormValues>>;
   orgId: Id<"organizations"> | null | undefined;
   locked: boolean;
+  bearerName: string | undefined;
 }>) {
   const { t } = useLanguage();
   return (
@@ -731,11 +732,22 @@ function ExpensePartyFields({ form, orgId, locked }: Readonly<{
               ariaLabel={t("ExpenseServicePayee")}
             />
           </FormControl>
+          <ExpenseBearerField name={bearerName} />
           <p className="text-xs text-muted-foreground">{t("ExpenseBearerExplanation")}</p>
           {locked && <p className="text-xs text-muted-foreground">{t("ExpensePayeeLocked")}</p>}
           <FormMessage />
         </FormItem>
       )}
     />
+  );
+}
+
+function ExpenseBearerField({ name }: Readonly<{ name: string | undefined }>) {
+  const { t } = useLanguage();
+  return (
+    <label className="block space-y-2">
+      <span className="text-sm font-medium">{t("ExpenseBearerSupplier")}</span>
+      <Input readOnly value={name || t("ExpenseBearerUnavailable")} />
+    </label>
   );
 }

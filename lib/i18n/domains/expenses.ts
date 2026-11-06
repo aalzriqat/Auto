@@ -1,5 +1,7 @@
 export const expensesEn = {
   ExpenseServicePayee: "Service provider / payee",
+  ExpenseBearerSupplier: "Supplier bearing the cost",
+  ExpenseBearerUnavailable: "Supplier name unavailable",
   ExpenseBearerExplanation: "Recovered from the vehicle supplier, not the payee.",
   ExpensePayeeLocked: "The recorded payee is fixed once this expense is paid.",
   Expenses: "Expenses",
@@ -185,6 +187,8 @@ export const expensesEn = {
 
 export const expensesAr = {
   ExpenseServicePayee: "مقدم الخدمة / المستفيد",
+  ExpenseBearerSupplier: "المورّد المتحمل للتكلفة",
+  ExpenseBearerUnavailable: "اسم المورّد غير متاح",
   ExpenseBearerExplanation: "تُسترد من مورّد المركبة، وليس من المستفيد.",
   ExpensePayeeLocked: "لا يمكن تغيير المستفيد المسجل بعد دفع هذا المصروف.",
   Expenses: "المصروفات",
