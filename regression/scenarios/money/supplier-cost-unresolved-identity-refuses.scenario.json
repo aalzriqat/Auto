@@ -14,7 +14,8 @@
         "costBearer": "SUPPLIER",
         "amountMinor": 200000,
         "supplierId": "ABSENT",
-        "supplierName": "ABSENT"
+        "supplierName": "ABSENT",
+        "vendorSupplierId": "PAYEE_SUPPLIER"
       }
     }
   ],
@@ -53,5 +54,5 @@
     "key": "SCRUM-868",
     "failingFirst": "025516912d24354c824f3267cd19fdefb7a9b7c7"
   },
-  "fingerprint": "0cd2b48e048c3faff2703280bdc748b47f79b0b5a7aee9a7885fbb708f30bdca"
+  "fingerprint": "4407e5aa59d3555f1c8dfa7bfdd30c846746acf62701544020d3977ec29dac16"
 }

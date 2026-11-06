@@ -1,0 +1,72 @@
+{
+  "id": "expense-parties-retry-preserves-snapshots",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "costBearer": "SUPPLIER",
+        "payee": "GARAGE",
+        "amountMinor": 200000,
+        "idempotencyKey": "SAME_INTENT"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "costBearer": "SUPPLIER",
+        "payee": "GARAGE",
+        "amountMinor": 200000,
+        "idempotencyKey": "SAME_INTENT",
+        "afterRenameAndDeactivation": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "retry.changed",
+      "value": false
+    },
+    {
+      "observable": "expense.count",
+      "value": 1
+    },
+    {
+      "observable": "recovery.count",
+      "value": 1
+    }
+  ],
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "retry after rename and deactivation is idempotent and retains the first parties"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4b-expense-parties",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "794a6c850ec4522add2ebf1ad36fdbcb93bb66a9"
+  },
+  "fingerprint": "75749c1f14ad27f6cdc8bb94b0ca7b8c8d5a01ace16a5cc3f5944e962f1e9f88"
+}

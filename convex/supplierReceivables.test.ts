@@ -547,7 +547,7 @@ describe("what a supplier still owes", () => {
     await s.asUser.mutation(api.expenses.create, {
       orgId: s.orgId, vehicleId: s.vehicleId, title: "Transport, borne by the supplier",
       amount: SUPPLIER_COST, date: Date.now() - 60_000, category: "TRANSPORT", status: "PAID",
-      paymentMethod: "CASH", costBearer: "SUPPLIER", idempotencyKey: crypto.randomUUID(),
+      paymentMethod: "CASH", costBearer: "SUPPLIER", vendorSupplierId: s.supplierId, idempotencyKey: crypto.randomUUID(),
     });
 
     const summary = await s.asUser.query(api.supplierReceivables.outstandingSummary, { orgId: s.orgId });

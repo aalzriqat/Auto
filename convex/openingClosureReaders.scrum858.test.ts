@@ -708,6 +708,7 @@ test("ordinary advances, supplier costs and partner contributions reconcile with
   await owner.mutation(api.payroll.recordAdvance, { orgId, userId: employeeId, amount: 25, method: "CASH", idempotencyKey: "closure-ordinary-advance" });
   await owner.mutation(api.expenses.create, { orgId, vehicleId, title: "Synthetic supplier-borne cost", amount: 200,
     date: Date.now() - 60_000, category: "TRANSPORT", status: "PAID", paymentMethod: "CASH", costBearer: "SUPPLIER",
+    vendorSupplierId: (await t.run((ctx) => ctx.db.get(vehicleId)))!.sourcedSupplierId,
     idempotencyKey: "closure-ordinary-expense" } as never);
   await owner.mutation(api.partnerEquity.recordEquityMovement, { orgId, partnerId, type: "CONTRIBUTION", amountMinor: 4_000,
     paymentMethod: "CASH", idempotencyKey: "closure-ordinary-contribution" });

@@ -1,0 +1,81 @@
+{
+  "id": "expense-parties-legacy-notes-no-rewrite",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.list",
+      "input": {
+        "expense": "LEGACY_PENDING_SUPPLIER_COST",
+        "supplierDeleted": true
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "expense": "LEGACY_PENDING_SUPPLIER_COST",
+        "notes": "HISTORY_NOTE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "expense": "LEGACY_PENDING_SUPPLIER_COST",
+        "status": "PAID",
+        "payee": "GARAGE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "read.changed",
+      "value": false
+    },
+    {
+      "observable": "expense.costBearerSupplierIdPresent",
+      "value": false
+    },
+    {
+      "observable": "expense.vendorSupplierIdPresent",
+      "value": false
+    },
+    {
+      "observable": "payment.refusal",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    }
+  ],
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "legacy read and notes edit preserve absent identity while new payment refuses"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4b-expense-parties",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "794a6c850ec4522add2ebf1ad36fdbcb93bb66a9"
+  },
+  "fingerprint": "462b3a8b83e8a646aa5b4fb696c9ce7264855108831b1a874bc8ea3b13d273ec"
+}

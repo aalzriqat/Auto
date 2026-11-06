@@ -82,7 +82,7 @@ export async function openSupplierCostRecovery(
       .withIndex("by_org_expense", (q) => q.eq("orgId", args.expense.orgId).eq("expenseId", args.expense._id))
       .first();
     if (existing) return existing._id;
-    const supplier = await requireSupplierSnapshotForCompletion(ctx, args.expense.orgId, args.vehicle.sourcedSupplierId);
+    const supplier = await requireSupplierSnapshotForCompletion(ctx, args.expense.orgId, args.expense.costBearerSupplierId);
     const now = Date.now();
     return await ctx.db.insert("supplierCostRecoveries", {
       orgId: args.expense.orgId,

@@ -13,7 +13,8 @@
         "vehicle": "SOURCED_LINKED",
         "costBearer": "SUPPLIER",
         "amountMinor": 200000,
-        "idempotencyKey": "SAME_INTENT"
+        "idempotencyKey": "SAME_INTENT",
+        "vendorSupplierId": "VEHICLE_SUPPLIER"
       }
     },
     {
@@ -27,7 +28,8 @@
         "costBearer": "SUPPLIER",
         "amountMinor": 200000,
         "idempotencyKey": "SAME_INTENT",
-        "afterSupplierRename": true
+        "afterSupplierRename": true,
+        "vendorSupplierId": "VEHICLE_SUPPLIER"
       }
     }
   ],
@@ -66,5 +68,5 @@
     "key": "SCRUM-868",
     "failingFirst": "025516912d24354c824f3267cd19fdefb7a9b7c7"
   },
-  "fingerprint": "5bed71e68843e7c33ea19b4b816946b8029874970065f22c32793d9eb836b536"
+  "fingerprint": "9241ad142d77ff78ecc99dabdcfcfb8fd111ee9a340ac707f813604d9cec9c86"
 }

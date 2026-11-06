@@ -112,13 +112,15 @@ async function seed(tag: string) {
     sourceType: "SOURCED", sourcedFromName: "Amman Importer Co", sourcedSupplierId: supplierId, sourceCost: 9_500,
   });
   const stockId = await addVehicle(t, org.orgId, `${tag}K`, { sourceType: "STOCK", purchasePrice: 8_000 });
-  return { t, ...org, sourcedId, stockId };
+  return { t, ...org, sourcedId, stockId, supplierId };
 }
 
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
 function expenseArgs(s: Seeded, overrides: Record<string, unknown> = {}) {
+  const bearer = "costBearer" in overrides ? overrides.costBearer : "SUPPLIER";
   return {
+    vendorSupplierId: bearer === "SUPPLIER" ? s.supplierId : undefined,
     orgId: s.orgId,
     vehicleId: s.sourcedId,
     title: "Transport from the supplier's yard",
@@ -250,7 +252,7 @@ describe("switching a PENDING expense to a supplier bearer", () => {
     await expect(
       s.as.mutation(api.expenses.update, { orgId: s.orgId, expenseId, costBearer: "SUPPLIER" })
     ).rejects.toThrow();
-    await s.as.mutation(api.expenses.update, { orgId: s.orgId, expenseId, taxAmount: 0, costBearer: "SUPPLIER" });
+    await s.as.mutation(api.expenses.update, { orgId: s.orgId, expenseId, taxAmount: 0, costBearer: "SUPPLIER", vendorSupplierId: s.supplierId });
     const row = await s.t.run((ctx) => ctx.db.get(expenseId));
     expect(row!.costBearer).toBe("SUPPLIER");
     expect(row!.taxAmount ?? 0).toBe(0);

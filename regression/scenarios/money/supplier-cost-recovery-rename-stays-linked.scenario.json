@@ -23,7 +23,8 @@
       "input": {
         "costBearer": "SUPPLIER",
         "status": "PAID",
-        "amountMinor": 200000
+        "amountMinor": 200000,
+        "vendorSupplierId": "VEHICLE_SUPPLIER"
       }
     },
     {
@@ -90,5 +91,5 @@
     "key": "SCRUM-868",
     "failingFirst": "19d5faa64723307c0346b52be7575cc831c1e9bc"
   },
-  "fingerprint": "1d7ecffcc5e20b7598091916f901ced90dd33feff192b70d368af4a0657375fb"
+  "fingerprint": "465125e16a23093451e915cc5a23f31359d44774c3584c2cc7e753a84f7e5941"
 }

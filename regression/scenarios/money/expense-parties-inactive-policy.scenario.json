@@ -1,0 +1,87 @@
+{
+  "id": "expense-parties-inactive-policy",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "supplierStatus": "INACTIVE",
+        "costBearer": "SUPPLIER",
+        "amountMinor": 200000,
+        "payee": "GARAGE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "expense": "ACCEPTED_PENDING",
+        "bearerStatus": "INACTIVE",
+        "amountMinor": 300000,
+        "payee": "GARAGE"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.update",
+      "input": {
+        "expense": "ACCEPTED_PENDING",
+        "status": "PAID",
+        "payee": "GARAGE",
+        "payeeRenamedAndDeactivated": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "newCost.refusal",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "amountIncrease.refusal",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "paid.vendor",
+      "value": "Garage"
+    },
+    {
+      "observable": "paid.amountMinor",
+      "value": 200000
+    }
+  ],
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "new inactive bearer refuses; accepted pending cost completes without refreshing payee snapshot"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4b-expense-parties",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "794a6c850ec4522add2ebf1ad36fdbcb93bb66a9"
+  },
+  "fingerprint": "47f7dbdb746917505e891e84a1a996d750f59c8b8f457d9658281c3316281195"
+}
