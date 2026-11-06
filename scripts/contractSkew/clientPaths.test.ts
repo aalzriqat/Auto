@@ -143,8 +143,10 @@ describe("SCRUM-920 spread alternative budget", () => {
       expect(arm.fields.get("before")?.node.kind).toBe("opaqueValue");
       expect(arm.fields.get("after")?.node).toEqual({ kind: "literal", values: new Set([2]) });
     }
-    expect(compare(payload, { before: v.number(), after: v.number() }).findings.some(
-      (finding) => finding.severity === "UNKNOWN")).toBe(true);
+    const fields = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`bit${i}`, v.optional(v.number())]));
+    const findings = compare(payload, { before: v.number(), after: v.number(), ...fields }).findings;
+    expect(findings).toContainEqual(expect.objectContaining({ severity: "TYPE_UNKNOWN", path: "before" }));
+    expect(findings.some((finding) => finding.severity === "BREAKING")).toBe(false);
   });
 
   // A balanced ternary reaches 127 distinct arms without hitting MAX_DEPTH.
