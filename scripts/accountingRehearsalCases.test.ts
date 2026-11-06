@@ -24,6 +24,7 @@ import "../convex/sales";
 import fs from "node:fs";
 import path from "node:path";
 import { summarize } from "./accountingPreviewRehearsal.mjs";
+import { SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING } from "../convex/utils/closeWarnings";
 import { exportedArgsOf, registeredArgsProblems } from "../test-utils/registeredArgs";
 import {
   CURRENCY_SCALES,
@@ -296,6 +297,9 @@ type Defects = {
   sameKeyReplayRefused?: boolean;
   /** The period cannot be closed at all — so the property is UNTESTED, not proven. */
   refuseClose?: boolean;
+  /** P1 must acknowledge only its known, truthful supplier-margin warning. */
+  closeWarnings?: unknown;
+  unreadableCloseChecklist?: boolean;
   /** A replayed create makes a SECOND row — the double-spend. */
   duplicateOnCreateReplay?: boolean;
   /** A replayed create is REFUSED — safe-looking, and not safe. */
@@ -605,6 +609,8 @@ async function registeredArgsRefusal(registered: unknown, fnPath: string, args: 
 }
 
 function makeBackend(defects: Defects = {}) {
+  const closeWarnings = defects.closeWarnings === undefined
+    ? [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING] : defects.closeWarnings;
   const deposits = new Map<string, Deposit>();
   const commands = new Map<string, string>();
   const createdByKey = new Map<string, string>();
@@ -1285,9 +1291,17 @@ function makeBackend(defects: Defects = {}) {
         return { ok: true as const, value: id("period") };
       case "accountingPeriods:list":
         return { ok: true as const, value: [{ _id: "p1", status: periodStatus }] };
+      case "accountingPeriods:closeChecklist":
+        if (defects.unreadableCloseChecklist) {
+          return { ok: false as const, error: "Checklist unavailable." };
+        }
+        return { ok: true as const, value: { canClose: true, warnings: closeWarnings } };
       case "accountingPeriods:close":
         if (defects.refuseClose) {
           return { ok: false as const, error: "The close checklist is not clean." };
+        }
+        if (JSON.stringify(args.acknowledgedWarnings) !== JSON.stringify(closeWarnings)) {
+          return { ok: false as const, error: "Review and acknowledge every warning before closing." };
         }
         periodStatus = "CLOSED";
         return { ok: true as const, value: null };
@@ -3101,6 +3115,24 @@ describe("the rehearsal FAILS when the backend misbehaves — one defect per cas
     // close a period is not evidence that closed periods behave correctly.
     const results = await runAgainst({ refuseClose: true });
     expect(statusOf(results, "P1")).toBe("UNPROVEN");
+  });
+
+  test("SCRUM-858 P1 acknowledges the known supplier-margin warning and exercises the closed period", async () => {
+    expect(statusOf(await runAgainst(), "P1")).toBe("PASS");
+  });
+
+  test.each([
+    ["missing expected warning", []],
+    ["unexpected warning", ["Unexpected reconciliation warning"]],
+    ["additional warning", [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING, "Unexpected reconciliation warning"]],
+    ["duplicate warning", [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING, SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING]],
+    ["malformed warnings", null],
+  ])("SCRUM-858 P1 stays UNPROVEN for %s", async (_label, closeWarnings) => {
+    expect(statusOf(await runAgainst({ closeWarnings }), "P1")).toBe("UNPROVEN");
+  });
+
+  test("SCRUM-858 P1 stays UNPROVEN when the checklist cannot be read", async () => {
+    expect(statusOf(await runAgainst({ unreadableCloseChecklist: true }), "P1")).toBe("UNPROVEN");
   });
 
   test("RT1 catches a replayed create that makes a SECOND row", async () => {
