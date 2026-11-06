@@ -3,6 +3,7 @@ import { jsonToConvex } from "convex/values";
 import { api } from "../../convex/_generated/api";
 import { newContainedContext } from "../containedContext";
 import { authenticatedConvexClient, APPROVER_AUTH_FILE, USER_AUTH_FILE, resolveOrgId } from "../utils";
+import { isOpeningProofWorkflow } from "./openingProofWorkflow";
 
 const DIRECT = "accountingCutover:postOpeningBalanceDirect";
 const DRAFT = "accountingCutover:draftOpeningBalance";
@@ -38,10 +39,7 @@ function frame(payload: string | Buffer): Record<string, unknown> | null {
 function decode(value: unknown): unknown { return jsonToConvex(JSON.parse(JSON.stringify(value))); }
 
 function workflowTarget(baseURL: string | undefined): URL {
-  const main = process.env.GITHUB_WORKFLOW === "Deal Scenarios E2E (Playwright, GL-checked)" &&
-    ["schedule", "workflow_dispatch"].includes(process.env.GITHUB_EVENT_NAME ?? "");
-  const candidate = process.env.GITHUB_WORKFLOW === "Trusted Browser Attack Swarm" && process.env.GITHUB_EVENT_NAME === "workflow_run";
-  if (process.env.GITHUB_ACTIONS !== "true" || process.env.CI !== "true" || (!main && !candidate)) {
+  if (!isOpeningProofWorkflow(process.env)) {
     throw new Error("Opening browser proof requires an isolated trusted terminal Preview workflow");
   }
   const app = new URL(baseURL ?? "http://localhost:3000");
