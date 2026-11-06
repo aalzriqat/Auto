@@ -978,24 +978,25 @@ function collectFromExpression(expr, context) {
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    const fields = new Map();
     // The key set of an object LITERAL is knowable by construction. It stops
     // being knowable the moment a computed key or an unresolvable spread joins
     // it — and that distinction is the whole basis of the missing-required-
     // field direction, so it is tracked here rather than guessed later.
-    let keysComplete = true;
+    let alternatives = [{ fields: new Map(), keysComplete: true }];
 
     for (const prop of node.properties) {
       if (ts.isSpreadAssignment(prop)) {
         // A spread's asserted target is not its runtime shape. Read the source
         // expression and unwrap only transparent TYPE_CLAIM wrappers.
-        const spread = unwrapTypeClaims(
+        const spreads = objectSpreadAlternatives(
           collectFromExpression(prop.expression, nested())
         );
-        if (spread.kind === "object") {
-          applySpread(fields, spread);
-          if (!spread.keysComplete) keysComplete = false;
-        } else {
+        alternatives = alternatives.flatMap((prior) => spreads.map((spread) => {
+          const fields = new Map(prior.fields);
+          if (spread.kind === "object") {
+            applySpread(fields, spread);
+            return { fields, keysComplete: prior.keysComplete && spread.keysComplete };
+          }
           // ⚠️ ANY OTHER SPREAD WITHDRAWS KEY COMPLETENESS, INCLUDING
           // `unresolved`. The previous condition excluded `unresolved`
           // explicitly, so the ONE case where we know least about what is being
@@ -1009,8 +1010,8 @@ function collectFromExpression(expr, context) {
           // one, fabricated in the other.
           acc.unknowns.push(`${prefix || "<root>"} (unresolvable spread)`);
           obscureOverwritableValues(fields);
-          keysComplete = false;
-        }
+          return { fields, keysComplete: false };
+        }));
         continue;
       }
       const name = propertyName(prop);
@@ -1018,7 +1019,7 @@ function collectFromExpression(expr, context) {
         // Computed key: the field name is not statically knowable, so this
         // object may carry keys we cannot see.
         acc.unknowns.push(`${prefix ? `${prefix}.` : ""}[computed]`);
-        keysComplete = false;
+        for (const alternative of alternatives) alternative.keysComplete = false;
         continue;
       }
       const childPath = prefix ? `${prefix}.${name}` : name;
@@ -1031,9 +1032,11 @@ function collectFromExpression(expr, context) {
               nested(childPath),
             )
           : clientNode.unresolved();
-      fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
+      for (const alternative of alternatives) {
+        alternative.fields.set(name, { node: childNode, provenance: "LITERAL", optional: false });
+      }
     }
-    return clientNode.object(fields, keysComplete);
+    return clientNode.variants(alternatives.map(({ fields, keysComplete }) => clientNode.object(fields, keysComplete)));
   }
 
   if (ts.isArrayLiteralExpression(node)) {
@@ -1076,9 +1079,14 @@ function collectFromExpression(expr, context) {
     );
     const whenTrue = collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements));
     const whenFalse = collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements));
-    // Only one arm is transmitted. Preserve its complete shape so a validator
-    // union checks the discriminant, fields and values against the same branch.
-    return clientNode.variants([whenTrue, whenFalse]);
+    // Object arms carry correlated discriminants, fields and values. Keep each
+    // complete shape for union matching; retain the existing opacity merge for
+    // alternatives whose shape is unproven.
+    if (context.opaqueSymbols?.size ||
+        (unwrapTypeClaims(whenTrue).kind === "object" && unwrapTypeClaims(whenFalse).kind === "object")) {
+      return clientNode.variants([whenTrue, whenFalse]);
+    }
+    return mergeClientNodes(whenTrue, whenFalse);
   }
 
   // A derived expression cannot manufacture evidence for an opaque map element.
@@ -2038,6 +2046,13 @@ function routeSegmentKind(fileName, parameterName) {
   if (segments.includes(`[...${parameterName}]`)) return "catchAll";
   if (segments.includes(`[${parameterName}]`)) return "single";
   return null;
+}
+
+/** @param {import("./contractTree.mjs").ClientNode} node
+ * @returns {import("./contractTree.mjs").ClientNode[]} */
+function objectSpreadAlternatives(node) {
+  const source = unwrapTypeClaims(node);
+  return source.kind === "variants" ? source.nodes.flatMap(objectSpreadAlternatives) : [source];
 }
 
 /** Apply a spread in source order; later properties overwrite earlier ones. */
