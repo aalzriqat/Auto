@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
+import { seedBank } from "../test-utils/bankFixture";
 import { renameSupplier, seedSupplier } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -132,7 +133,7 @@ describe("SCRUM-868 P4b expense parties", () => {
       await ctx.db.patch(s.payeeId, { status: "INACTIVE" });
     });
     await refused(s, () => s.owner.mutation(api.expenses.update, {
-      orgId: s.orgId, expenseId: id, amount: fromMinorUnits(300000, "JOD"),
+      orgId: s.orgId, expenseId: id, amount: fromMinorUnits(300000, "JOD"), vendorSupplierId: s.payeeId,
     }), "SUPPLIER_INACTIVE");
     await s.owner.mutation(api.expenses.update, { orgId: s.orgId, expenseId: id, status: "PAID", vendorSupplierId: s.payeeId });
     expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ vendor: "Garage", vendorSupplierId: s.payeeId, costBearerSupplierId: s.supplierId });
@@ -216,6 +217,42 @@ describe("SCRUM-868 P4b expense parties", () => {
     await refused(s, () => s.owner.mutation(api.expenses.update, {
       orgId: s.orgId, expenseId: id, status: "PAID", vendorSupplierId: s.payeeId,
     }), "SUPPLIER_IDENTITY_UNRESOLVED");
+  });
+
+
+  test("web first payment completes an accepted inactive obligation with its first method and bank choice", async () => {
+    for (const paymentMethod of ["CASH", "BANK_TRANSFER"] as const) {
+      const s = await setup();
+      const bankAccountId = paymentMethod === "BANK_TRANSFER" ? await seedBank(s.t, s.orgId) : undefined;
+      // Exact web create shape: PENDING has no selected payment method or bank.
+      const id = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING", paymentMethod: undefined });
+      await s.t.run(async ctx => {
+        await ctx.db.patch(s.supplierId, { status: "INACTIVE" });
+        await ctx.db.patch(s.payeeId, { status: "INACTIVE" });
+      });
+      await s.owner.mutation(api.expenses.update, {
+        orgId: s.orgId, expenseId: id, status: "PAID", vendorSupplierId: s.payeeId,
+        paymentMethod, bankAccountId, taxAmount: 0, isPrepaid: false,
+      });
+      expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({
+        status: "PAID", amount: fromMinorUnits(200000, "JOD"), paymentMethod, vendor: "Garage",
+        vendorSupplierId: s.payeeId, costBearerSupplierId: s.supplierId,
+      });
+      expect(await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").unique())).toMatchObject({ supplierId: s.supplierId, amountDueMinor: 200000 });
+    }
+  });
+
+  test("mobile-shaped pending amount increase requires explicit payee confirmation", async () => {
+    const s = await setup();
+    const id = await s.owner.mutation(api.expenses.create, { ...s.args, status: "PENDING", paymentMethod: undefined });
+    await refused(s, () => s.owner.mutation(api.expenses.update, {
+      orgId: s.orgId, expenseId: id, amount: fromMinorUnits(300000, "JOD"),
+    }), "SUPPLIER_IDENTITY_REQUIRED");
+    // The web-shaped economic edit remains available with explicit party confirmation.
+    await s.owner.mutation(api.expenses.update, {
+      orgId: s.orgId, expenseId: id, amount: fromMinorUnits(300000, "JOD"), vendorSupplierId: s.payeeId,
+    });
+    expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ amount: fromMinorUnits(300000, "JOD"), costBearerSupplierId: s.supplierId });
   });
 
 });
