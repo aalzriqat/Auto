@@ -146,7 +146,7 @@ async function assertCostBearerAllowed(
       args.amount > 0 &&
       fromMinorUnits(toMinorUnits(args.amount, currency), currency) === args.amount,
   });
-  if (refusal) throwSupplierError(SUPPLIER_ERROR.ROLE_CONFLICT, refusal);
+  if (refusal) throw new ConvexError(refusal);
   // A name is only a snapshot. Prove the stored canonical link in this org
   // before create/edit/payment can leave any financial state behind.
   if (vehicle) {
