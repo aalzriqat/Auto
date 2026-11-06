@@ -345,7 +345,7 @@ Account facts, traced in `convex/accounting/postingRules.ts`: GL 1240 (`RECEIVAB
 | Direction 1: receipt in the GL, not in the subledger | GL 2,000,000, subledger 3,000,000, difference -1,000,000, not reconciled | `a receipt posted to the GL but not recorded in the subledger is a difference` |
 | Direction 2: receipt in the subledger, not in the GL | GL 3,000,000, subledger 2,000,000, difference +1,000,000, not reconciled | `a receipt recorded in the subledger but never posted to the GL is the reverse difference` |
 | USD receivable 400.00 with no USD GL balance | USD shown with GL 0, subledger 40,000, not reconciled; JOD still reconciled | `a currency with subledger rows and no GL balance is a difference, not zero` |
-| Receivable with no supplier identity | counted in the total and in the Unlinked bucket; named supplier moves it to the linked part | `rows with no supplier identity fall in the Unlinked bucket and still count toward the total` |
+| Receivable with no supplier identity | counted in the total and in the Unlinked bucket; a stored `supplierId` moves it to the linked part, and an id-less row with a real supplier name also counts as linked (SCRUM-868 P4a round 3) | `rows with no supplier identity fall in the Unlinked bucket and still count toward the total` |
 | CANCELLED receivable, REVERSED recovery | contribute nothing to the subledger | `a CANCELLED receivable and a REVERSED recovery carry no balance` |
 | Queued posting that touches 1240 | UNAVAILABLE, PENDING_POSTINGS, no currencies, not reconciled, not complete | `a queued posting that touches 1240 reports pending, not a difference` |
 | Queued posting that cannot touch 1240 | AVAILABLE | `a queued posting that cannot touch 1240 does not block the comparison` |
