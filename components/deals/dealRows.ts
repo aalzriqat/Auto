@@ -1,3 +1,10 @@
+import {
+  isFinishedStageState,
+  isLiveStageState,
+  STAGE_LABEL_KEY,
+  type DealStageState,
+} from "@/components/applications/cockpit/DealStagePresentation";
+import { orderStagesForDisplay } from "@/components/applications/cockpit/dealStageDisplayOrder";
 import type { DealReason, DealRow, DealWaitingOn } from "./DealsListView";
 
 /**
@@ -91,8 +98,7 @@ export function applicationReason(app: ApplicationQueueFacts): { reason: DealRea
 export function applicationRow(
   app: ApplicationListRow,
   orgId: string,
-  t: (key: string) => string,
-  formatAmount: (major: number) => string
+  t: (key: string) => string
 ): DealRow {
   const { reason, waitingOn } = applicationReason(app);
   const statusKey = app.hasPendingDepositResolution ? "DepositPending" : (APPLICATION_STATUS_LABEL[app.status] ?? app.status);
@@ -116,7 +122,10 @@ export function applicationRow(
     waitingOn,
     since: app.updatedAt ?? app.createdAt,
     salespersonName: app.salespersonName ?? "",
-    amountLabel: app.financedAmount > 0 ? formatAmount(app.financedAmount) : null,
+    // The selling price of a financed deal is the cockpit's customer sale price, served per row by
+    // `dealListRow.figures` to a caller who may see it; the financed amount is not a selling price.
+    amountLabel: null,
+    source: { kind: "APPLICATION", id: app._id },
     dealNumber: app.dealNumber,
   };
 }
@@ -163,6 +172,7 @@ export function saleRow(
     since: sale.saleDate,
     salespersonName: sale.salespersonName,
     amountLabel: formatAmount(sale.salePrice),
+    source: { kind: "SALE", id: sale._id },
     dealNumber: sale.dealNumber,
   };
 }
@@ -187,7 +197,7 @@ export function mergeDealRows(
 ): DealRow[] {
   const loadedApplicationIds = new Set(applications.map((app) => app._id));
   return [
-    ...applications.map((app) => applicationRow(app, orgId, t, formatAmount)),
+    ...applications.map((app) => applicationRow(app, orgId, t)),
     ...sales
       .filter((sale) => sale.applicationId === undefined || !loadedApplicationIds.has(sale.applicationId))
       .map((sale) => saleRow(sale, orgId, t, formatAmount)),
@@ -211,4 +221,31 @@ export function dealsPaging(statuses: readonly PagingStatus[]): {
     canLoadMore: statuses.includes("CanLoadMore"),
     loadingMore: statuses.includes("LoadingMore"),
   };
+}
+
+/** A deal's step rail as the cockpit serves it (`dealListRow.figures`): keys and states only. */
+export type ServedStage = Readonly<{ key: string; state: DealStageState }>;
+
+/** Where the deal is, in the cockpit's own words: the live step, every step done, or stopped. */
+export type DealStep =
+  | Readonly<{ kind: "LIVE"; labelKey: string; blocked: boolean }>
+  | Readonly<{ kind: "DONE" }>
+  | Readonly<{ kind: "STOPPED" }>;
+
+/**
+ * The live step exactly as the cockpit picks it: the rail in DISPLAY order
+ * (`orderStagesForDisplay`), first stage the server marked CURRENT or BLOCKED
+ * (`isLiveStageState`), named through the cockpit's own label map. No live
+ * stage means every step is finished or the deal stopped; nothing is inferred
+ * from the list's status.
+ */
+export function currentDealStep(stages: ReadonlyArray<ServedStage>): DealStep | null {
+  if (stages.length === 0) return null;
+  const ordered = orderStagesForDisplay(stages);
+  const live = ordered.find((stage) => isLiveStageState(stage.state));
+  if (live) {
+    return { kind: "LIVE", labelKey: STAGE_LABEL_KEY[live.key] ?? live.key, blocked: live.state === "BLOCKED" };
+  }
+  if (ordered.some((stage) => stage.state === "STOPPED")) return { kind: "STOPPED" };
+  return ordered.every((stage) => isFinishedStageState(stage.state)) ? { kind: "DONE" } : null;
 }

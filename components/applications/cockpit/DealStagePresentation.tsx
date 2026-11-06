@@ -99,6 +99,34 @@ export function stageNodeContent(state: DealStageState, index: number): React.Re
 }
 
 /**
+ * Each stage's i18n key. One map for every screen that names a stage — the
+ * cockpit's rail and focus row, and the Deals list's current-step column — so
+ * a step is never called two things.
+ */
+export const STAGE_LABEL_KEY: Record<string, string> = {
+  /** CASH only — the cash rail's anchor stage. */
+  SALE_AGREED: "StageSaleAgreed",
+  APPLICATION: "StageApplication",
+  CREDIT_DECISION: "StageCreditDecision",
+  APPRAISAL: "StageAppraisal",
+  GAP_RESOLUTION: "StageGapResolution",
+  APPROVED_PURCHASE: "StageApprovedPurchase",
+  DELIVERY_ACTIONS: "StageDeliveryActions",
+  /**
+   * The stage the backend already emits and this build is the first to name.
+   *
+   * Until now the map had no entry, so the rail fell through to `t(rawKey)` —
+   * covered only by a transitional dictionary entry under the raw key. This
+   * entry is what makes that crutch unnecessary going forward; it is
+   * deliberately NOT the signal to delete it — see the note on `DISBURSEMENT`
+   * in `lib/i18n/domains/sales.ts`.
+   */
+  DISBURSEMENT: "StageDisbursement",
+  HANDOVER: "StageHandover",
+  SETTLEMENT: "StageSettlement",
+};
+
+/**
  * The focus row's icon per state. Keyed rather than tested with a ternary
  * chain: the chain drew three SonarCloud findings, and its final `else`
  * silently absorbed any state it did not name.

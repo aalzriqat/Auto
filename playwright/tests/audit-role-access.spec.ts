@@ -243,8 +243,8 @@ test("pilot Deals opens owned and SOURCED cash and configured financed detail sc
           if (allowed) {
             // Follow the actual row link: a direct URL alone misses list/cockpit integration.
             await openHuntPage(page, baseURL, `/${orgId}/deals`);
-            // The list paints every deal twice, a card (`@2xl:hidden`) before a
-            // table row (`hidden @2xl:block`), so the first anchor in document order is
+            // The list paints every deal twice, a card (`@3xl:hidden`) before a
+            // table row (`hidden @3xl:block`), so the first anchor in document order is
             // display:none at the 1440px cell. Keep only the displayed one, and require
             // exactly one: a deal missing from the list, or painted twice, still fails.
             // (locator.filter({ visible: true }): Playwright >= 1.51, repo is on 1.61.)
