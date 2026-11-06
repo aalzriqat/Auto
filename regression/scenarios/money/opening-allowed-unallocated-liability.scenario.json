@@ -1,0 +1,72 @@
+{
+  "id": "opening-allowed-unallocated-liability",
+  "fingerprint": "8839c689af338ecbdd3f7af13f4e3e87d0576c2fd3b00195efaf6db6a8766137",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-writer-family-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "synthetic": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.keepPostedDeclaration",
+      "input": {
+        "family": "UNALLOCATED_LIABILITY",
+        "purpose": "UNIDENTIFIED_RECEIPT",
+        "customMinor": 30000,
+        "allowed": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readClosureFamily",
+      "input": {
+        "family": "UNALLOCATED_LIABILITY"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "AVAILABLE"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "a public unallocated custom liability is permitted and stays outside supplier payables"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

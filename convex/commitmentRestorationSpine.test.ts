@@ -65,6 +65,7 @@ const PERMISSIONS = [
   "approve:requests",
   "manage:finance",
   "view:finance",
+  "view:cost_price",
   // S.4b reopens a closed month so a deferred reversal can finally post.
   // Deliberately a separate permission in production — MANAGE_FINANCE alone
   // does not grant it, because reopening un-does a close's own protections.

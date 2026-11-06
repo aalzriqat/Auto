@@ -27,6 +27,11 @@ const MAX_DOCUMENT_BYTES = 1024 * 1024;
 /** The part of a query or mutation context the check needs. A context without it is one whose headroom cannot be read. */
 export type HeadroomCtx = { meta?: { getTransactionMetrics?: () => Promise<TransactionMetrics> } };
 
+/** Each step sees the budget spent by its predecessor; reads must not be admitted in parallel. */
+export function inTurn<T>(items: readonly T[], step: (item: T) => Promise<void>): Promise<void> {
+  return items.reduce<Promise<void>>((previous, item) => previous.then(() => step(item)), Promise.resolve());
+}
+
 /**
  * True when the transaction can take one more read of a worst-case document (1 MiB) and still leave the reserve for the
  * caller's remaining work: 2 MiB, 2,000 documents and 256 queries, the policy of the SCRUM-889 verification pass.

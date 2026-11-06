@@ -92,7 +92,7 @@ async function seed(tag: string, opts: { vehicleCount?: 1 | 2 } = {}) {
     ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "Sales" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "Owner", permissions: PERMS })
+    ctx.db.insert("roles", { orgId, name: "Owner", permissions: [...PERMS, "view:cost_price"] })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   // Refunds and forfeitures may not be actioned by whoever took the deposit.

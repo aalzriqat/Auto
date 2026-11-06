@@ -1,0 +1,101 @@
+{
+  "id": "opening-payable-date-warning-acknowledgement",
+  "fingerprint": "ca9a2d03bb796cf382a3018bf7b99e8c412306378265325cfc87f6457ad4ab22",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-population-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "accountingPeriods.create",
+      "input": {
+        "historical": true,
+        "openImmediately": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "accountingPeriods.closeChecklist",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "acknowledged": false,
+        "refused": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "accountingPeriods.close",
+      "input": {
+        "acknowledged": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "fixture.grantReopenPeriodsPermission",
+      "input": {
+        "permission": "reopen:accounting_periods"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-admin",
+        "org": "A"
+      },
+      "action": "accountingPeriods.lock",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "AS_OF_DATE_UNSUPPORTED"
+    },
+    {
+      "observable": "period.closedStatus",
+      "value": "CLOSED"
+    },
+    {
+      "observable": "period.lockedStatus",
+      "value": "LOCKED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingPhase1.test.ts",
+    "testName": "can close and lock a period"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

@@ -1,3 +1,4 @@
+import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
@@ -24,7 +25,7 @@ const accountTypeValidator = v.union(
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 export async function resolveSystemAccount(
-  ctx: QueryCtx | MutationCtx,
+  ctx: OpeningReadCtx | MutationCtx,
   orgId: Id<"organizations">,
   systemKey: SystemKey
 ): Promise<Id<"chartOfAccounts">> {
@@ -37,7 +38,7 @@ export async function resolveSystemAccount(
   // instead of failing or picking randomly. The duplicate itself still needs
   // a one-time cleanup, but that's a data-hygiene task, not a reason to block
   // every future posting until someone gets to it.
-  const accounts = await ctx.db
+  const accounts = await openingDatabase(ctx)
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
     .collect();
@@ -335,6 +336,18 @@ export async function ensureFixedAssetAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEPRECIATION_EXPENSE, "6400");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.IMPAIRMENT_LOSS, "6500");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.LOSS_ON_DISPOSAL, "6600");
+}
+
+/** Charts initialized before the opening-balance suspense account existed get it here, when first needed. */
+export async function ensureOpeningSuspenseAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<Id<"chartOfAccounts">> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OPENING_SUSPENSE, "1900");
+  const account = await resolveSystemAccount(ctx, orgId, SYSTEM_KEYS.OPENING_SUSPENSE);
+  if (!account) throw new ConvexError("The opening-balance suspense account could not be resolved.");
+  return account;
 }
 
 /**

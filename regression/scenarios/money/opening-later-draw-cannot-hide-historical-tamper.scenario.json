@@ -1,0 +1,77 @@
+{
+  "id": "opening-later-draw-cannot-hide-historical-tamper",
+  "fingerprint": "ef3db8c4af8cd7df7cef55329a4095e6f48ff2f1fc0bdcb930a9832de5ce846a",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "capitalMinor": 80000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "partnerEquity.recordEquityMovement",
+      "input": {
+        "amountMinor": 700
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.raisePartnerOpeningBalance",
+      "input": {
+        "increaseMinor": 700
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.partnerCapitalReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "current.discrepancyMinor",
+      "value": -700
+    },
+    {
+      "observable": "historical.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "a later native draw and equal opening tamper cannot produce a historical match"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

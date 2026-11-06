@@ -5,7 +5,7 @@ import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import { OPEN_RECOVERY_STATUSES } from "./costBearer";
 import { SYSTEM_KEYS } from "./defaultChart";
-import { hasReadHeadroom, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
+import { hasReadHeadroom, inTurn, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
 import {
   agingFor,
   ammanDateString,
@@ -816,15 +816,6 @@ interface ClaimProvenance {
    * that might be a receipt is counted unconfirmed (it could not be checked) without another read.
    */
   budgetSpent: boolean;
-}
-
-/**
- * Runs `step` for each item strictly one after another, each step seeing what the one before spent. The claim reads share one
- * entry budget and the transaction's read headroom, so they cannot be batched with Promise.all: a batch would admit every claim
- * against the same remaining room and could read past the 16 MiB limit that `readBoundedStream` exists to stay under.
- */
-function inTurn<T>(items: readonly T[], step: (item: T) => Promise<void>): Promise<void> {
-  return items.reduce<Promise<void>>((previous, item) => previous.then(() => step(item)), Promise.resolve());
 }
 
 async function readClaimProvenance(

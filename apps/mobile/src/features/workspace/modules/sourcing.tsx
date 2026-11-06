@@ -48,7 +48,7 @@ export function SourcingModule({ orgId, permissions }: Readonly<{ orgId: string;
   const markPaid = useMutation(api.sourcingPayables.markPaid);
   const commandId = useCommandIdentity();
   const [statusFilter, setStatusFilter] = useState<MobileSupplierPayableStatus | "ALL">("PENDING");
-  const payableQueryArgs = statusFilter === "ALL" ? { orgId } : { orgId, status: statusFilter };
+  const payableQueryArgs: { orgId: string; status?: MobileSupplierPayableStatus } = statusFilter === "ALL" ? { orgId } : { orgId, status: statusFilter };
   const payables = useQuery(
     api.sourcingPayables.list,
     !canViewSupplierCost ? "skip" : payableQueryArgs,

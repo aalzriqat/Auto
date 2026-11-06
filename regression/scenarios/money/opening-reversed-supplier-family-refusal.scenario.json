@@ -1,0 +1,81 @@
+{
+  "id": "opening-reversed-supplier-family-refusal",
+  "fingerprint": "ca02173802e2b53c900fdd84c4f6aa2fa8ad506eaa559f1cd61473b754516d3e",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-population-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.create",
+      "input": {
+        "route": "DIRECT_TO_SUPPLIER"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sales.update",
+      "input": {
+        "status": "CANCELLED"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierRecoverablesReconciliation",
+      "input": {
+        "netGlMinor": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "SOURCE_FAMILY_UNSUPPORTED"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.ledgerChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierReceivables.test.ts",
+    "testName": "a cancelled DIRECT sale still refuses unsupported supplier family after its GL nets to zero"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

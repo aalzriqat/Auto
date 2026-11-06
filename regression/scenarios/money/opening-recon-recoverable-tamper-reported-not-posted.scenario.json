@@ -1,0 +1,84 @@
+{
+  "id": "opening-recon-recoverable-tamper-reported-not-posted",
+  "fingerprint": "efe07bc772a69725b393431e91bb7842b61e4811c0c0c705bd3f9b465b89a013",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-closure",
+    "firstSeen": "2026-10-29"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "families": 4
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "harness.deleteSubledgerRow",
+      "input": {
+        "family": "RECEIVABLE_FROM_SUPPLIERS",
+        "control": "custom"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.supplierRecoverablesReconciliation",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recoverablesRecon.discrepancyMinor",
+      "value": 20000
+    },
+    {
+      "observable": "recoverablesRecon.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "recoverablesRecon.unexplainedDiff.labelLanguages",
+      "value": 2
+    },
+    {
+      "observable": "journalEntries.delta",
+      "value": 0
+    },
+    {
+      "observable": "journalLines.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountBalanceSnapshots.delta",
+      "value": 0
+    },
+    {
+      "observable": "accountingEvents.delta",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "a supplier recoverable row deleted from a custom control is reported as an unexplained opening difference and nothing is posted"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

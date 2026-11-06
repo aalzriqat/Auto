@@ -1,0 +1,69 @@
+{
+  "id": "opening-reconciliation-boundary-sanitizes-supplier-recoverables",
+  "fingerprint": "fa19add4f498529e45f2c02a5c03678cbd0f055f89f2944260bcd4f2974f9ee3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.duplicateControls",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readFamilies",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.selectFamily",
+      "input": {
+        "family": "SUPPLIER_RECOVERABLES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.serverErrorLogged",
+      "value": true
+    },
+    {
+      "observable": "reconciliation.clientError",
+      "value": "GENERIC_CLIENT_ERROR"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "supplier recoverables logs unexpected async failures and exposes a generic boundary error"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}

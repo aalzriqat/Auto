@@ -1,0 +1,73 @@
+{
+  "id": "opening-dated-reconciliation-refuses-supplier-recoverables",
+  "fingerprint": "fae5b08b28578161787864754ca620a25be997eb02cb49501e40ff218a5bf156",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum858-pr710-remediation",
+    "firstSeen": "2026-10-30"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "advanceMinor": 100000,
+        "recoverableMinor": 70000,
+        "capitalMinor": 80000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.readHistoricalFamilies",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixture.selectFamily",
+      "input": {
+        "family": "SUPPLIER_RECOVERABLES"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reconciliation.status",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reconciliation.unavailableReason",
+      "value": "AS_OF_DATE_UNSUPPORTED"
+    },
+    {
+      "observable": "reconciliation.isReconciled",
+      "value": false
+    },
+    {
+      "observable": "reconciliation.unexplainedOpeningDifference",
+      "value": null
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingClosureReaders.scrum858.test.ts",
+    "testName": "supplier recoverables refuses unsupported historical dates including before cutover and intraday"
+  },
+  "matrixRow": "SCRUM-858-opening-closure-readers"
+}
