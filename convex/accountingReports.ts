@@ -3,7 +3,7 @@ import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
 import { openingPayableBasis, openingRecoveryBasis } from "./utils/openingSupplierBasis";
 import { loadOpeningSourceIdentity, verifyOpeningRead } from "./utils/openingSourceIdentity";
-import { hasReadHeadroom, type HeadroomCtx } from "./utils/transactionReadHeadroom";
+import { hasReadHeadroom, inTurn, type HeadroomCtx } from "./utils/transactionReadHeadroom";
 import { openingPolicyForAccount, openingAccountAllowsFamily, isRemainingOpeningKind, openingDeclaredFamilyRefusal } from "./utils/openingAccountPolicy";
 import { UNEXPLAINED_OPENING_DIFFERENCE_LABEL } from "./utils/closeWarnings";
 import { openingCommissionRemainingAsOf } from "./utils/openingCommissionBasis";
@@ -33,6 +33,7 @@ import {
   hasDocumentHeadroom,
   ReadHeadroomExhausted,
   readBoundedDocuments,
+  type CumulativeBalance,
 } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
@@ -203,7 +204,7 @@ async function getPostedControlLines(
     .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
   const parents = eligibility?.phase === "READY" ? null : await postedControlParentIds(ctx, orgId);
   const included: Doc<"journalLines">[] = [];
-  for await (const accountId of accounts) {
+  await inTurn([...accounts], async (accountId) => {
     const lines = ctx.db.query("journalLines").withIndex("by_org_account_date", (q) => {
       const scoped = q.eq("orgId", orgId).eq("accountId", accountId);
       return toDate === undefined ? scoped : scoped.lte("accountingDate", toDate);
@@ -213,7 +214,7 @@ async function getPostedControlLines(
       const posted = parents ? parents.has(line.journalEntryId) : line.reportPosted === true;
       if (posted) included.push(line);
     }
-  }
+  });
   return mergeByCreation([included]);
 }
 
@@ -1326,6 +1327,125 @@ export async function computeSupplierPayablesReconciliation(
   }));
 }
 
+async function readSupplierPayableRows(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  readLimit: number,
+): Promise<Array<Doc<"vehicleSupplierPayables">> | null> {
+  const rows: Array<Doc<"vehicleSupplierPayables">> = [];
+  let overLimit = false;
+  await inTurn(SUPPLIER_PAYABLE_RECON_READ_STATUSES, async (status) => {
+    if (overLimit) return;
+    const budget = readLimit - rows.length;
+    const batch = await openingDatabase(ctx)
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .take(budget + 1);
+    if (batch.length > budget) {
+      overLimit = true;
+      return;
+    }
+    rows.push(...batch);
+  });
+  return overLimit ? null : rows;
+}
+
+interface SupplierPayableSubledger {
+  subByCurrency: Map<string, number>;
+  controlAccounts: Set<Id<"chartOfAccounts">>;
+  hasNativeRow: boolean;
+  datedOpeningPayableIds: Set<string>;
+}
+
+async function supplierPayablePendingRefusal(
+  ctx: OpeningReadCtx,
+  orgId: Id<"organizations">,
+  readLimit: number,
+  suppliedOutboxEvents: Array<Doc<"pendingAccountingEvents">> | undefined,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
+    const [queued, failed] = await Promise.all(
+      (["PENDING", "FAILED"] as const).map((status) =>
+        openingDatabase(ctx)
+          .query("pendingAccountingEvents")
+          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+          .take(readLimit + 1)
+      )
+    );
+    return queued.length > readLimit || failed.length > readLimit ? null : [...queued, ...failed];
+  };
+  const [outboxEvents, drafts] = await Promise.all([
+    suppliedOutboxEvents ?? readOutbox(),
+    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
+  ]);
+  if (!outboxEvents) return "OVER_LIMIT";
+  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return "PENDING_POSTINGS";
+  if (drafts === "OVER_LIMIT") return "OVER_LIMIT";
+  if (drafts === "PENDING") return "PENDING_POSTINGS";
+  return null;
+}
+
+async function addSupplierPayableBalance(
+  ctx: OpeningReadCtx,
+  request: { orgId: Id<"organizations">; cutoff: number },
+  p: Doc<"vehicleSupplierPayables">,
+  subledger: SupplierPayableSubledger,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  const { orgId, cutoff } = request;
+  if (p.status === "CANCELLED") {
+    // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
+    if (p.origin === "OPENING") return null;
+    subledger.hasNativeRow = true;
+    if (cancelledNativePayableMovedAfter(p, cutoff)) return "POST_CUTOFF_ACTIVITY";
+    return null;
+  }
+  const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
+  if (balance.status === "UNAVAILABLE") return balance.reason;
+  if (balance.accountId) {
+    subledger.controlAccounts.add(balance.accountId);
+    subledger.datedOpeningPayableIds.add(p._id);
+  } else {
+    // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
+    // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
+    subledger.hasNativeRow = true;
+    if (nativePayableMovedAfter(p, cutoff)) return "POST_CUTOFF_ACTIVITY";
+  }
+  if (balance.openMinor === null) return null;
+  const openMinor = balance.openMinor;
+  subledger.subByCurrency.set(p.currency, (subledger.subByCurrency.get(p.currency) ?? 0) + openMinor);
+  return null;
+}
+
+async function accumulateSupplierPayableBalances(
+  ctx: OpeningReadCtx,
+  request: { orgId: Id<"organizations">; cutoff: number },
+  rows: Array<Doc<"vehicleSupplierPayables">>,
+  subledger: SupplierPayableSubledger,
+): Promise<SupplierPayablesUnavailableReason | null> {
+  let refusal: SupplierPayablesUnavailableReason | null = null;
+  await inTurn(rows, async (p) => {
+    if (refusal) return;
+    refusal = await addSupplierPayableBalance(ctx, request, p, subledger);
+  });
+  if (refusal) return refusal;
+  for (const [currency, minor] of subledger.subByCurrency) {
+    if (minor === 0) subledger.subByCurrency.delete(currency);
+  }
+  return null;
+}
+
+function supplierPayableGlByCurrency(
+  balances: CumulativeBalance[],
+  controlAccounts: ReadonlySet<Id<"chartOfAccounts">>,
+): Map<string, number> {
+  const glByCurrency = new Map<string, number>();
+  for (const balance of balances) {
+    if (!controlAccounts.has(balance.accountId)) continue;
+    glByCurrency.set(balance.currency, (glByCurrency.get(balance.currency) ?? 0) + balance.creditMinor - balance.debitMinor);
+  }
+  return glByCurrency;
+}
+
 async function readSupplierPayablesReconciliation(
   ctx: OpeningReadCtx,
   orgId: Id<"organizations">,
@@ -1356,40 +1476,15 @@ async function readSupplierPayablesReconciliation(
   // 1. Postings still in flight: the GL side is about to move, so a comparison now is not the truth.
   // The outbox and draft reads are independent, so they run together; the verdicts below are
   // still taken in the original order (outbox over-limit, queued posting, drafts).
-  const readOutbox = async (): Promise<Array<Doc<"pendingAccountingEvents">> | null> => {
-    const [queued, failed] = await Promise.all(
-      (["PENDING", "FAILED"] as const).map((status) =>
-        openingDatabase(ctx)
-          .query("pendingAccountingEvents")
-          .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-          .take(readLimit + 1)
-      )
-    );
-    return queued.length > readLimit || failed.length > readLimit ? null : [...queued, ...failed];
-  };
-  const [outboxEvents, drafts] = await Promise.all([
-    opts.outboxEvents ?? readOutbox(),
-    pendingControlAccountDraftState(ctx, orgId, readLimit, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS),
-  ]);
-  if (!outboxEvents) return unavailable("OVER_LIMIT");
-  if (await hasPendingAffectingPosting(ctx, outboxEvents, AP_AFFECTING_EVENT_TYPES)) return unavailable("PENDING_POSTINGS");
-  if (drafts === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  if (drafts === "PENDING") return unavailable("PENDING_POSTINGS");
+  const pendingRefusal = await supplierPayablePendingRefusal(ctx, orgId, readLimit, opts.outboxEvents);
+  if (pendingRefusal) return unavailable(pendingRefusal);
 
   // 2. Every payable, under one shared bound. Status is a label, not the balance: a payable leaves
   // PENDING on a partial payment or a dispute while the liability stands. CANCELLED rows are read last
   // (open-status verdicts keep their precedence) and contribute no balance, but a native one cancelled
   // after the cutoff stood for its AP credit at it (SCRUM-876), so they are read under the same bound.
-  const rows: Array<Doc<"vehicleSupplierPayables">> = [];
-  for (const status of SUPPLIER_PAYABLE_RECON_READ_STATUSES) {
-    const budget = readLimit - rows.length;
-    const batch = await openingDatabase(ctx)
-      .query("vehicleSupplierPayables")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .take(budget + 1);
-    if (batch.length > budget) return unavailable("OVER_LIMIT");
-    rows.push(...batch);
-  }
+  const rows = await readSupplierPayableRows(ctx, orgId, readLimit);
+  if (!rows) return unavailable("OVER_LIMIT");
 
   // Signed open balance in minor units. Deliberately NOT clamped: an overpaid row is a real
   // negative that the GL carries (AP in debit), and a legacy PAID row with no amountPaid is read by
@@ -1399,35 +1494,11 @@ async function readSupplierPayablesReconciliation(
   const controlAccounts = new Set<Id<"chartOfAccounts">>();
   const canonical = await openingDatabase(ctx).query("chartOfAccounts").withIndex("by_org_systemKey",q=>q.eq("orgId",orgId).eq("systemKey",SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)).unique();
   if(canonical)controlAccounts.add(canonical._id);
-  let hasNativeRow = false;
   // Opening-basis payables whose balance was rebuilt AS OF the cutoff from their dated payments.
   const datedOpeningPayableIds = new Set<string>();
-  for (const p of rows) {
-    if (p.status === "CANCELLED") {
-      // No balance now, and an opening-basis row keeps its own dated reconstruction (never read here).
-      if (p.origin === "OPENING") continue;
-      hasNativeRow = true;
-      if (cancelledNativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
-      continue;
-    }
-    const balance = await supplierPayableOpenBalanceAsOf(ctx, { orgId, payable: p, cutoff });
-    if (balance.status === "UNAVAILABLE") return unavailable(balance.reason);
-    if (balance.accountId) {
-      controlAccounts.add(balance.accountId);
-      datedOpeningPayableIds.add(p._id);
-    } else {
-      // A native row is only its CURRENT state (one cumulative `amountPaid`, one `updatedAt`). It stands
-      // for the cutoff only when nothing on it moved after the cutoff; it cannot be restated to it.
-      hasNativeRow = true;
-      if (nativePayableMovedAfter(p, cutoff)) return unavailable("POST_CUTOFF_ACTIVITY");
-    }
-    if (balance.openMinor === null) continue;
-    const openMinor = balance.openMinor;
-    subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + openMinor);
-  }
-  for (const [currency, minor] of subByCurrency) {
-    if (minor === 0) subByCurrency.delete(currency);
-  }
+  const subledger: SupplierPayableSubledger = { subByCurrency, controlAccounts, hasNativeRow: false, datedOpeningPayableIds };
+  const balanceRefusal = await accumulateSupplierPayableBalances(ctx, { orgId, cutoff }, rows, subledger);
+  if (balanceRefusal) return unavailable(balanceRefusal);
 
   // SCRUM-858: a declared payable control account is known from the immutable opening, not only from
   // the surviving rows. Otherwise a cancelled or deleted opening payable would take its own control
@@ -1444,7 +1515,7 @@ async function readSupplierPayablesReconciliation(
   // and the later GL line is then the only evidence left that the native subledger moved (SCRUM-876 round 3).
   if (canonical) {
     const later = await laterApControlActivity(ctx, {
-      orgId, accountId: canonical._id, cutoff, hasNativeRow, datedOpeningPayableIds,
+      orgId, accountId: canonical._id, cutoff, hasNativeRow: subledger.hasNativeRow, datedOpeningPayableIds,
       lineLimit: Math.min(readLimit, SUPPLIER_PAYABLES_RECON_LATER_LINE_LIMIT),
     });
     if (later === "OVER_LIMIT") return unavailable("OVER_LIMIT");
@@ -1460,11 +1531,7 @@ async function readSupplierPayablesReconciliation(
   const glRead = await getCumulativeBalancesAsOfChecked(ctx, orgId, cutoff, [...controlAccounts], readLimit, readBytesLimit, true);
   if (glRead.status === "INCONSISTENT_REFERENCE") return unavailable("INCONSISTENT_REFERENCE");
   if (glRead.status === "OVER_LIMIT") return unavailable("OVER_LIMIT");
-  const glByCurrency=new Map<string,number>();
-  for(const balance of glRead.balances){
-    if(!controlAccounts.has(balance.accountId))continue;
-    glByCurrency.set(balance.currency,(glByCurrency.get(balance.currency)??0)+balance.creditMinor-balance.debitMinor);
-  }
+  const glByCurrency = supplierPayableGlByCurrency(glRead.balances, controlAccounts);
   return { ...(await withOpeningDifferenceReport(ctx, orgId, combineGlAndSubledger(glByCurrency, subByCurrency))), status: "AVAILABLE" };
 }
 

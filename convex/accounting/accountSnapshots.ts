@@ -1,4 +1,5 @@
 import { openingDatabase, type OpeningReadCtx } from "../utils/openingSourceIdentity";
+import { inTurn } from "../utils/transactionReadHeadroom";
 /**
  * GL Phase 18 — running account balance snapshots.
  *
@@ -520,9 +521,7 @@ async function readCumulativeBalances(
   const totals = new Map<string, CumulativeBalance>();
   const addTo = balanceAdder(totals);
 
-  for await (const period of fullyElapsedPeriods) {
-    await addPeriodSnapshots(ctx, orgId, period._id, addTo, budget);
-  }
+  await inTurn(fullyElapsedPeriods, (period) => addPeriodSnapshots(ctx, orgId, period._id, addTo, budget));
 
   if (containingPeriod) {
     // Retained periods lack a snapshot-completeness certificate. Keep their
