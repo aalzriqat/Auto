@@ -1,0 +1,70 @@
+{
+  "id": "supplier-cost-retry-preserves-canonical-snapshot",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "costBearer": "SUPPLIER",
+        "amountMinor": 200000,
+        "idempotencyKey": "SAME_INTENT"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "vehicle": "SOURCED_LINKED",
+        "costBearer": "SUPPLIER",
+        "amountMinor": 200000,
+        "idempotencyKey": "SAME_INTENT",
+        "afterSupplierRename": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recovery.supplierSnapshotVersion",
+      "value": 3
+    },
+    {
+      "observable": "recovery.amountDueMinor",
+      "value": 200000
+    },
+    {
+      "observable": "retry.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P4a-recovery-identity",
+  "impl": {
+    "file": "convex/supplierRecoveryIdentity.scrum868.test.ts",
+    "testName": "retry preserves the first canonical snapshot and creates no second money effect"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p4a-recovery-identity",
+    "firstSeen": "2026-11-06"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "025516912d24354c824f3267cd19fdefb7a9b7c7"
+  },
+  "fingerprint": "5bed71e68843e7c33ea19b4b816946b8029874970065f22c32793d9eb836b536"
+}

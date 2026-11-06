@@ -24,7 +24,7 @@
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   computeSupplierReceivablesReconciliation, CONVEX_DOCUMENTS_SCANNED_LIMIT, CONVEX_INDEX_RANGES_LIMIT, getPostedLines,
@@ -189,6 +189,90 @@ const insertReceivable = (s: Seed, vehicleId: Id<"vehicles">, saleId: Id<"sales"
   );
 };
 
+describe("SCRUM-868 P4a reconciliation uses canonical supplier identity", () => {
+  async function assertRenamedSupplierLinked({ kind, name, marginMinor, recoveryMinor, totalMinor }: {
+    kind: "recovery" | "margin"; name: string; marginMinor: number; recoveryMinor: number; totalMinor: number;
+  }) {
+    const s = await seed(`p4a-${kind}`);
+    const vehicleId = await addSourcedVehicle(s, `p4a-${kind}`);
+    const vehicle = await s.t.run(ctx => ctx.db.get(vehicleId));
+    if (!vehicle?.sourcedSupplierId) throw new Error("Linked vehicle fixture missing");
+    await s.t.mutation(internal.suppliers.initialiseRegistry, { orgId: s.orgId });
+    const supplier = await s.asUser.query(api.suppliers.get, { orgId: s.orgId, supplierId: vehicle.sourcedSupplierId });
+    if (!supplier || !("revision" in supplier) || typeof supplier.revision !== "number") {
+      throw new Error("Supplier edit revision missing");
+    }
+    await s.asUser.mutation(api.suppliers.update, {
+      orgId: s.orgId, supplierId: supplier._id, expectedVersion: supplier.revision,
+      displayName: name, reason: "SCRUM-868 rename classification regression",
+    });
+    if (kind === "recovery") {
+      await s.asUser.mutation(api.expenses.create, {
+        orgId: s.orgId, vehicleId, title: "Supplier transport", amount: 200,
+        date: Date.now() - 60000, category: "TRANSPORT", status: "PAID",
+        paymentMethod: "CASH", costBearer: "SUPPLIER", idempotencyKey: "p4a-classification-cost",
+      });
+    } else {
+      await s.asUser.mutation(api.sales.create, {
+        orgId: s.orgId, vehicleId, customerId: s.customerId, salespersonId: s.userId,
+        salePrice: 12500, saleDate: Date.now(), status: "COMPLETED",
+        supplierSettlementRoute: "DIRECT_TO_SUPPLIER", idempotencyKey: "p4a-classification-sale",
+      });
+    }
+    const stored = await s.t.run(async ctx => kind === "recovery"
+      ? await ctx.db.query("supplierCostRecoveries").unique()
+      : await ctx.db.query("vehicleSupplierReceivables").unique());
+    expect(stored).toMatchObject({ supplierId: supplier._id, sourcedFromName: name, status: "OPEN" });
+    const before = await s.t.run(async ctx => ({
+      receivables: await ctx.db.query("vehicleSupplierReceivables").collect(),
+      recoveries: await ctx.db.query("supplierCostRecoveries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+    }));
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    // Assert unchanged money before the regression assertion, so the red run measures both.
+    expect(r.byCurrency.JOD).toMatchObject({
+      marginMinor, recoveryMinor, subledgerBalanceMinor: totalMinor,
+      glBalanceMinor: totalMinor, discrepancyMinor: 0, isReconciled: true,
+    });
+    expect(await s.t.run(async ctx => ({
+      receivables: await ctx.db.query("vehicleSupplierReceivables").collect(),
+      recoveries: await ctx.db.query("supplierCostRecoveries").collect(),
+      lines: await ctx.db.query("journalLines").collect(),
+    }))).toEqual(before);
+    expect(r.byCurrency.JOD).toMatchObject({ linkedMinor: totalMinor, unlinkedMinor: 0 });
+  }
+
+  // The scenario library requires literal registrations for its two failing-first bindings.
+  test("'recovery' stays linked after public rename to 'Unknown supplier'", async () => {
+    await assertRenamedSupplierLinked({ kind: "recovery", name: "Unknown supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 });
+  });
+  test("'margin' stays linked after public rename to 'Unknown supplier'", async () => {
+    await assertRenamedSupplierLinked({ kind: "margin", name: "Unknown supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 });
+  });
+  test.each([
+    { kind: "recovery" as const, name: "Ordinary supplier", marginMinor: 0, recoveryMinor: 200000, totalMinor: 200000 },
+    { kind: "margin" as const, name: "Ordinary supplier", marginMinor: 3000000, recoveryMinor: 0, totalMinor: 3000000 },
+  ])("$kind stays linked after public rename to $name", async fixture => {
+    await assertRenamedSupplierLinked(fixture);
+  });
+
+  test.each(["", "Unknown supplier", "Amman Importer Co"])("legacy recovery without supplierId keeps name classification: %j", async name => {
+    const s = await seed("p4alegacy");
+    const { recovery } = await supplierBornePayment(s, "p4alegacy");
+    // Public expense/payment doors require an id. Only historical storage needs direct setup.
+    await s.t.run(ctx => ctx.db.patch(recovery._id, { supplierId: undefined, sourcedFromName: name }));
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    expect(r.byCurrency.JOD).toEqual({
+      marginMinor: 0, recoveryMinor: 200000, subledgerBalanceMinor: 200000,
+      glBalanceMinor: 200000, discrepancyMinor: 0, isReconciled: true,
+      linkedMinor: name === "Amman Importer Co" ? 200000 : 0,
+      unlinkedMinor: name === "Amman Importer Co" ? 0 : 200000,
+    });
+  });
+});
+
 describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 1240", () => {
   test("a stored NaN produces a generic public error and logs conversion details only on the server", async () => {
     const s = await seed("nanpublic");
@@ -282,20 +366,26 @@ describe("SCRUM-869 S2 - the supplier receivables subledger reconciles to GL 124
     expect(r.isReconciled).toBe(false);
   });
 
-  test("rows with no supplier identity fall in the Unlinked bucket and still count toward the total", async () => {
+  async function assertLegacyMarginName(name: string) {
     const s = await seed("unl");
     const { receivable } = await directSale(s, "unl");
-    await s.t.run((ctx) => ctx.db.patch(receivable._id, { sourcedFromName: "Unknown supplier" }));
+    // Current sale completion cannot create an id-less receivable. Model pre-P3 storage only.
+    await s.t.run((ctx) => ctx.db.patch(receivable._id, { supplierId: undefined, sourcedFromName: name }));
     const r = await recon(s);
-    expect(r.byCurrency.JOD.unlinkedMinor).toBe(MARGIN * SCALE);
-    expect(r.byCurrency.JOD.linkedMinor).toBe(0);
-    expect(r.byCurrency.JOD.subledgerBalanceMinor).toBe(MARGIN * SCALE);
+    expect(r.byCurrency.JOD).toMatchObject({
+      marginMinor: 3000000, recoveryMinor: 0, subledgerBalanceMinor: 3000000,
+      glBalanceMinor: 3000000, discrepancyMinor: 0,
+      linkedMinor: name === "Amman Importer Co" ? 3000000 : 0,
+      unlinkedMinor: name === "Amman Importer Co" ? 0 : 3000000,
+    });
     expect(r.isReconciled).toBe(true);
+  }
 
-    await s.t.run((ctx) => ctx.db.patch(receivable._id, { sourcedFromName: "Amman Importer Co" }));
-    const named = await recon(s);
-    expect(named.byCurrency.JOD.unlinkedMinor).toBe(0);
-    expect(named.byCurrency.JOD.linkedMinor).toBe(MARGIN * SCALE);
+  test("rows with no supplier identity fall in the Unlinked bucket and still count toward the total", async () => {
+    await assertLegacyMarginName("Unknown supplier");
+  });
+  test.each(["", "Amman Importer Co"])("legacy margin without supplierId keeps name classification: %j", async name => {
+    await assertLegacyMarginName(name);
   });
 
   test("a CANCELLED receivable and a REVERSED recovery carry no balance", async () => {
@@ -822,7 +912,7 @@ describe("SCRUM-858 F3 - every balance-carrying status is in the subledger", () 
 describe("SCRUM-858 F3 - opening cost recoveries", () => {
   const OPENING_MINOR = 100_000; // 100 JOD
 
-  async function openingRecovery(s: Seed, asOfDate: number, customCapital = false) {
+  async function openingRecovery(s: Seed, asOfDate: number, customCapital = false, counterpartyName = "Synthetic supplier") {
     const owner = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "OWNER")!;
     await s.t.run(async (ctx) => {
       const membership = await ctx.db.query("memberships").withIndex("by_org", (q) => q.eq("orgId", s.orgId)).first();
@@ -847,7 +937,7 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
         { accountId: capitalAccountId, debitMinor: 0, creditMinor: OPENING_MINOR },
       ],
       allocations: [
-        { kind: "SUPPLIER_RECOVERABLE", counterpartyName: "Synthetic supplier", title: "Synthetic opening claim", purpose: "CLAIM",
+        { kind: "SUPPLIER_RECOVERABLE", counterpartyName, title: "Synthetic opening claim", purpose: "CLAIM",
           rowKey: "open-1", accountId, amountMinor: OPENING_MINOR },
         ...(partnerId ? [{ kind: "PARTNER_CAPITAL" as const, partnerId, accountId: capitalAccountId, rowKey: "capital-1", amountMinor: OPENING_MINOR }] : []),
       ],
@@ -861,6 +951,21 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
   }
   const at = (s: Seed, toDate: number) =>
     s.asUser.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId, toDate });
+
+  test.each(["Unknown supplier", "Synthetic supplier"])("P4a opening recovery without supplierId keeps name classification: %s", async name => {
+    const s = await seed("p4aopening");
+    // The public opening door still creates id-less rows until P5. No direct insert needed.
+    const { row } = await openingRecovery(s, Date.now() - 1000, false, name);
+    expect(row.supplierId).toBeUndefined();
+    const r = await recon(s);
+    expect(r).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
+    expect(r.byCurrency.JOD).toEqual({
+      marginMinor: 0, recoveryMinor: 100000, subledgerBalanceMinor: 100000,
+      glBalanceMinor: 100000, discrepancyMinor: 0, isReconciled: true,
+      linkedMinor: name === "Synthetic supplier" ? 100000 : 0,
+      unlinkedMinor: name === "Synthetic supplier" ? 0 : 100000,
+    });
+  });
 
   test("an opening recovery posts to its declared account and reconciles", async () => {
     const s = await seed("f3open");
