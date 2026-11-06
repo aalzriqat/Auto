@@ -85,6 +85,7 @@ describe("SCRUM-920 discriminated object union payloads", () => {
       v.object({ kind: v.literal("APPLICATION"), applicationId: v.id("financeApplications") }),
       v.object({ kind: v.literal("SALE"), saleId: v.id("sales") }),
     ) });
+    if (!("json" in validator)) throw new Error("Native validator metadata unavailable");
     const compared = compareNode(call.payload, validatorTree(validator.json), "", {
       site: { identifier: call.identifier, file: call.file, line: call.line },
     });

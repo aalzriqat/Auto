@@ -1076,7 +1076,9 @@ function collectFromExpression(expr, context) {
     );
     const whenTrue = collectFromExpression(node.whenTrue, nested(prefix, whenTrueRefinements));
     const whenFalse = collectFromExpression(node.whenFalse, nested(prefix, whenFalseRefinements));
-    return context.opaqueSymbols?.size ? clientNode.variants([whenTrue, whenFalse]) : mergeClientNodes(whenTrue, whenFalse);
+    // Only one arm is transmitted. Preserve its complete shape so a validator
+    // union checks the discriminant, fields and values against the same branch.
+    return clientNode.variants([whenTrue, whenFalse]);
   }
 
   // A derived expression cannot manufacture evidence for an opaque map element.
