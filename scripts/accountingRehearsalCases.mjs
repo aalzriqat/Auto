@@ -1,4 +1,5 @@
 import { runOpeningRehearsalCases } from "./accountingOpeningRehearsal.mjs";
+import { SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING } from "../convex/utils/closeWarnings.ts";
 /**
  * The rehearsal's cases, driven ONLY through the real public API of a live
  * preview deployment as two genuine Clerk-authenticated users.
@@ -4003,6 +4004,24 @@ export async function runRehearsalCases(ctx) {
       // a deposit and allocating it are ordinary trading and they post normally.
       const fx = await makePartiallyCommittedDeposit({ orgId, ownerMust, label: "p1" });
 
+      // SUP-MARGIN posts a consignment margin and two collections to 1240.
+      // Those are outside the cost-recovery subledger, even once fully paid.
+      // Acknowledge only that truthful warning; a changed fixture or any new
+      // warning must leave P1 UNPROVEN, never silently widen this allowance.
+      const checklist = await ownerCall("query", "accountingPeriods:closeChecklist", {
+        orgId,
+        periodId: open[0]._id,
+      });
+      if (!checklist.ok) {
+        unproven("the close checklist could not be read through the supported query");
+      }
+      const expectedWarnings = [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING];
+      const warnings = checklist.value?.warnings;
+      if (!Array.isArray(warnings) || warnings.length !== expectedWarnings.length ||
+          !expectedWarnings.every((warning) => warnings.includes(warning))) {
+        unproven(`the close checklist warnings differ from the expected supplier-margin warning: ${JSON.stringify(warnings)}`);
+      }
+
       // Close through the real mutation. If the product refuses — a close
       // checklist that is not clean is a legitimate refusal, not a defect —
       // this case reports UNPROVEN rather than inventing a way through. Forcing
@@ -4011,6 +4030,7 @@ export async function runRehearsalCases(ctx) {
       const closed = await ownerCall("mutation", "accountingPeriods:close", {
         orgId,
         periodId: open[0]._id,
+        acknowledgedWarnings: expectedWarnings,
       });
       if (!closed.ok) {
         unproven(`the period could not be closed through the supported mutation: ${closed.error.slice(0, 200)}`);

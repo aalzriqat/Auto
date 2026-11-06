@@ -609,6 +609,8 @@ async function registeredArgsRefusal(registered: unknown, fnPath: string, args: 
 }
 
 function makeBackend(defects: Defects = {}) {
+  const closeWarnings = defects.closeWarnings === undefined
+    ? [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING] : defects.closeWarnings;
   const deposits = new Map<string, Deposit>();
   const commands = new Map<string, string>();
   const createdByKey = new Map<string, string>();
@@ -1290,19 +1292,17 @@ function makeBackend(defects: Defects = {}) {
       case "accountingPeriods:list":
         return { ok: true as const, value: [{ _id: "p1", status: periodStatus }] };
       case "accountingPeriods:closeChecklist":
-        return defects.unreadableCloseChecklist
-          ? { ok: false as const, error: "Checklist unavailable." }
-          : { ok: true as const, value: { canClose: true, warnings:
-            defects.closeWarnings === undefined
-              ? [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING] : defects.closeWarnings } };
+        if (defects.unreadableCloseChecklist) {
+          return { ok: false as const, error: "Checklist unavailable." };
+        }
+        return { ok: true as const, value: { canClose: true, warnings: closeWarnings } };
       case "accountingPeriods:close":
         if (defects.refuseClose) {
           return { ok: false as const, error: "The close checklist is not clean." };
         }
-        if (JSON.stringify(args.acknowledgedWarnings) !== JSON.stringify(
-          defects.closeWarnings === undefined
-            ? [SUPPLIER_RECOVERABLES_RECON_FAMILY_WARNING] : defects.closeWarnings
-        )) return { ok: false as const, error: "Review and acknowledge every warning before closing." };
+        if (JSON.stringify(args.acknowledgedWarnings) !== JSON.stringify(closeWarnings)) {
+          return { ok: false as const, error: "Review and acknowledge every warning before closing." };
+        }
         periodStatus = "CLOSED";
         return { ok: true as const, value: null };
       case "collections:createReceivable": {
