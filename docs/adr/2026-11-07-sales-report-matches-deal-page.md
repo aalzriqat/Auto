@@ -216,6 +216,9 @@ existing release process. The local work is committed without pushing.
 - [Convex best practices](https://docs.convex.dev/understanding/best-practices):
   plain TypeScript helpers, indexed reads, bounded collections and sparing use
   of nested query calls. This supports the shared pure derivation and batch loader.
+- [OWASP authorization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html):
+  enforce authorization on the server and test the allowed and refused cases.
+  The owner's report-specific policy determines which grants each field needs.
 - [IFRS management performance measures discussion](https://www.ifrs.org/content/dam/ifrs/meetings/2022/january/iasb/ap21a-pfs-management-performance-measures-disclosures-usefulness-and-reconciliations.pdf):
   disclose the measure's meaning and reconciliation. This supports explicit
   management labels and arithmetically closing cards, not a claim of IFRS certification.

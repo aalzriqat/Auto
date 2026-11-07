@@ -1341,7 +1341,7 @@ kills two tests. These are money findings, not deferred test-only follow-ups.
 | --- | --- | --- |
 | Financed SOURCED DIRECT and STOCK | 1,023,700 minor management net, including 451,300 fee, 300,000 preparation and 110,000 commissions; customer price 12,100,000 | `convex/reports.matchesDeal.test.ts`, literal public report and overview assertions |
 | Cash without application | Cash cockpit management net 1,790,000 minor, price 12,100,000 | same suite, cash case |
-| Permission and unreadable evidence | Cost access still withholds the whole report; commission or finance withholding and unsafe or mixed fee evidence never become zero | same suite, role and fee cases |
+| Permission and unreadable evidence | Main's report and cost gates remain. Without finance access, the real MANAGER template sees the owner's CASH and SOURCED financed values. Commission-only fields retain their gate; unsafe or mixed fee evidence never becomes zero | same suite, role and fee cases |
 | Post-completion changes and routes | Late fee actual, removed preparation, supplier-borne expenses, both supplier routes and cancelled siblings preserve report/deal parity | same suite, literal self-attack cases |
 | Settlement-dependent legacy estimate | Unsettled net 875,000; settled net 1,023,700, using posted canonical invoice evidence | same suite, settled/unsettled cases |
 | Cards, performance, CSV | Included revenue minus costs and reconciliation equals included management net; performance sums that net; CSV columns use the same row values | backend suite, `lib/saleReporting.test.ts`, and explicit CSV projection in the report page |
@@ -1350,6 +1350,14 @@ kills two tests. These are money findings, not deferred test-only follow-ups.
 Failing-first commits are `173185b2d12a767be6b91bb6c46f829530eccf94`
 (9 failed, 1 passed) and `442fa7d1837942da2e71d36b16eb058e51eb5744`
 (20 failed, 14 passed across the expanded backend, card and page suites).
+The permission follow-up records the 2026-11-07 owner quote "Keep today's view"
+in its bound test name and ADR. The answer's comment id is not supplied; c24730
+identifies the problem comment. Ruling attribution remains pending confirmation.
+The untouched commission suite also exposes a separate contract conflict:
+it requires base profit 5000 and net after commissions 4875, while this PR
+defines both as management net. The permission repair yields 4875, and the
+unchanged test remains red. No certification is claimed for that conflict.
+
 Nine scenario records cite the stable SCRUM-928 c24715 brief digest. This is local,
 serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
