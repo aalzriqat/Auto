@@ -1,0 +1,378 @@
+{
+  "version": 1,
+  "frozenAt": "f5b5332999351fd800143b4798f57468f5e24a97",
+  "cases": [
+    {
+      "id": "g6-01",
+      "fix": "e4995a36aab0ede9b5ecb8be8e9771c23757f148",
+      "parent": "124e2408f2b9628bfcf20125c81e81f38a41e5d3",
+      "paths": [
+        "convex/sourcingPayables.ts"
+      ],
+      "baselineTests": [
+        "convex/sourcingPayables.test.ts"
+      ],
+      "witnessTests": [
+        "convex/specialOrdersHunt.scrum773.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-773#description",
+      "finding": "Full supplier settlement accepts a foreign payment account",
+      "scenario": null,
+      "family": "authorization",
+      "oracle": "browser-authorization",
+      "expectedDetection": "A deterministic authorization violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "e4995a36aab0ede9b5ecb8be8e9771c23757f148",
+        "test": "convex/specialOrdersHunt.scrum773.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof",
+        "note": "The fix also refuses disputed rows; that assertion is a companion reproduction, not a separately counted finding."
+      },
+      "expectedFingerprints": [
+        "swarm:TEN-1:sourcingPayables:markPaid"
+      ]
+    },
+    {
+      "id": "g6-02",
+      "fix": "2e7ea58cdbfe746a0169494570443316846026e6",
+      "parent": "6c71a7654bc8fc11b37b4b57ac52dbb71ecae592",
+      "paths": [
+        "convex/sourcingPayables.ts",
+        "convex/utils/errors.ts",
+        "convex/utils/vehicleOwnership.ts",
+        "lib/i18n/domains/common.ts"
+      ],
+      "baselineTests": [
+        "convex/sourcingPayables.test.ts"
+      ],
+      "witnessTests": [
+        "convex/consignedPayableVat.scrum781.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-773#c22401",
+      "finding": "Consigned settlement incorrectly reclaims supplier VAT",
+      "scenario": "regression/scenarios/money/consigned-supplier-payable-refuses-vat-and-settles-gross.scenario.json",
+      "family": "money",
+      "oracle": "browser-money",
+      "expectedDetection": "A deterministic money violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "2e7ea58cdbfe746a0169494570443316846026e6",
+        "test": "convex/consignedPayableVat.scrum781.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:CONS-1:sourcingPayables:markPaid"
+      ]
+    },
+    {
+      "id": "g6-03",
+      "fix": "fa4bdab248f09adedf36c0c497fa9f3e1f36c555",
+      "parent": "99b175f7039e284e3a03c1312689df65efd6ec28",
+      "paths": [
+        "convex/accounting/postingEngine.ts",
+        "convex/accountingOutbox.ts",
+        "convex/schema.ts"
+      ],
+      "baselineTests": [
+        "convex/accountingOutboxAtomicity.test.ts"
+      ],
+      "witnessTests": [
+        "convex/consignedQueuedVat.scrum782.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-760#c23812",
+      "finding": "Queued consigned settlement can post prohibited VAT",
+      "scenario": "regression/scenarios/money/queued-consigned-supplier-vat-is-quarantined.scenario.json",
+      "family": "money",
+      "oracle": "browser-money",
+      "expectedDetection": "A deterministic money violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "fa4bdab248f09adedf36c0c497fa9f3e1f36c555",
+        "test": "convex/consignedQueuedVat.scrum782.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:CONS-1:accountingOutbox:retryFailed"
+      ]
+    },
+    {
+      "id": "g6-04",
+      "fix": "29de7810652eaa319266f21f99ace10b1e2ff39b",
+      "parent": "d8f8c52c15464c3ebc5ccd882c30bfdfbf84fd19",
+      "paths": [
+        "convex/dealCommissions.ts",
+        "convex/utils/errors.ts",
+        "lib/i18n/domains/common.ts"
+      ],
+      "baselineTests": [
+        "convex/dealCommissions.test.ts"
+      ],
+      "witnessTests": [
+        "convex/dealCommissions.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-854#description",
+      "finding": "Salesperson can receive a second SALE commission on their own sale",
+      "scenario": null,
+      "family": "authorization",
+      "oracle": "browser-authorization",
+      "expectedDetection": "A deterministic authorization violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "29de7810652eaa319266f21f99ace10b1e2ff39b",
+        "test": "convex/dealCommissions.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:AUTH-1:dealCommissions:addLine"
+      ]
+    },
+    {
+      "id": "g6-05",
+      "fix": "b32891eb11324bc69ff9570c010f2def3b9120bd",
+      "parent": "d98fa6082ea99075271279848af07c0c4ce8ae5f",
+      "paths": [
+        "convex/accounting/openingAllocations.ts",
+        "convex/utils/openingCommissionLiabilities.ts"
+      ],
+      "baselineTests": [
+        "convex/openingCommissionPayroll.test.ts"
+      ],
+      "witnessTests": [
+        "convex/openingCommissionPayroll.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-760#c22465",
+      "finding": "Non-owner can prepare their own opening commission",
+      "scenario": "regression/scenarios/permission/opening-commission-beneficiary-draft-refused.scenario.json",
+      "family": "authorization",
+      "oracle": "browser-authorization",
+      "expectedDetection": "A deterministic authorization violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "b32891eb11324bc69ff9570c010f2def3b9120bd",
+        "test": "convex/openingCommissionPayroll.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:AUTH-1:accountingCutover:draftOpeningBalance"
+      ]
+    },
+    {
+      "id": "g6-06",
+      "fix": "b67957756c6804023925719352390af874eb00f1",
+      "parent": "79bd26401bc9ca6f0180092753c85ab238cb330a",
+      "paths": [
+        "convex/adminOrgs.ts",
+        "convex/documents.ts",
+        "convex/schema.ts",
+        "convex/utils/financeStatuses.ts",
+        "lib/i18n/domains/sales.ts"
+      ],
+      "baselineTests": [
+        "convex/documents.test.ts"
+      ],
+      "witnessTests": [
+        "convex/documents.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-422#c21130",
+      "finding": "Documents of closed or cancelled finance deals remain writable",
+      "scenario": null,
+      "family": "lifecycle",
+      "oracle": "browser-lifecycle",
+      "expectedDetection": "A deterministic lifecycle violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "b67957756c6804023925719352390af874eb00f1",
+        "test": "convex/documents.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:LIFE-1:documents:ensureApplicationDocument",
+        "swarm:LIFE-1:documents:generateUploadUrl",
+        "swarm:LIFE-1:documents:saveDocumentFile",
+        "swarm:LIFE-1:documents:updateDocumentStatus"
+      ]
+    },
+    {
+      "id": "g6-07",
+      "fix": "2a647c2844fba744a64db2bb3bba72b3ad932a68",
+      "parent": "55024c1c11581628cf45e00d0c4d9a1319befb02",
+      "paths": [
+        "convex/_generated/api.d.ts",
+        "convex/applications.ts",
+        "convex/sales.ts",
+        "convex/utils/errors.ts",
+        "convex/utils/financialGuards.ts",
+        "convex/utils/financingEconomics.ts",
+        "convex/utils/quoteEconomicsAnchor.ts",
+        "lib/i18n/domains/sales.ts"
+      ],
+      "baselineTests": [
+        "convex/billOfSaleEconomics.test.ts"
+      ],
+      "witnessTests": [
+        "convex/billOfSaleEconomics.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-528#description",
+      "finding": "Finalization accepts quote economics that drifted from the frozen application",
+      "scenario": null,
+      "family": "money",
+      "oracle": "browser-money",
+      "expectedDetection": "A deterministic money violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "2a647c2844fba744a64db2bb3bba72b3ad932a68",
+        "test": "convex/billOfSaleEconomics.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:ACC-1:applications:finalizeDeal"
+      ],
+      "witnessSupport": [
+        "test-utils/quoteEconomicsDrifted.ts"
+      ]
+    },
+    {
+      "id": "g6-08",
+      "fix": "ea13dc298c21cefdf7356fee451c84f3a08072ac",
+      "parent": "23889380d4c2586a2ebc87ffda90f9ec6581a5a5",
+      "paths": [
+        "convex/_generated/api.d.ts",
+        "convex/adminData.ts",
+        "convex/applications.ts",
+        "convex/approvals.ts",
+        "convex/commitments.ts",
+        "convex/depositRequests.ts",
+        "convex/deposits.ts",
+        "convex/quotes.ts",
+        "convex/utils/depositHelpers.ts",
+        "convex/utils/errors.ts",
+        "convex/utils/profitApproval.ts",
+        "convex/utils/quoteDepositPosting.ts",
+        "convex/utils/saleCompletion.ts",
+        "convex/utils/vehicleLiveness.ts",
+        "convex/vehicles.ts",
+        "lib/i18n/domains/common.ts"
+      ],
+      "baselineTests": [
+        "convex/deposits.test.ts"
+      ],
+      "witnessTests": [
+        "convex/scrum641DeletedVehicleDoors.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-641#description",
+      "finding": "Deleted vehicle can acquire new commercial authority",
+      "scenario": null,
+      "family": "lifecycle",
+      "oracle": "browser-lifecycle",
+      "expectedDetection": "A deterministic lifecycle violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "ea13dc298c21cefdf7356fee451c84f3a08072ac",
+        "test": "convex/scrum641DeletedVehicleDoors.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:LIFE-1:quotes:create",
+        "swarm:LIFE-1:deposits:create",
+        "swarm:LIFE-1:applications:finalizeDeal"
+      ]
+    },
+    {
+      "id": "g6-09",
+      "fix": "b6f64fe24ac08e6d73fc01f7cff08880afa8d1a4",
+      "parent": "bdf0bc11e84adb62466e083da81ade6894a3f750",
+      "paths": [
+        "convex/_generated/api.d.ts",
+        "convex/applications.ts",
+        "convex/dealOverview.ts",
+        "convex/financeDealCosts.ts",
+        "convex/schema.ts",
+        "convex/utils/dealFinancialSummary.ts",
+        "convex/utils/executionFeePosition.ts",
+        "convex/utils/financedSaleRecognition.ts",
+        "convex/utils/financingEconomics.ts",
+        "convex/utils/handoverCostPayment.ts",
+        "lib/i18n/domains/sales.ts"
+      ],
+      "baselineTests": [
+        "convex/dealOverview.test.ts"
+      ],
+      "witnessTests": [
+        "convex/executionFeePosition.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-690#c22119",
+      "finding": "Unrelated cost consumes an unrecorded execution fee",
+      "scenario": null,
+      "family": "money",
+      "oracle": "browser-money",
+      "expectedDetection": "A deterministic money violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "b6f64fe24ac08e6d73fc01f7cff08880afa8d1a4",
+        "test": "convex/executionFeePosition.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:ACC-1:dealOverview:financedDealOverview"
+      ]
+    },
+    {
+      "id": "g6-10",
+      "fix": "98073b88fb9a6ba07be13e3b4e0bec7dafb87386",
+      "parent": "d10f586d90ec6d5a488d2a7031d687fcc757ae62",
+      "paths": [
+        "convex/utils/saleCompletion.ts"
+      ],
+      "baselineTests": [
+        "convex/sales.test.ts"
+      ],
+      "witnessTests": [
+        "convex/scrum415FinancedDoor.test.ts"
+      ],
+      "severity": "HIGH",
+      "severityBasis": "Curator risk classification: unauthorized financial state or materially wrong accounting; not a claim of historical Jira priority",
+      "ruling": "SCRUM-415#description",
+      "finding": "A financed sale completes outside its own finance finalization door",
+      "scenario": null,
+      "family": "authorization",
+      "oracle": "browser-authorization",
+      "expectedDetection": "A deterministic authorization violation on the reverted subject, absent on the fixed control. Generic crashes and model opinions do not count.",
+      "failingFirstEvidence": {
+        "commit": "98073b88fb9a6ba07be13e3b4e0bec7dafb87386",
+        "test": "convex/scrum415FinancedDoor.test.ts",
+        "verification": "Must reproduce fixed-green and inverse-red locally; commit narrative alone is not runtime proof"
+      },
+      "expectedFingerprints": [
+        "swarm:AUTH-1:sales:create:FINANCED",
+        "swarm:AUTH-1:sales:completeDraft:FINANCED"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "candidate": "09ef9c8e8 / 0fd6a5ac5 LTV helper",
+      "reason": "Helper added before its separate tests; inverting an export addition produces missing-function failures, not an observed product breach."
+    },
+    {
+      "candidate": "94923ad00 economic oracle F1/F2",
+      "reason": "Oracle implementation defects are useful harness controls, but are not independent product bugs for hunter recall."
+    },
+    {
+      "candidate": "PR285 / PR309 historical clean controls",
+      "reason": "No known bug or failing-first product regression. Keep existing routing calibration separate; fixed companions provide negative controls here."
+    },
+    {
+      "candidate": "b66d9a845 opening allocations",
+      "reason": "Feature introduction, not a bounded fix of an existing behavior."
+    }
+  ]
+}
