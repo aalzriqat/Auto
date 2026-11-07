@@ -207,7 +207,7 @@ describe("organization hard-delete coverage", () => {
     expect(unknown).toEqual([]);
   });
 
-  test("the financial reset knows about every storage field it has to delete", () => {
+  test("the financial reset pins every deleted or deliberately retained storage field", () => {
     // The reset sweeps blobs by a hardcoded field name. `expenses`,
     // `paymentVouchers`, `receivableDocuments` and `postDatedCheques` are all in
     // its table list and are plausible attachment carriers — the day one gains a
@@ -233,6 +233,11 @@ describe("organization hard-delete coverage", () => {
     ).toEqual({
       financeAppraisals: ["documentStorageIds"],
       financeDealFees: ["documentStorageIds"],
+      // SCRUM-565 ADR retains newly covered blobs: tenant ownership/sharing is unproven.
+      vehicles: ["imageIds"],
+      vehicleEdits: ["payload"],
+      vehicleOwnershipConversions: ["documentStorageIds"],
+      socialPosts: ["imageStorageIds"],
     });
   });
 

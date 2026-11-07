@@ -8,6 +8,8 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
+import { expectAppError } from "../test-utils/expectAppError";
+import type { TableNames } from "./_generated/dataModel";
 
 const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
@@ -270,7 +272,7 @@ describe("guide-required opening stock, bank, and cash replay", () => {
     expect(await t.run(async (ctx) => (await ctx.db.query("journalEntries").collect()).length)).toBe(0);
   });
 
-  test("financial reset leaves old opening stock unavailable instead of reusing its parent", async () => {
+  test("owner ruling 2026-11-07 wipes vehicles: old opening stock replay is refused without writes", async () => {
     const { t, orgId, userId, owner, accountId } = await seed();
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Synthetic", lastName: "Buyer" })
@@ -301,10 +303,19 @@ describe("guide-required opening stock, bank, and cash replay", () => {
     expect(readback).toMatchObject({ journalStatus: "MISSING", rows: [{ kind: "VEHICLE_INVENTORY", recordAvailable: false }] });
     expect(await owner.query(api.accountingCutover.listOpeningStockChoices, { orgId }))
       .toMatchObject([{ vehicleId, available: false, amountMinor: null }]);
-    await expect(owner.mutation(api.sales.create, {
+    const snapshot = () => t.run(async ctx => {
+      const rows: Record<string, unknown> = {};
+      for (const table of Object.keys(schema.tables) as TableNames[]) rows[table] = await ctx.db.query(table).collect();
+      return rows;
+    });
+    // The owner now wipes the car too. Its coded liveness refusal must prevent
+    // posting just as the former generation refusal did, with no replay effects.
+    const beforeSaleReplay = await snapshot();
+    await expectAppError(owner.mutation(api.sales.create, {
       orgId, idempotencyKey: "sale-after-opening-reset", vehicleId, customerId, salespersonId: userId,
       salePrice: 15_000, saleDate: Date.now(), status: "COMPLETED",
-    })).rejects.toThrow(/predates a financial reset/i);
+    }), "VEHICLE_NOT_FOUND", "Vehicle not found in this organization.");
+    expect(await snapshot()).toEqual(beforeSaleReplay);
     await owner.mutation(api.chartOfAccounts.initialize, { orgId });
     const replacementAccounts = await owner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
     const replacement = (systemKey: string) => {
@@ -312,6 +323,7 @@ describe("guide-required opening stock, bank, and cash replay", () => {
       if (!account) throw new Error(`Missing replacement synthetic account ${systemKey}`);
       return account._id;
     };
+    const beforeOpeningReplay = await snapshot();
     await expect(owner.mutation(api.accountingCutover.postOpeningBalanceDirect, {
       orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
       lines: [
@@ -320,9 +332,10 @@ describe("guide-required opening stock, bank, and cash replay", () => {
       ],
       allocations: [{ kind: "VEHICLE_INVENTORY", rowKey: "reset-stock-1",
         accountId: replacement("VEHICLE_INVENTORY"), vehicleId, amountMinor: 8_000_000 }],
-    })).rejects.toThrow(/cost, ownership or posting proof conflicts|financial reset/i);
+    })).rejects.toThrow("Opening inventory vehicle not found in this organization.");
+    expect(await snapshot()).toEqual(beforeOpeningReplay);
     expect(await t.run(async (ctx) => (await ctx.db.query("journalEntries").collect()).length)).toBe(0);
-    expect(await t.run(async (ctx) => (await ctx.db.query("vehicles").collect()).length)).toBe(1);
+    expect(await t.run(async (ctx) => (await ctx.db.query("vehicles").collect()).length)).toBe(0);
   });
 
   test("a reversed opening journal claim cannot leave inventory available to sale or readback", async () => {

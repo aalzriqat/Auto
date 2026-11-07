@@ -1,0 +1,86 @@
+{
+  "id": "scrum565-owed-commission-counts-over-bound",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-round2-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "tables": [
+          "dealCommissionLines",
+          "sales",
+          "openingCommissionLiabilities"
+        ],
+        "eachInSeparateFixture": true,
+        "sourceRows": 101,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "preflight.verdict",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "preflight.owedCommissionCounts.overBoundSource",
+      "value": null
+    },
+    {
+      "observable": "reset.writes",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "owner ruling 2026-11-07 keeps over-bound commission evidence UNAVAILABLE with no invented count"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
+  },
+  "fingerprint": "ec04afc5f38a6b61465862dfcb8db313364046572510941dcddc2d3d26254fea"
+}

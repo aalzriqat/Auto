@@ -1,0 +1,87 @@
+{
+  "id": "scrum565-a-linked-event-amid-an-over-bound-retained-thread-refuses-b-905f7460",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "batchSize": 1,
+        "case": "largeKeptTablesWithFewVehicleReferences",
+        "keptRowsPerTable": 27,
+        "vehicleWritesPerTable": 1,
+        "ownerRuling": "OWNER_2026_11_07_SCRUM565"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dryRun.preflight.verdict",
+      "value": "PASS"
+    },
+    {
+      "observable": "reset.remainingAfterRepeatedBatches",
+      "value": 0
+    },
+    {
+      "observable": "kept.vehicleReferences",
+      "value": 0
+    },
+    {
+      "observable": "kept.nonReferencingRowsByteIdentical",
+      "value": true
+    },
+    {
+      "observable": "orgB.allRowsByteIdentical",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "owner ruling 2026-11-07 bounds only vehicle writes: large kept tables reset through batches without changing unrelated rows or org B"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "e911b34d228b70ad0ce761b39eed82be190647d9"
+  },
+  "fingerprint": "96b01afe96defda44c3044d0be07de6397b02895ff7dbe678a82e06d2006261d"
+}

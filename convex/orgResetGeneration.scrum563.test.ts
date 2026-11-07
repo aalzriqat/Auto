@@ -269,15 +269,20 @@ describe("SCRUM-563 R1 — generation lifecycle", () => {
     expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1 });
   });
 
-  test("D-19: a fresh destructive run on a suspended clean org is refused and writes nothing", async () => {
+  test("owner ruling SCRUM-565 c24729 replaces D-19: clean suspended fresh reset requires preflight; dry run writes nothing", async () => {
     const s = await setup();
     await createExpense(s, "A");
     await suspend(s.t, s.orgId);
-    await expect(
-      s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false })
-    ).rejects.toThrow(/Fresh financial resets are disabled/);
+    const before = await footprint(s.t, s.orgId);
+    const dry = await s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: true });
+    expect(dry.preflight).toMatchObject({ verdict: "PASS", refusals: [] });
     expect(await orgState(s.t, s.orgId)).toEqual({ generation: undefined, completed: undefined, suspended: true });
+    expect(await footprint(s.t, s.orgId)).toEqual(before);
     expect((await footprint(s.t, s.orgId)).expenses).toBe(1);
+    const done = await s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false });
+    expect(done).toMatchObject({ preflight: { verdict: "PASS", refusals: [] }, resetCompleted: true, remaining: 0 });
+    expect(await orgState(s.t, s.orgId)).toEqual({ generation: 1, completed: 1, suspended: true });
+    expect(await footprint(s.t, s.orgId)).toMatchObject({ expenses: 0, transactions: 0, commands: before.commands });
   });
 });
 
@@ -341,18 +346,23 @@ describe("SCRUM-563 F1 — cash drawer state refuses the reset (its own replay s
     expect(await orgState(s.t, s.orgId)).toMatchObject({ generation: 1, completed: 1 });
   });
 
-  test("(d) a cash key recorded before the reset replays in its generation, and the reset that would orphan it refuses", async () => {
+  test("(d) owner ruling SCRUM-565 c24729: cash key replays in its generation; survivor preflight refuses reset and writes nothing", async () => {
     const s = await setup();
     const { movementId, record } = await seedCash(s, "K");
     expect(await record()).toEqual(movementId);
     expect((await cashRows(s)).movements).toBe(1);
 
     await suspend(s.t, s.orgId);
-    // D-19: a fresh start is refused (by the barrier, ahead of the cash check); the
-    // cash refusal itself is covered through the continuation path in (a).
+    // c24729 replaced D-19's blanket barrier with complete survivor admission.
+    const before = await footprint(s.t, s.orgId);
+    const cashBefore = await cashRows(s);
+    const stateBefore = await orgState(s.t, s.orgId);
     await expect(
       s.t.mutation(internal.orgFinancialReset.resetOrgFinancialData, { orgId: s.orgId, dryRun: false })
-    ).rejects.toThrow(/Fresh financial resets are disabled/);
+    ).rejects.toThrow(/REFUSED: cashMovements count 1 \(SURVIVOR\)/);
+    expect(await footprint(s.t, s.orgId)).toEqual(before);
+    expect(await cashRows(s)).toEqual(cashBefore);
+    expect(await orgState(s.t, s.orgId)).toEqual(stateBefore);
 
     // No reset ever completed, so K can never be replayed across one.
     expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
