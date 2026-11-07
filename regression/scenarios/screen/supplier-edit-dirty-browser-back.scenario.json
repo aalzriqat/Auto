@@ -51,7 +51,7 @@
     "app/layout.tsx",
     "package.json",
     "pnpm-lock.yaml",
-    "test-utils/supplierNavigation*"
+    "playwright/visual/fixtures/supplierNavigation*"
   ],
   "fingerprint": "46cb5bd295f0931f88790d33211f6f918814b99b9400e28f0933f4ef6bc20e6f"
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 
-/** Offline browser boundary only. The real supplier components and discard guard are bundled unchanged. */
+/** Offline browser boundary only. Keep this outside the backend compiler's test-utils include. */
 export function useQuery(reference: FunctionReference<"query">, args: unknown) {
   if (args === "skip") return undefined;
   if (getFunctionName(reference) === "suppliers:get") return {

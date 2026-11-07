@@ -10,7 +10,7 @@ test.beforeAll(async () => {
   const require = createRequire(__filename);
   const vitePath = createRequire(require.resolve("vitest/package.json")).resolve("vite");
   const vite: { build: (config: Record<string, unknown>) => Promise<unknown> } = await import(pathToFileURL(vitePath).href);
-  const hooks = resolve(ROOT, "test-utils/supplierNavigationHooks.tsx");
+  const hooks = resolve(ROOT, "playwright/visual/fixtures/supplierNavigationHooks.tsx");
   const built = await vite.build({
     configFile: false, publicDir: false, logLevel: "error", root: ROOT,
     define: { "process.env.NODE_ENV": JSON.stringify("production") },
@@ -18,7 +18,7 @@ test.beforeAll(async () => {
       ...["convex/react", "@/hooks/use-permissions", "next/navigation", "next/link"].map(find => ({ find, replacement: hooks })),
       { find: "@", replacement: ROOT },
     ] },
-    build: { write: false, minify: false, lib: { entry: resolve(ROOT, "test-utils/supplierNavigationFixture.tsx"), name: "SupplierFixture", formats: ["iife"] } },
+    build: { write: false, minify: false, lib: { entry: resolve(ROOT, "playwright/visual/fixtures/supplierNavigationFixture.tsx"), name: "SupplierFixture", formats: ["iife"] } },
   });
   const output = Array.isArray(built) ? built[0] : built;
   if (!output || typeof output !== "object" || !("output" in output) || !Array.isArray(output.output)) throw new Error("Fixture bundle unavailable");
