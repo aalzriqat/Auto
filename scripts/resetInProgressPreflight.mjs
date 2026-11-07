@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * SCRUM-565 D-17 (N9) / D-19 — fails closed unless NO organization is mid
  * financial reset on the production deployment AND the live backend attests that
