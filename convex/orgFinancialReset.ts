@@ -10,6 +10,10 @@ import {
   orgResetState,
 } from "./utils/orgResetGeneration";
 
+const OPENING_RESULT_REFERENCE_TABLES: ReadonlySet<string> = new Set([
+  "openingCommissionLiabilities", "supplierCostRecoveries", "vehicleSupplierPayables",
+]);
+
 /**
  * One-off operational tool: clears an organization's accounting, sales and
  * finance-application records while leaving the dealership itself intact.
@@ -843,13 +847,10 @@ export const resetOrgFinancialData = internalMutation({
           if (table === "payrollItems") {
             await clearOpeningPayrollReference(ctx, args.orgId, row._id as Id<"payrollItems">);
           }
-          const referencesCleared = table === "openingCommissionLiabilities"
-            ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })
-            : table === "supplierCostRecoveries"
-              ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"supplierCostRecoveries"> })
-              : table === "vehicleSupplierPayables"
-                ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"vehicleSupplierPayables"> })
-                : true;
+          const referencesCleared = OPENING_RESULT_REFERENCE_TABLES.has(table)
+            ? await clearNewOpeningResultReference(ctx, args.orgId,
+              { table, id: row._id } as Parameters<typeof clearNewOpeningResultReference>[2])
+            : true;
           if (!referencesCleared) {
             total -= batch.length - index;
             if (index > 0) perTable[table] = index;

@@ -3,6 +3,7 @@ import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import { KNOWN_SURVIVING_REFERENCES } from "./orgResetReferences";
 import { convexToJson } from "convex/values";
 import { isCommissionOwed } from "./commission";
+import { inTurn } from "./transactionReadHeadroom";
 
 export const RESET_FAMILY_READ_BOUND = 100;
 // Owner 2026-11-07: bound trigger-producing writes, not unrelated retained history.
@@ -86,27 +87,33 @@ async function measureFamilies(db: DatabaseReader, orgId: Id<"organizations">,
     openingCommissionLiabilities: "by_org", sales: "by_org", unmatchedProviderFunds: "by_org_review",
     cashDrawerSessions: "by_org",
   } as const;
-  for (const [name, index] of Object.entries(familyIndexes)) {
+  await inTurn(Object.entries(familyIndexes), async ([name, index]) => {
     const table = name as keyof typeof familyIndexes;
     evidence.table = table;
     const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, evidence);
     result.counts[table] = found.length;
     if (found.length > RESET_FAMILY_READ_BOUND) {
       result.refusals.push({ table, count: found.length, reason: "OVER_BOUND" });
-      continue;
+      return;
     }
     if (table === "dealCommissionLines" || table === "sales" || table === "openingCommissionLiabilities") {
       result.owedCommissionCounts[table] = owedCommissionCount(table, found);
     }
     const risky = found.filter(row => isRiskyFamilyRow(table, row));
     if (risky.length > 0) result.refusals.push({ table, count: risky.length, reason: "RISKY_STATE" });
-  }
+  });
 }
 
 export function survivingReferenceTables(resetTables: readonly string[]): SurvivorTable[] {
   const deleted = new Set(resetTables);
   return [...new Set(Object.keys(KNOWN_SURVIVING_REFERENCES).map(key => key.split(".")[0]))]
-    .filter(table => !deleted.has(table)).sort().map(table => {
+    .filter(table => !deleted.has(table))
+    // Read order controls shared-budget attribution; retain the original UTF-16 ordering.
+    .sort((a, b) => {
+      if (a < b) return -1;
+      if (a > b) return 1;
+      return 0;
+    }).map(table => {
       if (!Object.hasOwn(RESET_SURVIVOR_INDEX, table)) throw new Error(`Unmeasured survivor table ${table}`);
       return table as SurvivorTable;
     });
@@ -152,23 +159,22 @@ export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"orga
     owedCommissionCounts: { dealCommissionLines: null, sales: null, openingCommissionLiabilities: null } };
   const evidence = { bytes: 0, table: "organizations" };
   try {
-    for (const table of survivingReferenceTables(resetTables)) {
+    await inTurn(survivingReferenceTables(resetTables), async table => {
       evidence.table = table;
       const index = RESET_SURVIVOR_INDEX[table];
-      if (!index) throw new Error("Unmeasured survivor table");
       const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, evidence);
       result.counts[table] = found.length;
       if (found.length > 0) result.refusals.push({ table, count: found.length,
         reason: found.length > RESET_FAMILY_READ_BOUND ? "OVER_BOUND" : "SURVIVOR" });
-    }
+    });
     await measureFamilies(db, orgId, result, evidence);
-    for (const name of Object.keys(RESET_KEPT_REFERENCE_INDEX)) {
+    await inTurn(Object.keys(RESET_KEPT_REFERENCE_INDEX), async name => {
       const table = name as KeptTable;
       evidence.table = table;
       const found = await keptReferences(db, table, orgId);
       result.counts[table] = found.scanned;
       if (found.overflowCount > 0) result.refusals.push({ table, count: found.overflowCount, reason: "OVER_BOUND" });
-    }
+    });
   } catch (error) {
     console.error("Financial reset preflight evidence unavailable", error);
     result.refusals.push({ table: evidence.table, count: 0, reason: "READ_FAILED" });
@@ -181,7 +187,7 @@ export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"orga
 /** Bounded before writes, including social-trigger fanout. Runs before any vehicle can be deleted. */
 export async function clearResetVehicleReferences(ctx: MutationCtx, orgId: Id<"organizations">): Promise<void> {
   const groups: Array<{ table: KeptTable; docs: Doc<KeptTable>[] }> = [];
-  for (const name of Object.keys(RESET_KEPT_REFERENCE_INDEX)) {
+  await inTurn(Object.keys(RESET_KEPT_REFERENCE_INDEX), async name => {
     const table = name as KeptTable;
     const found = await keptReferences(ctx.db, table, orgId).catch(error => {
       console.error("Financial reset kept-reference evidence unavailable", error);
@@ -189,37 +195,37 @@ export async function clearResetVehicleReferences(ctx: MutationCtx, orgId: Id<"o
     });
     if (found.overflowCount > 0) throw new Error(`UNAVAILABLE ${table} count ${found.overflowCount}`);
     groups.push({ table, docs: found.docs });
-  }
+  });
   // Clear events first: their normal triggers rebuild conversation projections.
   groups.sort((a, b) => Number(a.table === "socialConversations") - Number(b.table === "socialConversations"));
-  for (const { table, docs } of groups) {
-    for (const row of docs) await clearVehicleReference(ctx, table, row);
-  }
+  await inTurn(groups, ({ table, docs }) => inTurn(docs, row => clearVehicleReference(ctx, table, row)));
 }
 
 async function clearVehicleReference(ctx: MutationCtx, table: KeptTable, row: Doc<KeptTable>): Promise<void> {
+  if (!keptReferenceNeedsWrite(table, row)) return;
   switch (table) {
-    case "orgCustomFieldValues": {
-      if (!("entityType" in row) || row.entityType !== "vehicle") return;
-      const id = ctx.db.normalizeId("orgCustomFieldValues", row._id);
-      if (!id) throw new Error("Invalid custom-field cleanup reference");
-      await ctx.db.delete("orgCustomFieldValues", id);
-      return;
-    }
+    case "orgCustomFieldValues":
+      return clearVehicleCustomField(ctx, row);
     case "socialConversations":
-      if ("vehicleIds" in row && row.vehicleIds.length > 0) await ctx.db.patch(row._id, { vehicleIds: [], vehicleCount: 0 });
+      await ctx.db.patch(row._id, { vehicleIds: [], vehicleCount: 0 });
       return;
     case "marketplaceRequestMatches":
-      if ("matchedVehicleId" in row && row.matchedVehicleId) await ctx.db.patch(row._id, {
+      await ctx.db.patch(row._id, {
         matchedVehicleId: undefined, matchTier: "ELIGIBLE", estimatedMonthlyPayment: undefined,
         estimatedTotalContractValue: undefined, matchScore: undefined, matchReasons: undefined, calculationSnapshot: undefined,
       });
       return;
     case "marketplaceResponses":
-      if ("vehicleId" in row && row.vehicleId) await ctx.db.patch(row._id, { vehicleId: undefined,
+      await ctx.db.patch(row._id, { vehicleId: undefined,
         kind: "NOT_AVAILABLE", offerPriceJod: undefined, financeOffer: undefined });
       return;
     default:
-      if ("vehicleId" in row && row.vehicleId) await ctx.db.patch(row._id, { vehicleId: undefined });
+      await ctx.db.patch(row._id, { vehicleId: undefined });
   }
+}
+
+async function clearVehicleCustomField(ctx: MutationCtx, row: Doc<KeptTable>): Promise<void> {
+  const id = ctx.db.normalizeId("orgCustomFieldValues", row._id);
+  if (!id) throw new Error("Invalid custom-field cleanup reference");
+  await ctx.db.delete("orgCustomFieldValues", id);
 }
