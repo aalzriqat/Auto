@@ -5,6 +5,8 @@ The profit column is before commissions. The separate after-commission column
 matches the deal page. The [ADR](2026-11-07-sales-report-matches-deal-page.md)
 records the derivation, permission boundary and retained ruling reference.
 This is implementer evidence. It is not independent review or runtime certification.
+The implementation commit is `ead75b8819a74d14e8a0f9ddb82329219bc65015`.
+The following evidence/baseline commit changes no TypeScript source.
 
 ## Field contract
 
@@ -112,8 +114,23 @@ The author checked these predicted failures with the real public queries:
 
 Both `pnpm typecheck` and `pnpm typecheck:convex` passed. `git diff --check`
 passed. `node scripts/contractSkew/checkBaselineIdentity.mjs` exited 0 with
-945 matched entries and zero stranded. Baseline renewal evidence is checked
-after the source commit, because it measures committed Git blobs.
+945 matched entries and zero stranded. After the source commit,
+`node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 684ba04d0`
+first reported 13 stale entries. After individual source-attribution review and
+blob renewal, it exited 0 with 945 checked, zero unrenewed, zero stale, zero
+malformed and zero missing. The 13 entries cover eight web date operands and
+five mobile organization-id operands. Their input contracts and recorded analysis
+gaps remain unchanged. Only `renewal` text changed; fingerprints, causes,
+rationales, multiplicities, issues and expiries are preserved.
+
+Each renewed entry contains its own committed client/backend `evidence-blobs`
+pair. The three distinct blobs are:
+
+| File | Git blob at the implementation commit |
+| --- | --- |
+| app/(dashboard)/[orgId]/reports/page.tsx | 81160b029a48dddae533225185b1ade1eea2ea52 |
+| apps/mobile/src/features/workspace/modules/reports.tsx | e5dbdd3f0abcf8ed60220767dc997f18246ce124 |
+| convex/reports.ts | 6a41277c483595974493c5b2bc9e8f9efb02ca03 |
 
 `pnpm typecheck` checks the root project. Its configured exclusions are
 `node_modules`, `apps`, `packages`, `convex`, `dealer-worker` and `test-utils`.
