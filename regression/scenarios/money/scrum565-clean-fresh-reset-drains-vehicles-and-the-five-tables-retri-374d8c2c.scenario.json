@@ -1,0 +1,72 @@
+{
+  "id": "scrum565-clean-fresh-reset-drains-vehicles-and-the-five-tables-retri-374d8c2c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "batchSize": 1,
+        "case": "cleanVehicleGraph"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reset.remaining",
+      "value": 0
+    },
+    {
+      "observable": "organizationB.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "clean fresh reset drains vehicles and the five tables; retries preserve kept rows and org B"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+  },
+  "fingerprint": "7a5cb3b99bed3ccf03d5a92559018044a15d8eb6bbac9e73d9909ad25145008d"
+}

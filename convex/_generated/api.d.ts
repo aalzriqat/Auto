@@ -291,6 +291,8 @@ import type * as utils_orgBusinessDay from "../utils/orgBusinessDay.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgOwner from "../utils/orgOwner.js";
 import type * as utils_orgResetGeneration from "../utils/orgResetGeneration.js";
+import type * as utils_orgResetReferences from "../utils/orgResetReferences.js";
+import type * as utils_orgResetSurvivorPreflight from "../utils/orgResetSurvivorPreflight.js";
 import type * as utils_orgSettingsProjection from "../utils/orgSettingsProjection.js";
 import type * as utils_partnerDistributionContainment from "../utils/partnerDistributionContainment.js";
 import type * as utils_partnerEquityBank from "../utils/partnerEquityBank.js";
@@ -654,6 +656,8 @@ declare const fullApi: ApiFromModules<{
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgOwner": typeof utils_orgOwner;
   "utils/orgResetGeneration": typeof utils_orgResetGeneration;
+  "utils/orgResetReferences": typeof utils_orgResetReferences;
+  "utils/orgResetSurvivorPreflight": typeof utils_orgResetSurvivorPreflight;
   "utils/orgSettingsProjection": typeof utils_orgSettingsProjection;
   "utils/partnerDistributionContainment": typeof utils_partnerDistributionContainment;
   "utils/partnerEquityBank": typeof utils_partnerEquityBank;

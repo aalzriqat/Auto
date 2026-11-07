@@ -1,0 +1,82 @@
+{
+  "id": "scrum565-cheque-held-refuses-terminal-cheques-are-resettable",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "batchSize": 1,
+        "case": "heldCheque"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.returnCheque",
+      "input": {
+        "status": "RETURNED"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "heldReset.writes",
+      "value": 0
+    },
+    {
+      "observable": "terminalReset.remaining",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "cheque HELD refuses; terminal cheques are resettable"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+  },
+  "fingerprint": "8842864ed30749ce4931985fd07bb1cacf4ff41d51787f27e42e637e467749af"
+}

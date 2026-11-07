@@ -1,0 +1,93 @@
+{
+  "id": "scrum565-risky-family-dealcommissionlines-refuses-by-table-before-any-write",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "table": "dealCommissionLines",
+        "batchSize": 1,
+        "owedRows": 2,
+        "settledRows": 1,
+        "payrollItems": 2,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1,
+        "repeatUntilComplete": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "preflight.owedCommissionCounts.dealCommissionLines",
+      "value": 2
+    },
+    {
+      "observable": "reset.remaining",
+      "value": 0
+    },
+    {
+      "observable": "reset.resetCompleted",
+      "value": true
+    },
+    {
+      "observable": "reset.payrollChildrenDrainBeforeSources",
+      "value": true
+    },
+    {
+      "observable": "reset.sourceRowsRemaining",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "owner ruling 2026-11-07 wipes owed deal commission lines, books start from zero"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
+  },
+  "fingerprint": "03d1c086e7b6e051ee72e6c72c0ec68668037f08cd32dd4450c19784f4dc41fd"
+}

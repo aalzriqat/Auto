@@ -1,0 +1,69 @@
+{
+  "id": "scrum565-kept-scan-overflow",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-round3-bound-controls",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "leads": 1001,
+        "vehicleReferences": 0,
+        "scanBound": 1000
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dryRun.preflight.verdict",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reset.writes",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "kept scan past 1000 rows is UNAVAILABLE even with no vehicle references"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "fingerprint": "a828301abcf2d0098393af276774ed3e65274357239cc19714dbdd24f90e280d"
+}

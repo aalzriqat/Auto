@@ -48,6 +48,10 @@ export function assertPageComplete(pageStatus: "SplitRecommended" | "SplitRequir
  * Read-only, internal (the workflow's operator key reaches it; no client can),
  * and exactly ONE paginated read per call (Convex's runtime limit).
  *
+ * SCRUM-565 c24729: fresh starts now have a survivor guard, so the blanket
+ * `freshStartsBlocked` attestation is false. The existing release controller
+ * still refuses it. Do not reinterpret this boolean as conditional admission.
+ *
  * KNOWN BLIND SPOT: a reset that started BEFORE SCRUM-563 shipped never stamped
  * the generation fields, so it reads as "not in progress" here. Tracked for S4.
  */

@@ -1,5 +1,15 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM565-narrow-reset
+
+Owner ruling SCRUM-565 c24729, 2026-11-07, supersedes the blanket D-19 refusal and the broad wipe brief in c24724. Outside the pilot train.
+
+| Operation | Required result | Bound check |
+| --- | --- | --- |
+| Internal reset, two orgs, batchSize 1 | Clean admission deletes the vehicle graph and accounting rows, retries complete one generation, kept identity/configuration and org B stay identical; excluded survivors and incomplete evidence refuse before writes | `convex/orgFinancialResetNarrow.scrum565.test.ts`, 30 exact scenario bindings under `regression/scenarios/money/scrum565-*` |
+
+Failing first at `9b584a38bcabd2735393acb807cb807a7d1b8f59`: 30 failed against unchanged main `684ba04d002edfcbee20162bdad1a2fbfc61a7a5`. Serial convex-test evidence only. No real-backend, OCC, browser-hunter, review-seat or production certification is claimed. Shared newly covered media blobs are retained. The release no-new-start attestation remains false and its existing controller refuses it.
+
 ## SCRUM-760-DECISION-B-BLOCKED-DOORS
 
 Owner rulings SCRUM-795 c22479 (2026-10-08, Q2 selective containment: do not activate a new retained-credit

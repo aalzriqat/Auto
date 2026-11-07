@@ -1,14 +1,4 @@
-/**
- * SCRUM-565 D-19 — no organization can NEWLY enter "reset in progress".
- *
- * INVARIANT: once this release is live and older invocations have finished, a
- * destructive `resetOrgFinancialData` can only CONTINUE a reset that is already
- * in progress. A fresh start (clean org, or an organizations row that does not
- * exist) is refused before any write. Dry runs are unchanged.
- *
- * The in-progress state is seeded directly (generation N+1, completed N) because
- * that is the only way into the destructive path that remains.
- */
+/** SCRUM-565 c24729: guarded fresh starts, truthful release attestation, continuations. */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { beginInProgressReset } from "../test-utils/orgResetFixtures";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
@@ -90,23 +80,23 @@ const destructive = (t: Harness, orgId: Id<"organizations">, batchSize?: number)
     ...(batchSize === undefined ? {} : { batchSize }),
   });
 
-const FRESH_REFUSED = /Fresh financial resets are disabled/;
+const FRESH_REFUSED = /Organization not found/;
 
 describe("SCRUM-565 D-19 — the no-new-start barrier", () => {
-  test("(a) a clean suspended org: a fresh destructive call refuses, bumps nothing, deletes nothing", async () => {
+  test("(a) a clean suspended org starts and completes with one generation", async () => {
     const s = await setup();
     await createExpense(s, "A-1");
     await suspend(s.t, s.orgId);
 
-    await expect(destructive(s.t, s.orgId)).rejects.toThrow(FRESH_REFUSED);
+    expect((await destructive(s.t, s.orgId)).preflight.verdict).toBe("PASS");
 
-    expect(await orgState(s.t, s.orgId)).toEqual({ exists: true, generation: undefined, completed: undefined });
-    expect(await expenseCount(s.t, s.orgId)).toBe(1);
+    expect(await orgState(s.t, s.orgId)).toEqual({ exists: true, generation: 1, completed: 1 });
+    expect(await expenseCount(s.t, s.orgId)).toBe(0);
   });
 
-  test("(a2) the barrier is the FIRST refusal: an unsuspended clean org gets it, not the suspension message", async () => {
+  test("(a2) an unsuspended clean org still refuses without writes", async () => {
     const s = await setup();
-    await expect(destructive(s.t, s.orgId)).rejects.toThrow(FRESH_REFUSED);
+    await expect(destructive(s.t, s.orgId)).rejects.toThrow(/Suspend this organization/);
     expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
   });
 
@@ -141,7 +131,7 @@ describe("SCRUM-565 D-19 — the no-new-start barrier", () => {
     expect(await expenseCount(s.t, s.orgId)).toBe(0);
   });
 
-  test("(c2) once completed, the same org is clean again and a further destructive call is a refused fresh start", async () => {
+  test("(c2) a completed clean org may start the next generation", async () => {
     const s = await setup();
     await createExpense(s, "C2-1");
     await suspend(s.t, s.orgId);
@@ -151,8 +141,8 @@ describe("SCRUM-565 D-19 — the no-new-start barrier", () => {
     }
     expect(await orgState(s.t, s.orgId)).toEqual({ exists: true, generation: 1, completed: 1 });
 
-    await expect(destructive(s.t, s.orgId)).rejects.toThrow(FRESH_REFUSED);
-    expect(await orgState(s.t, s.orgId)).toEqual({ exists: true, generation: 1, completed: 1 });
+    await destructive(s.t, s.orgId);
+    expect(await orgState(s.t, s.orgId)).toEqual({ exists: true, generation: 2, completed: 2 });
   });
 
   test("(d) a dry run on a clean org still reports and writes nothing", async () => {
@@ -176,19 +166,20 @@ describe("SCRUM-565 D-19 — the no-new-start barrier", () => {
     expect(report.orgName).toBeNull();
   });
 
-  test("(e) page A read, then a fresh reset on A is refused, then the walk finishes green and A is not mid-reset", async () => {
+  test("(e) paginated zero is not a no-new-start attestation once clean resets are admitted", async () => {
     const s = await setup();
     await createExpense(s, "E-1");
+    await createExpense(s, "E-2");
     await suspend(s.t, s.orgId);
 
     const query = internal.orgResetPreflight.countOrgsWithResetInProgress;
     const first = await s.t.query(query, { paginationOpts: { numItems: 1, cursor: null } });
     expect(first.protocol).toBe(RESET_PREFLIGHT_PROTOCOL);
-    expect(first.freshStartsBlocked).toBe(true);
+    expect(first.freshStartsBlocked).toBe(false);
     expect(first.inProgress).toBe(0);
 
     // The race the barrier closes: A is attempted AFTER its page was counted.
-    await expect(destructive(s.t, s.orgId)).rejects.toThrow(FRESH_REFUSED);
+    await destructive(s.t, s.orgId, 1);
 
     let total = first.inProgress;
     let cursor = first.continueCursor;
@@ -201,6 +192,7 @@ describe("SCRUM-565 D-19 — the no-new-start barrier", () => {
     }
     expect(isDone).toBe(true);
     expect(total).toBe(0);
-    expect((await orgState(s.t, s.orgId)).generation).toBeUndefined();
+    expect((await orgState(s.t, s.orgId)).generation).toBe(1);
+    expect((await orgState(s.t, s.orgId)).completed).toBeUndefined();
   });
 });
