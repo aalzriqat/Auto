@@ -5656,6 +5656,12 @@ export function DealCockpitView({
   const revealDetailsFor = (target: Element | null) => {
     if (target && target.closest('[data-zone="record"]')) setDetailsChoice(true);
   };
+  const scrollIntoViewRespectingMotion = (el: Element | null) => {
+    const reduceMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+  };
   const goToDocuments = () => {
     setLowerTab("documents");
     revealDetailsFor(document.querySelector('[data-testid="deal-lower-tabs"]'));
@@ -5663,10 +5669,7 @@ export function DealCockpitView({
     // The target's `scroll-mt-*` keeps it clear of the sticky header; focus
     // moves to the Documents tab without a second, instant jump.
     requestAnimationFrame(() => {
-      const reduceMotion =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      lowerTabsRef.current?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      scrollIntoViewRespectingMotion(lowerTabsRef.current);
       documentsTriggerRef.current?.focus({ preventScroll: true });
     });
   };
@@ -5679,10 +5682,7 @@ export function DealCockpitView({
     requestAnimationFrame(() => {
       const target = document.getElementById(id);
       if (!target) return;
-      const reduceMotion =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      target.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      scrollIntoViewRespectingMotion(target);
       target.focus({ preventScroll: true });
     });
   };
@@ -5696,10 +5696,7 @@ export function DealCockpitView({
     requestAnimationFrame(() => {
       const target = find();
       if (!target) return;
-      const reduceMotion =
-        typeof window.matchMedia === "function" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      target.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+      scrollIntoViewRespectingMotion(target);
       target
         .querySelector<HTMLElement>('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')
         ?.focus({ preventScroll: true });
@@ -6093,7 +6090,7 @@ export function DealCockpitView({
   };
 
   /**
-   * Both recorders share one shape: submit, and on refusal keep the dialog open
+   * Dialog submissions share one shape: on refusal keep the dialog open
    * with the server's own words in it.
    *
    * The refusals here are the whole point — "record the quotation before
@@ -6102,6 +6099,26 @@ export function DealCockpitView({
    * message would leave an operator holding a document they cannot enter, which
    * is the dead end this screen was built to end.
    */
+  const submitDialog = async ({ submit, onSuccess, setSubmitting, setError }: Readonly<{
+    submit: () => Promise<unknown>;
+    onSuccess: () => void;
+    setSubmitting: (submitting: boolean) => void;
+    setError: (error: string | null) => void;
+  }>) => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await submit();
+      onSuccess();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      setError(message);
+      toast.error(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleRecordQuotation = async (values: {
     submittedQuotationMinor: number;
     source: "SYSTEM_CALCULATED" | "MANUAL_ENTRY" | "CALCULATED_WITH_OVERRIDE";
@@ -6109,20 +6126,14 @@ export function DealCockpitView({
     ltvPercent?: number;
   }) => {
     if (!financeDecision) return;
-    setQuotationSubmitting(true);
-    setQuotationError(null);
-    try {
-      await trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
+    await submitDialog({
+      setSubmitting: setQuotationSubmitting,
+      setError: setQuotationError,
+      submit: () => trackStep(() => financeDecision.onRecordQuotation(values), "QuotationRecorded", {
         reflectedWhen: quotationReflected(values.submittedQuotationMinor, values.source),
-      });
-      setRecordingQuotation(false);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setQuotationError(message);
-      toast.error(message);
-    } finally {
-      setQuotationSubmitting(false);
-    }
+      }),
+      onSuccess: () => setRecordingQuotation(false),
+    });
   };
 
   const handleRecordAppraisal = async (values: {
@@ -6133,18 +6144,12 @@ export function DealCockpitView({
     reappraisalReason?: string;
   }) => {
     if (!financeDecision) return;
-    setAppraisalSubmitting(true);
-    setAppraisalError(null);
-    try {
-      await trackStep(() => financeDecision.onRecordAppraisal(values), "AppraisalRecorded");
-      setRecordingAppraisal(false);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setAppraisalError(message);
-      toast.error(message);
-    } finally {
-      setAppraisalSubmitting(false);
-    }
+    await submitDialog({
+      setSubmitting: setAppraisalSubmitting,
+      setError: setAppraisalError,
+      submit: () => trackStep(() => financeDecision.onRecordAppraisal(values), "AppraisalRecorded"),
+      onSuccess: () => setRecordingAppraisal(false),
+    });
   };
 
   const handleRecordApproved = async (values: {
@@ -6155,63 +6160,47 @@ export function DealCockpitView({
     outlierAcknowledged?: boolean;
   }) => {
     if (!financeDecision) return;
-    setApprovalSubmitting(true);
-    setApprovalError(null);
-    try {
-      await trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
+    await submitDialog({
+      setSubmitting: setApprovalSubmitting,
+      setError: setApprovalError,
+      submit: () => trackStep(() => financeDecision.onRecordApproved(values), "ApprovedPurchaseRecorded", {
         reflectedWhen: approvedPurchaseReflected(values.approvedAmountMinor, values.basis),
-      });
-      setRecordingApproval(false);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setApprovalError(message);
-      toast.error(message);
-    } finally {
-      setApprovalSubmitting(false);
-    }
+      }),
+      onSuccess: () => setRecordingApproval(false),
+    });
   };
 
   const handleApplyQuoteFirstPayment = async (values: { reason: string; economicsStamp: string }) => {
     if (!financeDecision?.onApplyQuoteFirstPayment) return;
-    setFirstPaymentSubmitting(true);
-    setFirstPaymentError(null);
-    try {
-      await trackStep(
+    await submitDialog({
+      setSubmitting: setFirstPaymentSubmitting,
+      setError: setFirstPaymentError,
+      submit: () => trackStep(
         () => financeDecision.onApplyQuoteFirstPayment!(values),
         "ApplyQuoteFirstPaymentApplied"
-      );
-      setApplyingFirstPayment(false);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setFirstPaymentError(message);
-      toast.error(message);
-    } finally {
-      setFirstPaymentSubmitting(false);
-    }
+      ),
+      onSuccess: () => setApplyingFirstPayment(false),
+    });
   };
 
   const handleReopenApproved = async (values: { reason: string }) => {
     if (!financeDecision) return;
-    setReopenSubmitting(true);
-    setReopenError(null);
-    try {
-      await trackStep(() => financeDecision.onReopenApproved(values), "ApprovedPurchaseReopened", {
+    await submitDialog({
+      setSubmitting: setReopenSubmitting,
+      setError: setReopenError,
+      submit: () => trackStep(() => financeDecision.onReopenApproved(values), "ApprovedPurchaseReopened", {
         reflectedWhen: approvalReopenedReflected,
-      });
-      setReopeningApproval(false);
-      // Straight into recording the correct figure. Reopening leaves the deal
-      // with no approved amount and handover blocked — a state nobody wants to
-      // stop in — so the correction reads as one action even though it is two
-      // writes. The operator can still close this dialog and come back: the
-      // card offers the record action again, because the amount is now gone.
-      setRecordingApproval(true);
-    } catch (error) {
-      const message = getErrorMessage(error);
-      setReopenError(message);
-      toast.error(message);
-    } finally {
-      setReopenSubmitting(false);
-    }
+      }),
+      onSuccess: () => {
+        setReopeningApproval(false);
+        // Straight into recording the correct figure. Reopening leaves the deal
+        // with no approved amount and handover blocked — a state nobody wants to
+        // stop in — so the correction reads as one action even though it is two
+        // writes. The operator can still close this dialog and come back: the
+        // card offers the record action again, because the amount is now gone.
+        setRecordingApproval(true);
+      },
+    });
   };
 
   const handleCorrectAdvice = async (correction: {
