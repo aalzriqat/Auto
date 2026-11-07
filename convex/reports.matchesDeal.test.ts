@@ -1,83 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
-import schema from "./schema";
+import { DATE, reportDealFixture as fixture } from "../test-utils/reportDealFixture";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
-
-const DATE = Date.UTC(2026, 10, 7);
-const modules = import.meta.glob("./**/*.*s");
-
-async function fixture(options: { cash?: boolean; stock?: boolean; direct?: boolean; without?: string } = {}) {
-  const t = convexTestWithComponents(schema, modules);
-  registerRateLimiter(t);
-  const ids = await t.run(async (ctx) => {
-    const orgId = await ctx.db.insert("organizations", { name: "Report parity", createdAt: DATE });
-    const userId = await ctx.db.insert("users", { clerkId: "parity", email: "parity@example.com", name: "Reporter" });
-    const roleId = await ctx.db.insert("roles", {
-      orgId, name: "Report operator", isSystemOwnerRole: false,
-      permissions: ALL_PERMISSIONS.filter((p) => p !== options.without),
-    });
-    await ctx.db.insert("memberships", { orgId, userId, roleId });
-    const customerId = await ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Customer" });
-    const vehicleId = await ctx.db.insert("vehicles", {
-      orgId, vin: "PARITY0003", make: "Toyota", model: "Camry", year: 2024,
-      mileage: 100, color: "White", fuelType: "Gasoline", transmission: "Automatic",
-      sellingPrice: 12100, status: "SOLD",
-      ...(options.stock || options.cash
-        ? { sourceType: "STOCK" as const, purchasePrice: 9900 }
-        : { sourceType: "SOURCED" as const, sourceCost: 9900, sourcedFromName: "Supplier" }),
-    });
-    const quoteId = await ctx.db.insert("quotes", {
-      orgId, customerId, vehicleId, vehiclePrice: 11785, downPayment: 0,
-      termMonths: 60, status: "ACCEPTED", createdBy: userId, createdAt: DATE,
-    });
-    const applicationId = options.cash ? null : await ctx.db.insert("financeApplications", {
-      orgId, quoteId, customerId, vehicleId, salespersonId: userId, status: "CLOSED",
-      economicsCurrency: "JOD", targetSellingAmountMinor: 13000000,
-      submittedQuotationMinor: 12200000, legalInvoiceAmountMinor: 12100000,
-      approvedDealerPurchaseAmountMinor: 12000000, dealerContributionMinor: 215000,
-      estimatedDealerBorneExpensesMinor: 451300,
-      supplierSettlementRoute: options.direct === false ? "THROUGH_DEALERSHIP" : "DIRECT_TO_SUPPLIER",
-      createdAt: DATE, updatedAt: DATE,
-    });
-    const saleId = await ctx.db.insert("sales", {
-      orgId, vehicleId, customerId, salespersonId: userId, salePrice: options.cash ? 12100 : 11785,
-      saleDate: DATE, status: "COMPLETED", financingType: options.cash ? "CASH" : "FINANCED",
-      commissionAmount: 110,
-      ...(applicationId ? { applicationId } : {}),
-      ...(!options.stock && !options.cash ? {
-        supplierSettlementRoute: options.direct === false ? "THROUGH_DEALERSHIP" as const : "DIRECT_TO_SUPPLIER" as const,
-        consignedMarginMinor: 2100000, consignedMarginCurrency: "JOD",
-        consignedSupplierEntitlementMinor: 9900000, consignedSupplierGrossReceiptMinor: 12000000,
-        financedNetRevenue: { minor: 1885000, currency: "JOD", considerationMinor: 12000000 },
-      } : {}),
-    });
-    if (applicationId) await ctx.db.patch(applicationId, { finalizedSaleId: saleId });
-    const expenseId = await ctx.db.insert("expenses", {
-      orgId, vehicleId, title: "Showroom maintenance", amount: 300,
-      date: DATE, category: "MAINTENANCE", status: "PAID", accountingTreatment: "PERIOD_EXPENSE",
-    });
-    const feeId = applicationId ? await ctx.db.insert("financeDealFees", {
-      orgId, applicationId, feeType: "FINANCE_COMPANY_FEE", currency: "JOD", actualAmountMinor: 451300,
-      paidBy: "DEALER", paidTo: "FINANCE_COMPANY", accountingTreatment: "FINANCE_COMPANY_COMMISSION",
-      includedInQuotation: false, deductedFromSettlement: false, refundable: false, source: "MANUAL",
-      createdBy: userId, createdAt: DATE, updatedAt: DATE,
-    }) : null;
-    return { orgId, userId, roleId, customerId, vehicleId, saleId, applicationId, expenseId, feeId };
-  });
-  const asUser = t.withIdentity({ subject: "parity" });
-  const report = () => asUser.query(api.reports.getSalesAndProfitReport, { orgId: ids.orgId, startDate: DATE, endDate: DATE });
-  const deal = async () => {
-    if (ids.applicationId) {
-      const overview = await asUser.query(api.dealOverview.financedDealOverview, { orgId: ids.orgId, applicationId: ids.applicationId });
-      return { profit: overview?.financialSummary?.profit, price: overview?.financialSummary?.customerSalePrice?.amountMinor };
-    }
-    const cockpit = await asUser.query(api.sales.dealCockpit, { orgId: ids.orgId, saleId: ids.saleId });
-    return { profit: cockpit?.money?.managementNetProfit, price: 12100000 };
-  };
-  return { t, ...ids, asUser, report, deal };
-}
 
 async function expectParity(s: Awaited<ReturnType<typeof fixture>>, amount: number, before: number) {
   const deal = await s.deal();
@@ -100,40 +25,41 @@ async function expectParity(s: Awaited<ReturnType<typeof fixture>>, amount: numb
 
 describe("SCRUM-928 report matches the deal page", () => {
   // Scenario records require one non-parameterized registration per binding.
-  test("owner before commissions: MANAGER SOURCED financed", async () => {
-    await expectCommissionSplit({ role: "MANAGER", cash: false, before: 1133.7, after: 998.7, pageMinor: 998700 });
+  test("owner before sale commission: MANAGER SOURCED financed", async () => {
+    await expectSaleCommissionSplit({ role: "MANAGER", cash: false, before: 1133.7, after: 1023.7, pageMinor: 1023700 });
   });
-  test("owner before commissions: ADMIN SOURCED financed", async () => {
-    await expectCommissionSplit({ role: "ADMIN", cash: false, before: 1133.7, after: 998.7, pageMinor: 998700 });
+  test("owner before sale commission: ADMIN SOURCED financed", async () => {
+    await expectSaleCommissionSplit({ role: "ADMIN", cash: false, before: 1133.7, after: 1023.7, pageMinor: 1023700 });
   });
-  test("owner before commissions: MANAGER CASH", async () => {
-    await expectCommissionSplit({ role: "MANAGER", cash: true, before: 1900, after: 1765, pageMinor: 1765000 });
+  test("owner before sale commission: MANAGER CASH", async () => {
+    await expectSaleCommissionSplit({ role: "MANAGER", cash: true, before: 1900, after: 1790, pageMinor: 1790000 });
   });
-  test("owner before commissions: ADMIN CASH", async () => {
-    await expectCommissionSplit({ role: "ADMIN", cash: true, before: 1900, after: 1765, pageMinor: 1765000 });
+  test("owner before sale commission: ADMIN CASH", async () => {
+    await expectSaleCommissionSplit({ role: "ADMIN", cash: true, before: 1900, after: 1790, pageMinor: 1790000 });
   });
-  async function expectCommissionSplit({ role, cash, before, after, pageMinor }: {
+  async function expectSaleCommissionSplit({ role, cash, before, after, pageMinor }: {
     role: "MANAGER" | "ADMIN"; cash: boolean; before: number; after: number; pageMinor: number;
   }) {
     const s = await fixture({ cash });
     await s.t.run(async (ctx) => {
-      await ctx.db.insert("dealCommissionLines", {
-        orgId: s.orgId, saleId: s.saleId, kind: "PURCHASE", employeeId: s.userId,
-        amountMinor: 25000, currency: "JOD", createdBy: s.userId,
+      await ctx.db.insert("orgSettings", {
+        orgId: s.orgId, currency: "JOD", currencySymbol: "JOD", enabledPaymentTypes: [], commissionMode: "MANUAL",
       });
+      await ctx.db.patch(s.saleId, { commissionAmount: undefined });
     });
-    const page = await s.deal();
-    expect(page.profit).toMatchObject({ available: true, amountMinor: pageMinor });
+    // Use the public sale-commission door with the shipped pilot configuration.
+    await s.asUser.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId: s.saleId, commissionAmount: 110 });
+    expect((await s.deal()).profit).toMatchObject({ available: true, amountMinor: pageMinor });
     await s.t.run(async (ctx) => {
       const manager = DEFAULT_ROLE_TEMPLATES.find((template) => template.name === "MANAGER");
       if (!manager) throw new Error("MANAGER template missing");
       await ctx.db.patch(s.roleId, { name: role, permissions: role === "MANAGER" ? manager.permissions : ALL_PERMISSIONS });
     });
     const report = await s.report();
-    expect(report!.sales[0]).toMatchObject({ netProfit: before, netProfitAfterCommissions: after, commissionsTotal: 135 });
-    expect(report).toMatchObject({ totalProfit: before, totalNetProfitAfterCommissions: after, totalCommissions: 135, commissionIncompleteSaleCount: 0 });
+    expect(report!.sales[0]).toMatchObject({ netProfit: before, netProfitAfterCommissions: after, commissionsTotal: 110 });
+    expect(report).toMatchObject({ totalProfit: before, totalNetProfitAfterCommissions: after, totalCommissions: 110, commissionIncompleteSaleCount: 0 });
     expect(await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE }))
-      .toMatchObject([{ totalProfit: before, totalNetProfitAfterCommissions: after, totalCommissions: 135, commissionIncompleteSaleCount: 0 }]);
+      .toMatchObject([{ totalProfit: before, totalNetProfitAfterCommissions: after, totalCommissions: 110, commissionIncompleteSaleCount: 0 }]);
   }
   test("pending commissions keep SOURCED financed profit available", async () => {
     await expectPendingCommissions({ cash: false, before: 1133.7 });

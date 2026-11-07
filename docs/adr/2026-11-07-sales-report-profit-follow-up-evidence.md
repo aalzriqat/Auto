@@ -149,3 +149,74 @@ used. Independent seats, CI/SonarCloud, the three live bug hunters, signed-in
 browser flows, desktop/mobile layout, actual CSV download, cloud limits/OCC and
 production parity remain unverified. EN/AR headers, amounts, payload refusal and
 direction are covered in jsdom, which does not prove browser layout.
+
+## CI parity follow-up at 62432d80d
+
+The local parity reproduction failed with 1 failed and 53 passed in
+`test-utils/pilotConfigParity.test.ts`. Its unlabelled-suite list contained
+`convex/reports.matchesDeal.test.ts` because `expectCommissionSplit` directly
+inserted a `dealCommissionLines` row.
+
+The four `owner before commissions: ...` cases and `expectCommissionSplit`
+now live in `convex/reports.commissionLines.test.ts`. That suite is labelled
+`NON-PILOT-CERTIFYING` and retains its direct legacy-row insert, original test
+names and assertions. The four existing scenario records change only their
+implementation file path. Their fingerprints and failing-first references
+are unchanged. The shared synthetic fixture moved to
+`test-utils/reportDealFixture.ts`, without moving the commission-line insert
+out of its labelled test suite.
+
+The task described the line door as pilot-closed. The inspected source at
+62432d80d instead has `DEAL_COMMISSION_LINES_PILOT_DISABLED = false` and an
+owner-ruling comment saying lines are on. The parity census conservatively
+classifies the table-name argument as opening a pilot door regardless of that
+value. The header describes that measured classification rather than claiming
+the shipped writer is closed. This change modifies neither containment nor
+the census or its shrink-only baseline.
+
+`convex/reports.matchesDeal.test.ts` has four new
+`owner before sale commission: ...` cases, one for each MANAGER-template or
+ADMIN caller and SOURCED financed or CASH deal. Each sets a previously unknown
+sale commission to 110 JOD through `api.sales.setCommissionAmount` in MANUAL
+mode. Inspection of that handler found no pilot-closure guard, and the four
+executed mutations succeed with the shipped configuration. The report reads
+then use the specified role. Literal expectations are:
+
+| Fixture | Before commissions | Sale commission | After commissions | Deal-page net, minor |
+| --- | ---: | ---: | ---: | ---: |
+| SOURCED financed | 1133.7 | 110 | 1023.7 | 1023700 |
+| CASH | 1900 | 110 | 1790 | 1790000 |
+
+Four new `sales-report-before-sale-commission-*.scenario.json` records bind to
+those public-door cases. They are preventive variants and do not inherit the
+legacy cases' failing-first claim. Both suites keep individual test registrations
+because the scenario validator requires an exact executable binding.
+
+The shared fixture and public mutation/query assertions follow the
+[Convex testing guidance](https://docs.convex.dev/testing/convex-test).
+The library is a mock backend, so these runs prove harness behavior only.
+
+The move-preservation check compared the four tests and `expectCommissionSplit`
+with their exact source at 62432d80d. Their text is unchanged. It also compared
+the extracted fixture after accounting for its export name and relative module
+glob. The setup is unchanged. Test Guard review retained separate registrations
+for the scenario bindings and found no new mock or implementation-detail assertion.
+
+`pnpm typecheck:convex` passed. It covers `convex/**/*` and `test-utils/**/*`,
+with generated files excluded as roots. ESLint passed with zero errors and zero
+warnings on the two report suites and shared fixture. `git diff --check` passed.
+`node scripts/contractSkew/checkBaselineIdentity.mjs` exited 0 with 945 matched
+entries and zero stranded. That script did not check backend finding identity.
+
+The final named-file run passed 557 tests across 13 files, with zero failures
+and zero skips. It used one worker and exited 0:
+
+```text
+pnpm exec vitest run --maxWorkers=1 test-utils/pilotConfigParity.test.ts convex/reports.matchesDeal.test.ts convex/reports.commissionLines.test.ts convex/dealCommissions.test.ts scripts/regression/scenarioRecord.test.ts convex/reports.test.ts components/reports/ReportsPage.matchesDeal.test.tsx scripts/regression/localExecution.test.ts scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts scripts/regression/prRunner.test.ts scripts/intelligence/browserSwarmTrustedImpact.test.ts scripts/accountingRehearsalPathGate.test.ts
+```
+
+This follow-up changes tests, scenario records and this evidence document.
+It does not change production behavior. No Jira access, push, merge, deployment,
+server, watcher or production-data access was used. Independent review seats,
+CI for the new commit, a real backend, signed-in browser behavior and cloud
+limits or concurrency remain unverified.

@@ -64,7 +64,7 @@
     }
   ],
   "impl": {
-    "file": "convex/reports.matchesDeal.test.ts",
+    "file": "convex/reports.commissionLines.test.ts",
     "testName": "owner before commissions: MANAGER SOURCED financed"
   },
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
