@@ -231,7 +231,7 @@ describe("SCRUM-928 report matches the deal page", () => {
   test.each([
     { cash: true, label: "CASH", net: 1790, before: 1900 },
     { cash: false, label: "SOURCED financed", net: 1023.7, before: 1133.7 },
-  ])("MANAGER template sees the owner's report figures for $label", async ({ cash, net, before }) => {
+  ])("MANAGER template sees the owner's report figures and the deal page sale price (SCRUM-928 c24734) for $label", async ({ cash, net, before }) => {
     const manager = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER");
     if (!manager) throw new Error("MANAGER template missing");
     expect(manager.permissions).toEqual(expect.arrayContaining(["view:reports", "view:cost_price", "view:commissions"]));

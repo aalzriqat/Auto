@@ -30,6 +30,14 @@ that separate grant. Stored sale FINANCE fields still pass through
 `projectSaleRow`, retaining their own finance gate. CSV uses the same projected
 report fields. The deal page's own authorization is unchanged.
 
+The sale price question (Seat 1 F1 at `ddf214094`) has its own owner ruling,
+recorded on SCRUM-928 in comment c24734: "سعر صفحة الصفقة (مقترح)". MANAGER and
+every other role with `view:reports` and `view:cost_price` see the deal page's
+sale price in the Sales report and its CSV. That price is the legal invoice,
+quotation or target price that the deal page shows, and `view:finance` is not
+required. The MANAGER template test in `convex/reports.matchesDeal.test.ts`
+pins this with the literal price.
+
 The access comparison below uses R = `view:reports`, C = `view:cost_price`,
 M = `view:commissions`, and F = `view:finance`. Existing system-owner bypasses
 apply. Evidence refusals for genuinely unreadable amounts remain separate.
