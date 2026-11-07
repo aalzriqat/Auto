@@ -19,7 +19,7 @@ function RouteFixture({ path, setPath }: Readonly<{ path: string; setPath: (path
     return () => window.removeEventListener("popstate", onPopState);
   }, [mode]);
   if (path === "/suppliers") return <p>Supplier list reached</p>;
-  if (path === "/suppliers/created" || path === "/suppliers/existing") return <p>Supplier statement reached</p>;
+  if (path === "/org/suppliers/created" || path === "/org/suppliers/existing") return <p>Supplier statement reached</p>;
   const orgId = "org" as Id<"organizations">;
   return mode === "create" ? <SupplierCreateDialog orgId={orgId} open={open} onOpenChange={setOpen} /> : <SupplierDetailScreen orgId={orgId} supplierId={"supplier" as Id<"suppliers">} />;
 }
