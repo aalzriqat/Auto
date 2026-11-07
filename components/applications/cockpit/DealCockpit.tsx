@@ -905,10 +905,13 @@ export function DealCockpit({
    * white-screened the cockpit instead of merely not seeing this card.
    */
   const canViewApplications = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
+  const dealArgs = deal ? { orgId, applicationId } : "skip";
+  const financeArgs = canViewApplications ? dealArgs : "skip";
   const economics = useQuery(
     api.financingEconomics.getEconomics,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    financeArgs
   );
+  const economicsPending = financeArgs !== "skip" && economics === undefined;
   const economicsApp = economics?.application ?? null;
   /**
    * The supplier concession basis (SCRUM-766 PR-C), asked for ONLY when there is
@@ -1068,20 +1071,22 @@ export function DealCockpit({
   const app = useQuery(api.applications.get, { orgId, applicationId });
   const documents = useQuery(
     api.documents.getForApplication,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    financeArgs
   );
   // Round 3 (S417-R3-1): files kept for requirements removed after the upload,
   // view only — the same permission and the same skip as the active list.
   const documentHistory = useQuery(
     api.documents.getHistoryForApplication,
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    financeArgs
   );
   const canViewDealCosts = canViewApplications && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
+  const dealCostsArgs = canViewDealCosts ? dealArgs : "skip";
   // The bundled cost read requires both grants, including while permissions load.
   const dealCosts = useQuery(
     api.financeDealCosts.listDealCosts,
-    canViewDealCosts && deal ? { orgId, applicationId } : "skip"
+    dealCostsArgs
   );
+  const dealCostsPending = permissionsLoading || (dealCostsArgs !== "skip" && dealCosts === undefined);
   // SCRUM-417 UX5 (S7). A step's success is held until the read model shows the
   // fact THAT action wrote (each call site names it: `reflectedWhen`), then shown
   // as one persistent "Recorded. Next: ..." line. An action with no observable
@@ -1116,7 +1121,7 @@ export function DealCockpit({
    * server withholds each half by its own permission (view:finance,
    * view:cost_price) and returns null for it, never a zero.
    */
-  const overview = useQuery(api.dealOverview.financedDealOverview, deal ? { orgId, applicationId } : "skip");
+  const overview = useQuery(api.dealOverview.financedDealOverview, dealArgs);
   const recordDealFee = useMutation(api.financeDealCosts.recordDealFee);
   const recordTemplateFeeActual = useMutation(api.financeDealCosts.recordTemplateFeeActual);
   const recordExecutionFeeActual = useMutation(api.financeDealCosts.recordExecutionFeeActual);
@@ -1134,7 +1139,7 @@ export function DealCockpit({
   // this query existed costs the panel its verdict, not the screen its life
   // (SCRUM-414 Codex R2).
   const { readiness: closingReadiness, serviceUnavailable: closingReadinessServiceUnavailable } = useClosingReadiness(
-    canViewApplications && deal ? { orgId, applicationId } : "skip"
+    financeArgs
   );
   /**
    * The ONE readiness condition the close is offered AND submitted under
@@ -1241,28 +1246,31 @@ export function DealCockpit({
   const [cancelling, setCancelling] = useState(false);
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const unwindArgs = app?.status === "CLOSED" ? { orgId, applicationId } : "skip";
   const unwindStatus = useQuery(
     api.dealUnwind.unwindStatus,
-    app?.status === "CLOSED" ? { orgId, applicationId } : "skip"
+    unwindArgs
   );
+  const unwindPending = unwindArgs !== "skip" && unwindStatus === undefined;
   // A closed deal's controls that an active unwind bars stay off until its status has been read.
-  const unwindBars = app?.status === "CLOSED" && (unwindStatus === undefined || unwindStatus.status === "ACTIVE");
-  const [unwindOpen, setUnwindOpen] = useState(false);
-  const [unwindSubmitting, setUnwindSubmitting] = useState(false);
-  const [unwindError, setUnwindError] = useState<string | null>(null);
-  const unwindKeyRef = useRef<string | null>(null);
+  const unwindBars = unwindArgs !== "skip" && (unwindPending || unwindStatus?.status === "ACTIVE");
   // The server's answer: a live unwind, or a paid deal whose start it would accept. Otherwise the
   // refusal is shown as a hint, so a paid deal is never left without an explanation.
   const unwindOffered =
     unwindStatus != null &&
-    app?.status === "CLOSED" &&
-    (unwindStatus.status === "ACTIVE" || (!!app.disbursedAt && unwindStatus.eligibility.canStart)) &&
+    unwindArgs !== "skip" &&
+    (unwindStatus.status === "ACTIVE" || (!!app?.disbursedAt && unwindStatus.eligibility.canStart)) &&
     // A viewer who may do none of it gets no button rather than a dialog of dead controls.
     Object.values(unwindStatus.eligibility).some(Boolean);
   const unwindHint =
-    unwindStatus != null && !unwindOffered && app?.status === "CLOSED" && !!app.disbursedAt
+    unwindStatus != null && !unwindOffered && unwindArgs !== "skip" && !!app?.disbursedAt
       ? unwindStatus.refusals.start
-      : undefined;  const runUnwind = async (
+      : undefined;
+  const [unwindOpen, setUnwindOpen] = useState(false);
+  const [unwindSubmitting, setUnwindSubmitting] = useState(false);
+  const [unwindError, setUnwindError] = useState<string | null>(null);
+  const unwindKeyRef = useRef<string | null>(null);
+  const runUnwind = async (
     step: string,
     success: string,
     call: (idempotencyKey: string) => Promise<unknown>
@@ -1537,7 +1545,7 @@ export function DealCockpit({
           // Undefined is "loading" until the permission has resolved AND, for a
           // caller who holds it, the query has answered; only a resolved caller
           // WITHOUT the permission is told the rows are not theirs to read.
-          loading: permissionsLoading || (canViewDealCosts && dealCosts === undefined),
+          loading: dealCostsPending,
           costs: dealCosts
             ? ({
                 lines: dealCosts.fees.map((fee) => ({
@@ -3068,7 +3076,7 @@ export function DealCockpit({
   const custody: DealCustodyWiring | undefined =
     app && deal
       ? {
-          loading: permissionsLoading || (canViewDealCosts && dealCosts === undefined),
+          loading: dealCostsPending,
           records: dealCosts?.custody,
           truncated: dealCosts?.custodyTruncated ?? false,
           currency: dealCosts?.currency ?? economicsCurrencyCode,
@@ -3123,7 +3131,7 @@ export function DealCockpit({
       // The step's panel can still arrive only while what it is built from is
       // unanswered. Queries a caller cannot run are skipped (they stay undefined
       // for good), so each is counted only when this caller runs it.
-      workbenchPending={permissionsLoading || app === undefined || (canViewApplications && economics === undefined)}
+      workbenchPending={permissionsLoading || app === undefined || economicsPending}
       financingPlan={financingPlan ? { facts: financingPlan, formatMajor: formatPlanMajor } : undefined}
       handoverCosts={handoverCosts}
       financialOverview={deal ? { data: overview ?? undefined, loading: overview === undefined } : undefined}
