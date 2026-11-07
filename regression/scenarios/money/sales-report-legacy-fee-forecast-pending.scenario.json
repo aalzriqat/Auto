@@ -1,0 +1,84 @@
+{
+  "id": "sales-report-legacy-fee-forecast-pending",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-owner-before-commissions",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ADMIN",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "sourceType": "SOURCED",
+        "forecastFeeMinor": 600000,
+        "feeActualMinor": 451300,
+        "settled": false,
+        "commissionPending": true
+      }
+    },
+    {
+      "actor": {
+        "role": "ADMIN",
+        "org": "A"
+      },
+      "action": "reports.getSalespersonPerformance",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.totalProfitMinor",
+      "value": 985000
+    },
+    {
+      "observable": "row.netAfterCommissionsMinor",
+      "value": null
+    },
+    {
+      "observable": "performance.totalProfitMinor",
+      "value": 985000
+    },
+    {
+      "observable": "report.commissionIncompleteSaleCount",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.matchesDeal.test.ts",
+    "testName": "pending commissions preserve unsettled forecast profit"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "a7d31e68aa8e55f3f07c995ae20eebaa1c8cf28b"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/sales.ts",
+    "convex/applications.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/utils/cashDealFigures.ts",
+    "convex/utils/dealProfitReads.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
+  ],
+  "fingerprint": "9f1df364bced9a2200724fca4da880453eb16563ecf96d118e9af9090f9d9fc9"
+}

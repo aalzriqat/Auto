@@ -53,9 +53,13 @@ export async function outstandingFromReceivableDoc(
     .query("paymentAllocations")
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableId))
     .collect();
-  const activeAllocations = receivableAllocations.filter((a) => a.status === "ACTIVE");
+  return receivableOutstandingFromRows(doc, receivableAllocations);
+}
 
-  const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
+/** Same current-balance authority for readers that already loaded allocations. */
+export function receivableOutstandingFromRows(doc: Doc<"receivableDocuments">, allocations: Doc<"paymentAllocations">[]): number {
+  if (doc.status === "CANCELLED") return 0;
+  const allocated = allocations.filter((a) => a.status === "ACTIVE").reduce((sum, a) => sum + a.amountMinor, 0);
   return Math.max(0, doc.originalAmountMinor - allocated);
 }
 

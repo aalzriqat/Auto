@@ -1,3 +1,4 @@
+import { cashAccountingProfit } from "./utils/cashDealFigures";
 import { v, ConvexError } from "convex/values";
 import { assertRt11DoorAllowed } from "./utils/rt11DoorContainment";
 import { query, MutationCtx, QueryCtx } from "./_generated/server";
@@ -26,7 +27,6 @@ import {
   saleIsAgentSale,
 } from "./utils/vehicleOwnership";
 import {
-  deriveAccountingProfit,
   deriveCashDealStages,
   obligationFromRow,
   positionForObligation,
@@ -64,7 +64,6 @@ import {
   fromMinorUnits,
   isValidMinorAmount,
   assertFiniteNumber,
-  toMinorSameCurrencyOrUndefined,
   outstandingMinorFromMajor,
 } from "./utils/money";
 import { allocatedDepositForVehicle } from "./utils/depositAllocation";
@@ -3257,20 +3256,6 @@ export const dealCockpit = query({
         sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });
 
-    // Major to minor happens HERE and only here. `saleEconomics` works in MAJOR
-    // units — `recordedConsignedMargin` converts on the way in — while the screen
-    // renders minor. `toMinorSameCurrencyOrUndefined` is used rather than
-    // `toMinorUnits` because it refuses NaN and overflow instead of throwing, and
-    // a throw inside a query blanks the whole screen over one corrupt row.
-    const marginMinor =
-      economics.dealershipMargin === null
-        ? null
-        : (toMinorSameCurrencyOrUndefined(economics.dealershipMargin, currency, currency) ?? null);
-    const entitlementMinor =
-      economics.supplierSettlement === null
-        ? null
-        : (toMinorSameCurrencyOrUndefined(economics.supplierSettlement, currency, currency) ?? null);
-
     const parties = consigned
       ? [
           {
@@ -3292,35 +3277,7 @@ export const dealCockpit = query({
       : [];
 
     // Preserve the ledger-reconciling result; the headline is management net below.
-    const accountingProfit = deriveAccountingProfit({
-      dealCancelled,
-      // A PENDING draft has posted nothing, so it has no journal to call
-      // this figure postable against.
-      saleCompleted: sale.status === "COMPLETED",
-      /**
-       * The financed DIRECT route with no application behind it.
-       *
-       * Reached only by rows that predate the write-path guard, and their
-       * frozen margin may be the sale-price spread — a figure that reaches
-       * no party on this route. Nothing on the row can prove what the
-       * financier approved, so the headline is withheld rather than guessed.
-       * A row WITH an application never gets here: `money` is already null
-       * for those, because its deal screen is the application-keyed one.
-       */
-      financedDirectWithoutApproval:
-        consigned && externallyFinanced && !collectsGross && !financingApplicationId,
-      dealershipMarginMinor: marginMinor,
-      // `?? null`, never `?? 0`. An amount that could not be READ is not an
-      // amount of nought, and these two used to be `?? 0` — which printed
-      // "Sale price: 0.000" beside a valid headline whenever a corrupt price
-      // sat on a sale whose margin was frozen independently.
-      salePriceMinor:
-        toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency) ?? null,
-      recognizedCostMinor:
-        toMinorSameCurrencyOrUndefined(economics.recognizedCost, currency, currency) ?? null,
-      supplierEntitlementMinor: consigned ? entitlementMinor : null,
-      currency,
-    });
+    const accountingProfit = cashAccountingProfit({ sale, economics, currency });
 
     return {
       ...base,
