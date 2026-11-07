@@ -93,3 +93,33 @@ The scripts-tree query/guard/census filename inventory found no dedicated global
 The five design attacks above are measured in the public Convex contracts: renamed stored identity; missing/foreign/deleted supplier fallback; same-day settled recovery/cancelled claim; disputed payable with simultaneous receivable; and separate currencies plus Amman midnight/family/page/byte bounds. Expected amounts are literals, with additional exact statement comparisons.
 
 Not verified here: styled EN/AR desktop and phone rendering, signed-in route execution, the complete role audit, independent review seats, CI/Sonar results, Convex platform limits/OCC, deployment or production behavior. The coordinator performs rendered and independent checks. Browser fixtures replace data/auth and the route destination consumer, not the actual guarded Next useRouter. CSV remains a follow-up. Existing notifications retain their original stored links.
+
+## Round 2 CI repair and investigation — 2026-11-08
+
+Starting head: `11a2c6350f98ff58e16f35121ce0e193c9f462da`, incorporating main `a01d5fe5c7d6a665a51c6dd55b2165e554191258`. The coordinator owns Jira updates and independent review.
+
+The unchanged supplier-master guard reproduced 46 passing tests and one failure, naming the direct supplier reads in `supplierBalances.ts` and `supplierDueAlerts.ts`. Its `scanCall` refuses direct supplier-table access outside `suppliers.ts` and `utils/supplierRegistry.ts`; an index alone does not satisfy that module boundary. The list now delegates its existing indexed pagination to `readSupplierRegistryPage` in the registry module. The index, cursor, five-item request, 2 MiB page budget and sequential outstanding reads are unchanged. Alert attribution uses the existing `requireOwnedRow` reader and handles only its specific supplier-not-found refusal as the existing report fallback. Unexpected read errors still propagate before writes. No guard, allowance or baseline entry changed.
+
+The full failure section of [CI job 128533915021](https://github.com/aalzriqat/Auto/actions/runs/42415935982/job/128533915021) reports the create replay failing in 0 ms with `TypeError: Expected a string, an ArrayBuffer, or a TypedArray to be returned for the "source" from the "load" hook but got null.` The remaining three replays did not run. This is a setup/module-loader failure, before the navigation assertions, and does not establish a product timing defect or test race. The log pins Node 22.21.1 and Chromium 149.0.7827.55.
+
+The unchanged offline replay passed all four cases on Windows with Node 26.4.0 and again with Node 22.21.1. Linux probes using Node 22.21.1, Playwright 1.61.1 and Vite 8.1.6 also imported Vite and bundled the real fixture successfully, including after preloading PostCSS and Lightning CSS. A final Linux run copied the tracked fixture sources at the starting head to a case-sensitive filesystem and executed the same four replay bodies with `CI=true`, one worker and zero retries: four passed. That sandbox adapted the source root and resolved Vite from its isolated npm installation; product dependency files came from the worktree. This is not the exact CI container or pnpm dependency layout. The first Linux browser attempt could not launch because WSL lacked shared libraries; local extracted library copies allowed the completed run. No system packages were installed. The CI loader failure remains unresolved, and the repository replay is unchanged.
+
+Verification of the repair:
+
+| Check | Observed result |
+| --- | --- |
+| `vitest run scripts/supplierMasterGuards.test.ts convex/supplierBalances.scrum929.test.ts convex/supplierDueAlerts.scrum869.test.ts scripts/tenantWriteGuard.test.ts --maxWorkers=1` | Four files, 151 passed; includes unchanged guard, missing/foreign/deleted fallback, pagination, byte headroom, tenant refusal, idempotency and alert budgets |
+| Offline `playwright.visual.config.ts` supplier-navigation replay | Four passed; one worker, unchanged assertions |
+| `pnpm exec playwright test --list` | 68 tests in 19 files collected |
+| `pnpm exec playwright test -c playwright.visual.config.ts --list` | 566 tests in 19 files collected |
+| `pnpm typecheck` | Passed; root config excludes convex, apps, packages, dealer-worker and test-utils as roots |
+| `pnpm typecheck:convex` | Passed; includes convex and test-utils, excludes generated files as roots |
+| ESLint on the three changed TypeScript files, `--max-warnings=0` | Passed |
+| Baseline identity | 945 matched, zero stranded; does not measure backend finding identity |
+| Renewal check, reviewed `c82890bd`, `--check-evidence --pr-base a01d5fe5c` | 945 checked, zero unrenewed/stale/malformed/missing; no renewal needed |
+
+The requested `convex/tenantWriteGuard.test.ts` does not exist; the registered guard is `scripts/tenantWriteGuard.test.ts`. The literal supplier Playwright command selects the app-server config; it was stopped when it began a build, and completed executions used the offline visual config. No application server, Convex backend or production data was used for verification.
+
+The design preserves native [Convex cursor pagination](https://docs.convex.dev/database/pagination) and [indexed reads](https://docs.convex.dev/understanding/best-practices). The replay retains [Playwright auto-waiting and retrying assertions](https://playwright.dev/docs/actionability); no sleeps, retries or weaker assertions were added. This is an internal [behavior-preserving refactoring](https://martinfowler.com/bliki/DefinitionOfRefactoring.html) of the read boundary, verified by the existing contracts rather than by assuming the earlier code was correct.
+
+Not verified: the exact Linux CI workflow/container and its loader failure, styled EN/AR desktop/phone rendering, authenticated routes, independent review seats, Convex platform limits/OCC, deployment or production behavior. No push or deploy is part of this round.

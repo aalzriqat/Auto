@@ -1,9 +1,9 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { internalAction, query, type MutationCtx } from "./_generated/server";
-import { requireSuperAdmin } from "./utils/tenancy";
+import { requireOwnedRow, requireSuperAdmin } from "./utils/tenancy";
 import { internalMutation } from "./functions";
 import { supplierDueAlertJobName } from "./constants";
 import { hasPlanFeature } from "./subscriptions";
@@ -14,6 +14,7 @@ import { fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { alertStepFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type ObligationRow } from "./utils/supplierObligationDue";
+import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
 /**
  * SCRUM-869 S8 - in-app alerts for supplier obligations coming due or overdue.
@@ -167,8 +168,13 @@ async function alertSupplier(ctx: MutationCtx, orgId: Id<"organizations">, row: 
   const id = ctx.db.normalizeId(table[row.kind], row.id);
   const obligation = id ? await ctx.db.get(id) : null;
   if (!obligation || obligation.orgId !== orgId || !obligation.supplierId) return null;
-  const supplier = await ctx.db.get(obligation.supplierId);
-  return supplier?.orgId === orgId ? supplier : null;
+  try {
+    return await requireOwnedRow(ctx, orgId, "suppliers", obligation.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+  } catch (error) {
+    // Missing and foreign links use the report fallback; unexpected read failures still abort the worker.
+    if (error instanceof ConvexError && error.data === SUPPLIER_NOT_FOUND_MESSAGE) return null;
+    throw error;
+  }
 }
 
 /** The worker's arguments other than `orgId`, shared by the mutation and the action that wraps it. */

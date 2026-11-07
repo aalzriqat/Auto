@@ -1,4 +1,5 @@
 import { ConvexError } from "convex/values";
+import type { PaginationOptions, PaginationResult } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { codeUnitCompare, normalizeNameKey } from "./supplierNames";
@@ -79,6 +80,7 @@ export type SupplierErrorCode = (typeof SUPPLIER_ERROR)[keyof typeof SUPPLIER_ER
 
 /** Same message for a missing and a foreign id: no existence oracle (TEN-1, invariant I2). */
 export const SUPPLIER_NOT_FOUND_MESSAGE = "Supplier not found.";
+
 export const SUPPLIER_ALIAS_NOT_FOUND_MESSAGE = "Supplier alias not found.";
 /** English equals the dictionary entry under ServerError_<code> (lib/i18n/domains/common.ts). */
 export const SUPPLIER_IDENTITY_UNRESOLVED_MESSAGE =
@@ -418,6 +420,17 @@ export async function ownedStoredSupplierId(
   if (storedId === undefined) return undefined;
   const row = await ctx.db.get("suppliers", storedId);
   return row !== null && row.orgId === orgId ? storedId : undefined;
+}
+
+/** Registry reads stay in the supplier modules; callers retain their own permission and page budgets. */
+export async function readSupplierRegistryPage(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  paginationOpts: PaginationOptions,
+): Promise<PaginationResult<Doc<"suppliers">>> {
+  return ctx.db.query("suppliers")
+    .withIndex("by_org_and_status", q => q.eq("orgId", orgId))
+    .paginate(paginationOpts);
 }
 
 /** The alias keys read for one name before the lookup gives up and treats it as no evidence (fail closed). */

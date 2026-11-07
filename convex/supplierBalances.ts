@@ -5,7 +5,7 @@ import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { requireFeature } from "./subscriptions";
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { readSupplierOutstanding, type ObligationRow, type StatementTotal } from "./utils/supplierObligationDue";
-import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
+import { readSupplierRegistryPage, SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 
 /** Read-only projections of the statement, never a second financial balance (SCRUM-929 ADR). */
 const currencyBalance = v.object({
@@ -74,8 +74,8 @@ export const list = query({
     validateClock(args.nowMs);
     return guardedRead(async () => {
       // Exactly one pagination call. Five suppliers also bound worst-case registry document bytes.
-      const suppliers = await ctx.db.query("suppliers").withIndex("by_org_and_status", q => q.eq("orgId", args.orgId))
-        .paginate({ cursor: args.cursor ?? null, numItems: 5, maximumBytesRead: 2 * 1024 * 1024 });
+      const suppliers = await readSupplierRegistryPage(ctx, args.orgId,
+        { cursor: args.cursor ?? null, numItems: 5, maximumBytesRead: 2 * 1024 * 1024 });
       const page: Awaited<ReturnType<typeof readBalance>>[] = [];
       // Shared transaction headroom must be spent in order, never in Promise.all.
       for (const supplier of suppliers.page) page.push(await readBalance(ctx, supplier, args.nowMs));
