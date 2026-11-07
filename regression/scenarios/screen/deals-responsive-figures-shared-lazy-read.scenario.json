@@ -1,0 +1,98 @@
+{
+  "id": "deals-responsive-figures-shared-lazy-read",
+  "fingerprint": "a1776b16417bfac5f186f9273529170188873ac82645e3c3ea65ad7a4f25f3bd",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "42298621254",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ALLOWED_SALES_ROLE",
+        "org": "SYNTHETIC"
+      },
+      "action": "deals.render",
+      "input": {
+        "renderer": "jsdom",
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "layouts": [
+          "card",
+          "row"
+        ],
+        "deals": 2
+      }
+    },
+    {
+      "actor": {
+        "role": "ALLOWED_SALES_ROLE",
+        "org": "SYNTHETIC"
+      },
+      "action": "deals.intersect",
+      "input": {
+        "oneCopyOfFirstDeal": true,
+        "secondDealNear": false
+      }
+    },
+    {
+      "actor": {
+        "role": "ALLOWED_SALES_ROLE",
+        "org": "SYNTHETIC"
+      },
+      "action": "deals.switchResponsiveLayout",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "nearDeal.activeFiguresSubscriptions",
+      "value": 1
+    },
+    {
+      "observable": "nearDeal.bothCopies.loadingPlaceholders",
+      "value": 0
+    },
+    {
+      "observable": "nearDeal.bothCopies.sellingPrice",
+      "value": [
+        "15",
+        "000"
+      ]
+    },
+    {
+      "observable": "nearDeal.bothCopies.netProfit",
+      "value": "640.500"
+    },
+    {
+      "observable": "farDeal.activeFiguresSubscriptions",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "components/deals/DealsListView.readiness.test.tsx",
+    "testName": "SCRUM-925: either responsive copy resolves shared lazy figures in EN and AR"
+  },
+  "bugRef": {
+    "key": "SCRUM-925",
+    "failingFirst": "290008ffdae0866fe38cfc85bf1c0dd55478328c"
+  },
+  "sourceGlobs": [
+    "components/deals/DealsListView.tsx",
+    "app/**/deals/**",
+    "playwright/role-audit/roles.spec.ts"
+  ]
+}

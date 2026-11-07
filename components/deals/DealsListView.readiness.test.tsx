@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useEffect } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { dictionaries, type Locale } from "@/lib/i18n/dictionaries";
 import { DealRowFiguresContext, DealsListView, type DealRow, type RowFigures } from "./DealsListView";
 
@@ -101,3 +101,26 @@ function checkSharedRead(locale: Locale, layout: "card" | "row") {
     expect(active.get("near")).toBe(1);
     expect(active.has("far")).toBe(false);
 }
+
+test("SCRUM-925: cards and table retain deal order after filtering and live sorting", () => {
+  const first = { ...deal("first"), since: 3 };
+  const second = { ...deal("second"), since: 2 };
+  const third = { ...deal("third"), since: 1 };
+  const list = (rows: DealRow[]) => (
+    <DealsListView rows={rows} loading={false} canLoadMore={false} loadingMore={false}
+      complete onLoadMore={() => {}} newDealHref={null} t={(key) => key} />
+  );
+  const view = render(list([first, second, third]));
+  const search = screen.getByRole("textbox", { name: "SearchDeals" });
+  fireEvent.change(search, { target: { value: "second" } });
+  fireEvent.change(search, { target: { value: "" } });
+  for (const prefix of ["card", "row"]) {
+    expect(screen.getAllByTestId(new RegExp(`^deal-${prefix}-`)).map((node) => node.dataset.testid))
+      .toEqual([`deal-${prefix}-first`, `deal-${prefix}-second`, `deal-${prefix}-third`]);
+  }
+  view.rerender(list([first, second, { ...third, since: 4 }]));
+  for (const prefix of ["card", "row"]) {
+    expect(screen.getAllByTestId(new RegExp(`^deal-${prefix}-`)).map((node) => node.dataset.testid))
+      .toEqual([`deal-${prefix}-third`, `deal-${prefix}-first`, `deal-${prefix}-second`]);
+  }
+});
