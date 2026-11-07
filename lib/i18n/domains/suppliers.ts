@@ -40,6 +40,9 @@ const suppliersMessages = defineBilingualMessages({
   SuppliersTabOutstanding: ["Outstanding", "القائم"],
   SuppliersTabSettled: ["Settled", "المسدّد"],
   SuppliersTabPayments: ["Payments", "الدفعات"],
+  SuppliersStmtType: ["Obligation", "الالتزام"],
+  SuppliersAccountActivity: ["Account activity", "حركة الحساب"],
+  SuppliersStmtAmount: ["Amount", "المبلغ"],
   SuppliersSubtitle: [
     "The supplier master. Vehicles and supplier payables point to a supplier here, so a name is corrected once.",
     "سجل الموردين. تشير المركبات ومستحقات الموردين إلى مورّد من هذه القائمة، فيُصحَّح الاسم مرة واحدة.",

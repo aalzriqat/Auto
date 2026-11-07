@@ -20,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { usePermissions } from "@/hooks/use-permissions";
 import { interpolate } from "@/lib/i18n/interpolate";
@@ -52,8 +54,8 @@ function useDebounced(value: string, delayMs: number): string {
 function SupplierRows({ orgId, rows }: Readonly<{ orgId: string; rows: ManagementRow[] }>) {
   const translate = useTranslate();
   return (
-    <Table>
-      <TableHeader>
+    <Table className="border-separate border-spacing-y-3 sm:border-collapse sm:border-spacing-0">
+      <TableHeader className="hidden bg-muted/60 sm:table-header-group">
         <TableRow>
           <TableHead className="text-start">{translate("SuppliersColName")}</TableHead>
           <TableHead className="hidden text-start md:table-cell">{translate("SuppliersColLegalName")}</TableHead>
@@ -61,10 +63,10 @@ function SupplierRows({ orgId, rows }: Readonly<{ orgId: string; rows: Managemen
           <TableHead className="text-start">{translate("SuppliersColStatus")}</TableHead>
         </TableRow>
       </TableHeader>
-      <TableBody>
+      <TableBody className="block space-y-3 sm:table-row-group sm:space-y-0">
         {rows.map((row) => (
-          <TableRow key={row._id}>
-            <TableCell className="text-start">
+          <TableRow key={row._id} className="block rounded-xl border bg-card p-3 shadow-sm sm:table-row sm:rounded-none sm:border-x-0 sm:p-0 sm:shadow-none">
+            <TableCell className="block text-start sm:table-cell">
               <Link href={supplierHref(orgId, row._id)} className="font-medium text-primary hover:underline">
                 <bdi>{row.displayName}</bdi>
               </Link>
@@ -83,7 +85,7 @@ function SupplierRows({ orgId, rows }: Readonly<{ orgId: string; rows: Managemen
             <TableCell className="hidden text-start sm:table-cell">
               <bdi dir="ltr">{row.taxId ? `${row.taxJurisdiction ? `${row.taxJurisdiction} · ` : ""}${row.taxId}` : ""}</bdi>
             </TableCell>
-            <TableCell className="text-start">
+            <TableCell className="block text-start sm:table-cell">
               <SupplierStatusBadge status={row.status} />
             </TableCell>
           </TableRow>
@@ -119,9 +121,10 @@ function SupplierListBody({
 
   if (loading) {
     return (
-      <p role="status" className="py-8 text-center text-sm text-muted-foreground">
+      <output className="block space-y-3 py-8 text-center text-sm text-muted-foreground">
         {translate("SuppliersLoading")}
-      </p>
+        <Skeleton className="h-16 w-full rounded-xl" /><Skeleton className="h-16 w-full rounded-xl" /><Skeleton className="h-16 w-full rounded-xl" />
+      </output>
     );
   }
   if (rows.length === 0) {
@@ -194,10 +197,13 @@ export function SupplierListScreen({ orgId }: Readonly<{ orgId: Id<"organization
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
+      <Card className="border-t-4 border-t-primary shadow-sm"><CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="rounded-xl bg-primary/10 p-3 text-primary"><Building2 aria-hidden="true" /></span>
+          <div className="min-w-0 space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">{translate("Suppliers")}</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">{translate("SuppliersSubtitle")}</p>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
         <Button asChild variant="outline"><Link href={`/${orgId}/suppliers/balances`}>{translate("SuppliersBalances")}</Link></Button>
@@ -208,12 +214,13 @@ export function SupplierListScreen({ orgId }: Readonly<{ orgId: Id<"organization
           </Button>
         )}
         </div>
-      </header>
+      </CardHeader></Card>
       {!isLoading && !canManage && (
         <p role="note" className="rounded-md border bg-muted/50 p-3 text-sm text-muted-foreground">
           {translate("SuppliersReadOnlyNote")}
         </p>
       )}
+      <Card className="shadow-sm"><CardContent className="space-y-5 p-4 sm:p-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="relative flex-1 space-y-1.5">
           <Label htmlFor="suppliers-search">{translate("SuppliersSearchLabel")}</Label>
@@ -260,6 +267,7 @@ export function SupplierListScreen({ orgId }: Readonly<{ orgId: Id<"organization
       >
         <SupplierListBody orgId={orgId} search={search} filter={filter} canManage={canManage} onAdd={() => setCreating(true)} />
       </QueryErrorBoundary>
+      </CardContent></Card>
       {canManage && <SupplierCreateDialog orgId={orgId} open={creating} onOpenChange={setCreating} />}
     </div>
   );

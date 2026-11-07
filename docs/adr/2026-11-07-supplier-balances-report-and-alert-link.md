@@ -36,6 +36,10 @@ Part 3 is committed separately after the behavior. Use the app's Tailwind v4 `ap
 
 Editing follows the existing `CustomerDialog` / `SupplierCreateDialog` Radix dialog pattern. Move the existing supplier form without changing fields, validation, revision token or mutation arguments. `manage:finance` controls the Edit button, as before. Save closes; Cancel, Escape and outside dismissal confirm dirty changes. Creating uses the same existing SupplierFields in a dialog, with dirty-discard confirmation too. No permission is widened.
 
+Aliases are read-only on the profile and retain their existing add/retire controls inside Edit. Their pending text participates in discard confirmation; in-flight alias work prevents dismissal. Draft forms also protect browser unload and navigation through duplicate-candidate links. Query error boundaries and pagination state are keyed by organization/supplier so a route change cannot retain another record's editor or refused query.
+
+Test selector changes in part 3: `SupplierManagement.test.tsx` opens Edit before existing form/alias assertions and excludes the new Balances navigation link when asserting that an empty search has no supplier links. Its consecutive-save test reopens after Save and supplies the same returned revision through the reactive record fixture, preserving both revision assertions. `SupplierConfirmations.realBackend.test.tsx` clicks Edit before typing. `SupplierStatementSection.test.tsx` selects Settled or Payments before its existing assertions; its loading check selects Settled explicitly. Amount, refusal and confirmation assertions remain intact.
+
 ## Design attacks and proof plan
 
 1. Renamed supplier / conflicting legal name: stored id wins; public alert and report read use current display name.

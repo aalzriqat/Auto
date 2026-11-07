@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-const world = vi.hoisted(() => ({ locale: "en" as "en" | "ar", permissions: ["view:finance", "view:cost_price"], calls: [] as Array<{ name: string; args: unknown }> }));
+const world = vi.hoisted(() => ({ locale: "en" as "en" | "ar", permissions: ["view:finance", "view:cost_price"], included: true, queryError: null as Error | null, calls: [] as Array<{ name: string; args: unknown }> }));
 vi.mock("@/components/providers/LanguageProvider", async () => {
   const { dictionaries } = await import("@/lib/i18n/dictionaries");
   return { useLanguage: () => ({ locale: world.locale, isRtl: world.locale === "ar", t: (key: string) => (dictionaries[world.locale] as Record<string, string>)[key] ?? key }) };
@@ -12,11 +12,13 @@ vi.mock("convex/react", async () => {
   return { useQuery: (reference: never, args: unknown) => {
     world.calls.push({ name: getFunctionName(reference), args });
     if (args === "skip") return undefined;
-    if (getFunctionName(reference) === "subscriptions:getMySubscription") return { planDetails: { gates: { accounting: true } } };
+    if (getFunctionName(reference) === "subscriptions:getMySubscription") return { planDetails: { gates: { accounting: world.included } } };
+    if (world.queryError) throw world.queryError;
     return undefined;
   } };
 });
 import { SupplierBalancesScreen, SupplierBalancesView, type SupplierBalancesData } from "./SupplierBalancesScreen";
+import { SupplierSummaryTilesView } from "./SupplierSummaryTiles";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 import type { Id } from "@/convex/_generated/dataModel";
 const ORG = "org" as Id<"organizations">;
@@ -26,7 +28,7 @@ const data: SupplierBalancesData = { complete: true, isDone: true, continueCurso
     disputedPayableMinor: 5500001, disputedReceivableMinor: 0, oldestDueDate: "2026-11-06" }],
 }] };
 afterEach(cleanup);
-beforeEach(() => { world.locale = "en"; world.permissions = ["view:finance", "view:cost_price"]; world.calls.length = 0; });
+beforeEach(() => { world.locale = "en"; world.permissions = ["view:finance", "view:cost_price"]; world.included = true; world.queryError = null; world.calls.length = 0; });
 describe("SCRUM-929 supplier balances screen", () => {
   test.each(["en", "ar"] as const)("%s displays exact currency amounts, direction and statement links", locale => {
     world.locale = locale;
@@ -60,5 +62,26 @@ describe("SCRUM-929 supplier balances screen", () => {
     render(<SupplierBalancesScreen orgId={ORG} />);
     expect(screen.getByText((dictionaries[locale] as Record<string, string>).SuppliersBalancesWithheld)).toBeTruthy();
     expect(world.calls.filter(c => c.name === "supplierBalances:list").every(c => c.args === "skip")).toBe(true);
+  });
+  test("a plan without accounting skips the report and shows its existing gate", () => {
+    world.included = false;
+    render(<SupplierBalancesScreen orgId={ORG} />);
+    expect(screen.getByText(dictionaries.en.SuppliersStmtPlanGate)).toBeTruthy();
+    expect(world.calls.filter(c => c.name === "supplierBalances:list").every(c => c.args === "skip")).toBe(true);
+  });
+  test("a read error shows a clean error state", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    world.queryError = new Error("Technical database detail");
+    render(<SupplierBalancesScreen orgId={ORG} />);
+    expect(screen.getByRole("alert").textContent).toBe(dictionaries.en.SuppliersStmtLoadError);
+    expect(document.body.textContent).not.toContain("Technical database detail");
+  });
+  test("summary tiles display the server net and withhold every figure for an incomplete supplier", () => {
+    const { container, rerender } = render(<SupplierSummaryTilesView balance={data.page[0]} />);
+    expect(container.textContent).toContain("-2,300.001");
+    expect(container.textContent).toContain(dictionaries.en.SuppliersBalancesNetYouOwe);
+    rerender(<SupplierSummaryTilesView balance={{ ...data.page[0]!, complete: false, currencies: [] }} />);
+    expect(container.textContent).not.toMatch(/2,300|5,500|3,200/);
+    expect(screen.getAllByText(dictionaries.en.SuppliersStmtTotalUnavailable)).toHaveLength(4);
   });
 });

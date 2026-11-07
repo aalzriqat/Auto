@@ -12,6 +12,9 @@ import { ammanDateString } from "@/convex/utils/supplierDueDates";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 import { QueryErrorBoundary, supplierHref, useTranslate } from "./shared";
 
@@ -28,7 +31,7 @@ export function SupplierNet({ balance }: Readonly<{ balance: CurrencyBalance }>)
   const translate = useTranslate();
   const label = balance.netMinor < 0 ? "SuppliersBalancesNetYouOwe" : "SuppliersBalancesNetOwesYou";
   return <span className="inline-flex flex-col items-end gap-1">
-    <span>{balance.netMinor > 0 && "+"}<SupplierMoney minor={balance.netMinor} currency={balance.currency} /></span>
+    <bdi>{balance.netMinor > 0 && "+"}<SupplierMoney minor={balance.netMinor} currency={balance.currency} /></bdi>
     <span className="text-xs text-muted-foreground">{translate(balance.netMinor === 0 ? "SuppliersBalancesNetZero" : label)}</span>
   </span>;
 }
@@ -37,17 +40,17 @@ export function SupplierNet({ balance }: Readonly<{ balance: CurrencyBalance }>)
 export function SupplierBalancesView({ orgId, data }: Readonly<{ orgId: Id<"organizations">; data: SupplierBalancesData | undefined }>) {
   const translate = useTranslate();
   const { locale } = useLanguage();
-  if (data === undefined) return <output className="block p-8 text-center text-muted-foreground">{translate("SuppliersLoading")}</output>;
+  if (data === undefined) return <div className="space-y-3"><output className="block p-4 text-center text-muted-foreground">{translate("SuppliersLoading")}</output><Skeleton className="h-40 rounded-xl" /></div>;
   return <div dir={locale === "ar" ? "rtl" : "ltr"} className="space-y-4">
     {!data.complete && <p role="note" className="rounded-lg border bg-muted p-3 text-sm">{translate("SuppliersBalancesPartial")}</p>}
-    {data.page.length === 0 ? <p className="p-8 text-center text-muted-foreground">{translate("SuppliersBalancesEmpty")}</p> : <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full text-sm">
+    {data.page.length === 0 ? data.complete && <p className="p-8 text-center text-muted-foreground">{translate("SuppliersBalancesEmpty")}</p> : <div className="min-w-0 rounded-xl border bg-card p-3 shadow-sm md:p-0">
+      <Table className="block w-full text-sm md:table">
         <caption className="sr-only">{translate("SuppliersBalances")}</caption>
-        <thead className="bg-muted text-muted-foreground"><tr>
-          {["SuppliersColName", "SuppliersBalancesYouOwe", "SuppliersBalancesOwesYou", "SuppliersBalancesNet", "SuppliersBalancesOverdue", "SuppliersBalancesOldest", "SuppliersBalancesCurrency"].map(key => <th scope="col" key={key} className="p-3 text-start">{translate(key)}</th>)}
-        </tr></thead>
-        <tbody>{data.page.map(row => <BalanceRows key={row.supplierId} orgId={orgId} row={row} />)}</tbody>
-      </table>
+        <TableHeader className="hidden bg-muted text-muted-foreground md:table-header-group"><TableRow>
+          {["SuppliersColName", "SuppliersBalancesYouOwe", "SuppliersBalancesOwesYou", "SuppliersBalancesNet", "SuppliersBalancesOverdue", "SuppliersBalancesOldest", "SuppliersBalancesCurrency"].map((key, i) => <TableHead scope="col" key={key} className={`p-3 ${i === 0 ? "text-start" : "text-end"}`}>{translate(key)}</TableHead>)}
+        </TableRow></TableHeader>
+        <TableBody className="block space-y-3 md:table-row-group md:space-y-0">{data.page.map(row => <BalanceRows key={row.supplierId} orgId={orgId} row={row} />)}</TableBody>
+      </Table>
     </div>}
   </div>;
 }
@@ -55,19 +58,23 @@ export function SupplierBalancesView({ orgId, data }: Readonly<{ orgId: Id<"orga
 function BalanceRows({ orgId, row }: Readonly<{ orgId: Id<"organizations">; row: SupplierBalanceData }>) {
   const translate = useTranslate();
   const name = <Link href={supplierHref(orgId, row.supplierId)} className="font-medium text-primary hover:underline"><bdi>{row.supplier}</bdi></Link>;
-  if (!row.complete || row.currencies.length === 0) return <tr className="border-t"><th scope="row" className="p-3 text-start">{name}</th><td colSpan={6} className="p-3 text-muted-foreground">{translate(row.complete ? "SuppliersBalancesZero" : "SuppliersStmtTotalUnavailable")}</td></tr>;
-  return row.currencies.map(c => <tr key={c.currency} className="border-t hover:bg-muted/50">
-    <th scope="row" className="p-3 text-start">{name}</th>
-    <td className="p-3 text-end"><SupplierMoney minor={c.payableMinor} currency={c.currency} /><Disputed minor={c.disputedPayableMinor} currency={c.currency} /></td>
-    <td className="p-3 text-end"><SupplierMoney minor={c.receivableMinor} currency={c.currency} /><Disputed minor={c.disputedReceivableMinor} currency={c.currency} /></td>
-    <td className="p-3 text-end"><SupplierNet balance={c} /></td>
-    <td className="space-y-1 p-3 text-end">
+  if (!row.complete || row.currencies.length === 0) return <TableRow className="block rounded-xl border p-3 md:table-row md:rounded-none md:p-0"><TableHead scope="row" className="block p-3 text-start md:table-cell">{name}</TableHead><TableCell colSpan={6} className="block p-3 text-muted-foreground md:table-cell">{translate(row.complete ? "SuppliersBalancesZero" : "SuppliersStmtTotalUnavailable")}</TableCell></TableRow>;
+  return row.currencies.map(c => <TableRow key={c.currency} className="block rounded-xl border p-3 hover:bg-muted/50 md:table-row md:rounded-none md:border-x-0 md:p-0">
+    <TableHead scope="row" className="block p-3 text-start md:table-cell">{name}</TableHead>
+    <BalanceCell label={translate("SuppliersBalancesYouOwe")} className="text-money-out"><div><SupplierMoney minor={c.payableMinor} currency={c.currency} /><Disputed minor={c.disputedPayableMinor} currency={c.currency} /></div></BalanceCell>
+    <BalanceCell label={translate("SuppliersBalancesOwesYou")} className="text-profit-positive"><div><SupplierMoney minor={c.receivableMinor} currency={c.currency} /><Disputed minor={c.disputedReceivableMinor} currency={c.currency} /></div></BalanceCell>
+    <BalanceCell label={translate("SuppliersBalancesNet")}><SupplierNet balance={c} /></BalanceCell>
+    <BalanceCell label={translate("SuppliersBalancesOverdue")}><div className="space-y-1">
       <div><span className="text-xs text-muted-foreground">{translate("SuppliersBalancesYouOwe")}: </span><SupplierMoney minor={c.overduePayableMinor} currency={c.currency} /></div>
       <div><span className="text-xs text-muted-foreground">{translate("SuppliersBalancesOwesYou")}: </span><SupplierMoney minor={c.overdueReceivableMinor} currency={c.currency} /></div>
-    </td>
-    <td className="p-3 text-end"><bdi>{c.oldestDueDate ?? translate("SuppliersStmtNoDueDate")}</bdi></td>
-    <td className="p-3 text-end"><bdi>{c.currency}</bdi></td>
-  </tr>);
+    </div></BalanceCell>
+    <BalanceCell label={translate("SuppliersBalancesOldest")}><bdi>{c.oldestDueDate ?? translate("SuppliersStmtNoDueDate")}</bdi></BalanceCell>
+    <BalanceCell label={translate("SuppliersBalancesCurrency")}><bdi>{c.currency}</bdi></BalanceCell>
+  </TableRow>);
+}
+
+function BalanceCell({ label, className = "", children }: Readonly<{ label: string; className?: string; children: React.ReactNode }>) {
+  return <TableCell className={`flex min-w-0 items-start justify-between gap-3 p-3 text-end md:table-cell ${className}`}><span className="text-start text-xs text-muted-foreground md:hidden">{label}</span>{children}</TableCell>;
 }
 
 function Disputed({ minor, currency }: Readonly<{ minor: number; currency: string }>) {
@@ -103,7 +110,7 @@ export function SupplierBalancesScreen({ orgId }: Readonly<{ orgId: Id<"organiza
   const translate = useTranslate();
   return <div className="space-y-5 p-4 md:p-6">
     <Button asChild variant="ghost" size="sm"><Link href={`/${orgId}/suppliers`}><ArrowLeft className="rtl:rotate-180" aria-hidden="true" />{translate("SuppliersBack")}</Link></Button>
-    <header className="space-y-2"><h1 className="text-2xl font-semibold">{translate("SuppliersBalances")}</h1><p className="text-muted-foreground">{translate("SuppliersBalancesSubtitle")}</p><p className="text-xs text-muted-foreground">{translate("SuppliersBalancesNetNote")}</p><p className="text-xs text-muted-foreground">{translate("SuppliersBalancesScope")}</p></header>
-    <QueryErrorBoundary render={() => <p role="alert">{translate("SuppliersStmtLoadError")}</p>}><BalancesBody orgId={orgId} /></QueryErrorBoundary>
+    <Card className="border-t-4 border-t-primary shadow-sm"><CardHeader className="space-y-2"><h1 className="text-2xl font-semibold">{translate("SuppliersBalances")}</h1><p className="text-muted-foreground">{translate("SuppliersBalancesSubtitle")}</p><p className="text-xs text-muted-foreground">{translate("SuppliersBalancesNetNote")}</p><p className="text-xs text-muted-foreground">{translate("SuppliersBalancesScope")}</p></CardHeader></Card>
+    <QueryErrorBoundary key={orgId} render={() => <p role="alert">{translate("SuppliersStmtLoadError")}</p>}><BalancesBody orgId={orgId} /></QueryErrorBoundary>
   </div>;
 }

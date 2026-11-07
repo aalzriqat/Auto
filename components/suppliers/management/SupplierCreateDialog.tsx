@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { describeSupplierError, useSupplierCreateFlow } from "../useSupplierCreateFlow";
+import { SupplierDiscardDialog, useSupplierBeforeUnload } from "./SupplierDiscardDialog";
 import {
   createFieldsFrom,
   DuplicateCandidatesPanel,
@@ -52,6 +53,15 @@ function SupplierCreateDialogBody({
   const { reset } = flow;
   const [values, setValues] = useState<SupplierFormValues>(EMPTY_FORM);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const dirty = Object.values(values).some(value => value !== "");
+  useSupplierBeforeUnload(dirty);
+  function requestClose() {
+    if (flow.creating) return;
+    if (dirty) setConfirmDiscard(true);
+    else onOpenChange(false);
+  }
 
   // Any edit is a new request: the previous key, candidates and conflict no longer describe it.
   const signature = useMemo(() => JSON.stringify(values), [values]);
@@ -75,8 +85,15 @@ function SupplierCreateDialogBody({
 
   const busy = flow.creating;
   return (
-    <Dialog open onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+    <>
+    <Dialog open onOpenChange={(next) => !next && requestClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" onClickCapture={event => {
+        const anchor = event.target instanceof Element ? event.target.closest("a") : null;
+        if (anchor && (dirty || busy)) {
+          event.preventDefault();
+          if (!busy) { setPendingHref(anchor.getAttribute("href")); setConfirmDiscard(true); }
+        }
+      }}>
         <DialogHeader className="text-start">
           <DialogTitle>{translate("SuppliersCreateTitle")}</DialogTitle>
           <DialogDescription>{translate("SuppliersCreateDescription")}</DialogDescription>
@@ -120,7 +137,7 @@ function SupplierCreateDialogBody({
             </p>
           )}
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" disabled={busy} onClick={requestClose}>
               {translate("SuppliersCancel")}
             </Button>
             <Button type="submit" disabled={busy}>
@@ -130,5 +147,7 @@ function SupplierCreateDialogBody({
         </form>
       </DialogContent>
     </Dialog>
+    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => { onOpenChange(false); if (pendingHref) router.push(pendingHref); }} />
+    </>
   );
 }

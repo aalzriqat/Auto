@@ -214,6 +214,7 @@ describe("edit: a name match and a shared legal identity together", () => {
     });
     backend.queryResults.set("suppliers:get", await identity.query(api.suppliers.get, { orgId, supplierId: branch.supplierId }));
     render(<SupplierDetailScreen orgId={orgId} supplierId={branch.supplierId} />);
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersEdit }));
 
     typeInto(document.body, "SuppliersFieldDisplayName", "Gulf Motors");
     typeInto(document.body, "SuppliersNameReason", "Rebranded");
