@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { getFunctionName, type FunctionReference } from "convex/server";
+import { ConvexError } from "convex/values";
 
 /** Offline browser boundary only. Keep this outside the backend compiler's test-utils include. */
 export function useQuery(reference: FunctionReference<"query">, args: unknown) {
@@ -10,7 +11,9 @@ export function useQuery(reference: FunctionReference<"query">, args: unknown) {
   };
   return undefined;
 }
-export function useMutation() { return async () => ({ supplierId: "supplier", version: 1, revision: 2 }); }
+export function useMutation() { return async (args: Record<string, unknown>) => {
+  if (args.displayName === "Duplicate supplier") throw new ConvexError({ code: "SUPPLIER_DUPLICATE_CANDIDATES", message: "Confirm identity", candidates: [{ supplierId: "existing", displayName: "Existing supplier", status: "ACTIVE", reasons: ["SAME_NAME"] }] });
+  return { supplierId: "created", version: 1, revision: 2 };
+}; }
 export function usePermissions() { return { isLoading: false, hasPermission: (permission: string) => ["view:finance", "manage:finance"].includes(permission) }; }
-export function useRouter() { return { push: (href: string) => window.history.pushState(window.history.state, "", href) }; }
 export default function Link({ href, children, ...props }: Readonly<{ href: string; children: ReactNode }>) { return <a href={href} {...props}>{children}</a>; }
