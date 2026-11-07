@@ -953,19 +953,6 @@ export function DealCockpit({
   );
 
   /**
-   * The calculator, mounted wherever the quotation action can actually be
-   * offered — which includes RE-recording one that already exists.
-   *
-   * Not narrowed to "no quotation yet". A re-record with the calculator absent
-   * is labelled `MANUAL_ENTRY` whatever the operator types, so skipping the
-   * query on the second visit would quietly downgrade the provenance of a
-   * figure the solver could have confirmed.
-   *
-   * Still skipped for a caller who cannot record and for a deal nobody can
-   * change: it is a real query with real reads, and running it for every role
-   * on every view would be paying for a suggestion nobody was going to see.
-   */
-  /**
    * Whether the approved amount is on the record — from the STAGE RAIL, which
    * the server derives from the unredacted row.
    *
@@ -1002,8 +989,7 @@ export function DealCockpit({
    * during render loses the whole screen. That is how this was found: rendering
    * against a company created through the settings form, which never asked for
    * the field.
-   */
-  /**
+   *
    * ASKED, not derived (SCRUM-117).
    *
    * This read `companyRuleSnapshot` and `appliedLtvPercent` off the economics
@@ -1014,6 +1000,19 @@ export function DealCockpit({
    * names no rate; the screen stops holding a second opinion.
    */
   const ltvMissing = economics?.requiresLtvPercent === true;
+  /**
+   * The calculator, mounted wherever the quotation action can actually be
+   * offered — which includes RE-recording one that already exists.
+   *
+   * Not narrowed to "no quotation yet". A re-record with the calculator absent
+   * is labelled `MANUAL_ENTRY` whatever the operator types, so skipping the
+   * query on the second visit would quietly downgrade the provenance of a
+   * figure the solver could have confirmed.
+   *
+   * Still skipped for a caller who cannot record and for a deal nobody can
+   * change: it is a real query with real reads, and running it for every role
+   * on every view would be paying for a suggestion nobody was going to see.
+   */
   const suggestion = useQuery(
     api.financingEconomics.suggestQuotationForApplication,
     canOfferQuotation ? { orgId, applicationId } : "skip"
@@ -1293,7 +1292,8 @@ export function DealCockpit({
       setUnwindSubmitting(false);
     }
     return true;
-  };  const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
+  };
+  const [confirmingDisbursement, setConfirmingDisbursement] = useState(false);
   const [recordingForward, setRecordingForward] = useState(false);
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [forwardCorrection, setForwardCorrection] = useState<ForwardCorrectionKind | null>(null);
@@ -3114,10 +3114,10 @@ export function DealCockpit({
         renderCommissions={({ profitMinor, money, t }) => (
           <DealCommissionsRow orgId={orgId} saleId={deal?.canonicalSaleId} profitMinor={profitMinor} money={money} t={t} />
         )}
-      deal={deal}
-      stageDeepLink={stageDeepLink}
-      backHref={`/${orgId}/deals`}
-      financeDecision={financeDecision}
+        deal={deal}
+        stageDeepLink={stageDeepLink}
+        backHref={`/${orgId}/deals`}
+        financeDecision={financeDecision}
       // The step's panel can still arrive only while what it is built from is
       // unanswered. Queries a caller cannot run are skipped (they stay undefined
       // for good), so each is counted only when this caller runs it.
