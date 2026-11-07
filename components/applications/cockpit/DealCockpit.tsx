@@ -3068,7 +3068,7 @@ export function DealCockpit({
   const custody: DealCustodyWiring | undefined =
     app && deal
       ? {
-          loading: permissionsLoading || (canViewApplications && dealCosts === undefined),
+          loading: permissionsLoading || (canViewDealCosts && dealCosts === undefined),
           records: dealCosts?.custody,
           truncated: dealCosts?.custodyTruncated ?? false,
           currency: dealCosts?.currency ?? economicsCurrencyCode,
