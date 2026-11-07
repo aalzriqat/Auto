@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { renderNotification } from "./render";
 
 describe("SCRUM-929 supplier alert direction", () => {
-  test.each(["PAYABLE", "RECEIVABLE", "RECOVERY"])("%s due and overdue are directional in EN and AR", kind => {
+  test("all obligation families have directional EN and AR due and overdue copy", () => {
+    for (const kind of ["PAYABLE", "RECEIVABLE", "RECOVERY"]) {
     for (const overdue of [false, true]) {
       const type = overdue ? "accounting.supplierObligationOverdue" : "accounting.supplierObligationDue";
       const data = { kind, supplier: "Bloom", amount: "200.000", currency: "JOD", dueDate: "2026-11-07", daysOverdue: 7 };
@@ -15,6 +16,7 @@ describe("SCRUM-929 supplier alert direction", () => {
         expect(withheld).not.toMatch(/Bloom|200|\{|undefined/);
         expect(withheld).toContain(locale === "en" ? (kind === "PAYABLE" ? "You owe a supplier" : "A supplier owes you") : (kind === "PAYABLE" ? "عليك لمورّد" : "مورّد مدين لك"));
       }
+    }
     }
   });
   test("cost reader with unresolved supplier gets localized generic identity", () => {

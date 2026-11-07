@@ -50,7 +50,7 @@ async function seed(tag: string, permissions = ["view:finance", "view:cost_price
   return { t, orgId, userId, roleId, subscriptionId, supplierId, vehicleId, saleId, asUser: t.withIdentity({ subject: tag, clerkId: tag }) };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
-const payable = (s: Seed, fields: Partial<Doc<"vehicleSupplierPayables">> = {}) => s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
+const payable = (s: Seed, fields: Partial<Extract<Doc<"vehicleSupplierPayables">, { vehicleId: Id<"vehicles"> }>> = {}) => s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
   orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, sourcedFromName: "Old name", amountDue: 9500,
   currency: "JOD", status: "DUE_ON_SALE", paymentDueDate: NOW - DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW, ...fields,
 }));
@@ -58,7 +58,7 @@ const receivable = (s: Seed, fields: Partial<Doc<"vehicleSupplierReceivables">> 
   orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Old name", amountDue: 3000,
   currency: "JOD", status: "OPEN", agreedDueDate: NOW + DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW, ...fields,
 }));
-const recovery = (s: Seed, fields: Partial<Doc<"supplierCostRecoveries">> = {}) => s.t.run(async ctx => {
+const recovery = (s: Seed, fields: Partial<Extract<Doc<"supplierCostRecoveries">, { vehicleId: Id<"vehicles"> }>> = {}) => s.t.run(async ctx => {
   const expenseId = await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" });
   return ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId,
     sourceEventKey: String(expenseId), sourcedFromName: "Old name", amountDueMinor: 200000, amountRecoveredMinor: 0, currency: "JOD",
@@ -167,7 +167,8 @@ describe("SCRUM-929 supplier balances", () => {
 });
 
 describe("SCRUM-929 alert destinations and confidentiality", () => {
-  test.each(["PAYABLE", "RECEIVABLE", "RECOVERY"] as const)("%s links stored supplier identity and renders direction, once per step", async kind => {
+  test("stored supplier identity targets its statement for every obligation family, once per step", async () => {
+    for (const kind of ["PAYABLE", "RECEIVABLE", "RECOVERY"] as const) {
     const s = await seed(`alert${kind}`);
     if (kind === "PAYABLE") await payable(s, { paymentDueDate: NOW });
     else if (kind === "RECEIVABLE") await receivable(s, { agreedDueDate: NOW });
@@ -180,10 +181,12 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.link).toBe(`/${s.orgId}/suppliers/${s.supplierId}`);
     expect(rows[0]?.data?.supplier).toBe("Renamed supplier");
-    const message = renderNotification("en", rows[0]!.type, rows[0]!.data).message;
+    const message = renderNotification("en", rows[0]!.type!, rows[0]!.data).message;
     expect(message).toContain(kind === "PAYABLE" ? "You owe supplier Renamed supplier" : "Supplier Renamed supplier owes you");
+    }
   });
-  test.each(["missing", "foreign", "deleted"])("%s supplier falls back to balances without leaking a name", async mode => {
+  test("missing, foreign and deleted suppliers fall back to balances without leaking a name", async () => {
+    for (const mode of ["missing", "foreign", "deleted"]) {
     const s = await seed(`fallback${mode}`);
     if (mode === "foreign") {
       const org = await s.t.run(ctx => ctx.db.insert("organizations", { name: "Other", createdAt: NOW }));
@@ -196,6 +199,7 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.link).toBe(`/${s.orgId}/suppliers/balances`);
     expect(rows[0]?.data).not.toHaveProperty("supplier");
+    }
   });
   test("non-cost recipient receives neither amount nor supplier name; direction remains useful", async () => {
     const s = await seed("redacted", ["view:finance"]);
@@ -205,6 +209,6 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.data).not.toHaveProperty("amount");
     expect(rows[0]?.data).not.toHaveProperty("supplier");
-    expect(renderNotification("en", rows[0]!.type, rows[0]!.data).message).toBe("You owe a supplier, due 2026-11-07.");
+    expect(renderNotification("en", rows[0]!.type!, rows[0]!.data).message).toBe("You owe a supplier, due 2026-11-07.");
   });
 });
