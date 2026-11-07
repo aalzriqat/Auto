@@ -70,7 +70,7 @@
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
   "bugRef": {
     "key": "SCRUM-928",
-    "failingFirst": "173185b2d12a767be6b91bb6c46f829530eccf94"
+    "failingFirst": "a7d31e68aa8e55f3f07c995ae20eebaa1c8cf28b"
   },
   "sourceGlobs": [
     "convex/reports.ts",
