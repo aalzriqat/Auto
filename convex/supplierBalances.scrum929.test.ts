@@ -167,7 +167,8 @@ describe("SCRUM-929 supplier balances", () => {
 });
 
 describe("SCRUM-929 alert destinations and confidentiality", () => {
-  test.each(["PAYABLE", "RECEIVABLE", "RECOVERY"] as const)("%s links stored supplier identity and renders direction, once per step", async kind => {
+  test("stored supplier identity targets its statement for every obligation family, once per step", async () => {
+    for (const kind of ["PAYABLE", "RECEIVABLE", "RECOVERY"] as const) {
     const s = await seed(`alert${kind}`);
     if (kind === "PAYABLE") await payable(s, { paymentDueDate: NOW });
     else if (kind === "RECEIVABLE") await receivable(s, { agreedDueDate: NOW });
@@ -182,8 +183,10 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows[0]?.data?.supplier).toBe("Renamed supplier");
     const message = renderNotification("en", rows[0]!.type!, rows[0]!.data).message;
     expect(message).toContain(kind === "PAYABLE" ? "You owe supplier Renamed supplier" : "Supplier Renamed supplier owes you");
+    }
   });
-  test.each(["missing", "foreign", "deleted"])("%s supplier falls back to balances without leaking a name", async mode => {
+  test("missing, foreign and deleted suppliers fall back to balances without leaking a name", async () => {
+    for (const mode of ["missing", "foreign", "deleted"]) {
     const s = await seed(`fallback${mode}`);
     if (mode === "foreign") {
       const org = await s.t.run(ctx => ctx.db.insert("organizations", { name: "Other", createdAt: NOW }));
@@ -196,6 +199,7 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.link).toBe(`/${s.orgId}/suppliers/balances`);
     expect(rows[0]?.data).not.toHaveProperty("supplier");
+    }
   });
   test("non-cost recipient receives neither amount nor supplier name; direction remains useful", async () => {
     const s = await seed("redacted", ["view:finance"]);
