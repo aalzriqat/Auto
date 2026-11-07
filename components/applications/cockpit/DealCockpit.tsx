@@ -1462,6 +1462,7 @@ export function DealCockpit({
   const orgScale = safeScaleForCurrency(orgCurrency.code, 2);
   const orgFactor = Math.pow(10, orgScale);
   const economicsCurrencyCode = app?.economicsCurrency ?? orgCurrency.code;
+  const dealCurrency = dealCosts?.currency ?? economicsCurrencyCode;
   const economicsScale = safeScaleForCurrency(economicsCurrencyCode, 2);
   const economicsFactor = Math.pow(10, economicsScale);
   /**
@@ -1488,9 +1489,7 @@ export function DealCockpit({
     isConsignedDeal && app?.supplierSettlementRoute === "DIRECT_TO_SUPPLIER";
   const supplierName = app?.vehicle?.sourcedFromName ?? undefined;
   const formatEconomics = (minor: number) => {
-    return `${formatMinorAmount(minor, economicsFactor)} ${
-      economicsCurrencyCode === orgCurrency.code ? currencyMarker(economicsCurrencyCode) : economicsCurrencyCode
-    }`;
+    return `${formatMinorAmount(minor, economicsFactor)} ${currencyMarker(economicsCurrencyCode)}`;
   };
   /**
    * The customer's plan, read straight off the quote `applications.get`
@@ -1539,6 +1538,8 @@ export function DealCockpit({
       ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
       : "skip"
   );
+  const custodyMoney = (minor: number, currency: string) =>
+    `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${currencyMarker(currency)}`;
   const handoverCosts =
     app && deal
       ? {
@@ -1629,12 +1630,9 @@ export function DealCockpit({
           // The currency a new line is recorded in, as the SERVER resolves it
           // for its own writers (pin, else the org's verified currency, which
           // the first cost fixes — SCRUM-319). Not derived client-side.
-          denomination: { code: dealCosts?.currency ?? economicsCurrencyCode },
+          denomination: { code: dealCurrency },
           scaleOf: (cur: string) => safeScaleForCurrency(cur, 2),
-          money: (minor: number, currency: string) =>
-            `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-              currency === orgCurrency.code ? currencyMarker(currency) : currency
-            }`,
+          money: custodyMoney,
           // Frozen once the sale is recognized (`economicsFrozen`): the server
           // refuses every posting-bearing edit, so none is offered, and the
           // panel says why at its head.
@@ -1911,9 +1909,7 @@ export function DealCockpit({
       : undefined;
   const formatPlanMajor = (major: number, currency: string) => {
     const scale = safeScaleForCurrency(currency, 2);
-    return `${formatMoneyAmount(major, currency, scale)} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
-    }`;
+    return `${formatMoneyAmount(major, currency, scale)} ${currencyMarker(currency)}`;
   };
   /**
    * The frozen net is built in the deal's PINNED currency
@@ -2073,7 +2069,7 @@ export function DealCockpit({
   const forwardBankOptions = useQuery(
     api.financeCompanyForward.listForwardBankOptions,
     forwardPayment && canConfirmFinanceDisbursement && hasPermission(PERMISSIONS.VIEW_FINANCE)
-      ? { orgId, currency: dealCosts?.currency ?? economicsCurrencyCode }
+      ? { orgId, currency: dealCurrency }
       : "skip"
   );
   /**
@@ -2950,10 +2946,6 @@ export function DealCockpit({
    * second payment, while a dialog opened again later for the same figures
    * is a new command rather than a silent replay of the first.
    */
-  const custodyMoney = (minor: number, currency: string) =>
-    `${formatMinorAmount(minor, Math.pow(10, safeScaleForCurrency(currency, 2)))} ${
-      currency === orgCurrency.code ? currencyMarker(currency) : currency
-    }`;
   // One intent per dialog attempt. The deal, record and kind are named for
   // legibility only; the attempt's `intentId` is what makes it one command.
   const openCustodyIntent = (intentId: string) => `open-custody:${applicationId}:${intentId}`;
@@ -3079,7 +3071,7 @@ export function DealCockpit({
           loading: dealCostsPending,
           records: dealCosts?.custody,
           truncated: dealCosts?.custodyTruncated ?? false,
-          currency: dealCosts?.currency ?? economicsCurrencyCode,
+          currency: dealCurrency,
           expectedTotalMinor: dealCosts?.expected?.expectedTotalMinor ?? null,
           accounting: dealCosts?.custodyAccounting,
           plannedCustody: dealCosts?.plannedCustody ?? null,
@@ -3103,7 +3095,7 @@ export function DealCockpit({
               <CustodyMovementsList
                 orgId={orgId}
                 custodyId={custodyId}
-                currency={record?.currency ?? dealCosts?.currency ?? economicsCurrencyCode}
+                currency={record?.currency ?? dealCurrency}
                 money={custodyMoney}
                 formatDate={(ms: number) => renderMoment(ms, "d MMM yyyy", locale)}
                 t={t}
@@ -5860,8 +5852,9 @@ export function DealCockpitView({
   // locale gets the short form that belongs to it.
   // The org's symbol only stands for the org's own currency; on a deal pinned to
   // a different one it would label the amount as something it is not.
-  const marker =
-    locale === "ar" && dealCurrency === currency.code ? currency.symbol : dealCurrency;
+  const viewCurrencyMarker = (code: string) =>
+    locale === "ar" && code === currency.code ? currency.symbol : code;
+  const marker = viewCurrencyMarker(dealCurrency);
   const money = (minor: number) => `${formatMinorAmount(minor, factor)} ${marker}`;
 
   // The discrepancy's own figures.
@@ -5897,8 +5890,7 @@ export function DealCockpitView({
     () => Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2)),
     [discrepancyCurrency]
   );
-  const discrepancyMarker =
-    locale === "ar" && discrepancyCurrency === currency.code ? currency.symbol : discrepancyCurrency;
+  const discrepancyMarker = viewCurrencyMarker(discrepancyCurrency);
   const discrepancyMoney = (minor: number) =>
     `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
 
@@ -5912,8 +5904,7 @@ export function DealCockpitView({
     () => Math.pow(10, safeScaleForCurrency(decisionCurrency, 2)),
     [decisionCurrency]
   );
-  const decisionMarker =
-    locale === "ar" && decisionCurrency === currency.code ? currency.symbol : decisionCurrency;
+  const decisionMarker = viewCurrencyMarker(decisionCurrency);
   /**
    * What the handover confirmation shows — from the COCKPIT's own payload, not
    * from `getEconomics`.
@@ -5935,8 +5926,7 @@ export function DealCockpitView({
    */
   const servedMoney = (minor: number, served: { code: string; scale: number } | null) => {
     if (denominationUnusable || served === null) return null;
-    const servedMarker =
-      locale === "ar" && served.code === currency.code ? currency.symbol : served.code;
+    const servedMarker = viewCurrencyMarker(served.code);
     return `${formatMinorAmount(minor, Math.pow(10, served.scale))} ${servedMarker}`;
   };
   // Withheld outright rather than approximated: a figure the operator cannot
