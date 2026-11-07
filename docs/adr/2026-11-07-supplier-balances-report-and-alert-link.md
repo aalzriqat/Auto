@@ -66,3 +66,30 @@ Tests run through registered Convex functions with real documents and literal mo
 - [WAI tables](https://www.w3.org/WAI/tutorials/tables/), [WCAG 1.4.1](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html), and [ARIA modal dialog](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/): native table semantics, text alongside color, labelled modal focus behavior.
 - [Next App Router navigation](https://nextjs.org/docs/app/api-reference/functions/use-router), [MDN popstate](https://developer.mozilla.org/en-US/docs/Web/API/Window/popstate_event), and [the maintained guard's source and setup](https://github.com/br-schneider/nextjs-nav-guard): same-document history requires a guard beyond `beforeunload`; mount its provider before router effects.
 - [React flushSync](https://react.dev/reference/react-dom/flushSync): rare integration ordering escape hatch; commit editor closure before invoking the external navigation guard.
+
+## Implementer verification handoff — 2026-11-07
+
+Parts 1 and 2 landed locally in `113b05212`; the separate Part 3 starts at `c333d736b`. No push or deployment was performed. The branch incorporates the file-disjoint main update `684ba04d002edfcbee20162bdad1a2fbfc61a7a5` through merge `8a24e7325`. That remained the remote main tip at the final read-back.
+
+Failing-first evidence is reachable in this branch: `db0dec582` has 26 failures against the original main source. `170c8c9d8` has the same variants grouped into ordinary, executable scenario registrations (20 failures), retained by merge `788896577`. No variant assertions were removed. `271203d5e` reproduces two dirty Back failures. The corrected real-router-context fixture at `11e408f58` reproduces two save/candidate failures while both Back checks pass. The navigation fix is `5497ae835`.
+
+Final local checks:
+
+| Check | Observed result |
+| --- | --- |
+| All named supplier/statement/aging/alert/notification tests, one Vitest worker | 11 files, 276 passed |
+| Scenario library, tenant write guard, economic command census, supplier settlement census, pilot door inventory, i18n key coverage | 6 files, 132 passed |
+| Offline Chromium create/edit Back, successful save and accepted candidate navigation | 4 passed, one worker |
+| `pnpm typecheck` | Passed; root config excludes convex, apps, packages, dealer-worker and test-utils as roots (imports may still be followed) |
+| `pnpm typecheck:convex` | Passed; includes convex and test-utils, excludes generated files as roots; does not compile the frontend as a root |
+| ESLint on changed TypeScript/TSX, excluding generated declaration | Passed; final fixture rerun with max-warnings zero corrected the sole missing-dependency warning |
+| Contract baseline identity | 945 matched, 0 stranded; backend finding identity is outside this check |
+| Baseline renewal, reviewed c82890bd, main 684ba04d0, check-evidence | 945 checked, 0 unrenewed/stale/malformed/missing; exactly nine supplier-update entries renewed with committed blob evidence |
+| Role-audit Playwright collection | 162 tests in 5 files; collected, not executed |
+| Frozen offline manifest/lock validation | Passed; only nextjs-nav-guard 1.1.3 added |
+
+The scripts-tree query/guard/census filename inventory found no dedicated global public-query count gate. Existing mutation/caller census guards above ran unchanged; tenant mutation pins remain 571 total / 383 analyzed / 15 denied / 173 exempt. Sixteen SCRUM-761 scenario records bind the new money, permission and screen checks; screen scenarios also carry affected source globs. No review-evidence certificate was written.
+
+The five design attacks above are measured in the public Convex contracts: renamed stored identity; missing/foreign/deleted supplier fallback; same-day settled recovery/cancelled claim; disputed payable with simultaneous receivable; and separate currencies plus Amman midnight/family/page/byte bounds. Expected amounts are literals, with additional exact statement comparisons.
+
+Not verified here: styled EN/AR desktop and phone rendering, signed-in route execution, the complete role audit, independent review seats, CI/Sonar results, Convex platform limits/OCC, deployment or production behavior. The coordinator performs rendered and independent checks. Browser fixtures replace data/auth and the route destination consumer, not the actual guarded Next useRouter. CSV remains a follow-up. Existing notifications retain their original stored links.

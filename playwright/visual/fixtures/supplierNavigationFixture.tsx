@@ -17,7 +17,7 @@ function RouteFixture({ path, setPath }: Readonly<{ path: string; setPath: (path
     const onPopState = () => setPath(location.pathname);
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [mode]);
+  }, [mode, setPath]);
   if (path === "/suppliers") return <p>Supplier list reached</p>;
   if (path === "/org/suppliers/created" || path === "/org/suppliers/existing") return <p>Supplier statement reached</p>;
   const orgId = "org" as Id<"organizations">;
