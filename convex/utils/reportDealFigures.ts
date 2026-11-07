@@ -1,5 +1,5 @@
 import { ConvexError } from "convex/values";
-import type { Doc, Id, TableNames } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { saleCompletedKey } from "../accounting/postingRules";
 import { deriveFinancedOverviewFigures } from "./dealOverviewFigures";
@@ -25,11 +25,11 @@ const MAX_BATCH_CHILD_ROWS = 10000;
 const REPORT_READ_CHUNK_SIZE = 100;
 
 /** Keep each phase below Convex's per-function concurrent I/O limit, preserving ID order. */
-async function readDocumentsInChunks<T extends TableNames>(ctx: QueryCtx, ids: Id<T>[]): Promise<(Doc<T> | null)[]> {
-  const documents: (Doc<T> | null)[] = [];
+async function readInChunks<I, D>(ids: I[], read: (id: I) => Promise<D>): Promise<D[]> {
+  const documents: D[] = [];
   for (let offset = 0; offset < ids.length; offset += REPORT_READ_CHUNK_SIZE) {
     const chunk = ids.slice(offset, offset + REPORT_READ_CHUNK_SIZE);
-    documents.push(...await Promise.all(chunk.map((id) => ctx.db.get(id))));
+    documents.push(...await Promise.all(chunk.map(read)));
   }
   return documents;
 }
@@ -151,8 +151,8 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   if (sales.length === 0) return [];
   const vehicleIds = [...new Set(sales.map((sale) => sale.vehicleId))];
   const appIds = [...new Set(sales.flatMap((sale) => sale.applicationId ? [sale.applicationId] : []))];
-  const vehicles = await readDocumentsInChunks(ctx, vehicleIds);
-  const applications = await readDocumentsInChunks(ctx, appIds);
+  const vehicles = await readInChunks(vehicleIds, (id) => ctx.db.get(id));
+  const applications = await readInChunks(appIds, (id) => ctx.db.get(id));
   const vehicleMap = new Map(vehicles.flatMap((v) => v?.orgId === orgId ? [[v._id, v] as const] : []));
   const appMap = new Map(applications.flatMap((app) => app?.orgId === orgId ? [[app._id, app] as const] : []));
   let remaining = MAX_BATCH_CHILD_ROWS;
@@ -253,7 +253,7 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
 
   const pending = prepared.flatMap((row) => row.pending ? [row] : []);
   const invoiceIds = [...new Set(pending.flatMap((row) => row.base.sale.canonicalReceivableDocumentId ? [row.base.sale.canonicalReceivableDocumentId] : []))];
-  const invoiceRows = await readDocumentsInChunks(ctx, invoiceIds);
+  const invoiceRows = await readInChunks(invoiceIds, (id) => ctx.db.get(id));
   const invoices = new Map(invoiceRows.flatMap((d) => d ? [[d._id, d] as const] : []));
   // Match the existing by_receivable reader even for malformed foreign linked
   // allocations. Scope the one range to the referenced canonical ids, then group.
@@ -268,9 +268,9 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   for (const event of events) if (!firstEvents.has(event.idempotencyKey)) firstEvents.set(event.idempotencyKey, event);
   const pendingKeys = new Set(pending.map((row) => saleCompletedKey(row.base.sale._id)));
   const journalIds = [...new Set([...firstEvents.values()].flatMap((e) => pendingKeys.has(e.idempotencyKey) && e.journalEntryId ? [e.journalEntryId] : []))];
-  const journals = new Map((await readDocumentsInChunks(ctx, journalIds)).flatMap((j) => j ? [[j._id, j] as const] : []));
+  const journals = new Map((await readInChunks(journalIds, (id) => ctx.db.get(id))).flatMap((j) => j ? [[j._id, j] as const] : []));
   const quoteIds = [...new Set(pending.flatMap((row) => row.pending && row.pending.app.quoteModeAtSubmission === undefined ? [row.pending.app.quoteId] : []))];
-  const quotes = new Map((await readDocumentsInChunks(ctx, quoteIds)).flatMap((q) => q?.orgId === orgId ? [[q._id, q] as const] : []));
+  const quotes = new Map((await readInChunks(quoteIds, (id) => ctx.db.get(id))).flatMap((q) => q?.orgId === orgId ? [[q._id, q] as const] : []));
   return prepared.map((row) => {
     let result: ReportDealFigures;
     if (row.kind === "READY") result = row.result;
