@@ -458,6 +458,16 @@ describe("SCRUM-565 narrow reset", () => {
 
   test("owner ruling 2026-11-07 wipes unpaid sale commissions, books start from zero", () => wipesOwedCommissions("sales"));
 
+  test("dry run excludes a soft-deleted completed sale from owed commissions", async () => {
+    const { t, a } = await fixture();
+    await t.run(async ctx => {
+      await document(ctx, a, "sales", { status: "COMPLETED", commissionAmount: 2, isDeleted: true });
+    });
+    expect(await reset(t, a, true)).toMatchObject({
+      preflight: { verdict: "PASS", owedCommissionCounts: { sales: 0 } },
+    });
+  });
+
   test("owner ruling 2026-11-07 wipes historical unpaid opening commissions with missing draft and paid timestamp", () => wipesOwedCommissions("openingCommissionLiabilities"));
 
   test("owner ruling 2026-11-07 keeps over-bound commission evidence UNAVAILABLE with no invented count", async () => {

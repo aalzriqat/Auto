@@ -2,6 +2,7 @@ import type { DatabaseReader, MutationCtx } from "../_generated/server";
 import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import { KNOWN_SURVIVING_REFERENCES } from "./orgResetReferences";
 import { convexToJson } from "convex/values";
+import { isCommissionOwed } from "./commission";
 
 export const RESET_FAMILY_READ_BOUND = 100;
 // Owner 2026-11-07: bound trigger-producing writes, not unrelated retained history.
@@ -60,7 +61,7 @@ function owedCommissionCount(table: FamilyTable, found: Doc<FamilyTable>[]): num
     case "dealCommissionLines":
       return found.filter(row => "amountMinor" in row && (row.amountMinor ?? 0) > 0 && !("paidAt" in row) && !("removedAt" in row)).length;
     case "sales":
-      return found.filter(row => "commissionAmount" in row && row.status === "COMPLETED" && (row.commissionAmount ?? 0) > 0 && !("commissionPaidAt" in row)).length;
+      return found.filter(row => "commissionAmount" in row && isCommissionOwed(row)).length;
     case "openingCommissionLiabilities":
       return found.filter(row => "paidMinor" in row && row.amountMinor > row.paidMinor).length;
     default: return null;
