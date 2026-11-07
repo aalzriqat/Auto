@@ -436,7 +436,7 @@ function SalesReportTab({
                           is shown as a dash and excluded from the totals above,
                           because formatting it as 0 would read as "this sale
                           made nothing", which is a different and false claim. */}
-                      <TableCell className="text-right font-medium text-green-600 dark:text-green-400">
+                      <TableCell className="text-right font-medium text-green-600 dark:text-green-400" dir="ltr">
                         {sale.netProfit === null ? (
                           <span className="text-muted-foreground" title={t("ProfitUnknownForSale")}>
                             —
@@ -447,13 +447,13 @@ function SalesReportTab({
                       </TableCell>
                       {showCommissions && (
                         <>
-                          <TableCell className="text-right">
+                          <TableCell className="text-right" dir="ltr">
                             {sale.commissionsTotal === null ? "—" : rowMoney(sale.commissionsTotal, sale.currency)}
                             {sale.commissionPending && (
                               <span className="block text-xs text-amber-700 dark:text-amber-400">{t("DealCommissionsPendingSale")}</span>
                             )}
                           </TableCell>
-                          <TableCell className="text-right font-medium">
+                          <TableCell className="text-right font-medium" dir="ltr">
                             {sale.netProfitAfterCommissions === null ? "—" : rowMoney(sale.netProfitAfterCommissions, sale.currency)}
                           </TableCell>
                         </>
