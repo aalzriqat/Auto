@@ -1,30 +1,25 @@
-import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { test, expect, type Page } from "@playwright/test";
 
 const ROOT = resolve(__dirname, "../..");
 let bundle: string;
 
-test.beforeAll(async () => {
-  const require = createRequire(__filename);
-  const vitePath = createRequire(require.resolve("vitest/package.json")).resolve("vite");
-  const vite: { build: (config: Record<string, unknown>) => Promise<unknown> } = await import(pathToFileURL(vitePath).href);
-  const hooks = resolve(ROOT, "playwright/visual/fixtures/supplierNavigationHooks.tsx");
-  const built = await vite.build({
-    configFile: false, publicDir: false, logLevel: "error", root: ROOT,
-    define: { "process.env": JSON.stringify({ NODE_ENV: "production" }) },
-    resolve: { alias: [
-      ...["convex/react", "@/hooks/use-permissions", "next/link"].map(find => ({ find, replacement: hooks })),
-      { find: "@", replacement: ROOT },
-    ] },
-    build: { write: false, minify: false, lib: { entry: resolve(ROOT, "playwright/visual/fixtures/supplierNavigationFixture.tsx"), name: "SupplierFixture", formats: ["iife"] } },
-  });
-  const output = Array.isArray(built) ? built[0] : built;
-  if (!output || typeof output !== "object" || !("output" in output) || !Array.isArray(output.output)) throw new Error("Fixture bundle unavailable");
-  const chunk = output.output.find((item: unknown): item is { code: string } => !!item && typeof item === "object" && "code" in item && typeof item.code === "string");
-  if (!chunk) throw new Error("Fixture JavaScript unavailable");
-  bundle = chunk.code;
+test.beforeAll(() => {
+  const directory = mkdtempSync(resolve(tmpdir(), "autoflow-supplier-navigation-"));
+  const fixture = resolve(directory, "fixture.js");
+  // Vite's module graph must not enter the Playwright worker's module loader hooks.
+  try {
+    execFileSync(process.execPath, [resolve(ROOT, "playwright/visual/fixtures/buildSupplierNavigation.ts"), directory], {
+      cwd: ROOT, stdio: "inherit", timeout: 120_000,
+    });
+    bundle = readFileSync(fixture, "utf8");
+  } finally {
+    rmSync(fixture, { force: true });
+    rmdirSync(directory);
+  }
 });
 
 async function openSupplierFixture(page: Page, mode: "create" | "edit") {

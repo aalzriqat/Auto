@@ -6,6 +6,8 @@ import { requireFeature } from "./subscriptions";
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { readSupplierOutstanding, type ObligationRow, type StatementTotal } from "./utils/supplierObligationDue";
 import { readSupplierRegistryPage, SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
+import { inTurn } from "./utils/transactionReadHeadroom";
+import { codeUnitCompare } from "./utils/supplierNames";
 
 /** Read-only projections of the statement, never a second financial balance (SCRUM-929 ADR). */
 const currencyBalance = v.object({
@@ -37,7 +39,8 @@ async function readBalance(ctx: QueryCtx, supplier: Doc<"suppliers">, nowMs: num
   const identity = { supplierId: supplier._id, supplier: supplier.displayName };
   // One unread side makes the combined row unavailable. A missing currency is not evidence of zero on that side.
   if (!payable.complete || !receivable.complete) return { ...identity, complete: false, currencies: [] };
-  const currencies = [...new Set([...payable.totals, ...receivable.totals].map(t => t.currency))].sort();
+  const currencies = [...new Set([...payable.totals, ...receivable.totals].map(t => t.currency))]
+    .sort(codeUnitCompare);
   const amount = (totals: StatementTotal[], currency: string) => totals.find(t => t.currency === currency);
   return {
     ...identity, complete: true,
@@ -78,7 +81,7 @@ export const list = query({
         { cursor: args.cursor ?? null, numItems: 5, maximumBytesRead: 2 * 1024 * 1024 });
       const page: Awaited<ReturnType<typeof readBalance>>[] = [];
       // Shared transaction headroom must be spent in order, never in Promise.all.
-      for (const supplier of suppliers.page) page.push(await readBalance(ctx, supplier, args.nowMs));
+      await inTurn(suppliers.page, async supplier => { page.push(await readBalance(ctx, supplier, args.nowMs)); });
       return {
         page, isDone: suppliers.isDone, continueCursor: suppliers.continueCursor,
         complete: !args.cursor && suppliers.isDone && page.every(row => row.complete),

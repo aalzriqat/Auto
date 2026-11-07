@@ -423,7 +423,7 @@ export async function ownedStoredSupplierId(
 }
 
 /** Registry reads stay in the supplier modules; callers retain their own permission and page budgets. */
-export async function readSupplierRegistryPage(
+export function readSupplierRegistryPage(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   paginationOpts: PaginationOptions,

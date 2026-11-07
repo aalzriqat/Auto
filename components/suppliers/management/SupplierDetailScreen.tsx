@@ -246,17 +246,7 @@ function SupplierEditForm({
       memory.current = null;
       setReason("");
       // The live record reflects the save; measure the next edit against what was just written.
-      setBase({
-        ...base,
-        displayName: args.displayName ?? base.displayName,
-        legalName: args.legalName === undefined ? base.legalName : (args.legalName ?? undefined),
-        contact: args.contact === undefined ? base.contact : (args.contact ?? undefined),
-        taxId: args.taxId === undefined ? base.taxId : (args.taxId ?? undefined),
-        taxJurisdiction: args.taxJurisdiction === undefined ? base.taxJurisdiction : (args.taxJurisdiction ?? undefined),
-        // The server returns the snapshot version and the edit revision it wrote.
-        version: result.version,
-        revision: result.revision,
-      });
+      setBase(supplierAfterUpdate(base, args, result));
       if (aliasState.dirty) setConfirmDiscard(true);
       else onClose();
     } catch (caught) {
@@ -434,14 +424,14 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
         </p>
       )}
       {inactive && (
-        <div role="status" className="rounded-md border border-money-out/30 bg-money-out/5 p-3 text-sm text-money-out">
+        <output aria-live="polite" aria-atomic="true" className="block rounded-md border border-money-out/30 bg-money-out/5 p-3 text-sm text-money-out">
           <p className="font-medium">{translate("SuppliersDeactivatedBanner")}</p>
           {record.deactivatedReason && (
             <p className="text-xs">
               {interpolate(translate("SuppliersDeactivatedReason"), { reason: record.deactivatedReason })}
             </p>
           )}
-        </div>
+        </output>
       )}
       {record.sharedLegalIdentityOf && (
         <p className="text-sm text-muted-foreground">
@@ -493,4 +483,18 @@ export function SupplierDetailScreen({
       </QueryErrorBoundary>
     </div>
   );
+}
+
+/** The new edit baseline is the patch the server accepted, including explicit field clears. */
+function supplierAfterUpdate(base: FullSupplier, args: UpdateArgs, result: Pick<FullSupplier, "version" | "revision">): FullSupplier {
+  return {
+    ...base,
+    displayName: args.displayName ?? base.displayName,
+    legalName: args.legalName === undefined ? base.legalName : (args.legalName ?? undefined),
+    contact: args.contact === undefined ? base.contact : (args.contact ?? undefined),
+    taxId: args.taxId === undefined ? base.taxId : (args.taxId ?? undefined),
+    taxJurisdiction: args.taxJurisdiction === undefined ? base.taxJurisdiction : (args.taxJurisdiction ?? undefined),
+    version: result.version,
+    revision: result.revision,
+  };
 }

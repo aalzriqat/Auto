@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { makeFunctionReference } from "convex/server";
+import { defineSchema, makeFunctionReference } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
@@ -28,10 +28,10 @@ const get = makeFunctionReference<"query", { orgId: Id<"organizations">; supplie
 
 afterEach(() => vi.useRealTimers());
 
-async function seed(tag: string, permissions = ["view:finance", "view:cost_price"], plan: "professional" | "free" = "professional", transactionLimits = false) {
+async function seed(tag: string, permissions = ["view:finance", "view:cost_price"], plan: "professional" | "free" = "professional", transactionLimits = false, schemaValidation = true) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
-  const t = convexTestWithComponents(schema, MODULES, { transactionLimits });
+  const t = convexTestWithComponents(defineSchema(schema.tables, { schemaValidation }), MODULES, { transactionLimits });
   const orgId = await t.run(ctx => ctx.db.insert("organizations", { name: tag, createdAt: NOW }));
   const subscriptionId = await t.run(ctx => ctx.db.insert("subscriptions", { orgId, plan, status: "active", createdAt: NOW, updatedAt: NOW }));
   const userId = await t.run(ctx => ctx.db.insert("users", { clerkId: tag, name: "Reader", email: `${tag}@example.com` }));
@@ -67,6 +67,27 @@ const recovery = (s: Seed, fields: Partial<Extract<Doc<"supplierCostRecoveries">
 const report = (s: Seed, extra = {}) => s.asUser.query(list, { orgId: s.orgId, nowMs: NOW, ...extra });
 
 describe("SCRUM-929 supplier balances", () => {
+  test.each(["list", "get"] as const)("%s refuses a corrupt stored sale reference with a clean error", async query => {
+    const s = await seed(`corrupt-${query}`, undefined, undefined, false, false);
+    // Historical corruption at the storage boundary, not a mock of the reader or its error handler.
+    await payable(s, { saleId: 42 as unknown as Id<"sales"> });
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const result = query === "list" ? report(s) : s.asUser.query(get, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW });
+      await expect(result).rejects.toThrow("Unable to load supplier balances. Please try again later.");
+      expect(logged).toHaveBeenCalledWith("Supplier balances read failed", expect.any(Error));
+    } finally { logged.mockRestore(); }
+  });
+
+  test("currencies retain code-unit order and separate their balances", async () => {
+    const s = await seed("currency-order");
+    await payable(s, { currency: "USD", amountDue: 2 });
+    await payable(s, { currency: "JOD", amountDue: 3 });
+    await receivable(s, { currency: "EUR", amountDue: 4 });
+    expect((await report(s)).page[0]?.currencies.map(row => [row.currency, row.payableMinor, row.receivableMinor]))
+      .toEqual([["EUR", 0, 400], ["JOD", 3000, 0], ["USD", 200, 0]]);
+  });
+
   test("each supplier/currency equals the statement to the minor unit, including dispute and recovery", async () => {
     const s = await seed("equal");
     await payable(s, { amountDue: 9500.001, amountPaid: 4000, status: "DISPUTED" });
@@ -179,6 +200,15 @@ describe("SCRUM-929 supplier balances", () => {
 });
 
 describe("SCRUM-929 alert destinations and confidentiality", () => {
+  test("an unexpected supplier identity read error aborts the worker without notifications or idempotency writes", async () => {
+    const s = await seed("corrupt-alert", undefined, undefined, false, false);
+    await payable(s, { paymentDueDate: NOW, supplierId: 42 as unknown as Id<"suppliers"> });
+    await expect(s.t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, now: NOW, kind: "PAYABLE" }))
+      .rejects.toThrow(/expected string but got 'number': 42/);
+    expect(await s.t.run(ctx => ctx.db.query("notifications").collect())).toEqual([]);
+    expect(await s.t.run(ctx => ctx.db.query("commandIdempotency").collect())).toEqual([]);
+  });
+
   test("stored supplier identity targets its statement for every obligation family, once per step", async () => {
     for (const kind of ["PAYABLE", "RECEIVABLE", "RECOVERY"] as const) {
     const s = await seed(`alert${kind}`);

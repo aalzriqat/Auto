@@ -15,6 +15,7 @@ import { alertStepFor, alertTypeFor } from "./utils/supplierDueAlertPlan";
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 import { OBLIGATION_PAGE_MAX, readObligationPage, type ObligationKind, type ObligationRow } from "./utils/supplierObligationDue";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
+import { inTurn } from "./utils/transactionReadHeadroom";
 
 /**
  * SCRUM-869 S8 - in-app alerts for supplier obligations coming due or overdue.
@@ -225,7 +226,7 @@ export const processOrgSupplierDueAlerts = internalMutation({
       },
     });
     const planned: PlannedAlert[] = [];
-    for (const row of page.rows) {
+    await inTurn(page.rows, async row => {
       const alert = planAlert(row, args.orgId);
       if (alert) {
         const supplier = await alertSupplier(ctx, args.orgId, row);
@@ -235,7 +236,7 @@ export const processOrgSupplierDueAlerts = internalMutation({
         }
         planned.push(alert);
       }
-    }
+    });
 
     let alerted = 0;
     let moreRecipients = false;
