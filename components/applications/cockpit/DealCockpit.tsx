@@ -141,6 +141,7 @@ import {
   type AppraisalProviderType,
 } from "./RecordAppraisalDialog";
 import { usePermissions } from "@/hooks/use-permissions";
+import { APPLICATION_STATUS_LABEL } from "@/components/deals/dealRows";
 import { DealPendingDepositRequests } from "@/components/deposits/DepositRequests";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { SETTLED_FINANCE_STATUSES } from "@/convex/utils/financeStatuses";
@@ -342,13 +343,7 @@ const STATUS_LABEL: Record<string, string> = {
   /** CASH only — `sales.status`, a different enum from the application's. */
   PENDING: "SaleStatusPending",
   COMPLETED: "SaleStatusCompleted",
-  DRAFT: "Draft",
-  PENDING_DOCS: "PendingDocs",
-  UNDER_REVIEW: "UnderReview",
-  APPROVED: "Approved",
-  REJECTED: "Rejected",
-  CLOSED: "Closed",
-  CANCELLED: "Cancelled",
+  ...APPLICATION_STATUS_LABEL,
 };
 
 /**
@@ -415,34 +410,7 @@ function profitLineLabel(key: string, profit: HeadlineProfit): string {
  * inheriting whichever branch happened to be the `else`.
  */
 const PROFIT_BLOCKED_REASON: Record<
-  "NoApprovedPurchaseAmount"
-  | "NoSupplierSettlement"
-  | "NoDealerContribution"
-  /** STOCK only: the dealership's own car carries no cost basis to measure against. */
-  | "NoVehicleCost"
-  /** SOURCED only: the dealership's preparation spend on the supplier's car cannot be stated. */
-  | "PreparationExpensesUnreadable"
-  | "VehicleCostBasisUnreadable"
-  | "CommissionsUnreadable"
-  | "CommissionsReadBoundExceeded"
-  | "CommissionsPending"
-  | "CostAccessRequired"
-  | "CommissionAccessRequired"
-  | "ManagementNetUnavailable"
-  /** A dealer-borne cost line is in another currency: the cost operand would be partial. */
-  | "ExpensesMixedDenomination"
-  /** A cost line's amount is not a safe non-negative integer, or the lines overflow: the cost operand is not a figure. */
-  | "ExpensesUnreadable"
-  /** F-PNTR-1: which recorded cost is the finance company's execution fee is unclear, or the frozen total disagrees with it. */
-  | "ExecutionFeeUnclassified"
-  | "CorruptInput"
-  | "DealCancelled"
-  /** CASH only: `dealershipMargin === null`, which is UNKNOWN and never zero. */
-  | "UnknownMargin"
-  /** CASH only: a draft has posted no journal, so nothing is postable yet. */
-  | "SaleNotCompleted"
-  /** Financed + DIRECT with no application: the recorded margin cannot be trusted. */
-  | "FinancedDirectUnverified",
+  Extract<HeadlineProfit, { available: false }>["reason"],
   string
 > = {
   NoApprovedPurchaseAmount: "ProfitNeedsApprovedPurchase",

@@ -60,7 +60,7 @@ export type ApplicationQueueFacts = Pick<
   "status" | "companyId" | "disbursedAt" | "supplierSettlementRoute" | "hasPendingDepositResolution"
 >;
 
-const APPLICATION_STATUS_LABEL: Record<string, string> = {
+export const APPLICATION_STATUS_LABEL: Record<string, string> = {
   DRAFT: "Draft",
   PENDING_DOCS: "PendingDocs",
   UNDER_REVIEW: "UnderReview",
