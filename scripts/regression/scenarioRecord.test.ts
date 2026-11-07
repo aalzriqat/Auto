@@ -368,6 +368,8 @@ describe("review round 2 (Codex seat, PR #500): failing-first regressions", () =
     expect(run("playwright/scenarios/example.spec.ts")).toEqual([]);
     expect(run("playwright/visual/example.visual.spec.ts")).toEqual([]);
     expect(run("playwright/opening-proof/unknown.spec.ts")).toContain("impl");
+    expect(run("playwright/role-audit/unknown.spec.ts")).toContain("impl");
+    expect(run("playwright/role-audit/readiness-control.spec.ts")).toEqual([]);
     expect(run("playwright/unconfigured/opening-onboarding.spec.ts")).toContain("impl");
     expect(run("convex/example.test.ts")).toEqual([]);
   });
