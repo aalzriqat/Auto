@@ -11,6 +11,7 @@ import { USER_AUTH_FILE, authenticatedConvexClient, testDataSuffix } from "../ut
 import { newContainedContext } from "../containedContext";
 import { probe, TENANT_REFUSAL } from "../../scripts/intelligence/browserSwarmBoundaryOracle";
 import { dismissAuditNavigation, requireReadyScreen } from "./readiness";
+import { scrollAuditContent } from "./scroll";
 import { SCREEN_AUDIT_ROUTES as routes, ROLE_ROUTE_GUARDS as routePermissions, ROLE_ROUTE_ANY_GUARDS as routeAnyPermissions, auditDestination } from "../fixtures/screenAuditRoutes";
 import { servedDeployments } from "../scenarios/formExplorer/attestedPreview";
 
@@ -103,6 +104,9 @@ for (const locale of ["en", "ar"] as const) {
             (routeAnyPermissions[destination] === undefined || routeAnyPermissions[destination].some((permission) => membership.permissions.includes(permission)));
         const denied = page.getByRole("heading", { name: locale === "ar" ? "الوصول غير مسموح" : "Access Not Allowed", exact: true });
         if (allowed) {
+          await expect(page).toHaveURL((url) => url.pathname === expectedPath);
+          await expect(page.locator("main")).toBeVisible();
+          await page.locator("main").evaluate(scrollAuditContent);
           await requireReadyScreen(page, 15_000, expectedPath);
           await expect(denied).toHaveCount(0);
           await expect(page.locator("main")).toBeVisible();

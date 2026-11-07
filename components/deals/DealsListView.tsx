@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode, type RefCallback } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode, type RefCallback } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { AlertTriangle, Banknote, CarFront, ChevronRight, Lock, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -443,10 +444,33 @@ type RowProps = Readonly<{
   showNetProfit: boolean;
 }>;
 
+type PresentationProps = Omit<RowProps, "formatMinor"> & { facts: RowFacts };
+
+/** One read and one latched near state for both responsive presentations. */
+function DealPresentations({ tableTarget, ...props }: RowProps & { tableTarget: HTMLTableRowElement }) {
+  const [ref, near] = useNearViewport<Element>();
+  useEffect(() => ref(tableTarget), [ref, tableTarget]);
+  const facts = useRowFacts(props.row, near, props.formatMinor);
+  return (
+    <>
+      <DealCard {...props} facts={facts} ref={ref} />
+      {createPortal(<DealTableCells {...props} facts={facts} />, tableTarget)}
+    </>
+  );
+}
+
+/** Ordered DOM slots keep table order stable when filtering or live sorting changes. */
+function DealTableSlot({ row, onTarget }: Readonly<{
+  row: DealRow;
+  onTarget: (identity: string, node: HTMLTableRowElement | null) => void;
+}>) {
+  const identity = `${row.href}:${row.key}`;
+  const ref = useCallback((node: HTMLTableRowElement | null) => onTarget(identity, node), [identity, onTarget]);
+  return <TableRow ref={ref} data-testid={`deal-row-${row.key}`} className="group relative focus-within:bg-muted/50" />;
+}
+
 /** A phone card: the car first, then who and how, the step, and the two figures in a footer. */
-function DealCard({ row, t, locale, formatMinor, showNetProfit }: RowProps) {
-  const [ref, near] = useNearViewport<HTMLLIElement>();
-  const facts = useRowFacts(row, near, formatMinor);
+function DealCard({ row, t, locale, showNetProfit, facts, ref }: PresentationProps & { ref: RefCallback<Element> }) {
   return (
     <li ref={ref} data-testid={`deal-card-${row.key}`}>
       <Link
@@ -511,11 +535,9 @@ function DealCard({ row, t, locale, formatMinor, showNetProfit }: RowProps) {
  * status — so a tablet or a desktop with the sidebar open never wraps a cell
  * or scrolls the table. The whole row opens the deal through its one link.
  */
-function DealTableRow({ row, t, locale, formatMinor, showNetProfit }: RowProps) {
-  const [ref, near] = useNearViewport<HTMLTableRowElement>();
-  const facts = useRowFacts(row, near, formatMinor);
+function DealTableCells({ row, t, locale, showNetProfit, facts }: PresentationProps) {
   return (
-    <TableRow ref={ref} data-testid={`deal-row-${row.key}`} className="group relative focus-within:bg-muted/50">
+    <>
       <TableCell className="py-2.5">
         <div className="flex items-center gap-2.5">
           <VehicleThumb kind={row.kind} photoUrl={facts.photoUrl} className="h-9 w-12" />
@@ -587,7 +609,7 @@ function DealTableRow({ row, t, locale, formatMinor, showNetProfit }: RowProps) 
           <ChevronRight className="h-4 w-4 rtl:-scale-x-100" aria-hidden />
         </Link>
       </TableCell>
-    </TableRow>
+    </>
   );
 }
 
@@ -630,6 +652,15 @@ export function DealsListView({
   const [reason, setReason] = useState<DealReason | null>(null);
   const [kind, setKind] = useState<DealKind | null>(null);
   const [search, setSearch] = useState("");
+  const [tableTargets, setTableTargets] = useState<ReadonlyMap<string, HTMLTableRowElement>>(() => new Map());
+  const onTableTarget = useCallback((identity: string, node: HTMLTableRowElement | null) => {
+    setTableTargets((current) => {
+      const next = new Map(current);
+      if (node) next.set(identity, node);
+      else next.delete(identity);
+      return next;
+    });
+  }, []);
 
   const loaded = useMemo(() => rows ?? [], [rows]);
   const counts = useMemo(
@@ -801,11 +832,15 @@ export function DealsListView({
           <>
             {/* Cards on a phone, a table above it: the same rows, one source. */}
             <ul className="divide-y @3xl:hidden" data-testid="deals-cards">
-              {visible.map((row) => (
-                <RowFiguresBoundary key={`${row.href}:${row.key}`}>
-                  <DealCard row={row} {...rowProps} />
-                </RowFiguresBoundary>
-              ))}
+              {visible.map((row) => {
+                const identity = `${row.href}:${row.key}`;
+                const tableTarget = tableTargets.get(identity);
+                return tableTarget ? (
+                  <RowFiguresBoundary key={identity}>
+                    <DealPresentations row={row} {...rowProps} tableTarget={tableTarget} />
+                  </RowFiguresBoundary>
+                ) : null;
+              })}
             </ul>
             <div className="hidden @3xl:block">
               <Table>
@@ -836,9 +871,7 @@ export function DealsListView({
                 </TableHeader>
                 <TableBody>
                   {visible.map((row) => (
-                    <RowFiguresBoundary key={`${row.href}:${row.key}`}>
-                      <DealTableRow row={row} {...rowProps} />
-                    </RowFiguresBoundary>
+                    <DealTableSlot key={`${row.href}:${row.key}`} row={row} onTarget={onTableTarget} />
                   ))}
                 </TableBody>
               </Table>
