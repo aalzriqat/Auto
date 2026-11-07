@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, test, vi } from "vitest";
-import { scrollAuditContent } from "./scroll";
+// Kept out of playwright/role-audit: that is a Playwright testDir, and Playwright would load this vitest file and abort the audit run.
+import { scrollAuditContent } from "../role-audit/scroll";
 
 afterEach(() => {
   document.body.replaceChildren();
