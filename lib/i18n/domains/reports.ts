@@ -32,6 +32,10 @@ export const reportsEn = {
   TotalCosts: "Total Costs",
   TotalCost: "Total Cost",
   NetProfit: "Net Profit",
+  ReportManagementNet: "Net profit (after commissions)",
+  ReportUpdateRequired: "A report update is required before deal-page profit can be shown. These figures are unavailable until the backend update is deployed.",
+  ReportDealCosts: "Deal costs and reconciliation",
+  ReportDealFiguresHint: "Profit matches the deal page and includes commissions. Revenue is recognized dealership revenue. Costs and reconciliation bridge that revenue to net profit, including fees and showroom expenses. Supplier car prices are deal volume, not dealership revenue.",
   TotalExpenses: "Total Expenses",
   TotalLeads: "Total Leads",
   WonLeads: "Won Leads",
@@ -75,9 +79,9 @@ export const reportsEn = {
   OperationalReportAllPosted: "Every expense in this period has posted to the ledger as a P&L expense, so this report and the Income Statement agree.",
   ResolveUnpostedEntries: "Resolve unposted entries",
   ProfitUnknownForSale:
-    "This sale was financed and settled directly with the supplier, and the amount the finance company actually paid him was not recorded on it, so what the dealership earned cannot be worked out.",
+    "The deal's net profit is unavailable. Check its fee, vehicle-cost and commission evidence or your access permissions on the deal page.",
   ProfitUnknownNotice:
-    "{count} sale(s) are excluded from revenue and profit above because what they earned could not be established. Those totals are therefore a minimum, not the full picture.",
+    "{count} sale(s) are excluded from revenue, costs and net profit because a complete figure in the report currency is unavailable. Totals cover the included rows only.",
   // SCRUM-902: shown instead of the cost-bearing reports to a role that has view:reports but not view:cost_price.
   ReportsCostAccessRequired:
     "This report shows what each car cost and what it earned. Your role needs cost-price access as well as report access to see it. Ask an administrator to update your role.",
@@ -141,6 +145,10 @@ export const reportsAr = {
   TotalCosts: "إجمالي التكاليف",
   TotalCost: "إجمالي التكلفة",
   NetProfit: "صافي الربح",
+  ReportManagementNet: "صافي الربح (بعد العمولات)",
+  ReportUpdateRequired: "يلزم تحديث التقرير قبل عرض ربح صفحة الصفقة. هذه الأرقام غير متاحة حتى نشر تحديث الخادم.",
+  ReportDealCosts: "تكاليف الصفقة وفروق المطابقة",
+  ReportDealFiguresHint: "يتطابق الربح مع صفحة الصفقة ويشمل العمولات. الإيرادات هي إيرادات المعرض المعترف بها. تربط التكاليف وفروق المطابقة هذه الإيرادات بصافي الربح، وتشمل الرسوم ومصروفات المعرض. أسعار سيارات الموردين تمثل حجم الصفقات وليست إيرادات المعرض.",
   TotalExpenses: "إجمالي المصروفات",
   TotalLeads: "إجمالي العملاء المحتملين",
   WonLeads: "العملاء المحتملون الذين تحولوا",
@@ -182,9 +190,9 @@ export const reportsAr = {
   OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ كمصروف في قائمة الدخل، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
   ResolveUnpostedEntries: "معالجة القيود غير المُرحّلة",
   ProfitUnknownForSale:
-    "هذه المركبة بيعت بالتمويل وتمت تسوية ثمنها مع المورّد مباشرة، ولم يُسجَّل عليها المبلغ الذي دفعته شركة التمويل له فعلياً، لذلك لا يمكن احتساب ما حققه المعرض منها.",
+    "صافي ربح الصفقة غير متاح. راجع مستندات الرسوم وتكلفة المركبة والعمولات أو صلاحيات العرض في صفحة الصفقة.",
   ProfitUnknownNotice:
-    "تم استثناء {count} عملية بيع من الإيرادات والأرباح أعلاه لتعذُّر تحديد ما حققته. لذلك فإن هذه الإجماليات تمثّل الحد الأدنى وليست الصورة الكاملة.",
+    "تم استثناء {count} عملية بيع من الإيرادات والتكاليف وصافي الربح لعدم توفر رقم مكتمل بعملة التقرير. تشمل الإجماليات الصفوف المحتسبة فقط.",
   ReportsCostAccessRequired:
     "يعرض هذا التقرير تكلفة كل مركبة وما حققته من ربح. يحتاج دورك إلى صلاحية عرض سعر التكلفة إضافةً إلى صلاحية التقارير. اطلب من المسؤول تحديث دورك.",
   RegisterCostRowsWithheld:

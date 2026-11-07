@@ -649,7 +649,7 @@ describe("a recorded margin the reader cannot trust", () => {
    * that, which is why folding them made the margin counter claim an exclusion
    * it never made.
    */
-  test("an erased entitlement makes the supplier total a floor without touching profit", async () => {
+  test("an erased entitlement and deleted vehicle preserve supplier exclusions and withhold management net", async () => {
     const s = await seedDealer("reportEntitlementGone");
     const saleId = await sellConsigned(s, "VINENT1");
     /**
@@ -692,9 +692,11 @@ describe("a recorded margin the reader cannot trust", () => {
     });
     if (!report) throw new Error("report withheld");
 
-    // The margin survived, so the earning is known and belongs in the totals.
-    expect(report.totalProfit).toBe(MARGIN);
-    expect(report.unknownMarginSaleCount).toBe(0);
+    // SCRUM-928: a frozen margin is insufficient for the deal page's management net without its preparation evidence.
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.sales[0].netProfit).toBeNull();
+    expect(report.sales[0].profitUnavailableReason).toBe("PreparationExpensesUnreadable");
 
     // The entitlement did not, so the supplier total excludes it and says so.
     expect(report.unknownSupplierSettlementSaleCount).toBe(1);
@@ -842,9 +844,13 @@ describe("historical and new agent sales report identically", () => {
     });
     if (!freshReport) throw new Error("report withheld");
 
-    expect(legacyReport.totalRevenue).toBe(freshReport.totalRevenue);
+    // The legacy row never recorded a commission decision. Unknown pay cannot be silently zeroed.
+    expect(legacyReport.totalRevenue).toBe(0);
+    expect(freshReport.totalRevenue).toBe(3000);
     expect(legacyReport.totalCost).toBe(freshReport.totalCost);
-    expect(legacyReport.totalProfit).toBe(freshReport.totalProfit);
+    expect(legacyReport.totalProfit).toBe(0);
+    expect(legacyReport.sales[0].profitUnavailableReason).toBe("CommissionsPending");
+    expect(freshReport.totalProfit).toBe(3000);
     expect(legacyReport.totalGrossTransactionValue).toBe(freshReport.totalGrossTransactionValue);
     expect(legacyReport.totalSupplierSettlement).toBe(freshReport.totalSupplierSettlement);
   });
@@ -1114,7 +1120,10 @@ describe("historical consigned sales after the migration", () => {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });
 
-    expect(sales.totalRevenue).toBe(MARGIN);
+    // SCRUM-928: the migration does not decide the legacy salesperson commission.
+    expect(sales.totalRevenue).toBe(0);
+    expect(sales.unknownMarginSaleCount).toBe(1);
+    expect(sales.sales[0].profitUnavailableReason).toBe("CommissionsPending");
     expect(pl.totalRevenue).toBe(MARGIN);
     expect(dash.salesVolumeThisMonth).toBe(MARGIN);
 

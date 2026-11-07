@@ -28,8 +28,28 @@ supplier-evidence, vehicle-cost and commission authorities instead of adding
 report-specific arithmetic. Batch child rows by tenant, group by their actual
 application, sale or vehicle id, and retain their order and completeness rules.
 Distinct referenced document ids are fetched once. A bounded batch that cannot
-be read completely refuses with a clean narrow-range error; it never serves a
+be read completely refuses with a clean read-limit error; it never serves a
 truncated set as complete. A 366-day date range is not itself a row bound.
+
+The batch limits are 800 completed sales and 10,000 child rows shared across
+the indexed child reads. Expenses, work orders, commissions and supplier rows
+are tenant batches. Fees use the selected application-id envelope, matching
+the deal page's application-keyed input even when a fee has a malformed tenant
+stamp. Settlement-sensitive legacy rows additionally use an invoice-id envelope
+for allocations, and the tenant's sale-completed event prefix. Intervening rows
+are discarded before derivation, but still consume the read budget. Thus other
+retained history, including intervening foreign-parent rows in the two global
+envelopes, can refuse a report. Narrowing dates does not guarantee recovery.
+This is an explicit availability tradeoff to preserve the existing authorities
+and avoid per-sale child queries without new stored state or indexes. No figure
+from an intervening parent is served. Actual cloud read headroom is unverified.
+
+Settlement is loaded only when deriving both settled and unsettled versions
+changes the amount or refusal. Settlement can switch legacy forecast expenses
+to actuals. Both versions call the same pure derivation. The selected result
+follows the existing supplier, financier and canonical-invoice proof. Keep the
+cockpit's SOURCED fee-completion rule and the overview's STOCK fee-completion
+rule distinct, as they are today.
 
 ## Column and card meaning
 
@@ -41,9 +61,10 @@ The sale-price column uses the deal page's legal-invoice, submitted-quotation,
 target-amount precedence. Cash uses the sale cockpit's management net.
 
 Revenue retains the existing recognized-revenue convention: consigned gross is
-deal volume, not dealership turnover. Costs become all deductions between that
-recognized revenue and management net. Label the card "Total deal costs" and
-explain that fees, showroom expenses and commissions are included. Per-row costs
+deal volume, not dealership turnover. The difference between that recognized
+revenue and management net is labelled "Deal costs and reconciliation". It
+includes fees, showroom expenses and commissions, and can also bridge a legacy
+revenue basis to the application basis. It is not labelled as actual spending. Per-row costs
 and revenue join the totals only when both revenue and management net are
 complete and in the organization currency. Thus the same included rows satisfy
 revenue minus costs equals net profit. Count and disclose excluded rows. Keep
@@ -53,6 +74,11 @@ Do not label these management totals as the GL income statement.
 The salesperson performance tab publishes the same per-deal profit and will
 sum the same derived rows. Inventory, expenses, lead conversion, dashboard and
 legacy P&L are part 2; their different measures need separate owner decisions.
+
+The response carries `DEAL_MANAGEMENT_NET_V1`. A frontend running against the
+previous backend withholds the Sales and Performance tables with an explicit
+update-required message, rather than mislabelling accounting margin or
+formatting a row without its new currency field. Loading also states no number.
 
 ## Impact map and design risks
 
@@ -78,6 +104,49 @@ THROUGH_SHOWROOM payable is confused with a DIRECT supplier claim; a cash sale
 without an application uses financed arithmetic; and corrupt or foreign fee
 evidence becomes zero. Permission, cancelled-sale and repeated-vehicle fixtures
 also exercise the public readers.
+
+## Local evidence and remaining certification
+
+The first public-query red run at `173185b2d` was 9 failed, 1 passed. The expanded
+tests against committed snapshot `442fa7d18` were 20 failed, 14 passed. The
+implementation then passed all 34 expanded backend, card and real-page jsdom
+checks. Expectations are literal amounts from the finding and worked fixtures.
+
+| Self-attack | Public check and result |
+| --- | --- |
+| A fee changes after completion | Late actual 500,000 yields 975,000 minor on both readers. |
+| Deleted or supplier-borne expenses get deducted | Deleted 700 and supplier-borne 900 stay excluded; removing the live 300 expense changes both nets to 1,323,700. |
+| Supplier routes or repeated vehicles get mixed | THROUGH_SHOWROOM uses this sale's payable; cancelled and deleted siblings on the same vehicle do not add rows or costs. |
+| Cash is accidentally treated as financed | No application; both report and cash cockpit yield 1,790,000 minor. |
+| Unknown or mixed-currency fees become zero | NaN yields ExpensesUnreadable; USD actual on JOD deal yields ExpensesMixedDenomination on both readers. |
+
+Design review additionally caught that settlement can change the amount. Posted
+canonical-invoice fixtures prove legacy forecast 600,000 versus actual 451,300:
+unsettled net is 875,000; settled net is 1,023,700. Application-linked malformed
+fee stamps, finance withholding and corrupt strongest price documents also have
+public-query controls. A frontend legacy-payload reproduction failed with the
+missing-currency `.trim()` crash before the figure-basis gate; it passes with
+the explicit update-required state.
+
+The repeated independent-derivation mistake affected profit and customer sale
+price. The `correct` skill's architecture-first remedy is the shared pure
+derivation and public-seam tests, rather than another prose-only rule. The
+applications source pin is renewed for this explicitly requested extraction,
+and a new full-file pin covers the moved decisions in
+`utils/dealSettlementFigures.ts`. Both byte length and hash assertions remain.
+These pins track change control; they do not claim independent certification.
+
+The existing suites' accounting assertions remain. Report assertions that
+expected pre-commission margin are updated to management net. Missing commission
+decisions remain unavailable, and a missing vehicle cannot invent preparation
+evidence. Dashboard and legacy P&L assertions keep their original basis for part 2.
+
+Independent Opus and Codex seats, CI/Sonar, the three live bug hunters, rendered
+desktop/mobile layout checks, actual CSV download, real-backend limits/OCC and
+production parity are not certified by these local runs. No dev server, watcher,
+Convex deployment or production-data read is part of this lane. Deploy the
+frontend's compatibility gate before the new backend contract, through the
+existing release process. The local work is committed without pushing.
 
 ## Sources
 

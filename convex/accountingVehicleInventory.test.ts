@@ -2390,7 +2390,9 @@ describe("Review issue #4 — a post-sale repair can never retroactively join th
     });
     if (!report) throw new Error("report withheld");
     const saleRow = report.sales.find((s) => s.vehicleId === vehicleId);
-    expect(saleRow?.totalCost).toBe(10000);
+    expect(saleRow?.vehicleCost).toBe(10000);
+    // SCRUM-928: management costs also include the 400 repair and 500 commission.
+    expect(saleRow?.totalCost).toBe(10900);
   });
 });
 

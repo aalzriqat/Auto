@@ -4286,7 +4286,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
    * contradiction: the home KPI said 5,000 and the P&L said 3,000 for the same
    * deal, in the same period.
    */
-  test("the dashboard and the sales report state the same profit for one deal", async () => {
+  test("the report uses deal-page management net while the dashboard retains accounting margin", async () => {
     const { s } = await financedDirectSale("s30DashAgrees", 18_000);
 
     const report = await s.asUser.query(api.reports.getSalesAndProfitReport, {
@@ -4305,7 +4305,8 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     const dashRevenue = dash.salesTrend.reduce((sum, p) => sum + p.Revenue, 0);
 
     // The premise, asserted so this cannot pass by both being wrong together.
-    expect(report.totalProfit).toBe(3_000);
+    expect(report.totalProfit).toBe(2_700);
+    expect(report.sales[0].netProfitAfterCommissions).toBe(2_700);
     expect(dashProfit).toBe(3_000);
     expect(dashRevenue).toBe(3_000);
     // Specifically not the commercial spread, which is what it published.
@@ -4661,7 +4662,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     expect(sale.commissionAmount).toBe(500);
   });
 
-  test("the sales report withholds the profit it cannot establish instead of publishing 5,000", async () => {
+  test("the report excludes unknown revenue while its row matches the deal-page net backed by the live claim", async () => {
     const { s, saleId } = await financedDirectSale("s30ReportErased", 18_000);
     await s.t.run(async (ctx) => {
       await ctx.db.patch(saleId, { consignedMarginMinor: undefined, financedNetRevenue: undefined });
@@ -4676,7 +4677,8 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     const row = report.sales.find((r: { _id: string }) => r._id === saleId)!;
     // UNKNOWN, and distinguishable from zero — a sale that earned nothing and a
     // sale whose earning is unknown are different answers to the owner.
-    expect(row.netProfit).toBeNull();
+    expect(row.netProfit).toBe(2_700);
+    expect(row.netProfitAfterCommissions).toBe(2_700);
     expect(row.recognizedRevenue).toBeNull();
     expect(row.netProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
 
@@ -4718,7 +4720,8 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       ...range(),
     });
     if (!report) throw new Error("report withheld");
-    expect(report.totalProfit).toBe(3_000);
+    // SCRUM-928: the deal page deducts the 300 commission.
+    expect(report.totalProfit).toBe(2_700);
     expect(report.unknownMarginSaleCount).toBe(0);
   });
 });
@@ -6440,7 +6443,7 @@ describe("one recognized-earning rule, asked identically by every surface", () =
    * the REPORT discard the margin the sale froze and publish the whole ticket
    * as the dealership's revenue and profit.
    */
-  test("a sale whose vehicle row is gone keeps the earning the sale itself recorded", async () => {
+  test("a sale whose vehicle row is gone withholds management net rather than inventing preparation evidence", async () => {
     const { s, saleId } = await financedDirectDeal("s30NoVehicle");
 
     await s.t.run(async (ctx) => {
@@ -6455,8 +6458,10 @@ describe("one recognized-earning rule, asked identically by every surface", () =
     if (!report) throw new Error("report withheld");
 
     // 3,000 is what the GL, the supplier claim and the cockpit recognized.
-    expect(report.totalRevenue).toBe(3_000);
-    expect(report.totalProfit).toBe(3_000);
+    expect(report.totalRevenue).toBe(0);
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.sales[0].profitUnavailableReason).toBe("PreparationExpensesUnreadable");
     // Specifically not the whole ticket against a cost basis that vanished
     // along with the vehicle.
     expect(report.totalRevenue).not.toBe(20_000);

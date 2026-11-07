@@ -1,0 +1,72 @@
+{
+  "id": "sales-report-matches-cash-management-net",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-local-public-seam",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "financingType": "CASH",
+        "application": "absent"
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "sales.dealCockpit",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfitMinor",
+      "value": 1790000
+    },
+    {
+      "observable": "row.matchesDeal",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.matchesDeal.test.ts",
+    "testName": "cash without an application uses the cash cockpit management net"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "173185b2d12a767be6b91bb6c46f829530eccf94"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/sales.ts",
+    "convex/applications.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/utils/cashDealFigures.ts",
+    "convex/utils/dealProfitReads.ts",
+    "convex/utils/dealFinancialSummary.ts"
+  ],
+  "fingerprint": "2265e79af061fb81625a0c47f1ea9ad269d9360ea60eaf42552110806af63579"
+}

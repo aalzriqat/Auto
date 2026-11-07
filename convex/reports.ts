@@ -1,3 +1,4 @@
+import { loadReportDealFigures, reportContributionFor, MAX_REPORT_SALES } from "./utils/reportDealFigures";
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
@@ -10,7 +11,6 @@ import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
   amortizationInfoFromScheduleProgress,
-  recognizedAmountInRange,
   recognizedAmountInRangeWithReversal,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
@@ -20,62 +20,11 @@ import {
   queuedEntryCountsInRange,
   type RecognitionState,
 } from "./utils/prepaidRecognitionEvents";
-import {
-  saleEconomics,
-  recordedConsignedMargin,
-  recordedFinancedConsideration,
-  recordedFinancedNetRevenue,
-  recordedSupplierEntitlement,
-  recordedSupplierGrossReceipt,
-} from "./utils/vehicleOwnership";
-import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+
 import { isShowroomBorne } from "./utils/costBearer";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./utils/money";
-import { dealCommissionTotalsBySale } from "./dealCommissions";
-import { netProfitAfterCommissionsMinor } from "./utils/dealCommissionLines";
+import { fromMinorUnits } from "./utils/money";
 import { isSystemOwnerRole } from "./utils/permissions";
-import { verifiedFinancingApplicationSaleIds } from "./utils/financingProvenance";
-
-/*
- * `recordedConsignedMargin` and `recordedSupplierEntitlement` moved to
- * `utils/vehicleOwnership.ts` for SCRUM-29, unchanged, and are imported above.
- * The deal screen reads the same frozen figures this report reads, so opening a
- * deal cannot show a different profit from the one the report totalled. Their
- * full reasoning — the raw-JSON-editor threat model, why the READER guards a
- * value the write path cannot produce, and why `NaN` is the dangerous case —
- * travelled with them.
- */
-
-/**
- * A sale's employee commissions and the margin after them, for the reports
- * (SCRUM-434). DISPLAY ONLY: `netProfit` / `totalProfit` keep their meaning and
- * these are additional fields. All major units, like the rest of the report.
- *
- * `netProfitAfterCommissions` is null while the margin is unknown OR the
- * salesperson's commission is undecided: unknown is never zero.
- */
-type CommissionView = {
-  commissionsTotal: number | null;
-  commissionPending: boolean;
-  netProfitAfterCommissions: number | null;
-};
-
-function commissionViewFor(
-  totals: { totalMinor: number | null; salePending: boolean } | undefined,
-  marginMajor: number | null,
-  currency: string
-): CommissionView {
-  if (!totals) return { commissionsTotal: null, commissionPending: false, netProfitAfterCommissions: null };
-  const marginMinor =
-    marginMajor === null ? null : (toMinorSameCurrencyOrUndefined(marginMajor, currency, currency) ?? null);
-  const netMinor = totals.salePending ? null : netProfitAfterCommissionsMinor(marginMinor, totals.totalMinor);
-  return {
-    commissionsTotal: totals.totalMinor === null ? null : fromMinorUnits(totals.totalMinor, currency),
-    commissionPending: totals.salePending,
-    netProfitAfterCommissions: netMinor === null ? null : fromMinorUnits(netMinor, currency),
-  };
-}
 
 /** Longest span an interactive report may request. */
 const MAX_REPORT_RANGE_MS = 366 * 24 * 60 * 60 * 1000;
@@ -138,7 +87,7 @@ export const getSalesAndProfitReport = query({
           q.neq(q.field("isDeleted"), true)
         )
       )
-      .collect();
+      .take(MAX_REPORT_SALES + 1);
 
     let totalRevenue = 0;
     let totalCost = 0;
@@ -149,171 +98,83 @@ export const getSalesAndProfitReport = query({
     let totalGrossTransactionValue = 0;
     let totalSupplierSettlement = 0;
     let agentSaleCount = 0;
-    // Sales whose earning could not be established (financed, settled directly
-    // with the supplier, and missing the margin the completion should have
-    // frozen). They are excluded from every profit figure below and reported as
-    // a count, because an understated total presented as complete is the same
-    // failure as an overstated one.
+    // Rows lacking complete revenue and management net in the report currency
+    // are excluded from all three cards and disclosed together.
     let unknownMarginSaleCount = 0;
     let unknownSupplierSettlementSaleCount = 0;
 
-    const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
-    const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
-    const vehicleMap = new Map(
-      vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
-    );
-
-    // Fetch expenses only for vehicles that appear in this date range
-    const expensesByVehicle = new Map<string, any[]>();
-    await Promise.all(
-      vehicleIds.map(async (vehicleId) => {
-        const exps = await ctx.db
-          .query("expenses")
-          .withIndex("by_org_vehicle", (q) =>
-            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId)
-          )
-          .collect();
-        expensesByVehicle.set(vehicleId, exps);
-      })
-    );
-
-    // Single authoritative cost basis — same function the GL (SALE_COMPLETED
-    // costMinor) and commission calculation use, so this report can no longer
-    // disagree with them about a vehicle's margin. vehicleExpenses stays a
-    // broader "all expenses logged against this vehicle" figure for display
-    // (it can include non-capitalizable categories like marketing), separate
-    // from the authoritative cost/profit below.
-    const capitalizedCostByVehicle = new Map<string, number>();
-    await Promise.all(
-      Array.from(vehicleMap.values()).map(async (vehicle) => {
-        capitalizedCostByVehicle.set(vehicle._id, await computeVehicleCapitalizedCost(ctx, vehicle));
-      })
-    );
-
-    // Provenance for every sale in the window, resolved ONCE. `saleEconomics`
-    // needs to know the financing application is real, not merely referenced;
-    // doing that per sale inside the map would be an N+1 read on a
-    // live-subscribed report.
-    const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
-    // The currency every frozen sale figure must be in to be published (a frozen
-    // net revenue in any other currency is withheld, not converted).
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-
-    const commissionTotals = canSeeCommissions
-      ? await dealCommissionTotalsBySale(ctx, args.orgId, salesInDateRange, orgCurrency)
-      : new Map();
+    const figures = await loadReportDealFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency, mayReadCommissions: canSeeCommissions,
+      mayReadFinance: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE),
+    });
     let totalCommissions = 0;
     let totalNetProfitAfterCommissions = 0;
-    // Sales left out of the two totals above because their margin or their
-    // salesperson's commission is not known: those totals are then a floor.
     let commissionIncompleteSaleCount = 0;
-
-    const enrichedSales = salesInDateRange.map((sale) => {
-      const vehicle = vehicleMap.get(sale.vehicleId);
-      // SCRUM-389: a supplier-borne cost is the supplier's, owed back — not
-      // an expense this sale carried.
-      const expenses = (expensesByVehicle.get(sale.vehicleId) ?? []).filter(isShowroomBorne);
-
-      const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-      const economics = saleEconomics({
-        salePrice: sale.salePrice,
-        vehicle: vehicle ?? null,
-        capitalizedCost: cost,
-        supplierSettlementRoute: sale.supplierSettlementRoute,
-        // The margin the sale froze at completion, so this report agrees with
-        // the GL and the P&L about what the deal earned. On a financed DIRECT
-        // deal re-deriving it from the sale price overstates by
-        // salePrice - approved, which is money that reaches no party.
-        recordedMargin: recordedConsignedMargin(sale),
-        // A v3 financed sale's revenue NET of the showroom's contribution - the
-        // figure the ledger nets - so this report cannot publish the gross.
-        recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
-        recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
-        recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
-        recordedConsideration: recordedFinancedConsideration(sale),
-        // The application that approved what the financier would pay. A frozen
-        // receipt proves its amount, not its provenance — see the field's note.
-        // PROVEN, not merely referenced: a Convex id carries no referential
-        // integrity, so `!== undefined` accepted deleted, cross-tenant and
-        // unrelated applications alike.
-        hasFinancingApplication: verifiedFinancing.has(sale._id),
-        externallyFinanced:
-          sale.financingType === "FINANCED" || sale.financingType === "LEASE",
-      });
-
-      // A financed direct row with no recorded margin earns UNKNOWN, not zero
-      // and not the sale-price spread. It is left out of the totals and counted,
-      // so the owner is told the report is incomplete rather than being handed a
-      // confident figure built on a number the ledger never recognized.
-      // Counted SEPARATELY, not folded together. Each counter names the totals
-      // it actually qualifies: folding the settlement into the margin counter
-      // made the margin counter's own contract false — it is documented as
-      // counting rows left out of `totalRevenue` and `totalProfit`, and a row
-      // with a known margin and an unknown entitlement is in both of those.
-      // Telling an owner their profit is a floor when it is exact is a smaller
-      // error than the reverse, but it is still a false statement.
-      if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
+    const enrichedSales = figures.map((figure) => {
+      const { sale, vehicle, economics, profit, currency } = figure;
+      const contribution = reportContributionFor(figure, orgCurrency);
+      const included = contribution.available;
+      const netProfit = profit.available ? fromMinorUnits(profit.amountMinor, currency) : null;
+      const recognizedRevenue = contribution.available ? fromMinorUnits(contribution.revenueMinor, orgCurrency) : null;
+      // Reconciliation between recognized revenue and the deal page's net.
+      // Labelled as costs AND reconciliation, not as actual cash spending.
+      const totalDealCost = contribution.available ? fromMinorUnits(contribution.costMinor, orgCurrency) : null;
+      if (!included) unknownMarginSaleCount += 1;
       if (economics.supplierSettlement === null) unknownSupplierSettlementSaleCount += 1;
-      totalRevenue += economics.recognizedRevenue ?? 0;
-      totalCost += economics.recognizedCost;
-      // Unchanged by the agent split, and deliberately so: price less cost is
-      // the same number either way, which is exactly why restating a consigned
-      // sale moves turnover and cost of sales but never profit.
-      totalProfit += economics.dealershipMargin ?? 0;
+      totalRevenue += recognizedRevenue ?? 0;
+      totalCost += totalDealCost ?? 0;
+      if (contribution.available) totalProfit += fromMinorUnits(contribution.netMinor, orgCurrency);
       totalGrossTransactionValue += economics.grossTransactionValue;
-      // Excluded rather than guessed, exactly as `totalProfit` treats an
-      // unknown margin: this total is a floor when the count above is non-zero.
       totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
-
-      const commissionView = commissionViewFor(commissionTotals.get(sale._id), economics.dealershipMargin, orgCurrency);
       if (canSeeCommissions) {
-        if (commissionView.netProfitAfterCommissions === null || commissionView.commissionsTotal === null) {
-          commissionIncompleteSaleCount += 1;
-        } else {
-          totalCommissions += commissionView.commissionsTotal;
-          totalNetProfitAfterCommissions += commissionView.netProfitAfterCommissions;
+        if (!contribution.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
+        else {
+          totalCommissions += figure.commissionsTotal;
+          totalNetProfitAfterCommissions += fromMinorUnits(contribution.netMinor, orgCurrency);
         }
       }
-
       return {
         ...projectSaleRow(sale, role),
-        ...commissionView,
-        vehicleMake: vehicle?.make,
-        vehicleModel: vehicle?.model,
-        vehicleYear: vehicle?.year,
-        vehicleVin: vehicle?.vin,
-        vehicleCost: cost,
-        vehicleExpenses: totalExpenses,
-        totalCost: economics.recognizedCost,
-        netProfit: economics.dealershipMargin,
-        isAgentSale: economics.isAgentSale,
-        settlementRoute: economics.settlementRoute,
+        salePrice: figure.salePrice,
+        salePriceUnavailableReason: figure.salePriceUnavailableReason,
+        currency,
+        commissionsTotal: figure.commissionsTotal,
+        commissionPending: figure.commissionPending,
+        netProfitAfterCommissions: netProfit,
+        profitUnavailableReason: profit.available ? null : profit.reason,
+        includedInTotals: included,
+        vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
+        vehicleYear: vehicle?.year, vehicleVin: vehicle?.vin,
+        vehicleCost: figure.vehicleCost,
+        totalCost: totalDealCost,
+        netProfit,
+        isAgentSale: economics.isAgentSale, settlementRoute: economics.settlementRoute,
         grossTransactionValue: economics.grossTransactionValue,
         supplierSettlement: economics.supplierSettlement,
-        recognizedRevenue: economics.recognizedRevenue,
+        recognizedRevenue,
       };
     });
 
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
+      figureBasis: "DEAL_MANAGEMENT_NET_V1" as const,
       // Turnover. Excludes the gross of every consigned sale — the dealership
       // never owned those cars and may recognize only its margin on them.
       totalRevenue,
       totalCost,
       totalProfit,
-      // The deal volume the dealership actually handled, agent sales at full
-      // ticket. Equals totalRevenue when nothing consigned was sold.
+      // Recorded commercial deal volume, separate from customer invoice price
+      // and recognized dealership revenue.
       totalGrossTransactionValue,
       // What of that gross belongs to suppliers and never was the dealership's.
       totalSupplierSettlement,
       agentSaleCount,
       /**
-       * How many sales in this range were left out of `totalRevenue` and
-       * `totalProfit` because what they earned is unknown. Non-zero means these
-       * totals are a floor, not the answer.
+       * Rows left out of revenue, costs and profit. These totals describe the
+       * included rows only; an excluded deal might make a loss.
        */
       unknownMarginSaleCount,
       /**
@@ -325,8 +186,7 @@ export const getSalesAndProfitReport = query({
        */
       unknownSupplierSettlementSaleCount,
       /**
-       * Employee commissions (SCRUM-434), display only; `totalProfit` is
-       * unchanged. Null when the caller lacks view:commissions. The two totals
+       * Employee commissions are already included in management net. Null when the caller lacks view:commissions. The two totals
        * cover only the sales whose margin and commission are both known, and
        * `commissionIncompleteSaleCount` says how many were left out.
        */
@@ -870,9 +730,9 @@ export const getSalespersonPerformance = query({
           q.neq(q.field("isDeleted"), true)
         )
       )
-      .collect();
+      .take(MAX_REPORT_SALES + 1);
 
-    const salesBySalesperson: Record<string, any[]> = {};
+    const salesBySalesperson: Record<string, Doc<"sales">[]> = {};
     for (const sale of salesInDateRange) {
       if (sale.salespersonId) {
         if (!salesBySalesperson[sale.salespersonId]) {
@@ -882,34 +742,15 @@ export const getSalespersonPerformance = query({
       }
     }
 
-    const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
-    const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
-    const vehicleMap = new Map(
-      vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
-    );
-
-    // Single authoritative cost basis — same function the GL and commission
-    // calculation use (see getSalesAndProfitReport above).
-    const capitalizedCostByVehicle = new Map<string, number>();
-    await Promise.all(
-      Array.from(vehicleMap.values()).map(async (vehicle) => {
-        capitalizedCostByVehicle.set(vehicle._id, await computeVehicleCapitalizedCost(ctx, vehicle));
-      })
-    );
-
-    const userIds = Array.from(new Set(Object.keys(salesBySalesperson))) as Id<"users">[];
-    const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
-    const userMap = new Map(
-      users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u])
-    );
-
-    // Same one-pass provenance resolution as the profit report above.
-    const verifiedFinancing = await verifiedFinancingApplicationSaleIds(ctx, salesInDateRange);
+    const userIds = Object.keys(salesBySalesperson) as Id<"users">[];
+    const users = await Promise.all(userIds.map((id) => ctx.db.get(id)));
+    const userMap = new Map(users.flatMap((user) => user ? [[user._id, user] as const] : []));
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
-
-    const commissionTotals = canSeeCommissions
-      ? await dealCommissionTotalsBySale(ctx, args.orgId, salesInDateRange, orgCurrency)
-      : new Map();
+    const figures = await loadReportDealFigures(ctx, {
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency, mayReadCommissions: canSeeCommissions,
+      mayReadFinance: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE),
+    });
+    const figuresBySale = new Map(figures.map((figure) => [figure.sale._id, figure]));
 
     const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
       let totalRevenue = 0;
@@ -928,45 +769,28 @@ export const getSalespersonPerformance = query({
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
 
       for (const sale of userSales) {
-        const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
-        const economics = saleEconomics({
-          salePrice: sale.salePrice,
-          vehicle: vehicleMap.get(sale.vehicleId) ?? null,
-          capitalizedCost: cost,
-          supplierSettlementRoute: sale.supplierSettlementRoute,
-          // As above: the margin the sale recorded, so a rep is ranked on what
-          // the dealership actually earned rather than on a spread that
-          // includes money no party paid.
-          recordedMargin: recordedConsignedMargin(sale),
-          recordedNetRevenue: recordedFinancedNetRevenue(sale, orgCurrency),
-          recordedSupplierEntitlement: recordedSupplierEntitlement(sale),
-          recordedSupplierGrossReceipt: recordedSupplierGrossReceipt(sale),
-          recordedConsideration: recordedFinancedConsideration(sale),
-          hasFinancingApplication: verifiedFinancing.has(sale._id),
-          externallyFinanced:
-            sale.financingType === "FINANCED" || sale.financingType === "LEASE",
-        });
-
-        if (economics.dealershipMargin === null) unknownMarginSaleCount += 1;
-        // Same exclusion as getSalesAndProfitReport: a rep who sold a consigned
-        // car did not turn over its sticker price. Ranking on that would rank
-        // them above someone who sold twice the margin on owned stock.
-        totalRevenue += economics.recognizedRevenue ?? 0;
-        totalProfit += economics.dealershipMargin ?? 0;
+        const figure = figuresBySale.get(sale._id);
+        if (!figure) throw new Error("Missing report sale figure");
+        const { economics } = figure;
+        const contribution = reportContributionFor(figure, orgCurrency);
+        if (!contribution.available) unknownMarginSaleCount += 1;
+        else {
+          totalRevenue += fromMinorUnits(contribution.revenueMinor, orgCurrency);
+          totalProfit += fromMinorUnits(contribution.netMinor, orgCurrency);
+        }
         totalGrossTransactionValue += economics.grossTransactionValue;
         if (canSeeCommissions) {
-          const view = commissionViewFor(commissionTotals.get(sale._id), economics.dealershipMargin, orgCurrency);
-          if (view.netProfitAfterCommissions === null || view.commissionsTotal === null) {
-            commissionIncompleteSaleCount += 1;
-          } else {
-            totalCommissions += view.commissionsTotal;
-            totalNetProfitAfterCommissions += view.netProfitAfterCommissions;
+          if (!contribution.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
+          else {
+            totalCommissions += figure.commissionsTotal;
+            totalNetProfitAfterCommissions += fromMinorUnits(contribution.netMinor, orgCurrency);
           }
         }
       }
 
       return {
         userId,
+        figureBasis: "DEAL_MANAGEMENT_NET_V1" as const,
         userName,
         vehiclesSold: userSales.length,
         totalRevenue,
