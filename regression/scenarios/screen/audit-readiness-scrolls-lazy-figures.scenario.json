@@ -1,0 +1,80 @@
+{
+  "id": "audit-readiness-scrolls-lazy-figures",
+  "fingerprint": "d36b4c60c5a922501e6eded18dbb804a462562da35ca6aa42597f2a55ebef560",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "42330222054",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "readiness.mountLazyFigures",
+      "input": {
+        "boundary": "SYNTHETIC_DOM",
+        "width": 800,
+        "height": 600,
+        "spacerHeight": 1400,
+        "rootMargin": "200px",
+        "placeholder": "animate-pulse",
+        "label": "Loading"
+      }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "readiness.requireReadyScreen",
+      "input": {
+        "callerScrolls": false,
+        "timeoutMs": 5000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "readiness.accepted",
+      "value": true
+    },
+    {
+      "observable": "lazyRow.textTokens",
+      "value": [
+        "QA",
+        "TEST",
+        "ready",
+        "figures"
+      ]
+    },
+    {
+      "observable": "window.scrollY",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "playwright/role-audit/readiness-control.spec.ts",
+    "testName": "SCRUM-925: readiness resolves figures below the viewport without caller scrolling"
+  },
+  "bugRef": {
+    "key": "SCRUM-925",
+    "failingFirst": "9a4a6da0ea4145b268fbb7d51bebdd0174102c11"
+  },
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts",
+    "playwright/role-audit/scroll.ts",
+    "playwright/role-audit/roles.spec.ts",
+    "playwright/tests/audit-role-access.spec.ts"
+  ]
+}

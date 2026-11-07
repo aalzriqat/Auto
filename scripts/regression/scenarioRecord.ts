@@ -203,8 +203,12 @@ const RUNNER_FILE = /(?:^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.
 const SKIP_CALL = /\.\s*(?:skip|fixme|todo|skipIf|runIf)\s*\(|\bskip\s*\(|\b(?:test|it|describe|suite|ctx|context|testInfo|t|c)(?:\.\w+)*\.(?:fail|fails|only)\b|\binfo\(\)\s*\.\s*(?:fail|fixme|skip)\s*\(/;
 const SKIP_OPTION = /[{,]\s*["']?(?:skip|todo|fails|fail|fixme)["']?\s*(?::\s*(?!false\b)|[,}])/;
 const PLAYWRIGHT_SPEC = /^playwright\/(?:tests|scenarios)\/(?:.*\/)?[^/]+\.spec\.ts$|^playwright\/visual\/[^/]+\.visual\.spec\.ts$/;
-// Explicit terminal runner; its disjoint config/selection is checked by openingBrowserProofContract.test.ts.
-const TERMINAL_OPENING_SPEC = "playwright/opening-proof/opening-onboarding.spec.ts";
+// Explicit specs collected outside the conventional directories. Execution
+// evidence is still required separately by the scenario runner.
+const EXPLICIT_PLAYWRIGHT_SPECS = new Set([
+  "playwright/opening-proof/opening-onboarding.spec.ts",
+  "playwright/role-audit/readiness-control.spec.ts",
+]);
 const NOT_RUN_DIRS = /^(?:(?:apps|packages|\.next|out|build)\/|(?:.*\/)?(?:node_modules|\.claude)\/)/;
 const MATRIX_ROW = /^[A-Za-z0-9][A-Za-z0-9._-]{1,40}$/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
@@ -496,9 +500,10 @@ export function validateLibrary(
       const abs = path.resolve(repoRoot, r.impl.file.replace(/\\/g, "/"));
       // Classify the NORMALISED repo-relative path: "scripts/../apps/x.test.ts" is apps/.
       const rel = path.relative(path.resolve(repoRoot), abs).replace(/\\/g, "/");
+      const isPlaywrightSpec = PLAYWRIGHT_SPEC.test(rel) || EXPLICIT_PLAYWRIGHT_SPECS.has(rel);
       if (rel === "" || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) add("impl", "impl.file must stay inside the repository");
-      else if ((!RUNNER_FILE.test(rel) && rel !== TERMINAL_OPENING_SPEC) || NOT_RUN_DIRS.test(rel) ||
-          (PLAYWRIGHT_SPEC.test(rel) || rel === TERMINAL_OPENING_SPEC) !== (r.level === "browser")) {
+      else if ((!RUNNER_FILE.test(rel) && !isPlaywrightSpec) || NOT_RUN_DIRS.test(rel) ||
+          isPlaywrightSpec !== (r.level === "browser")) {
         add("impl", `impl.file ${rel} is not a test/spec file a runner executes`);
       } else if (!existsSync(abs)) add("impl", `impl.file ${rel} does not exist: cannot-run is a failure`);
       else {

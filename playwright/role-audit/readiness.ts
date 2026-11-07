@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { scrollAuditContent } from "./scroll";
 
 /** Navigation interaction is not evidence that the drawer has disappeared. */
 export async function dismissAuditNavigation(page: Page, timeout = 5_000): Promise<void> {
@@ -15,15 +16,21 @@ export async function requireReadyScreen(page: Page, timeout = 15_000, expectedP
   }
   const main = page.locator("main");
   await expect(main).toBeVisible({ timeout });
-  await expect(main).not.toHaveAttribute("aria-busy", "true", { timeout });
-  await expect(main).not.toHaveAttribute("data-loading", "true", { timeout });
-  // These states are rendered by the audited pages and their shared guards.
-  // Their absence measures visible loading completion, not query completeness.
-  await expect(main.locator('[aria-busy="true"], [data-loading="true"], .animate-spin, .animate-pulse, [data-slot="skeleton"]'))
-    .toHaveCount(0, { timeout });
-  // textContent can concatenate a preceding table cell with this message, so
-  // a leading word boundary would miss "Old rowLoading customers...".
-  await expect(main).not.toContainText(/(?:Loading|Searching|Fetching|Checking readiness)\b|Please wait|جار(?:ي|ٍ)\s+(?:تحميل|التحميل|البحث|فحص)/iu, { timeout });
+  const attemptTimeout = Math.min(timeout, 250);
+  // Retry the traversal too: rows can arrive after an earlier pass completed.
+  // https://playwright.dev/docs/test-assertions#expecttopass
+  await expect(async () => {
+    await main.evaluate(scrollAuditContent);
+    await expect(main).not.toHaveAttribute("aria-busy", "true", { timeout: attemptTimeout });
+    await expect(main).not.toHaveAttribute("data-loading", "true", { timeout: attemptTimeout });
+    // These states are rendered by the audited pages and their shared guards.
+    // Their absence measures visible loading completion, not query completeness.
+    await expect(main.locator('[aria-busy="true"], [data-loading="true"], .animate-spin, .animate-pulse, [data-slot="skeleton"]'))
+      .toHaveCount(0, { timeout: attemptTimeout });
+    // textContent can concatenate a preceding table cell with this message, so
+    // a leading word boundary would miss "Old rowLoading customers...".
+    await expect(main).not.toContainText(/(?:Loading|Searching|Fetching|Checking readiness)\b|Please wait|جار(?:ي|ٍ)\s+(?:تحميل|التحميل|البحث|فحص)/iu, { timeout: attemptTimeout });
+  }).toPass({ timeout });
   await expect(main).not.toHaveText(/^\s*$/, { timeout });
   // A heading alone is insufficient: require content or an actionable/empty
   // state surface, rather than only the shell around an unresolved query.
