@@ -1,0 +1,84 @@
+{
+  "id": "audit-readiness-retries-delayed-rows",
+  "fingerprint": "3c743226385e6dd3315c303779517cdd2d1d1410a200e74f25fd947bda441452",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "42330222054-source-lead-local-control",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "readiness.mountDelayedLazyFigures",
+      "input": {
+        "boundary": "SYNTHETIC_DOM",
+        "width": 800,
+        "height": 600,
+        "spacerHeight": 1400,
+        "rootMargin": "200px",
+        "appendAfterCompletedPass": true,
+        "appendDelayMs": 1000,
+        "pendingLabelTokens": [
+          "Loading",
+          "rows..."
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "ANONYMOUS",
+        "org": "SYNTHETIC"
+      },
+      "action": "readiness.requireReadyScreen",
+      "input": {
+        "callerScrolls": false,
+        "timeoutMs": 5000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "readiness.accepted",
+      "value": true
+    },
+    {
+      "observable": "lazyRow.textTokens",
+      "value": [
+        "QA",
+        "TEST",
+        "ready",
+        "figures"
+      ]
+    },
+    {
+      "observable": "window.scrollY",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "playwright/role-audit/readiness-control.spec.ts",
+    "testName": "SCRUM-926: readiness revisits lazy rows appended after a completed scroll pass"
+  },
+  "bugRef": {
+    "key": "SCRUM-926",
+    "failingFirst": "9a4a6da0ea4145b268fbb7d51bebdd0174102c11"
+  },
+  "sourceGlobs": [
+    "playwright/role-audit/readiness.ts",
+    "playwright/role-audit/scroll.ts",
+    "playwright/role-audit/roles.spec.ts",
+    "playwright/tests/audit-role-access.spec.ts"
+  ]
+}
