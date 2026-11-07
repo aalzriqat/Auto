@@ -59,21 +59,23 @@ test("duplicate account codes are refused with a localized code, including inact
   ).resolves.toBeDefined();
 });
 
-test.each([
-  { role: "sales", permissions: [], canList: false },
-  {
-    role: "finance-reader",
-    permissions: [PERMISSIONS.VIEW_FINANCE],
-    canList: true,
-  },
-  {
-    role: "manage-without-view",
-    permissions: [PERMISSIONS.MANAGE_FINANCE],
-    canList: false,
-  },
-])(
-  "$role respects separate chart read and write grants",
-  async ({ role, permissions, canList }) => {
+test("chart roles respect separate read and write grants", async () => {
+  // The scenario library binds one concrete test. Keep its role table bounded
+  // inside that registration so every row runs under the same named check.
+  const roles: { role: string; permissions: string[]; canList: boolean }[] = [
+    { role: "sales", permissions: [], canList: false },
+    {
+      role: "finance-reader",
+      permissions: [PERMISSIONS.VIEW_FINANCE],
+      canList: true,
+    },
+    {
+      role: "manage-without-view",
+      permissions: [PERMISSIONS.MANAGE_FINANCE],
+      canList: false,
+    },
+  ];
+  for (const { role, permissions, canList } of roles) {
     const { t, orgId, identity } = await fixture();
     const accountId = await identity.mutation(api.chartOfAccounts.create, {
       orgId,
@@ -119,8 +121,8 @@ test.each([
     expect(
       (await identity.query(api.chartOfAccounts.list, { orgId }))[0].name,
     ).toBe("Partner Payables");
-  },
-);
+  }
+});
 
 test("foreign organizations are refused for chart create update and list", async () => {
   const { t, orgId, identity } = await fixture();

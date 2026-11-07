@@ -58,7 +58,7 @@
   ],
   "impl": {
     "file": "convex/chartOfAccounts.management.test.ts",
-    "testName": "$role respects separate chart read and write grants"
+    "testName": "chart roles respect separate read and write grants"
   },
   "matrixRow": "SCRUM932-coa-management",
   "fingerprint": "6d8354f9d2184cd276aed754b434c4b7a61e381c71ab5b8f180eaf1219b86a1a"
