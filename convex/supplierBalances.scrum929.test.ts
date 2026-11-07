@@ -50,7 +50,7 @@ async function seed(tag: string, permissions = ["view:finance", "view:cost_price
   return { t, orgId, userId, roleId, subscriptionId, supplierId, vehicleId, saleId, asUser: t.withIdentity({ subject: tag, clerkId: tag }) };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
-const payable = (s: Seed, fields: Partial<Doc<"vehicleSupplierPayables">> = {}) => s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
+const payable = (s: Seed, fields: Partial<Extract<Doc<"vehicleSupplierPayables">, { vehicleId: Id<"vehicles"> }>> = {}) => s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
   orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, sourcedFromName: "Old name", amountDue: 9500,
   currency: "JOD", status: "DUE_ON_SALE", paymentDueDate: NOW - DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW, ...fields,
 }));
@@ -58,7 +58,7 @@ const receivable = (s: Seed, fields: Partial<Doc<"vehicleSupplierReceivables">> 
   orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Old name", amountDue: 3000,
   currency: "JOD", status: "OPEN", agreedDueDate: NOW + DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW, ...fields,
 }));
-const recovery = (s: Seed, fields: Partial<Doc<"supplierCostRecoveries">> = {}) => s.t.run(async ctx => {
+const recovery = (s: Seed, fields: Partial<Extract<Doc<"supplierCostRecoveries">, { vehicleId: Id<"vehicles"> }>> = {}) => s.t.run(async ctx => {
   const expenseId = await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" });
   return ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId,
     sourceEventKey: String(expenseId), sourcedFromName: "Old name", amountDueMinor: 200000, amountRecoveredMinor: 0, currency: "JOD",
@@ -180,7 +180,7 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.link).toBe(`/${s.orgId}/suppliers/${s.supplierId}`);
     expect(rows[0]?.data?.supplier).toBe("Renamed supplier");
-    const message = renderNotification("en", rows[0]!.type, rows[0]!.data).message;
+    const message = renderNotification("en", rows[0]!.type!, rows[0]!.data).message;
     expect(message).toContain(kind === "PAYABLE" ? "You owe supplier Renamed supplier" : "Supplier Renamed supplier owes you");
   });
   test.each(["missing", "foreign", "deleted"])("%s supplier falls back to balances without leaking a name", async mode => {
@@ -205,6 +205,6 @@ describe("SCRUM-929 alert destinations and confidentiality", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.data).not.toHaveProperty("amount");
     expect(rows[0]?.data).not.toHaveProperty("supplier");
-    expect(renderNotification("en", rows[0]!.type, rows[0]!.data).message).toBe("You owe a supplier, due 2026-11-07.");
+    expect(renderNotification("en", rows[0]!.type!, rows[0]!.data).message).toBe("You owe a supplier, due 2026-11-07.");
   });
 });

@@ -1,0 +1,51 @@
+{
+  "id": "supplier-balances-renamed-stored-identity",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierBalances.list",
+      "input": {
+        "supplierId": "SUPPLIER_ID",
+        "displayName": "RENAMED",
+        "unlinkedPayable": 500
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "linkedPayableMinor",
+      "value": 9500000
+    },
+    {
+      "observable": "supplierIdentity",
+      "value": "STORED_ID_CURRENT_NAME"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "renamed suppliers retain id attribution; unlinked legacy rows are outside statement scope"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "db0dec582b7af7939f815f832ff9d71c4fa2ccd6"
+  },
+  "fingerprint": "2b67f581f5a19eb1abb95ad8c16fb43e4d143f08978d225fc7973a1da2afab1a"
+}

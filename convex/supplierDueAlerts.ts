@@ -136,6 +136,8 @@ interface PlannedAlert {
   data: Record<string, string | number>;
   /** Cost-derived: added to `data` only for a recipient who may read it, so the key is absent for everyone else. */
   amount: string;
+  supplier?: string;
+  link: string;
   idempotencyKey: string;
 }
 
@@ -145,7 +147,7 @@ interface PlannedAlert {
  * classification ratchet (`idempotencyEconomicCommands.test.ts`) attributes each
  * `runWithIdempotency` call to the exported function it sits in.
  */
-function planAlert(row: ObligationRow): PlannedAlert | null {
+function planAlert(row: ObligationRow, orgId: Id<"organizations">): PlannedAlert | null {
   // A missing due date can never alert, and a disputed obligation is held back.
   if (row.dueAt === null || row.disputedMinor > 0) return null;
   const plan = alertStepFor(row.daysOverdue);
@@ -154,8 +156,19 @@ function planAlert(row: ObligationRow): PlannedAlert | null {
     type: alertTypeFor(plan.step),
     data: alertData(row),
     amount: fromMinorUnits(row.outstandingMinor, row.currency).toFixed(scaleForCurrency(row.currency)),
+    link: `/${orgId}/suppliers/balances`,
     idempotencyKey: `${row.kind}:${row.id}:${plan.step}:${plan.occurrence}`,
   };
+}
+
+/** Stored identity only, as the statement's supplier index. A legal/display name is never an identity lookup. */
+async function alertSupplier(ctx: MutationCtx, orgId: Id<"organizations">, row: ObligationRow) {
+  const table = { PAYABLE: "vehicleSupplierPayables", RECEIVABLE: "vehicleSupplierReceivables", RECOVERY: "supplierCostRecoveries" } as const;
+  const id = ctx.db.normalizeId(table[row.kind], row.id);
+  const obligation = id ? await ctx.db.get(id) : null;
+  if (!obligation || obligation.orgId !== orgId || !obligation.supplierId) return null;
+  const supplier = await ctx.db.get(obligation.supplierId);
+  return supplier?.orgId === orgId ? supplier : null;
 }
 
 /** The worker's arguments other than `orgId`, shared by the mutation and the action that wraps it. */
@@ -207,8 +220,15 @@ export const processOrgSupplierDueAlerts = internalMutation({
     });
     const planned: PlannedAlert[] = [];
     for (const row of page.rows) {
-      const alert = planAlert(row);
-      if (alert) planned.push(alert);
+      const alert = planAlert(row, args.orgId);
+      if (alert) {
+        const supplier = await alertSupplier(ctx, args.orgId, row);
+        if (supplier) {
+          alert.supplier = supplier.displayName;
+          alert.link = `/${args.orgId}/suppliers/${supplier._id}`;
+        }
+        planned.push(alert);
+      }
     }
 
     let alerted = 0;
@@ -221,12 +241,12 @@ export const processOrgSupplierDueAlerts = internalMutation({
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .paginate({ cursor: args.recipientCursor ?? null, numItems: Math.max(1, Math.floor(SEND_BUDGET / planned.length)) });
       const recipients = await eligibleRecipients(ctx, args.orgId, membershipPage.page);
-      for (const { type, data: sharedData, amount, idempotencyKey } of planned) {
+      for (const { type, data: sharedData, amount, supplier, link, idempotencyKey } of planned) {
         const def = NOTIFICATION_TYPES[type];
         for (const { userId, mayReadAmount } of recipients) {
           // The key is absent, not 0 or null, for a recipient who may not read it. The idempotency key names
           // the recipient and carries no amount, so redaction cannot make two sends of one alert disagree.
-          const data = mayReadAmount ? { ...sharedData, amount } : sharedData;
+          const data = mayReadAmount ? { ...sharedData, amount, ...(supplier ? { supplier } : {}) } : sharedData;
           let sent = false;
           // Non-economic: this command writes one in-app notification row and moves no money.
           await runWithIdempotency(
@@ -241,7 +261,7 @@ export const processOrgSupplierDueAlerts = internalMutation({
                 priority: def.priority,
                 data,
                 isRead: false,
-                link: `/${args.orgId}/accounting`,
+                link,
               });
               sent = true;
               return 1;

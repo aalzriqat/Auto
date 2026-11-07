@@ -16,6 +16,8 @@ B. The browser pages all three `supplierDueAging.list` families, resolves suppli
 
 Choose A. One native supplier page per invocation, at most five suppliers, with sequential shared-budget reads. No cross-currency sum or book-wide total is returned. A supplier with an incomplete side has no currency figures at all. `complete` describes the entire bounded report: false for multiple supplier pages, continuation pages, or any incomplete supplier; `isDone` describes navigation only. Complete supplier rows on a partial report remain usable. The UI explicitly calls the report partial and offers page navigation; it never accumulates page sums.
 
+`supplierBalances.get` exposes the identical projection for a single owned supplier's summary tiles. It uses `requireOwnedRow` and the same permission/feature gates. The existing `supplierStatement` response is unchanged, including its explicit no-net contract. Detail summary reads duplicate the bounded outstanding read; they introduce no stored aggregate and no additional financial writer.
+
 The report includes active and inactive registry suppliers, including zero-balance suppliers. Like the statement it includes only obligations linked by stored `supplierId`, and excludes unallocated openings and id-less legacy rows. The screen states that scope; it makes no claim to equal the entire GL. Disputed amounts remain in gross and overdue, with disputed payable/receivable amounts also shown separately. Positive net means the supplier owes the showroom; negative means the showroom owes the supplier. Oldest due date is the earliest known due date among open obligations in that currency, including disputed rows. Missing due dates stay unknown.
 
 ## Permissions, clock and errors

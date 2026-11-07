@@ -1,0 +1,61 @@
+{
+  "id": "supplier-balances-currencies-and-closed-rows",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierBalances.list",
+      "input": {
+        "payableJod": 9500,
+        "receivableUsd": 12.34,
+        "recoveryStatus": "RECOVERED",
+        "claimStatus": "CANCELLED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "currencyRows",
+      "value": [
+        [
+          "JOD",
+          9500000,
+          0,
+          -9500000
+        ],
+        [
+          "USD",
+          0,
+          1234,
+          1234
+        ]
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "two currencies remain separate; cancelled claims and same-day settled recoveries disappear"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "db0dec582b7af7939f815f832ff9d71c4fa2ccd6"
+  },
+  "fingerprint": "1d2727f9359857246af9bfeb2d48fca44e55211a299c448bdb46c3edec16d65c"
+}

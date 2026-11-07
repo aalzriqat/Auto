@@ -199,12 +199,15 @@ export function SupplierListScreen({ orgId }: Readonly<{ orgId: Id<"organization
           <h1 className="text-2xl font-semibold tracking-tight">{translate("Suppliers")}</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">{translate("SuppliersSubtitle")}</p>
         </div>
+        <div className="flex flex-wrap gap-2">
+        <Button asChild variant="outline"><Link href={`/${orgId}/suppliers/balances`}>{translate("SuppliersBalances")}</Link></Button>
         {canManage && (
           <Button onClick={() => setCreating(true)}>
             <Plus aria-hidden="true" />
             {translate("SuppliersAdd")}
           </Button>
         )}
+        </div>
       </header>
       {!isLoading && !canManage && (
         <p role="note" className="rounded-md border bg-muted/50 p-3 text-sm text-muted-foreground">

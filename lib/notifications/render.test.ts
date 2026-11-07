@@ -71,26 +71,26 @@ describe("renderNotification - supplier obligation alerts with and without an am
   const base = { kind: "PAYABLE", currency: "JOD", dueDate: "2026-06-15", daysOverdue: 0 };
   const overdue = { ...base, dueDate: "2026-06-01", daysOverdue: 7 };
 
-  test("with the amount, the sentence names it (unchanged)", () => {
+  test("with the amount, the sentence names it and states the direction (SCRUM-929)", () => {
     expect(renderNotification("en", "accounting.supplierObligationDue", { ...base, amount: "7654.000" }).message).toBe(
-      "A supplier obligation of 7654.000 JOD is due on 2026-06-15."
+      "You owe a supplier 7654.000 JOD, due 2026-06-15."
     );
     expect(renderNotification("en", "accounting.supplierObligationOverdue", { ...overdue, amount: "7654.000" }).message).toBe(
-      "A supplier obligation of 7654.000 JOD was due on 2026-06-01 and is 7 days overdue."
+      "You owe a supplier 7654.000 JOD, due 2026-06-01 and 7 days overdue."
     );
   });
 
   test("without the amount key, English reads correctly and keeps the date and days overdue", () => {
-    expect(renderNotification("en", "accounting.supplierObligationDue", base).message).toBe("A supplier obligation is due on 2026-06-15.");
+    expect(renderNotification("en", "accounting.supplierObligationDue", base).message).toBe("You owe a supplier, due 2026-06-15.");
     expect(renderNotification("en", "accounting.supplierObligationOverdue", overdue).message).toBe(
-      "A supplier obligation was due on 2026-06-01 and is 7 days overdue."
+      "You owe a supplier, due 2026-06-01 and 7 days overdue."
     );
   });
 
   test("without the amount key, Arabic reads correctly and keeps the date and days overdue", () => {
-    expect(renderNotification("ar", "accounting.supplierObligationDue", base).message).toBe("التزام مورّد يستحق بتاريخ 2026-06-15.");
+    expect(renderNotification("ar", "accounting.supplierObligationDue", base).message).toBe("عليك لمورّد، يستحق بتاريخ 2026-06-15.");
     expect(renderNotification("ar", "accounting.supplierObligationOverdue", overdue).message).toBe(
-      "التزام مورّد كان مستحقاً بتاريخ 2026-06-01 وتأخر 7 يوماً."
+      "عليك لمورّد، استحق بتاريخ 2026-06-01 ومتأخر 7 أيام."
     );
   });
 

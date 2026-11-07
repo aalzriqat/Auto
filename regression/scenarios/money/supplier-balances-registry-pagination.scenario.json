@@ -1,0 +1,54 @@
+{
+  "id": "supplier-balances-registry-pagination",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierBalances.list",
+      "input": {
+        "suppliers": 6,
+        "pageSize": 5
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "firstPage.complete",
+      "value": false
+    },
+    {
+      "observable": "continuation.complete",
+      "value": false
+    },
+    {
+      "observable": "distinctSuppliersAcrossPages",
+      "value": 6
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "a multi-page registry is partial, can be paged, and never claims a complete book on a continuation"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "db0dec582b7af7939f815f832ff9d71c4fa2ccd6"
+  },
+  "fingerprint": "f26ce255d6ce19d65d1f7b02863f5a01140b7b432674a909fd6f85cfc9dc46d4"
+}
