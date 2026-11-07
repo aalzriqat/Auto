@@ -535,6 +535,10 @@ export const resetOrgFinancialData = internalMutation({
     preflight: v.object({
       verdict: v.union(v.literal("PASS"), v.literal("REFUSED"), v.literal("UNAVAILABLE"), v.literal("CONTINUATION")),
       counts: v.record(v.string(), v.number()),
+      owedCommissionCounts: v.object({
+        dealCommissionLines: v.union(v.number(), v.null()), sales: v.union(v.number(), v.null()),
+        openingCommissionLiabilities: v.union(v.number(), v.null()),
+      }),
       refusals: v.array(v.object({ table: v.string(), count: v.number(),
         reason: v.union(v.literal("SURVIVOR"), v.literal("RISKY_STATE"), v.literal("OVER_BOUND"), v.literal("READ_FAILED")) })),
     }),
@@ -600,7 +604,8 @@ export const resetOrgFinancialData = internalMutation({
     if (!dryRun && !org) throw new ConvexError("Organization not found. Refusing before any deletion.");
     const resetState = orgResetState(org);
     const preflight: SurvivorPreflight = resetState.inProgress && !dryRun
-      ? { verdict: "CONTINUATION", counts: {}, refusals: [] }
+      ? { verdict: "CONTINUATION", counts: {}, refusals: [],
+        owedCommissionCounts: { dealCommissionLines: null, sales: null, openingCommissionLiabilities: null } }
       : await resetSurvivorPreflight(ctx.db, args.orgId, RESET_TABLES);
     if (isFreshResetStartRefused(org, dryRun, preflight.verdict === "PASS")) {
       throw new ConvexError(`${preflight.verdict}: ` + preflight.refusals

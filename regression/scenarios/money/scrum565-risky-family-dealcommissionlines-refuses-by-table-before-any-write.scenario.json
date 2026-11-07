@@ -18,7 +18,21 @@
       "input": {
         "table": "dealCommissionLines",
         "batchSize": 1,
-        "state": "risky"
+        "owedRows": 2,
+        "settledRows": 1,
+        "payrollItems": 2,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
       }
     },
     {
@@ -29,18 +43,35 @@
       "action": "orgFinancialReset.resetOrgFinancialData",
       "input": {
         "dryRun": false,
-        "batchSize": 1
+        "batchSize": 1,
+        "repeatUntilComplete": true
       }
     }
   ],
   "expected": [
     {
-      "observable": "reset.refusal.table",
-      "value": "dealCommissionLines"
+      "observable": "preflight.owedCommissionCounts.dealCommissionLines",
+      "value": 2
     },
     {
-      "observable": "reset.writes",
+      "observable": "reset.remaining",
       "value": 0
+    },
+    {
+      "observable": "reset.resetCompleted",
+      "value": true
+    },
+    {
+      "observable": "reset.payrollChildrenDrainBeforeSources",
+      "value": true
+    },
+    {
+      "observable": "reset.sourceRowsRemaining",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
     }
   ],
   "rulings": [
@@ -51,12 +82,12 @@
   ],
   "impl": {
     "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
-    "testName": "risky family dealCommissionLines refuses by table before any write"
+    "testName": "owner ruling 2026-11-07 wipes owed deal commission lines, books start from zero"
   },
   "matrixRow": "SCRUM565-narrow-reset",
   "bugRef": {
     "key": "SCRUM-565",
-    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
   },
-  "fingerprint": "0604f7881ce043b17f147d03098d9d2f53e33cc690e84f7bd0ca7c93e5d86f8e"
+  "fingerprint": "03d1c086e7b6e051ee72e6c72c0ec68668037f08cd32dd4450c19784f4dc41fd"
 }

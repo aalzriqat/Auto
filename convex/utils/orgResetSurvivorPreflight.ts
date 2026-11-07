@@ -27,6 +27,8 @@ export interface SurvivorPreflight {
   verdict: "PASS" | "REFUSED" | "UNAVAILABLE" | "CONTINUATION";
   /** Exact within the bound; an overflow is a lower bound, never an inventory total. */
   counts: Record<string, number>;
+  /** Exact owed rows to wipe; null when a complete bounded count was not measured. */
+  owedCommissionCounts: Record<"dealCommissionLines" | "sales" | "openingCommissionLiabilities", number | null>;
   refusals: Array<{ table: string; count: number; reason: "SURVIVOR" | "RISKY_STATE" | "OVER_BOUND" | "READ_FAILED" }>;
 }
 
@@ -43,6 +45,53 @@ type SurvivorTable = keyof typeof RESET_SURVIVOR_INDEX;
 type FamilyTable = "postDatedCheques" | "supplierCostRecoveries" | "dealCommissionLines" |
   "openingCommissionLiabilities" | "sales" | "unmatchedProviderFunds" | "cashDrawerSessions";
 type ReadableTable = SurvivorTable | FamilyTable | KeptTable;
+
+function owedCommissionCount(table: FamilyTable, found: Doc<FamilyTable>[]): number | null {
+  switch (table) {
+    case "dealCommissionLines":
+      return found.filter(row => "amountMinor" in row && (row.amountMinor ?? 0) > 0 && !("paidAt" in row) && !("removedAt" in row)).length;
+    case "sales":
+      return found.filter(row => "commissionAmount" in row && row.status === "COMPLETED" && (row.commissionAmount ?? 0) > 0 && !("commissionPaidAt" in row)).length;
+    case "openingCommissionLiabilities":
+      return found.filter(row => "paidMinor" in row && row.amountMinor > row.paidMinor).length;
+    default: return null;
+  }
+}
+
+function isRiskyFamilyRow(table: FamilyTable, row: Doc<FamilyTable>): boolean {
+  switch (table) {
+    case "unmatchedProviderFunds":
+    case "cashDrawerSessions": return true;
+    case "postDatedCheques": return "status" in row && (row.status === "HELD" || row.status === "DEPOSITED");
+    case "supplierCostRecoveries": return "status" in row && (row.status === "OPEN" || row.status === "PARTIALLY_RECOVERED");
+    // Owner 2026-11-07: owed commissions are wiped with the test books, not a refusal.
+    default: return false;
+  }
+}
+
+async function measureFamilies(db: DatabaseReader, orgId: Id<"organizations">,
+  result: SurvivorPreflight, evidence: { bytes: number; table: string }): Promise<void> {
+  const familyIndexes = {
+    postDatedCheques: "by_org", supplierCostRecoveries: "by_org", dealCommissionLines: "by_org_sale",
+    openingCommissionLiabilities: "by_org", sales: "by_org", unmatchedProviderFunds: "by_org_review",
+    cashDrawerSessions: "by_org",
+  } as const;
+  for (const [name, index] of Object.entries(familyIndexes)) {
+    const table = name as keyof typeof familyIndexes;
+    evidence.table = table;
+    const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, evidence);
+    result.counts[table] = found.length;
+    if (found.length > RESET_FAMILY_READ_BOUND) {
+      result.refusals.push({ table, count: found.length, reason: "OVER_BOUND" });
+      continue;
+    }
+    if (table === "dealCommissionLines" || table === "sales" || table === "openingCommissionLiabilities") {
+      result.owedCommissionCounts[table] = owedCommissionCount(table, found);
+    }
+    const risky = found.filter(row => isRiskyFamilyRow(table, row));
+    if (risky.length > 0) result.refusals.push({ table, count: risky.length, reason: "RISKY_STATE" });
+  }
+}
 
 export function survivingReferenceTables(resetTables: readonly string[]): SurvivorTable[] {
   const deleted = new Set(resetTables);
@@ -69,57 +118,33 @@ async function rows<Table extends ReadableTable>(db: DatabaseReader, table: Tabl
 
 export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"organizations">,
   resetTables: readonly string[]): Promise<SurvivorPreflight> {
-  const result: SurvivorPreflight = { verdict: "PASS", counts: {}, refusals: [] };
-  const budget = { bytes: 0 };
-  let currentTable = "organizations";
+  const result: SurvivorPreflight = { verdict: "PASS", counts: {}, refusals: [],
+    owedCommissionCounts: { dealCommissionLines: null, sales: null, openingCommissionLiabilities: null } };
+  const evidence = { bytes: 0, table: "organizations" };
   try {
     for (const table of survivingReferenceTables(resetTables)) {
-      currentTable = table;
+      evidence.table = table;
       const index = RESET_SURVIVOR_INDEX[table];
       if (!index) throw new Error("Unmeasured survivor table");
-      const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, budget);
+      const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, evidence);
       result.counts[table] = found.length;
       if (found.length > 0) result.refusals.push({ table, count: found.length,
         reason: found.length > RESET_FAMILY_READ_BOUND ? "OVER_BOUND" : "SURVIVOR" });
     }
-    // These families are reset-scoped or do not carry a typed reset reference.
-    const familyIndexes = {
-      postDatedCheques: "by_org", supplierCostRecoveries: "by_org", dealCommissionLines: "by_org_sale",
-      openingCommissionLiabilities: "by_org", sales: "by_org", unmatchedProviderFunds: "by_org_review",
-      cashDrawerSessions: "by_org",
-    } as const;
-    for (const [name, index] of Object.entries(familyIndexes)) {
-      const table = name as keyof typeof familyIndexes;
-      currentTable = table;
-      const found = await rows(db, table, index, orgId, RESET_FAMILY_READ_BOUND + 1, budget);
-      result.counts[table] = found.length;
-      if (found.length > RESET_FAMILY_READ_BOUND) {
-        result.refusals.push({ table, count: found.length, reason: "OVER_BOUND" });
-        continue;
-      }
-      const risky = found.filter(row => {
-        if (table === "unmatchedProviderFunds" || table === "cashDrawerSessions") return true;
-        if (table === "postDatedCheques") return "status" in row && (row.status === "HELD" || row.status === "DEPOSITED");
-        if (table === "supplierCostRecoveries") return "status" in row && (row.status === "OPEN" || row.status === "PARTIALLY_RECOVERED");
-        if (table === "dealCommissionLines") return "amountMinor" in row && (row.amountMinor ?? 0) > 0 && !("paidAt" in row) && !("removedAt" in row);
-        if (table === "sales") return "commissionAmount" in row && row.status === "COMPLETED" && (row.commissionAmount ?? 0) > 0 && !("commissionPaidAt" in row);
-        return "paidMinor" in row && row.amountMinor > row.paidMinor;
-      });
-      if (risky.length > 0) result.refusals.push({ table, count: risky.length, reason: "RISKY_STATE" });
-    }
+    await measureFamilies(db, orgId, result, evidence);
     for (const [name, index] of Object.entries(RESET_KEPT_REFERENCE_INDEX)) {
       const table = name as KeptTable;
-      currentTable = table;
-      const found = await rows(db, table, index, orgId, RESET_KEPT_READ_BOUND + 1, budget);
+      evidence.table = table;
+      const found = await rows(db, table, index, orgId, RESET_KEPT_READ_BOUND + 1, evidence);
       result.counts[table] = found.length;
       if (found.length > RESET_KEPT_READ_BOUND) result.refusals.push({ table, count: found.length, reason: "OVER_BOUND" });
     }
   } catch (error) {
     console.error("Financial reset preflight evidence unavailable", error);
-    result.refusals.push({ table: currentTable, count: 0, reason: "READ_FAILED" });
+    result.refusals.push({ table: evidence.table, count: 0, reason: "READ_FAILED" });
   }
-  result.verdict = result.refusals.some(r => r.reason === "OVER_BOUND" || r.reason === "READ_FAILED")
-    ? "UNAVAILABLE" : result.refusals.length > 0 ? "REFUSED" : "PASS";
+  if (result.refusals.length > 0) result.verdict = "REFUSED";
+  if (result.refusals.some(r => r.reason === "OVER_BOUND" || r.reason === "READ_FAILED")) result.verdict = "UNAVAILABLE";
   return result;
 }
 

@@ -17,7 +17,12 @@
       "action": "fixtures.seedTwoOrganizations",
       "input": {
         "table": "openingCommissionLiabilities",
-        "unpaidCommission": true,
+        "batchSize": 1,
+        "owedRows": 2,
+        "settledRows": 1,
+        "payrollItems": 2,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions",
+        "missingDraft": true,
         "paidTimestamp": true
       }
     },
@@ -28,19 +33,47 @@
       },
       "action": "orgFinancialReset.resetOrgFinancialData",
       "input": {
-        "dryRun": false,
+        "dryRun": true,
         "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1,
+        "repeatUntilComplete": true
       }
     }
   ],
   "expected": [
     {
-      "observable": "reset.refusal.table",
-      "value": "openingCommissionLiabilities"
+      "observable": "preflight.owedCommissionCounts.openingCommissionLiabilities",
+      "value": 2
     },
     {
-      "observable": "reset.writes",
+      "observable": "reset.remaining",
       "value": 0
+    },
+    {
+      "observable": "reset.resetCompleted",
+      "value": true
+    },
+    {
+      "observable": "reset.payrollChildrenDrainBeforeSources",
+      "value": true
+    },
+    {
+      "observable": "reset.sourceRowsRemaining",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
     }
   ],
   "rulings": [
@@ -51,12 +84,12 @@
   ],
   "impl": {
     "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
-    "testName": "an unpaid opening commission liability refuses even with a paid timestamp"
+    "testName": "owner ruling 2026-11-07 wipes historical unpaid opening commissions with missing draft and paid timestamp"
   },
   "matrixRow": "SCRUM565-narrow-reset",
   "bugRef": {
     "key": "SCRUM-565",
-    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
   },
-  "fingerprint": "6f1f8453251467ea0f8e30e3f52ba047d522d11596fc712ba92bb7dc05f2789c"
+  "fingerprint": "8df3f84189b072c14da234f72612f32796c2f41ff3a08803f39366d28f1f760c"
 }

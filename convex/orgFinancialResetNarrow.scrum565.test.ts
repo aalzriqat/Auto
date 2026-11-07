@@ -1,3 +1,4 @@
+/** NON-PILOT-CERTIFYING: destructive test-data reset; no pilot workflow is certified here. */
 import { describe, expect, test } from "vitest";
 import type { GenericDatabaseWriter, GenericDataModel } from "convex/server";
 import type { Value } from "convex/values";

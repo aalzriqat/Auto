@@ -17,8 +17,22 @@
       "action": "fixtures.seedTwoOrganizations",
       "input": {
         "table": "sales",
-        "unpaidCommission": true,
-        "paidTimestamp": false
+        "batchSize": 1,
+        "owedRows": 2,
+        "settledRows": 1,
+        "payrollItems": 2,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
       }
     },
     {
@@ -29,18 +43,35 @@
       "action": "orgFinancialReset.resetOrgFinancialData",
       "input": {
         "dryRun": false,
-        "batchSize": 1
+        "batchSize": 1,
+        "repeatUntilComplete": true
       }
     }
   ],
   "expected": [
     {
-      "observable": "reset.refusal.table",
-      "value": "sales"
+      "observable": "preflight.owedCommissionCounts.sales",
+      "value": 2
     },
     {
-      "observable": "reset.writes",
+      "observable": "reset.remaining",
       "value": 0
+    },
+    {
+      "observable": "reset.resetCompleted",
+      "value": true
+    },
+    {
+      "observable": "reset.payrollChildrenDrainBeforeSources",
+      "value": true
+    },
+    {
+      "observable": "reset.sourceRowsRemaining",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
     }
   ],
   "rulings": [
@@ -51,12 +82,12 @@
   ],
   "impl": {
     "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
-    "testName": "an unpaid sale commission refuses before deleting its sales or ledger basis"
+    "testName": "owner ruling 2026-11-07 wipes unpaid sale commissions, books start from zero"
   },
   "matrixRow": "SCRUM565-narrow-reset",
   "bugRef": {
     "key": "SCRUM-565",
-    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
   },
-  "fingerprint": "cd4c7db309395cb24b75c7bbbccc22a431622f519fe25eaad9d89ef954cfd553"
+  "fingerprint": "694fcbe679b686a6db23c88d0eda1aa55f56cb53f4afdd5a8ff31214d395724d"
 }
