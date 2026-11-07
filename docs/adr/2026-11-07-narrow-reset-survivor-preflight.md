@@ -19,7 +19,7 @@ All three source tables already belong to RESET_TABLES. The existing order and C
 
 Every other refusal is unchanged: HELD/DEPOSITED cheques, open supplier recoveries, unmatched provider funds, cash drawer state, PENDING payment intents, held captures, excluded survivors and existing authority/deletion protections. The row and byte bounds still produce UNAVAILABLE. The same bounded scans now populate preflight.owedCommissionCounts, with one count per source table and no ids or amounts. A count is exact only after that table's bounded scan completes. Overflow, an unread table or a destructive continuation reports null for that table, never an invented zero. These are source-row counts, not de-duplicated employees or obligations, and cover the complete reset rather than just the next deletion batch.
 
-The round-2 task instruction is the source of this additional ruling. Jira reauthentication prevented checking a new comment id; the scenario records retain the verified c24729 reference and explicitly cite the dated narrowing in their inputs and test names. No new Jira digest is fabricated.
+The coordinator recorded this ruling on SCRUM-565 in comment c24735. The scenario records keep the verified c24729 reference, which is in the rulings snapshot, and cite the dated narrowing in their inputs and test names. No new Jira digest is fabricated.
 
 Design B, rejected: delete every survivor table. This would erase provider evidence, pending messages, approval history and unresolved financial obligations, require wider lifecycle and recovery work, and exceed the owner's narrow approval.
 
