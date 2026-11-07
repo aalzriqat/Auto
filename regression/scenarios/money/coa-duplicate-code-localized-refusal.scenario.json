@@ -1,0 +1,69 @@
+{
+  "id": "coa-duplicate-code-localized-refusal",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "active": false
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "duplicate.refusalCode",
+      "value": "ACCOUNT_CODE_EXISTS"
+    },
+    {
+      "observable": "chart.rowCount",
+      "value": 1
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "d7a759ad18851b53669220fdb040884cdfaf82ea"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "duplicate account codes are refused with a localized code, including inactive accounts"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "aea9136d02d92bf438d0902e9be4b9e71dbeac7bf333ec64bcfba9345762b753"
+}

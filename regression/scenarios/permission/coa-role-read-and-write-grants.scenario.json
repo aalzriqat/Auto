@@ -1,0 +1,65 @@
+{
+  "id": "coa-role-read-and-write-grants",
+  "domain": "permission",
+  "steps": [
+    {
+      "actor": {
+        "role": "unprivileged-role",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.list",
+      "input": {
+        "requiredPermission": "view:finance"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-reader",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "requiredPermission": "manage:finance"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-reader",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "requiredPermission": "manage:finance"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "readWithoutViewFinance",
+      "value": "FORBIDDEN"
+    },
+    {
+      "observable": "writesWithoutManageFinance",
+      "value": "FORBIDDEN"
+    }
+  ],
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "$role respects separate chart read and write grants"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "6d8354f9d2184cd276aed754b434c4b7a61e381c71ab5b8f180eaf1219b86a1a"
+}

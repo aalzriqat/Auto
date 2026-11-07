@@ -1374,3 +1374,31 @@ The scenario records retain the stable SCRUM-928 c24715 brief digest. This is lo
 serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
 independent review seats. No posting, journal or lifecycle definition changed.
+
+## SCRUM-932 chart management regressions
+
+Matrix row `SCRUM932-coa-management` binds the following registered-function
+checks in `convex/chartOfAccounts.management.test.ts`. Opening policy is unchanged.
+
+| Scenario | Expected | Executable check |
+| --- | --- | --- |
+| Duplicate code, including an inactive account | `ACCOUNT_CODE_EXISTS`; one account remains; another org can use the same code | `duplicate account codes are refused with a localized code, including inactive accounts` |
+| Separate read and write grants | Missing `view:finance` refuses list; missing `manage:finance` refuses create and update | `$role respects separate chart read and write grants` |
+| Foreign organization and document | Foreign org create, list and update refuse; own org plus a foreign account id refuses; foreign row stays active | `foreign organizations are refused for chart create update and list` |
+| Custom 2500 and 2510 | Initialization creates neither account. User-created LIABILITY/CREDIT accounts advertise OTHER_PAYABLE. Inactive draft refuses. A different preparer and approver post obligations of JOD 100 and 50 | `custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts` |
+
+At `d7a759ad18851b53669220fdb040884cdfaf82ea`, the duplicate-code test fails
+because the refusal has no code. The other five checks already pass. Their
+scenario records are regressions, not new defects, and carry no invented
+`failingFirst` SHA. No opening policy, posting path, or pilot switch changes.
+This is serial convex-test evidence, not cloud runtime or concurrency evidence.
+The coordinator verifies rendered screens and obtains the independent review seats.
+
+The implementation keeps authorization and validators at the existing backend
+entry points, following [Convex authorization](https://docs.convex.dev/auth/overview)
+and [validation guidance](https://docs.convex.dev/functions/validation). The UI
+uses the repository's shared components and SupplierCreateDialog mounting pattern,
+with labelled dialogs and native table semantics, following
+[WAI-ARIA dialogs](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/),
+[WAI-ARIA tables](https://www.w3.org/WAI/ARIA/apg/patterns/table/), and
+[shadcn Dialog](https://ui.shadcn.com/docs/components/radix/dialog).

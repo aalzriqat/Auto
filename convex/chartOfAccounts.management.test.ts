@@ -100,7 +100,7 @@ test.each([
       await expect(
         user.query(api.chartOfAccounts.list, { orgId }),
       ).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
-    if (!permissions.includes(PERMISSIONS.MANAGE_FINANCE)) {
+    if (!new Set<string>(permissions).has(PERMISSIONS.MANAGE_FINANCE)) {
       await expect(
         user.mutation(api.chartOfAccounts.create, {
           orgId,

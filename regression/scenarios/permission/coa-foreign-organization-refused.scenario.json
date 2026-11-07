@@ -1,0 +1,68 @@
+{
+  "id": "coa-foreign-organization-refused",
+  "domain": "permission",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.list",
+      "input": {
+        "targetOrg": "B"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "targetOrg": "B",
+        "code": "2510"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "targetOrg": "A",
+        "accountOrg": "B",
+        "active": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "crossOrg.calls",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "foreignAccount.active",
+      "value": true
+    }
+  ],
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "foreign organizations are refused for chart create update and list"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "7747836a1a4a7318a3af4eace08753764c56e5858f07d86e84bba7bd90b3195a"
+}

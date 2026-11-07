@@ -824,7 +824,10 @@ export const create = mutation({
       .withIndex("by_org_code", (q) => q.eq("orgId", args.orgId).eq("code", args.code))
       .unique();
     if (existing) {
-      throw new ConvexError(`Account code "${args.code}" already exists in this organization.`);
+      throw new ConvexError({
+        code: "ACCOUNT_CODE_EXISTS",
+        message: "This account code already exists in this organization.",
+      });
     }
 
     if (args.parentAccountId) {
