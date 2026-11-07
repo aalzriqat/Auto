@@ -1339,12 +1339,14 @@ kills two tests. These are money findings, not deferred test-only follow-ups.
 
 | Check | Expected result | Executable evidence |
 | --- | --- | --- |
-| Financed SOURCED DIRECT and STOCK | 1,023,700 minor management net, including 451,300 fee, 300,000 preparation and 110,000 commissions; customer price 12,100,000 | `convex/reports.matchesDeal.test.ts`, literal public report and overview assertions |
-| Cash without application | Cash cockpit management net 1,790,000 minor, price 12,100,000 | same suite, cash case |
+| Financed SOURCED DIRECT and STOCK | 1,133,700 minor before commissions and 1,023,700 after, with 451,300 fee, 300,000 preparation and 110,000 commissions; price 12,100,000 | `convex/reports.matchesDeal.test.ts`, literal public report and overview assertions |
+| Cash without application | 1,900,000 minor before commissions, cash cockpit net 1,790,000 after, price 12,100,000 | same suite, cash case |
+| MANAGER template and ADMIN, sale plus line commissions | SOURCED financed 1,133,700 before and 998,700 after; CASH 1,900,000 before and 1,765,000 after; commission component 135,000 | same suite, four owner-ruling cases and their scenario records |
+| Pending commissions | Base profit remains available; after figure is null and counted. Settled/unsettled fee selection still applies to the base | same suite, pending CASH, financed and settlement cases |
 | Permission and unreadable evidence | Main's report and cost gates remain. Without finance access, the real MANAGER template sees the owner's CASH and SOURCED financed values. Commission-only fields retain their gate; unsafe or mixed fee evidence never becomes zero | same suite, role and fee cases |
 | Post-completion changes and routes | Late fee actual, removed preparation, supplier-borne expenses, both supplier routes and cancelled siblings preserve report/deal parity | same suite, literal self-attack cases |
 | Settlement-dependent legacy estimate | Unsettled net 875,000; settled net 1,023,700, using posted canonical invoice evidence | same suite, settled/unsettled cases |
-| Cards, performance, CSV | Included revenue minus costs and reconciliation equals included management net; performance sums that net; CSV columns use the same row values | backend suite, `lib/saleReporting.test.ts`, and explicit CSV projection in the report page |
+| Cards, performance, CSV | Included revenue minus costs and reconciliation equals before-commission profit; performance sums before and after separately; CSV uses the same row values | backend suite, `lib/saleReporting.test.ts`, and explicit CSV projection in the report page |
 | Rollout and bilingual page | Legacy backend is withheld, current figures render with EN/AR labels and RTL direction | `components/reports/ReportsPage.matchesDeal.test.tsx` |
 
 Failing-first commits are `173185b2d12a767be6b91bb6c46f829530eccf94`
@@ -1353,12 +1355,12 @@ Failing-first commits are `173185b2d12a767be6b91bb6c46f829530eccf94`
 The permission follow-up records the 2026-11-07 owner quote "Keep today's view"
 in its bound test name and ADR. The answer's comment id is not supplied; c24730
 identifies the problem comment. Ruling attribution remains pending confirmation.
-The untouched commission suite also exposes a separate contract conflict:
-it requires base profit 5000 and net after commissions 4875, while this PR
-defines both as management net. The permission repair yields 4875, and the
-unchanged test remains red. No certification is claimed for that conflict.
+The owner ruling on 2026-11-07, asked in Arabic, resolves the profit contract:
+"قبل العمولات (مقترح)". Base profit is before commissions; the separate after
+figure equals the deal page. The unchanged commission suite requires 5000 / 4875.
+The ADR records the supplied answer. No Jira answer id is invented.
 
-Nine scenario records cite the stable SCRUM-928 c24715 brief digest. This is local,
+The scenario records retain the stable SCRUM-928 c24715 brief digest. This is local,
 serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
 independent review seats. No posting, journal or lifecycle definition changed.

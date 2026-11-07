@@ -4305,7 +4305,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     const dashRevenue = dash.salesTrend.reduce((sum, p) => sum + p.Revenue, 0);
 
     // The premise, asserted so this cannot pass by both being wrong together.
-    expect(report.totalProfit).toBe(2_700);
+    expect(report.totalProfit).toBe(3_000);
     expect(report.sales[0].netProfitAfterCommissions).toBe(2_700);
     expect(dashProfit).toBe(3_000);
     expect(dashRevenue).toBe(3_000);
@@ -4677,7 +4677,7 @@ describe("financed direct evidence that has gone missing fails closed", () => {
     const row = report.sales.find((r: { _id: string }) => r._id === saleId)!;
     // UNKNOWN, and distinguishable from zero — a sale that earned nothing and a
     // sale whose earning is unknown are different answers to the owner.
-    expect(row.netProfit).toBe(2_700);
+    expect(row.netProfit).toBe(3_000);
     expect(row.netProfitAfterCommissions).toBe(2_700);
     expect(row.recognizedRevenue).toBeNull();
     expect(row.netProfit).not.toBe(VEHICLE_PRICE - SUPPLIER_ENTITLEMENT);
@@ -4720,8 +4720,9 @@ describe("financed direct evidence that has gone missing fails closed", () => {
       ...range(),
     });
     if (!report) throw new Error("report withheld");
-    // SCRUM-928: the deal page deducts the 300 commission.
-    expect(report.totalProfit).toBe(2_700);
+    // Base profit adds back the deal page's 300 commission.
+    expect(report.totalProfit).toBe(3_000);
+    expect(report.sales[0].netProfitAfterCommissions).toBe(2_700);
     expect(report.unknownMarginSaleCount).toBe(0);
   });
 });

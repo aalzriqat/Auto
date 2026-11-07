@@ -34,11 +34,15 @@
   "expected": [
     {
       "observable": "row.netProfitMinor",
-      "value": 1023700
+      "value": 1133700
     },
     {
-      "observable": "row.matchesDeal",
+      "observable": "row.netAfterMatchesDeal",
       "value": true
+    },
+    {
+      "observable": "row.netAfterCommissionsMinor",
+      "value": 1023700
     }
   ],
   "rulings": [
@@ -66,7 +70,8 @@
     "convex/utils/dealSettlementFigures.ts",
     "convex/utils/cashDealFigures.ts",
     "convex/utils/dealProfitReads.ts",
-    "convex/utils/dealFinancialSummary.ts"
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
   ],
-  "fingerprint": "0a82a4f72db800bdae4dcc34afab9eba0b2877f426bec8e4a8f8e616b35e75be"
+  "fingerprint": "bbacfa6920f788d3faa867aa9b4fa1b3ad30107f5aa588a841871a3c515a7451"
 }

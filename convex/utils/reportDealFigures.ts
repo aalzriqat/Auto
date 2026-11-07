@@ -11,14 +11,13 @@ import { saleEconomics, recordedConsignedMargin, recordedFinancedNetRevenue, rec
 import { vehicleCapitalizedCostFromExpenses } from "./vehicleCost";
 import { deriveVehicleCostBasis, deriveDealerPreparationExpenses, MAX_COST_BASIS_EXPENSES } from "./vehicleCostBasis";
 import { profitCommissionsFromRows, normalizeProfitExpenses } from "./dealProfitReads";
-import { withDealManagementCosts } from "./dealManagementNet";
+import { deriveDealManagementCosts } from "./dealManagementNet";
 import { cashAccountingProfit } from "./cashDealFigures";
 import { cockpitFeeSummary, cockpitManagementProfit, resolveDealRoute, resolveFinancierLeg, resolveFinancierObligation, resolveSupplierSettlementMinor,
   saleMarginEvidence, saleSupplierEvidence, supplierObligationFromRows } from "./dealSettlementFigures";
 import { customerInvoicePositionFromRows } from "./customerInvoiceObligation";
 import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./money";
 import { MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
-import type { DealFinancialSummary } from "./dealFinancialSummary";
 import type { MarginEvidence } from "./dealSettlementFigures";
 
 export const MAX_REPORT_SALES = 800;
@@ -45,6 +44,7 @@ export type ReportDealFigures = {
   economics: ReturnType<typeof saleEconomics>;
   vehicleCost: number;
   profit: DealProfit;
+  profitBeforeCommissions: DealProfit;
   salePrice: number | null;
   salePriceUnavailableReason: "UNSAFE_AMOUNT" | "NOT_RECORDED" | "DEAL_UNAVAILABLE" | null;
   currency: string;
@@ -55,7 +55,7 @@ export type ReportDealFigures = {
 /** A card's operands cover the same complete row and denomination. */
 export function reportContributionFor(figure: ReportDealFigures, orgCurrency: string):
   { available: true; revenueMinor: number; costMinor: number; netMinor: number } | { available: false } {
-  const { economics, profit } = figure;
+  const { economics, profitBeforeCommissions: profit } = figure;
   const revenueMinor = economics.recognizedRevenue === null ? undefined :
     toMinorSameCurrencyOrUndefined(economics.recognizedRevenue, orgCurrency, orgCurrency);
   if (!profit.available || figure.currency !== orgCurrency || revenueMinor === undefined) return { available: false };
@@ -64,18 +64,20 @@ export function reportContributionFor(figure: ReportDealFigures, orgCurrency: st
   return { available: true, revenueMinor, costMinor, netMinor: profit.amountMinor };
 }
 
-type ReportBase = Omit<ReportDealFigures, "profit" | "salePrice" | "salePriceUnavailableReason">;
+type ReportBase = Omit<ReportDealFigures, "profit" | "profitBeforeCommissions" | "salePrice" | "salePriceUnavailableReason">;
+type FinancedFigures = ReturnType<typeof deriveFinancedOverviewFigures>;
 
 function sameProfit(left: DealProfit, right: DealProfit): boolean {
   if (left.available && right.available) return left.amountMinor === right.amountMinor;
   return !left.available && !right.available && left.reason === right.reason;
 }
 
-function overviewReportResult(base: ReportBase, summary: DealFinancialSummary): ReportDealFigures {
-  if (summary.customerSalePrice) return { ...base, profit: summary.profit,
+function overviewReportResult(base: ReportBase, figures: FinancedFigures): ReportDealFigures {
+  const { summary, profitBeforeCommissions } = figures;
+  if (summary.customerSalePrice) return { ...base, profit: summary.profit, profitBeforeCommissions,
     salePrice: fromMinorUnits(summary.customerSalePrice.amountMinor, base.currency), salePriceUnavailableReason: null };
   const unsafePrice = summary.unreadable.some((field) => field.field === "customerSalePrice");
-  return { ...base, profit: summary.profit, salePrice: null,
+  return { ...base, profit: summary.profit, profitBeforeCommissions, salePrice: null,
     salePriceUnavailableReason: unsafePrice ? "UNSAFE_AMOUNT" : "NOT_RECORDED" };
 }
 
@@ -85,16 +87,16 @@ function cashReportResult(base: ReportBase, basis: ReturnType<typeof deriveVehic
   const { sale, vehicle, economics, currency } = base;
   const showroomExpenses = vehicle?.sourceType !== "SOURCED" && basis && !basis.available
     ? { available: false as const, reason: "VehicleCostBasisUnreadable" as const } : preparation ?? { available: false as const };
-  const profit = withDealManagementCosts({ profit: cashAccountingProfit({ sale, economics, currency }), showroomExpenses, commissions: commission });
+  const management = deriveDealManagementCosts({ profit: cashAccountingProfit({ sale, economics, currency }), showroomExpenses, commissions: commission });
   const salePriceMinor = toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency);
-  return { ...base, profit, salePrice: salePriceMinor === undefined ? null : fromMinorUnits(salePriceMinor, currency),
+  return { ...base, ...management, salePrice: salePriceMinor === undefined ? null : fromMinorUnits(salePriceMinor, currency),
     salePriceUnavailableReason: salePriceMinor === undefined ? "UNSAFE_AMOUNT" : null };
 }
 type PendingFinance = {
     app: Doc<"financeApplications">;
     route: ReturnType<typeof resolveDealRoute>;
-    derive: (moneySettled: boolean) => DealFinancialSummary;
-    resultFor: (summary: DealFinancialSummary) => ReportDealFigures;
+    derive: (moneySettled: boolean) => FinancedFigures;
+    resultFor: (figures: FinancedFigures) => ReportDealFigures;
     margin: MarginEvidence;
     supplierClaim: Doc<"vehicleSupplierReceivables"> | undefined;
     payableRows: Doc<"vehicleSupplierPayables">[];
@@ -196,7 +198,8 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
       return { kind: "READY", base, result: cashReportResult(base, basis, preparation, commission) };
     }
     if (!app || !proven) {
-      return { kind: "READY", base, result: { ...base, profit: { available: false, reason: "UnknownMargin" }, salePrice: null, salePriceUnavailableReason: "DEAL_UNAVAILABLE" } };
+      return { kind: "READY", base, result: { ...base, profit: { available: false, reason: "UnknownMargin" },
+        profitBeforeCommissions: { available: false, reason: "UnknownMargin" }, salePrice: null, salePriceUnavailableReason: "DEAL_UNAVAILABLE" } };
     }
     const liveFees = feesByApp.get(app._id) ?? [];
     if (liveFees.length > MAX_LIVE_DEAL_FEE_LINES) refuseBatch();
@@ -223,8 +226,11 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
     };
     const unsettled = derive(false);
     const settled = derive(true);
-    const resultFor = (summary: DealFinancialSummary): ReportDealFigures => overviewReportResult(base, summary);
-    if (sameProfit(unsettled.profit, settled.profit)) return { kind: "READY", base, result: resultFor(unsettled) };
+    const resultFor = (figures: FinancedFigures): ReportDealFigures => overviewReportResult(base, figures);
+    if (sameProfit(unsettled.summary.profit, settled.summary.profit) &&
+      sameProfit(unsettled.profitBeforeCommissions, settled.profitBeforeCommissions)) {
+      return { kind: "READY", base, result: resultFor(unsettled) };
+    }
     return { kind: "PENDING", base, pending: { app, route, derive, resultFor, margin, supplierClaim, payableRows } };
   });
 

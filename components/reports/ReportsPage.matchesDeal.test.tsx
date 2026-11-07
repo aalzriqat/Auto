@@ -37,8 +37,8 @@ function showReport() {
   return render(<LanguageProvider><OrgProvider><ReportsPage /></OrgProvider></LanguageProvider>);
 }
 
-test("a legacy backend payload is withheld before its missing currency can crash the report", () => {
-  state.sales = { totalRevenue: 1885, totalCost: 0, totalProfit: 1885, sales: [
+test.each([undefined, "DEAL_MANAGEMENT_NET_V1"])("a legacy backend payload (%s) is withheld before its profit can be mislabelled", (figureBasis) => {
+  state.sales = { figureBasis, totalRevenue: 1885, totalCost: 0, totalProfit: 1885, sales: [
     { _id: "sale-a", saleDate: 1794009600000, salePrice: 11785, totalCost: 0, netProfit: 1885 },
   ] };
   showReport();
@@ -49,15 +49,17 @@ test("a legacy backend payload is withheld before its missing currency can crash
 test.each(["en", "ar"])("current report renders exact deal figures with %s labels and direction", (locale) => {
   state.locale = locale;
   state.sales = {
-    figureBasis: "DEAL_MANAGEMENT_NET_V1", totalRevenue: 1885, totalCost: 861.3, totalProfit: 1023.7,
+    figureBasis: "DEAL_MANAGEMENT_NET_V2", totalRevenue: 1885, totalCost: 751.3, totalProfit: 1133.7,
     totalCommissions: 110, commissionIncompleteSaleCount: 0,
-    sales: [{ _id: "sale-a", saleDate: 1794009600000, salePrice: 12100, totalCost: 861.3,
-      netProfit: 1023.7, netProfitAfterCommissions: 1023.7, commissionsTotal: 110,
+    sales: [{ _id: "sale-a", saleDate: 1794009600000, salePrice: 12100, totalCost: 751.3,
+      netProfit: 1133.7, netProfitAfterCommissions: 1023.7, commissionsTotal: 110,
       recognizedRevenue: 1885, currency: "JOD", includedInTotals: true }],
   };
   const view = showReport();
   expect(screen.getByText(/12,100/)).toBeTruthy();
-  expect(screen.getAllByText(/1,023.7/).length).toBeGreaterThanOrEqual(2);
+  expect(screen.getAllByText(/1,133.7/).length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText(/1,023.7/)).toBeTruthy();
   expect(view.container.querySelector("[dir]")?.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
-  expect(screen.getAllByText(locale === "ar" ? "صافي الربح (بعد العمولات)" : "Net profit (after commissions)").length).toBeGreaterThan(0);
+  expect(screen.getByRole("columnheader", { name: locale === "ar" ? "صافي الربح" : "Net Profit" })).toBeTruthy();
+  expect(screen.getByRole("columnheader", { name: locale === "ar" ? "الصافي بعد العمولات" : "Net after commissions" })).toBeTruthy();
 });

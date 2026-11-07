@@ -220,9 +220,9 @@ function useReportsViewModel() {
   const members = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } } : "skip");
 
   // Main deploys the frontend before the manually deployed backend. Never
-  // relabel its old accounting-margin payload as management net.
-  const salesReportRequiresUpdate = salesPayload != null && salesPayload.figureBasis !== "DEAL_MANAGEMENT_NET_V1";
-  const performanceReportRequiresUpdate = performancePayload?.some((row) => row.figureBasis !== "DEAL_MANAGEMENT_NET_V1") ?? false;
+  // relabel an older profit contract as the current two-figure contract.
+  const salesReportRequiresUpdate = salesPayload != null && salesPayload.figureBasis !== "DEAL_MANAGEMENT_NET_V2";
+  const performanceReportRequiresUpdate = performancePayload?.some((row) => row.figureBasis !== "DEAL_MANAGEMENT_NET_V2") ?? false;
   const salesReport = salesReportRequiresUpdate ? undefined : salesPayload;
   const performanceReport = performanceReportRequiresUpdate ? undefined : performancePayload;
 
@@ -323,7 +323,7 @@ function SalesReportTab({
       currency: sale.currency,
       [t("SalePrice")]: sale.salePrice,
       [t("ReportDealCosts")]: sale.totalCost,
-      [t("ReportManagementNet")]: sale.netProfit,
+      [t("NetProfit")]: sale.netProfit,
       ...(showCommissions ? {
         [t("ReportCommissionsColumn")]: sale.commissionsTotal,
         [t("ReportNetAfterCommissions")]: sale.netProfitAfterCommissions,
@@ -376,7 +376,7 @@ function SalesReportTab({
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("ReportManagementNet")}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("NetProfit")}</CardTitle>
                   <BadgeDollarSign className="h-4 w-4 text-green-500 no-print" />
                 </CardHeader>
                 <CardContent>
@@ -412,7 +412,7 @@ function SalesReportTab({
                     <TableHead>{t("Salesperson")}</TableHead>
                     <TableHead className="text-right">{t("SalePrice") || "Sale Price"}</TableHead>
                     <TableHead className="text-right">{t("ReportDealCosts")}</TableHead>
-                    <TableHead className="text-right">{t("ReportManagementNet")}</TableHead>
+                    <TableHead className="text-right">{t("NetProfit")}</TableHead>
                     {showCommissions && (
                       <>
                         <TableHead className="text-right">{t("ReportCommissionsColumn")}</TableHead>

@@ -34,7 +34,7 @@
   "expected": [
     {
       "observable": "row.netProfit",
-      "value": 1023.7
+      "value": 1133.7
     },
     {
       "observable": "row.netAfterCommissions",
@@ -46,11 +46,11 @@
     },
     {
       "observable": "report.totalProfit",
-      "value": 1023.7
+      "value": 1133.7
     },
     {
       "observable": "performance.totalProfit",
-      "value": 1023.7
+      "value": 1133.7
     },
     {
       "observable": "deal.reason",
@@ -82,7 +82,8 @@
     "convex/utils/dealSettlementFigures.ts",
     "convex/utils/cashDealFigures.ts",
     "convex/utils/dealProfitReads.ts",
-    "convex/utils/dealFinancialSummary.ts"
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
   ],
-  "fingerprint": "1b28107a6c867c95693be5160feea4a828ad508ac026ae5f777c5b71c1a6708a"
+  "fingerprint": "81d19a22cb2c28e3fcd4d058b3c139f9df7ff0ca1589265560346c8a096ba1e0"
 }

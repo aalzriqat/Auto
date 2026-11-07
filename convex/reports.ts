@@ -98,7 +98,7 @@ export const getSalesAndProfitReport = query({
     let totalGrossTransactionValue = 0;
     let totalSupplierSettlement = 0;
     let agentSaleCount = 0;
-    // Rows lacking complete revenue and management net in the report currency
+    // Rows lacking complete revenue and profit before commissions in the report currency
     // are excluded from all three cards and disclosed together.
     let unknownMarginSaleCount = 0;
     let unknownSupplierSettlementSaleCount = 0;
@@ -111,12 +111,12 @@ export const getSalesAndProfitReport = query({
     let totalNetProfitAfterCommissions = 0;
     let commissionIncompleteSaleCount = 0;
     const enrichedSales = figures.map((figure) => {
-      const { sale, vehicle, economics, profit, currency } = figure;
+      const { sale, vehicle, economics, profit, profitBeforeCommissions, currency } = figure;
       const contribution = reportContributionFor(figure, orgCurrency);
       const included = contribution.available;
-      const netProfit = profit.available ? fromMinorUnits(profit.amountMinor, currency) : null;
+      const netProfit = profitBeforeCommissions.available ? fromMinorUnits(profitBeforeCommissions.amountMinor, currency) : null;
       const recognizedRevenue = contribution.available ? fromMinorUnits(contribution.revenueMinor, orgCurrency) : null;
-      // Reconciliation between recognized revenue and the deal page's net.
+      // Reconciliation between recognized revenue and management profit before commissions.
       // Labelled as costs AND reconciliation, not as actual cash spending.
       const totalDealCost = contribution.available ? fromMinorUnits(contribution.costMinor, orgCurrency) : null;
       if (!included) unknownMarginSaleCount += 1;
@@ -128,10 +128,10 @@ export const getSalesAndProfitReport = query({
       totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
       if (canSeeCommissions) {
-        if (!contribution.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
+        if (!contribution.available || !profit.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
         else {
           totalCommissions += figure.commissionsTotal;
-          totalNetProfitAfterCommissions += fromMinorUnits(contribution.netMinor, orgCurrency);
+          totalNetProfitAfterCommissions += fromMinorUnits(profit.amountMinor, orgCurrency);
         }
       }
       return {
@@ -141,8 +141,8 @@ export const getSalesAndProfitReport = query({
         currency,
         commissionsTotal: canSeeCommissions ? figure.commissionsTotal : null,
         commissionPending: canSeeCommissions && figure.commissionPending,
-        netProfitAfterCommissions: canSeeCommissions ? netProfit : null,
-        profitUnavailableReason: profit.available ? null : profit.reason,
+        netProfitAfterCommissions: canSeeCommissions && profit.available ? fromMinorUnits(profit.amountMinor, currency) : null,
+        profitUnavailableReason: profitBeforeCommissions.available ? null : profitBeforeCommissions.reason,
         includedInTotals: included,
         vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year, vehicleVin: vehicle?.vin,
@@ -159,7 +159,7 @@ export const getSalesAndProfitReport = query({
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
-      figureBasis: "DEAL_MANAGEMENT_NET_V1" as const,
+      figureBasis: "DEAL_MANAGEMENT_NET_V2" as const,
       // Turnover. Excludes the gross of every consigned sale — the dealership
       // never owned those cars and may recognize only its margin on them.
       totalRevenue,
@@ -185,7 +185,7 @@ export const getSalesAndProfitReport = query({
        */
       unknownSupplierSettlementSaleCount,
       /**
-       * Employee commissions are already included in management net. Null when the caller lacks view:commissions. The two totals
+       * Commissions bridge base profit to management net. Null when the caller lacks view:commissions. The two totals
        * cover only the sales whose margin and commission are both known, and
        * `commissionIncompleteSaleCount` says how many were left out.
        */
@@ -769,7 +769,7 @@ export const getSalespersonPerformance = query({
       for (const sale of userSales) {
         const figure = figuresBySale.get(sale._id);
         if (!figure) throw new Error("Missing report sale figure");
-        const { economics } = figure;
+        const { economics, profit } = figure;
         const contribution = reportContributionFor(figure, orgCurrency);
         if (!contribution.available) unknownMarginSaleCount += 1;
         else {
@@ -778,17 +778,17 @@ export const getSalespersonPerformance = query({
         }
         totalGrossTransactionValue += economics.grossTransactionValue;
         if (canSeeCommissions) {
-          if (!contribution.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
+          if (!contribution.available || !profit.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
           else {
             totalCommissions += figure.commissionsTotal;
-            totalNetProfitAfterCommissions += fromMinorUnits(contribution.netMinor, orgCurrency);
+            totalNetProfitAfterCommissions += fromMinorUnits(profit.amountMinor, orgCurrency);
           }
         }
       }
 
       return {
         userId,
-        figureBasis: "DEAL_MANAGEMENT_NET_V1" as const,
+        figureBasis: "DEAL_MANAGEMENT_NET_V2" as const,
         userName,
         vehiclesSold: userSales.length,
         totalRevenue,

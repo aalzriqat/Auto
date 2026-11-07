@@ -4,9 +4,10 @@ Date: 2026-11-07. Issue: SCRUM-928, part 1. Status: accepted for implementation.
 
 ## Invariant and scope
 
-For each completed, live sale, the report's customer sale price, profit and net
-after commissions use the deal page's shared value derivation, to the minor
-unit, with the same evidence refusals. Unknown is never zero. Access follows
+For each completed, live sale, the report's customer sale price and both profit
+figures use the deal page's shared value derivation, to the minor unit.
+Base profit is before commissions. Net after commissions equals the deal page's
+management net. Unknown is never zero. Access follows
 main's report rules at `684ba04d0`, independently of deal-page access. The report
 does not change deal economics, posting, commission amounts or lifecycle rules.
 
@@ -91,31 +92,57 @@ follows the existing supplier, financier and canonical-invoice proof. Keep the
 cockpit's SOURCED fee-completion rule and the overview's STOCK fee-completion
 rule distinct, as they are today.
 
-## Column and card meaning
+## Owner profit ruling and column meaning
 
-The existing profit field becomes management net, including commissions, as on
-the deal page. Label it "Net profit (after commissions)" in English and Arabic.
-The net-after-commissions column is the same amount; never subtract commissions
-again. Keep the commission column as a disclosed component, when authorized.
+Owner 2026-11-07, asked in Arabic: profit column is before commissions.
+The answer verbatim was "قبل العمولات (مقترح)". This supersedes the earlier
+decision that both columns contain management net after commissions.
+
+`netProfit`, `totalProfit` and Performance `totalProfit` contain management net
+before commissions. The shared deal derivation now returns that component before
+it subtracts the exact sale commission and deal commission lines. Fees, showroom
+preparation and the other deal-page operands remain included. There is no second
+report formula. The internal financed result contains the summary and this
+component separately. The deal query returns only the existing summary, preserving
+its permissions and payload.
+
+`netProfitAfterCommissions`, `totalNetProfitAfterCommissions` and the Performance
+equivalent contain the deal page's management net, exactly. Never subtract the
+commission twice. Pending or unreadable commissions withhold this figure and
+increment the separate incomplete count. Before-commission profit stays available
+when its own operands are readable. Settlement selection compares both components,
+so pending commissions cannot mask the forecast-versus-actual fee decision.
+
+Restore main's profit label, "Net Profit" / "صافي الربح", for the base column,
+cards and CSV. The after-commissions label stays unchanged. Keep the commission
+column as a disclosed component, when authorized. The permission gates remain
+exactly as restored in `894433d9b`, under "Keep today's view".
+
+No new Jira comment id was supplied or verified. `regression/rulings.json` and
+the scenarios retain the existing `SCRUM-928#c24715` reference and digest. That
+reference identifies the original brief, not the new Arabic answer. This ADR
+records the supplied ruling without inventing an id.
 The sale-price column uses the deal page's legal-invoice, submitted-quotation,
 target-amount precedence. Cash uses the sale cockpit's management net.
 
 Revenue retains the existing recognized-revenue convention: consigned gross is
 deal volume, not dealership turnover. The difference between that recognized
-revenue and management net is labelled "Deal costs and reconciliation". It
-includes fees, showroom expenses and commissions, and can also bridge a legacy
+revenue and before-commission management profit is labelled "Deal costs and reconciliation". It
+includes fees and showroom expenses, and can also bridge a legacy
 revenue basis to the application basis. It is not labelled as actual spending. Per-row costs
-and revenue join the totals only when both revenue and management net are
+and revenue join the totals only when both revenue and before-commission profit are
 complete and in the organization currency. Thus the same included rows satisfy
 revenue minus costs equals net profit. Count and disclose excluded rows. Keep
 gross deal volume and supplier settlement as separate, qualified figures.
 Do not label these management totals as the GL income statement.
 
-The salesperson performance tab publishes the same per-deal profit and will
-sum the same derived rows. Inventory, expenses, lead conversion, dashboard and
+The salesperson performance tab sums the same before-commission and after-commission
+components separately. Inventory, expenses, lead conversion, dashboard and
 legacy P&L are part 2; their different measures need separate owner decisions.
 
-The response carries `DEAL_MANAGEMENT_NET_V1`. A frontend running against the
+The response carries `DEAL_MANAGEMENT_NET_V2` for the two distinct profit figures.
+The initial PR's V1 used after-commission net in both fields and is refused too.
+A frontend running against the
 previous backend withholds the Sales and Performance tables with an explicit
 update-required message, rather than mislabelling accounting margin or
 formatting a row without its new currency field. Loading also states no number.
@@ -147,6 +174,12 @@ also exercise the public readers.
 
 ## Local evidence and remaining certification
 
+The before-commission follow-up's exact field table, red and green counts,
+32-file results and verification boundaries are in the
+[follow-up evidence](2026-11-07-sales-report-profit-follow-up-evidence.md).
+The earlier runs below remain historical evidence of the original extraction
+and permission repair, not a definition of the superseding profit contract.
+
 The permission follow-up reproduced four failing role cases before its fix.
 Afterward, all 19 report tests and all 70 scenario validators pass. The real
 `DEFAULT_ROLE_TEMPLATES` MANAGER permissions are used for CASH and SOURCED
@@ -156,14 +189,13 @@ checks pass. The scenario's executable test name includes the verbatim ruling
 text. The supplied source identifies c24730 as the problem comment, not the
 owner answer. The answer's comment id remains unverified.
 
-The untouched `dealCommissions.test.ts` exposes a separate contract conflict.
-It requires `netProfit` and `totalProfit` to remain pre-commission margin 5000,
-and the separate net-after-commissions fields to be 4875. The PR defines both
-as management net. After restoring access, the assertion fails with 4875
-versus 5000, rather than null versus 5000. Changing only permission inputs
-cannot satisfy both definitions. This follow-up does not change the test or
-introduce a role-dependent value formula. Resolving that contract needs an
-explicit scope decision before this PR can pass its required suite.
+The owner profit ruling resolves the earlier `dealCommissions.test.ts` contract
+conflict. The file remains byte-for-byte unchanged from `a7d31e68a`. Its base
+profit is 5000 and its after-commission net is 4875. MANAGER template and ADMIN
+fixtures also check sale plus line commissions on SOURCED financed and CASH
+sales, with literal expected amounts. The financed fixture has a 451,300 fee,
+300,000 preparation cost and 135,000 commissions. Before profit is 1,133,700 and
+after profit is 998,700 minor. CASH is 1,900,000 before and 1,765,000 after.
 
 The first public-query red run at `173185b2d` was 9 failed, 1 passed. The expanded
 tests against committed snapshot `442fa7d18` were 20 failed, 14 passed. The
@@ -172,10 +204,10 @@ checks. Expectations are literal amounts from the finding and worked fixtures.
 
 | Self-attack | Public check and result |
 | --- | --- |
-| A fee changes after completion | Late actual 500,000 yields 975,000 minor on both readers. |
-| Deleted or supplier-borne expenses get deducted | Deleted 700 and supplier-borne 900 stay excluded; removing the live 300 expense changes both nets to 1,323,700. |
+| A fee changes after completion | Late actual 500,000 yields 1,085,000 before commissions; report after and page net are 975,000 minor. |
+| Deleted or supplier-borne expenses get deducted | Deleted 700 and supplier-borne 900 stay excluded; removing the live 300 expense gives 1,433,700 before and 1,323,700 after. |
 | Supplier routes or repeated vehicles get mixed | THROUGH_SHOWROOM uses this sale's payable; cancelled and deleted siblings on the same vehicle do not add rows or costs. |
-| Cash is accidentally treated as financed | No application; both report and cash cockpit yield 1,790,000 minor. |
+| Cash is accidentally treated as financed | No application; before profit is 1,900,000, while report after and cash cockpit yield 1,790,000 minor. |
 | Unknown or mixed-currency fees become zero | NaN yields ExpensesUnreadable; USD actual on JOD deal yields ExpensesMixedDenomination on both readers. |
 
 Design review additionally caught that settlement can change the amount. Posted
@@ -199,9 +231,9 @@ nested conditionals. Small named helpers now express the same branches; both
 the cognitive-complexity rule (limit 15) and nested-conditional rule pass for
 all four new figure modules. This limited rule check is not a SonarCloud verdict.
 
-The existing suites' accounting assertions remain. Report assertions that
-expected pre-commission margin are updated to management net. Missing commission
-decisions remain unavailable, and a missing vehicle cannot invent preparation
+The existing suites' accounting assertions remain. Report assertions use the
+owner's separate before-commission and after-commission figures. Missing commission
+decisions withhold only the after figure, and a missing vehicle cannot invent preparation
 evidence. Dashboard and legacy P&L assertions keep their original basis for part 2.
 
 Independent Opus and Codex seats, CI/Sonar, the three live bug hunters, rendered
@@ -216,6 +248,13 @@ existing release process. The local work is committed without pushing.
 - [Convex best practices](https://docs.convex.dev/understanding/best-practices):
   plain TypeScript helpers, indexed reads, bounded collections and sparing use
   of nested query calls. This supports the shared pure derivation and batch loader.
+- [Convex validation](https://docs.convex.dev/functions/validation), checked
+  2026-11-07: runtime payloads need explicit boundaries. TypeScript annotations
+  do not remove fields. The internal before-commission component is excluded
+  from the deal query response by selecting only the summary.
+- [Convex testing](https://docs.convex.dev/testing/convex-test), checked
+  2026-11-07: public-query tests use the mock backend with stored fixture rows.
+  This supports fast regression evidence, not a claim about cloud execution or OCC.
 - [OWASP authorization guidance](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html):
   enforce authorization on the server and test the allowed and refused cases.
   The owner's report-specific policy determines which grants each field needs.

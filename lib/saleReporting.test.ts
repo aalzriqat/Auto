@@ -24,13 +24,13 @@ const OWNED_SALE = { salePrice: 8_000, recognizedRevenue: 8_000, totalCost: 6_00
 
 test("SCRUM-928 filtered cards include the same complete rows, excluding another denomination", () => {
   const rows = [
-    { recognizedRevenue: 1885, totalCost: 861.3, netProfit: 1023.7, includedInTotals: true },
+    { recognizedRevenue: 1885, totalCost: 751.3, netProfit: 1133.7, includedInTotals: true },
     { recognizedRevenue: null, totalCost: null, netProfit: 1000, includedInTotals: false },
     { recognizedRevenue: null, totalCost: null, netProfit: null, includedInTotals: false },
   ];
   expect(sumRecognizedRevenue(rows)).toBe(1885);
-  expect(sumReportedCost(rows)).toBe(861.3);
-  expect(sumReportedProfit(rows)).toBe(1023.7);
+  expect(sumReportedCost(rows)).toBe(751.3);
+  expect(sumReportedProfit(rows)).toBe(1133.7);
   expect(countUnknownMargin(rows)).toBe(2);
 });
 

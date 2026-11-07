@@ -66,7 +66,8 @@
     "convex/utils/dealSettlementFigures.ts",
     "convex/utils/cashDealFigures.ts",
     "convex/utils/dealProfitReads.ts",
-    "convex/utils/dealFinancialSummary.ts"
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
   ],
   "fingerprint": "4e1484d3f6e7a97258ed47c8c9486256038b8b3bf459266d6ea592180c805e61"
 }

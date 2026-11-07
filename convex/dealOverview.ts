@@ -209,7 +209,7 @@ export const financedDealOverview = query({
         app, money: cockpit.money, consigned: consignedByCockpit,
         moneySettled: cockpit.stages.find((stage) => stage.key === "SETTLEMENT")?.state === "COMPLETE",
         fees, commissions, preparation, fullCostBasis: costBasisFor(null), mayReadCost,
-      });
+      }).summary;
     }
 
     let vehicleCostBasis: ServedVehicleCostBasis | null = null;

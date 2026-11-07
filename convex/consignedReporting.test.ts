@@ -844,12 +844,14 @@ describe("historical and new agent sales report identically", () => {
     });
     if (!freshReport) throw new Error("report withheld");
 
-    // The legacy row never recorded a commission decision. Unknown pay cannot be silently zeroed.
-    expect(legacyReport.totalRevenue).toBe(0);
+    // Pending commissions withhold the after figure, while base profit stays available.
+    expect(legacyReport.totalRevenue).toBe(3000);
     expect(freshReport.totalRevenue).toBe(3000);
     expect(legacyReport.totalCost).toBe(freshReport.totalCost);
-    expect(legacyReport.totalProfit).toBe(0);
-    expect(legacyReport.sales[0].profitUnavailableReason).toBe("CommissionsPending");
+    expect(legacyReport.totalProfit).toBe(3000);
+    expect(legacyReport.sales[0].profitUnavailableReason).toBeNull();
+    expect(legacyReport.sales[0].netProfitAfterCommissions).toBeNull();
+    expect(legacyReport.commissionIncompleteSaleCount).toBe(1);
     expect(freshReport.totalProfit).toBe(3000);
     expect(legacyReport.totalGrossTransactionValue).toBe(freshReport.totalGrossTransactionValue);
     expect(legacyReport.totalSupplierSettlement).toBe(freshReport.totalSupplierSettlement);
@@ -1120,10 +1122,12 @@ describe("historical consigned sales after the migration", () => {
       orgId: s.orgId, timeRange: "YEAR" as const,
     });
 
-    // SCRUM-928: the migration does not decide the legacy salesperson commission.
-    expect(sales.totalRevenue).toBe(0);
-    expect(sales.unknownMarginSaleCount).toBe(1);
-    expect(sales.sales[0].profitUnavailableReason).toBe("CommissionsPending");
+    // The migration does not decide commissions; that does not withhold base profit.
+    expect(sales.totalRevenue).toBe(MARGIN);
+    expect(sales.unknownMarginSaleCount).toBe(0);
+    expect(sales.sales[0].profitUnavailableReason).toBeNull();
+    expect(sales.sales[0].netProfitAfterCommissions).toBeNull();
+    expect(sales.commissionIncompleteSaleCount).toBe(1);
     expect(pl.totalRevenue).toBe(MARGIN);
     expect(dash.salesVolumeThisMonth).toBe(MARGIN);
 

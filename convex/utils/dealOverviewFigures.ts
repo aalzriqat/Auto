@@ -5,7 +5,7 @@ import { composeCustomerGapToDealer, deriveStockManagementProfit, isMinorAmount,
 import { deriveDealFinancialSummary, type DealFinancialSummary, type DealFinancialSummaryInputs, type RecordedCostsReason } from "./dealFinancialSummary";
 import { type DealerPreparationExpenses, type VehicleCostBasis } from "./vehicleCostBasis";
 import { toMinorUnits } from "./money";
-import { withDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
+import { deriveDealManagementCosts, type ProfitCommissions } from "./dealManagementNet";
 import { executionFeeHeadline, executionFeePosition, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
 
 export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "routeKnown" | "settlesDirectToSupplier" | "parties"> & {
@@ -220,7 +220,7 @@ export function deriveFinancedOverviewFigures(args: {
   preparation: DealerPreparationExpenses | null;
   fullCostBasis: VehicleCostBasis | null;
   mayReadCost: boolean;
-}): DealFinancialSummary {
+}): { summary: DealFinancialSummary; profitBeforeCommissions: DealFinancialSummary["profit"] } {
   const { app, money, consigned, moneySettled, fees, commissions, preparation, fullCostBasis, mayReadCost } = args;
   // The readable-total contract over EVERY live line: a NaN, fractional,
   // negative or unsafe amount, or lines that overflow, make the cockpit's
@@ -300,7 +300,20 @@ export function deriveFinancedOverviewFigures(args: {
     // consumes it by type and payer (c22119 Q2/Q4).
     boundExecutionActual(executionFee, frozenEstimatedFees, fees, money.currency)
   );
-  return deriveDealFinancialSummary({
+  const management = mayReadCost ? deriveDealManagementCosts({
+    showroomExpenses: preparation ?? { available: false }, commissions,
+    profit: routeSpecificProfit({
+      app, consigned, money, fullCostBasis,
+      expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
+      executionFee: feeHeadline, fullySettled, expensesMixed,
+      expensesUnreadable: expensesUnreadable ||
+        (frozenEstimatedFees !== undefined && expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
+    }),
+  }) : {
+    profit: { available: false as const, reason: "CostAccessRequired" as const },
+    profitBeforeCommissions: { available: false as const, reason: "CostAccessRequired" as const },
+  };
+  const summary = deriveDealFinancialSummary({
     currency: money.currency,
     routeKnown: money.routeKnown,
     settlesDirectToSupplier: money.settlesDirectToSupplier,
@@ -309,24 +322,7 @@ export function deriveFinancedOverviewFigures(args: {
       expensesReason !== null
         ? { actualTotalMinor: null, awaitingActuals: money.expenses.awaitingActuals, reason: expensesReason }
         : { ...money.expenses, reason: null },
-    profit: mayReadCost ? withDealManagementCosts({
-      showroomExpenses: preparation ?? { available: false },
-      commissions,
-      profit: routeSpecificProfit({
-        app,
-        consigned,
-        money,
-        fullCostBasis,
-        expectedExpensesMinor: expectedDealerBorne.totalMinor ?? undefined,
-        executionFee: feeHeadline,
-        fullySettled,
-        expensesMixed,
-        expensesUnreadable:
-          expensesUnreadable ||
-          (frozenEstimatedFees !== undefined &&
-            expectedDealerBorne.reason === "UNSAFE_AMOUNT"),
-      }),
-    }) : { available: false, reason: "CostAccessRequired" },
+    profit: management.profit,
     vehicleConsigned: consigned,
     app: {
       ...app,
@@ -336,4 +332,5 @@ export function deriveFinancedOverviewFigures(args: {
     expectedDealerBorne,
     feeEvidence,
   });
+  return { summary, profitBeforeCommissions: management.profitBeforeCommissions };
 }
