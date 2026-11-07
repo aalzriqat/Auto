@@ -85,8 +85,13 @@ describe("SCRUM-929 supplier balances", () => {
     for (const row of r.page) {
       const statement = await s.asUser.query(api.supplierStatement.outstanding, { orgId: s.orgId, supplierId: row.supplierId, nowMs: NOW });
       for (const c of row.currencies) {
-        expect(c.payableMinor).toBe(statement.payable.totals.find(t => t.currency === c.currency)?.grossMinor ?? 0);
-        expect(c.receivableMinor).toBe(statement.receivable.totals.find(t => t.currency === c.currency)?.grossMinor ?? 0);
+        const ap = statement.payable.totals.find(t => t.currency === c.currency);
+        const ar = statement.receivable.totals.find(t => t.currency === c.currency);
+        expect(c).toMatchObject({
+          payableMinor: ap?.grossMinor ?? 0, receivableMinor: ar?.grossMinor ?? 0,
+          overduePayableMinor: ap?.overdueMinor ?? 0, overdueReceivableMinor: ar?.overdueMinor ?? 0,
+          disputedPayableMinor: ap?.disputedMinor ?? 0, disputedReceivableMinor: ar?.disputedMinor ?? 0,
+        });
       }
       expect(await s.asUser.query(get, { orgId: s.orgId, supplierId: row.supplierId, nowMs: NOW })).toEqual(row);
     }
@@ -157,8 +162,15 @@ describe("SCRUM-929 supplier balances", () => {
     await expect(report(s, { orgId: foreignOrg })).rejects.toThrow();
     await expect(s.asUser.query(get, { orgId: s.orgId, supplierId: foreignSupplier, nowMs: NOW })).rejects.toThrow(/not found/i);
     expect((await report(s)).page.map(r => r.supplier)).toEqual(["Current supplier"]);
+    for (const permissions of [["view:finance"], ["view:cost_price"], []]) {
+      await s.t.run(ctx => ctx.db.patch(s.roleId, { permissions }));
+      await expect(report(s)).rejects.toThrow(/permission|authorized|access/i);
+      await expect(s.asUser.query(get, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW })).rejects.toThrow(/permission|authorized|access/i);
+    }
+    await s.t.run(ctx => ctx.db.patch(s.roleId, { permissions: ["view:finance", "view:cost_price"] }));
     await s.t.run(ctx => ctx.db.patch(s.subscriptionId, { plan: "free" }));
     await expect(report(s)).rejects.toThrow(/upgrade|feature|plan/i);
+    await expect(s.asUser.query(get, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW })).rejects.toThrow(/upgrade|feature|plan/i);
   });
   test.each([NaN, Infinity, 1.5, 8.64e15 + 1])("refuses invalid clock %s", async nowMs => {
     const s = await seed("clock");

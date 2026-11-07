@@ -44,7 +44,7 @@ import {
 import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
 import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
-import { SupplierDiscardDialog, useSupplierBeforeUnload } from "./SupplierDiscardDialog";
+import { SupplierDiscardDialog, useSupplierNavigationGuard } from "./SupplierDiscardDialog";
 import { SupplierSummaryTiles } from "./SupplierSummaryTiles";
 import {
   DuplicateCandidatesPanel,
@@ -191,7 +191,7 @@ function SupplierEditForm({
   const changed = Object.keys(args).filter((key) => key !== "reason").length > 0;
   const nameChanged = args.displayName !== undefined;
   const dirty = changed || reason !== "" || aliasState.dirty;
-  useSupplierBeforeUnload(dirty);
+  useSupplierNavigationGuard({ dirty, busy: busy || aliasState.busy });
   function requestClose() {
     if (busy || aliasState.busy) return;
     if (dirty) setConfirmDiscard(true);

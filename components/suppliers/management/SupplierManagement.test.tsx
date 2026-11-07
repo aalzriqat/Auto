@@ -5,7 +5,8 @@
  * Every string is checked in English and Arabic through the real dictionaries.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderContent, screen, waitFor, within } from "@testing-library/react";
+import { NavigationGuardProvider } from "nextjs-nav-guard";
 import { ConvexError } from "convex/values";
 
 type Row = {
@@ -106,6 +107,7 @@ import { mainNavigation, navItemPermitted } from "@/lib/navigation";
 import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
 const en = dictionaries.en as Record<string, string>;
+const render = (ui: React.ReactNode) => renderContent(<NavigationGuardProvider>{ui}</NavigationGuardProvider>);
 const ar = dictionaries.ar as Record<string, string>;
 const ORG = "org_1" as never;
 const SUP = "sup_gulf" as never;

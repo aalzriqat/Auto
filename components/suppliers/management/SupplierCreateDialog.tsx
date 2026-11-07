@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { describeSupplierError, useSupplierCreateFlow } from "../useSupplierCreateFlow";
-import { SupplierDiscardDialog, useSupplierBeforeUnload } from "./SupplierDiscardDialog";
+import { SupplierDiscardDialog, useSupplierNavigationGuard } from "./SupplierDiscardDialog";
 import {
   createFieldsFrom,
   DuplicateCandidatesPanel,
@@ -56,7 +56,7 @@ function SupplierCreateDialogBody({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const dirty = Object.values(values).some(value => value !== "");
-  useSupplierBeforeUnload(dirty);
+  useSupplierNavigationGuard({ dirty, busy: flow.creating });
   function requestClose() {
     if (flow.creating) return;
     if (dirty) setConfirmDiscard(true);

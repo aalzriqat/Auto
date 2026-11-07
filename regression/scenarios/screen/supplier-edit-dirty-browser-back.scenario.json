@@ -1,0 +1,57 @@
+{
+  "id": "supplier-edit-dirty-browser-back",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierScreen.edit.browserBack",
+      "input": {
+        "mode": "EDIT",
+        "navigation": "BACK",
+        "phone": "DRAFT_PHONE"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "cancelBack.draft",
+      "value": "PRESERVED"
+    },
+    {
+      "observable": "acceptBack.route",
+      "value": "SUPPLIERS_LIST"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "playwright/visual/supplier-navigation.visual.spec.ts",
+    "testName": "dirty supplier editing survives Back until discard is confirmed"
+  },
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "271203d5ec8d3a078b32d6417094efc64dd95a96"
+  },
+  "sourceGlobs": [
+    "components/suppliers/**",
+    "app/layout.tsx",
+    "package.json",
+    "pnpm-lock.yaml",
+    "test-utils/supplierNavigation*"
+  ],
+  "fingerprint": "46cb5bd295f0931f88790d33211f6f918814b99b9400e28f0933f4ef6bc20e6f"
+}

@@ -16,7 +16,8 @@
  * How the panels look and read in Arabic. The strings are the real English dictionary.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderContent, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { NavigationGuardProvider } from "nextjs-nav-guard";
 import { convexTestWithComponents } from "../../../test-utils/convexTest";
 import { seedOrgWithMember } from "../../../test-utils/seedOrg";
 import schema from "../../../convex/schema";
@@ -80,6 +81,7 @@ import { useSupplierCreateFlow } from "../useSupplierCreateFlow";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 
 const en = dictionaries.en as Record<string, string>;
+const render = (ui: React.ReactNode) => renderContent(<NavigationGuardProvider>{ui}</NavigationGuardProvider>);
 const MODULES = import.meta.glob("../../../convex/**/*.*s");
 
 let seq = 0;

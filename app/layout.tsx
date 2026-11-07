@@ -8,6 +8,7 @@ import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { isDealerWebsiteHost } from "@/lib/dealerHost";
+import { NavigationGuardProvider } from "nextjs-nav-guard";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -71,11 +72,13 @@ export default async function RootLayout({
       <body
         className={`${inter.variable} ${cairo.variable} ${ibmPlexSansArabic.variable} ${montserrat.variable} ${playfairDisplay.variable} font-cairo antialiased`}
       >
+        <NavigationGuardProvider>
         <LanguageProvider>
           <ClerkProviderWithLocale>
             <ConvexClientProvider>{children}</ConvexClientProvider>
           </ClerkProviderWithLocale>
         </LanguageProvider>
+        </NavigationGuardProvider>
         {showAnalytics ? <Analytics /> : null}
         {showAnalytics ? <SpeedInsights /> : null}
       </body>

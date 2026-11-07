@@ -4,6 +4,7 @@ import { LanguageProvider } from "../components/providers/LanguageProvider";
 import { SupplierCreateDialog } from "../components/suppliers/management/SupplierCreateDialog";
 import { SupplierDetailScreen } from "../components/suppliers/management/SupplierDetailScreen";
 import type { Id } from "../convex/_generated/dataModel";
+import { NavigationGuardProvider } from "nextjs-nav-guard";
 
 /** Router-consumer stand-in: a history event reaching it unmounts the editor, just as an App Router route change does. */
 function RouteFixture() {
@@ -24,4 +25,4 @@ function RouteFixture() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Fixture root unavailable");
-createRoot(root).render(<LanguageProvider><RouteFixture /></LanguageProvider>);
+createRoot(root).render(<NavigationGuardProvider><LanguageProvider><RouteFixture /></LanguageProvider></NavigationGuardProvider>);
