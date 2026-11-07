@@ -27,6 +27,7 @@ function RouteFixture({ path, setPath }: Readonly<{ path: string; setPath: (path
 function RouterFixture() {
   const [path, setPath] = useState(location.pathname);
   const router = useMemo<AppRouterInstance>(() => ({
+    bfcacheId: "supplier-navigation-fixture",
     back: () => history.back(), forward: () => history.forward(), refresh: () => undefined, prefetch: () => undefined,
     push: href => { history.pushState(history.state, "", href); setPath(new URL(href, location.href).pathname); },
     replace: href => { history.replaceState(history.state, "", href); setPath(new URL(href, location.href).pathname); },
