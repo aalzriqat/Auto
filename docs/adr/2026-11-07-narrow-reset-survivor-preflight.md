@@ -216,3 +216,11 @@ Counts below come from the two native Vitest JSON reports. Every listed row pass
 | convex/openingManagementSettlement.test.ts | 46 |
 | convex/supplierReceivablesReconciliation.scrum869.test.ts | 105 |
 | scripts/accountingPreviewRehearsal.test.ts | 118 |
+
+### Committed implementation proof
+
+At implementation commit f8a45381af0e35ca07c69b072cf5fd3a62980965, the final fixture was rechecked against 8e770ccf0 production files: 1 failed / 33 passed. The same whole-org-bound mutant was rerun: 1 failed / 33 passed. Both controls were restored before a final green run of the narrow, generation, remaining-family, stock-replay and scenario-record files: 138 passed across five files, exit 0. These repeat checks do not add unique cases to the 1,316-case total above.
+
+The historical byte-overflow bugRef was also executed from its actual test file at 9b584a38bcabd2735393acb807cb807a7d1b8f59 against pre-fix 684ba04d0 production files. The named test failed because the old reset returned no survivor preflight. Only that test was selected with -t: 1 failed, 29 other registrations deselected by the command filter. The committed current source and test files were restored from HEAD afterward. No permanent skip or guard change was made.
+
+`node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 684ba04d0` at the implementation commit checked 945 entries: zero unrenewed, stale, malformed or missing, exit 0. No baseline entry needed renewal or was edited. `git diff --check` passed. Only the pre-existing .gitignore modification and untracked .ignore remain outside the requested commits; neither was staged.
