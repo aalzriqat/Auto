@@ -929,8 +929,8 @@ describe("protected source content pins", () => {
       // SCRUM-928: preserves the full-file pin over decisions extracted from
       // applications.ts under the same authorized implementation scope above.
       file: "convex/utils/dealSettlementFigures.ts",
-      bytes: 18661,
-      sha256: "d28e605912b3114409698f8591e1f5de131f4bef97b64f04282517c688a73e9b",
+      bytes: 18674,
+      sha256: "041177a4e533abefb587f644b1d91792c63d8cbf4aaa52546d7b3ff0bd41e954",
     },
   ] as const;
 

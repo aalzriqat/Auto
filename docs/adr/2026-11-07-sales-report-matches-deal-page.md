@@ -136,6 +136,11 @@ and a new full-file pin covers the moved decisions in
 `utils/dealSettlementFigures.ts`. Both byte length and hash assertions remain.
 These pins track change control; they do not claim independent certification.
 
+A final local SonarJS 4.2.2 check found two complex extracted functions and
+nested conditionals. Small named helpers now express the same branches; both
+the cognitive-complexity rule (limit 15) and nested-conditional rule pass for
+all four new figure modules. This limited rule check is not a SonarCloud verdict.
+
 The existing suites' accounting assertions remain. Report assertions that
 expected pre-commission margin are updated to management net. Missing commission
 decisions remain unavailable, and a missing vehicle cannot invent preparation

@@ -65,6 +65,31 @@ export function reportContributionFor(figure: ReportDealFigures, orgCurrency: st
 }
 
 type ReportBase = Omit<ReportDealFigures, "profit" | "salePrice" | "salePriceUnavailableReason">;
+
+function sameProfit(left: DealProfit, right: DealProfit): boolean {
+  if (left.available && right.available) return left.amountMinor === right.amountMinor;
+  return !left.available && !right.available && left.reason === right.reason;
+}
+
+function overviewReportResult(base: ReportBase, summary: DealFinancialSummary): ReportDealFigures {
+  if (summary.customerSalePrice) return { ...base, profit: summary.profit,
+    salePrice: fromMinorUnits(summary.customerSalePrice.amountMinor, base.currency), salePriceUnavailableReason: null };
+  const unsafePrice = summary.unreadable.some((field) => field.field === "customerSalePrice");
+  return { ...base, profit: summary.profit, salePrice: null,
+    salePriceUnavailableReason: unsafePrice ? "UNSAFE_AMOUNT" : "NOT_RECORDED" };
+}
+
+function cashReportResult(base: ReportBase, basis: ReturnType<typeof deriveVehicleCostBasis> | null,
+  preparation: ReturnType<typeof deriveDealerPreparationExpenses> | null,
+  commission: ReturnType<typeof profitCommissionsFromRows>): ReportDealFigures {
+  const { sale, vehicle, economics, currency } = base;
+  const showroomExpenses = vehicle?.sourceType !== "SOURCED" && basis && !basis.available
+    ? { available: false as const, reason: "VehicleCostBasisUnreadable" as const } : preparation ?? { available: false as const };
+  const profit = withDealManagementCosts({ profit: cashAccountingProfit({ sale, economics, currency }), showroomExpenses, commissions: commission });
+  const salePriceMinor = toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency);
+  return { ...base, profit, salePrice: salePriceMinor === undefined ? null : fromMinorUnits(salePriceMinor, currency),
+    salePriceUnavailableReason: salePriceMinor === undefined ? "UNSAFE_AMOUNT" : null };
+}
 type PendingFinance = {
     app: Doc<"financeApplications">;
     route: ReturnType<typeof resolveDealRoute>;
@@ -168,12 +193,7 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
       commissionsTotal: commission.available ? fromMinorUnits(commission.totalMinor, currency) : null,
       commissionPending: !commission.available && commission.reason === "CommissionsPending" };
     if (!sale.applicationId) {
-      const showroomExpenses = vehicle?.sourceType !== "SOURCED" && basis && !basis.available
-        ? { available: false as const, reason: "VehicleCostBasisUnreadable" as const } : preparation ?? { available: false as const };
-      const profit = withDealManagementCosts({ profit: cashAccountingProfit({ sale, economics, currency }), showroomExpenses, commissions: commission });
-      const salePriceMinor = toMinorSameCurrencyOrUndefined(sale.salePrice, currency, currency);
-      return { kind: "READY", base, result: { ...base, profit, salePrice: salePriceMinor === undefined ? null : fromMinorUnits(salePriceMinor, currency),
-        salePriceUnavailableReason: salePriceMinor === undefined ? "UNSAFE_AMOUNT" : null } };
+      return { kind: "READY", base, result: cashReportResult(base, basis, preparation, commission) };
     }
     if (!app || !proven) {
       return { kind: "READY", base, result: { ...base, profit: { available: false, reason: "UnknownMargin" }, salePrice: null, salePriceUnavailableReason: "DEAL_UNAVAILABLE" } };
@@ -203,13 +223,8 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
     };
     const unsettled = derive(false);
     const settled = derive(true);
-    const sameProfit = unsettled.profit.available && settled.profit.available
-      ? unsettled.profit.amountMinor === settled.profit.amountMinor
-      : !unsettled.profit.available && !settled.profit.available && unsettled.profit.reason === settled.profit.reason;
-    const resultFor = (summary: typeof settled): ReportDealFigures => ({ ...base, profit: summary.profit,
-      salePrice: summary.customerSalePrice ? fromMinorUnits(summary.customerSalePrice.amountMinor, currency) : null,
-      salePriceUnavailableReason: summary.customerSalePrice ? null : summary.unreadable.some((field) => field.field === "customerSalePrice") ? "UNSAFE_AMOUNT" : "NOT_RECORDED" });
-    if (sameProfit) return { kind: "READY", base, result: resultFor(unsettled) };
+    const resultFor = (summary: DealFinancialSummary): ReportDealFigures => overviewReportResult(base, summary);
+    if (sameProfit(unsettled.profit, settled.profit)) return { kind: "READY", base, result: resultFor(unsettled) };
     return { kind: "PENDING", base, pending: { app, route, derive, resultFor, margin, supplierClaim, payableRows } };
   });
 

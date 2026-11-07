@@ -188,6 +188,27 @@ function routeSpecificProfit(args: {
     fullySettled: args.fullySettled,
   });
 }
+function recordedExpenseReason(mixed: boolean, unreadable: boolean): RecordedCostsReason | null {
+  if (mixed) return "MIXED_DENOMINATION";
+  return unreadable ? "UNSAFE_AMOUNT" : null;
+}
+
+function feeEvidenceReason(unreadable: boolean, mixed: boolean): RecordedCostsReason | null {
+  if (unreadable) return "UNSAFE_AMOUNT";
+  return mixed ? "MIXED_DENOMINATION" : null;
+}
+
+function boundExecutionActual(
+  position: ReturnType<typeof executionFeePosition>,
+  frozenEstimatedFees: number | undefined,
+  fees: Doc<"financeDealFees">[],
+  currency: string
+): number {
+  if (!position.applies) return frozenExecutionFeeActualMinor(fees, currency);
+  if (position.bound === null) return 0;
+  return frozenEstimatedFees ?? 0;
+}
+
 /** Pure extraction of the financed deal page's figure derivation (SCRUM-928). */
 export function deriveFinancedOverviewFigures(args: {
   app: Doc<"financeApplications">;
@@ -242,21 +263,13 @@ export function deriveFinancedOverviewFigures(args: {
   // currency withholds the recorded, committed and expected outlay and the
   // profit built on them, with the reason — never a partial JOD total.
   const expensesMixed = dealerBorneLinesMixed(fees, money.currency);
-  const expensesReason: RecordedCostsReason | null = expensesMixed
-    ? "MIXED_DENOMINATION"
-    : expensesUnreadable
-      ? "UNSAFE_AMOUNT"
-      : null;
+  const expensesReason = recordedExpenseReason(expensesMixed, expensesUnreadable);
   // The estimate's evidence is EVERY live line, whoever pays it: the
   // financier's withholdings are settlement-deducted fees of any payer.
   // The same two verdicts, unreadable first (a corrupt amount is not a
   // figure in any currency), then denomination across all live lines.
   const feeEvidence: DealFinancialSummaryInputs["feeEvidence"] = {
-    reason: expensesUnreadable
-      ? "UNSAFE_AMOUNT"
-      : sameCurrencyFees.length !== fees.length
-        ? "MIXED_DENOMINATION"
-        : null,
+    reason: feeEvidenceReason(expensesUnreadable, sameCurrencyFees.length !== fees.length),
   };
   const frozenEstimatedFees =
     app.estimatedDealerBorneExpensesMinor ??
@@ -285,11 +298,7 @@ export function deriveFinancedOverviewFigures(args: {
     // With a position, only the BOUND line retires the expectation (an
     // explicit 0 included); an unbound finance-company fee no longer
     // consumes it by type and payer (c22119 Q2/Q4).
-    executionFee.applies
-      ? executionFee.bound !== null
-        ? (frozenEstimatedFees ?? 0)
-        : 0
-      : frozenExecutionFeeActualMinor(fees, money.currency)
+    boundExecutionActual(executionFee, frozenEstimatedFees, fees, money.currency)
   );
   return deriveDealFinancialSummary({
     currency: money.currency,

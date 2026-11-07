@@ -291,7 +291,8 @@ export function supplierObligationFromRows(app: Doc<"financeApplications">,
     // the supplier's cost, which means the dealership owes rather than is owed,
     // and no record here expresses that. Reporting NONE would close a deal on
     // the strength of a figure that contradicts its own paperwork.
-    return !margin.known ? "UNKNOWN" : margin.minor === 0 ? "NONE" : "UNKNOWN";
+    if (!margin.known) return "UNKNOWN";
+    return margin.minor === 0 ? "NONE" : "UNKNOWN";
   }
 
   const payable = payables.find((row) => row.orgId === app.orgId && row.status !== "CANCELLED");
