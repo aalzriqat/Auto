@@ -1,0 +1,72 @@
+{
+  "id": "scrum565-a-linked-event-amid-an-over-bound-retained-thread-refuses-b-905f7460",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "batchSize": 1,
+        "case": "socialThreadOverBound"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dryRun.preflight.verdict",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reset.writes",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "a linked event amid an over-bound retained thread refuses before triggers or deletion"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+  },
+  "fingerprint": "132993c7fbc0d03c57d8dc988578e10280cb84ea456876675c19332fc70be470"
+}

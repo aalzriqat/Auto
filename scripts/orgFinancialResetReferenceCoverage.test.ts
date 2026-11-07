@@ -17,6 +17,8 @@
  *   3. KNOWN SURVIVING — listed in KNOWN_SURVIVING_REFERENCES (OPEN DECISION).
  * Anything else, and any stale entry in the lists, fails.
  */
+import { KNOWN_SURVIVING_REFERENCES } from "../convex/utils/orgResetReferences";
+import { RESET_VEHICLE_REFERENCE_CLEARS, RESET_KEPT_REFERENCE_INDEX, RESET_SURVIVOR_INDEX, survivingReferenceTables } from "../convex/utils/orgResetSurvivorPreflight";
 import * as fs from "node:fs";
 import { OPENING_ATOMIC_REFERENCE_CLEARS } from "../convex/utils/openingResetCleanup";
 import * as path from "node:path";
@@ -114,6 +116,16 @@ function allReferences(): Ref[] {
  * preflight blocks every non-internal caller, and the reason must say so.
  */
 const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
+  "commitmentRoots.lineageRootId->commitmentRoots": "Optional same-table immutable lineage, no ordering can protect self references. Reset removes all roots while suspended.",
+  "commitmentRoots.restoredFromRootId->commitmentRoots": "Optional same-table predecessor; all roots are deleted, no new authority is granted by this reference.",
+  "commitmentRoots.originReservationId->vehicleReservations": "Historical optional origin. Reservations drain first, so expiry has no source rows to act on before claims/roots drain.",
+  "vehicleCommitmentClaims.restoredFromClaimId->vehicleCommitmentClaims": "Optional same-table predecessor lineage; all claims drain before roots.",
+  "vehicleCommitmentClaims.reservationId->vehicleReservations": "Reservations drain before claims to remove the expiry cron source first; the opposite reservation->claim link is deferred.",
+  "depositVehicleHolds.sourceHoldId->depositVehicleHolds": "Optional same-table immutable lineage; all holds drain before their deposit.",
+  "deposits.reservationId->vehicleReservations": "Optional reverse lifecycle link, reservations drain first so expiry has no source; tenant mutations are suspended.",
+  "deposits.singleVehicleCommitmentClaimId->vehicleCommitmentClaims": "Optional reverse claim link; claims drain first, with reservations already gone and tenant writers suspended.",
+  "financeApplications.currentCommitmentClaims[].claimId->vehicleCommitmentClaims": "Optional reverse claim projection. Claims drain before applications; reservations are gone before claims and tenant writers are suspended.",
+  "vehicles.soldBySaleId->sales": "Optional SOLD ownership, erased with vehicle. Sales must drain first because their vehicle link is required; this reset never restores a SOLD vehicle to inventory.",
   "dealCommissionLines.payrollItemId->payrollItems":
     "Written only (payroll.ts payItem patch when a line is paid); no reader dereferences it. Lines are deleted after payroll items, so a pass that stops between them leaves a line pointing at a deleted item that nothing reads.",
   "accountingEvents.reversalOfEventId->accountingEvents":
@@ -182,139 +194,7 @@ const ACCEPTED_OPTIONAL_DANGLING: Record<string, string> = {
  * that a reset-scoped table holds to a table the reset does not clear. None of
  * these is endorsed; listing them stops the set growing silently.
  */
-const KNOWN_SURVIVING_REFERENCES: Record<string, string> = {
-  "applicationDocuments.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "bankStatementLines.matchedJournalLineId->journalLines":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "cashMovements.accountingEventId->accountingEvents":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "claims.receivableDocumentId->receivableDocuments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "claims.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "collectionReminders.chequeId->postDatedCheques":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "collectionReminders.receivableId->receivables":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "commitmentRoots.consumedBySaleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "commitmentRoots.headQuoteId->quotes":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "consignedSaleCorrections.correctionJournalEntryId->journalEntries":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "consignedSaleCorrections.originalJournalEntryIds[]->journalEntries":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "consignedSaleCorrections.recognizedRevenueTransactionId->transactions":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "consignedSaleCorrections.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "dealerProductDeferrals.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  // SCRUM-693: an unwind is an audit record of a deal's reversal, like its
-  // sibling `financeCompanyForwards`; same SCRUM-546 document-only treatment.
-  "dealUnwinds.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "dealUnwinds.completion.customerReceiptSettlement.refundEventIds[]->accountingEvents":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "dealUnwinds.completion.customerReceiptSettlement.refundPaymentIds[]->canonicalPayments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "dealUnwinds.remittanceRefund.paymentId->canonicalPayments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "dealUnwinds.remittanceRefund.reversedAllocationIds[]->paymentAllocations":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "dealUnwinds.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "depositApplications.depositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "depositApplications.quoteId->quotes":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "depositApplications.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "depositRequests.confirmedDepositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "depositRequests.quoteId->quotes":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "depositVehicleHolds.appliedSaleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "depositVehicleHolds.depositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "customerFinanceCompanyPayments.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row. Same shape and decision as financeCompanyForwards.applicationId; nothing reads the evidence except through its application.",
-  "employeeAdvanceRecoveries.payrollItemId->payrollItems":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "financeCompanyForwards.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  // SCRUM-411 P2-02: the per-deposit provenance of a forward; same treatment as its parent forward row.
-  "financeCompanyForwardSlices.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "financeCompanyForwardSlices.depositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "fixedAssetEvents.accountingEventId->accountingEvents":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "manualJournalDrafts.journalEntryId->journalEntries":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "manualJournalDrafts.lines[].accountId->chartOfAccounts":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "openingBalanceDrafts.journalEntryId->journalEntries":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "openingBalanceDrafts.lines[].accountId->chartOfAccounts":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  // SCRUM-546 c21566 leaves the opening draft outside the reset. The new
-  // allocation references therefore survive with the same documented risk as
-  // its older line/journal references. This is not a cleanup or release pass:
-  // source-basis readers must report UNAVAILABLE after their target is deleted.
-  "openingBalanceDrafts.allocations[].accountId->chartOfAccounts":
-    "OPEN DECISION: opening drafts survive reset while their allocated chart account is deleted; posted basis cannot be reused without the actual journal/account.",
-  "openingBalanceDrafts.allocationResults[].receivableId->receivables":
-    "OPEN DECISION: opening drafts survive reset while their materialized receivable is deleted; collections and readback must refuse unavailable basis.",
-  "openingBalanceDrafts.allocationResults[].canonicalReceivableDocumentId->receivableDocuments":
-    "OPEN DECISION: opening drafts survive reset while their canonical document is deleted; collections and readback must refuse unavailable basis.",
-  // SCRUM-858 S1: a named opening deposit is recorded in its row's result. The draft survives the
-  // reset while the deposit is deleted with the rest of the deposits. Posted readback treats a
-  // missing, deleted or mismatched deposit as record-unavailable (`accountingCutover.ts`,
-  // CUSTOMER_DEPOSIT branch), so the survivor is reported UNAVAILABLE, never read as a balance.
-  "openingBalanceDrafts.allocationResults[].depositId->deposits":
-    "OPEN DECISION: opening drafts survive reset while their materialized named deposit is deleted; posted readback must report the record unavailable.",
-  "partnerEquityTransactions.accountingEventId->accountingEvents":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.canonicalPaymentId->canonicalPayments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.collectionPaymentId->collectionPayments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.paymentAllocationId->paymentAllocations":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.receivableDocumentId->receivableDocuments":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.receivableId->receivables":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "paymentIntents.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "prepaidExpenseSchedules.expenseId->expenses":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "vehicleCommitmentClaims.applicationId->financeApplications":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleCommitmentClaims.consumedBySaleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleCommitmentClaims.depositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleCommitmentClaims.quoteId->quotes":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleReservations.depositId->deposits":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicles.soldBySaleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleSupplierPayables.paymentAccountId->chartOfAccounts":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleSupplierPayables.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleSupplierReceivables.receiptAccountId->chartOfAccounts":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-  "vehicleSupplierReceivables.saleId->sales":
-    "OPEN DECISION: table is NOT cleared by the reset; REQUIRED reference survives pointing at a reset-deleted row.",
-  "workOrders.expenseId->expenses":
-    "OPEN DECISION: table is NOT cleared by the reset; optional reference survives pointing at a reset-deleted row.",
-};
+
 
 interface Verdict {
   unaccounted: string[];
@@ -329,7 +209,7 @@ function evaluate(
   accepted: Readonly<Record<string, string>>,
   known: Readonly<Record<string, string>>,
   refs: Ref[],
-  atomicClears: readonly string[] = OPENING_ATOMIC_REFERENCE_CLEARS
+  atomicClears: readonly string[] = [...OPENING_ATOMIC_REFERENCE_CLEARS, ...RESET_VEHICLE_REFERENCE_CLEARS]
 ): Verdict {
   const resetSet = new Set(resetTables);
   const order = new Map(resetTables.map((t, i) => [t, i]));
@@ -342,7 +222,11 @@ function evaluate(
     const key = pairKey(ref.table, ref.path, ref.target);
     const fromReset = resetSet.has(ref.table);
     // These exact new edges have destructive-lifecycle read/write controls; no dangling exemption.
-    if (atomicClears.includes(key)) continue;
+    if (atomicClears.includes(key)) { seen.add(key); continue; }
+    // These two optional protocol cursors are consumed by openingResetCleanup and
+    // removed on reset completion. They are not operational or financial authority.
+    if (ref.optional && (key === "organizations.openingCleanupPayableScan.pendingPayableIds[]->vehicleSupplierPayables" ||
+      key === "organizations.openingCleanupReferenceScan.source.id->vehicleSupplierPayables")) continue;
 
     if (fromReset) {
       const deferred = (childTables[ref.target] ?? []).includes(ref.table);
@@ -362,7 +246,7 @@ function evaluate(
     unaccounted.push(key);
   }
 
-  const staleEntries = [...Object.keys(accepted), ...Object.keys(known)].filter((k) => !seen.has(k));
+  const staleEntries = [...Object.keys(accepted), ...Object.keys(known), ...atomicClears].filter((k) => !seen.has(k));
   return { unaccounted: unaccounted.sort(), acceptedButRequired, staleEntries: staleEntries.sort() };
 }
 
@@ -370,6 +254,16 @@ const render = (title: string, keys: string[]) =>
   `${title}\n${keys.map((k) => `  - ${k}`).join("\n")}`;
 
 describe("organization financial reset covers every reset-to-reset reference", () => {
+  test("runtime survivor and retained-reference probes name real org-leading indexes", () => {
+    const definitions = schema.tables as unknown as Record<string, { indexes: Array<{ indexDescriptor: string; fields: string[] }> }>;
+    for (const table of survivingReferenceTables(RESET_TABLES_FOR_TEST)) {
+      const index = definitions[table]?.indexes.find(i => i.indexDescriptor === RESET_SURVIVOR_INDEX[table]);
+      expect(index?.fields[0], table).toBe("orgId");
+    }
+    for (const [table, name] of Object.entries(RESET_KEPT_REFERENCE_INDEX)) {
+      expect(definitions[table]?.indexes.find(i => i.indexDescriptor === name)?.fields[0], table).toBe("orgId");
+    }
+  });
   test("the analyzer sees the references it is supposed to guard", () => {
     const keys = new Set(allReferences().map((r) => pairKey(r.table, r.path, r.target)));
     // Required references that motivated this test, incl. an array-of-ids one.
@@ -409,7 +303,7 @@ describe("organization financial reset covers every reset-to-reset reference", (
 
   test("MUTATION CONTROL: removing measured atomic clears exposes every new cycle/proof edge", () => {
     const verdict = evaluate(RESET_TABLES_FOR_TEST, CHILD_TABLES_FOR_TEST, ACCEPTED_OPTIONAL_DANGLING, KNOWN_SURVIVING_REFERENCES, allReferences(), []);
-    expect(verdict.unaccounted).toEqual(expect.arrayContaining([...OPENING_ATOMIC_REFERENCE_CLEARS]));
+    expect(verdict.unaccounted).toEqual(expect.arrayContaining([...OPENING_ATOMIC_REFERENCE_CLEARS, ...RESET_VEHICLE_REFERENCE_CLEARS]));
   });
 
   test("MUTATION CONTROL: removing the payrollRuns edge is detected", () => {

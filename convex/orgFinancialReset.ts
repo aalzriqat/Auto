@@ -1,4 +1,5 @@
 import { clearOpeningPayablesBatch, clearOpeningPayrollReference, clearNewOpeningResultReference } from "./utils/openingResetCleanup";
+import { clearResetVehicleReferences, resetSurvivorPreflight, type SurvivorPreflight } from "./utils/orgResetSurvivorPreflight";
 import { v, ConvexError } from "convex/values";
 import { internalMutation } from "./functions";
 import type { DatabaseReader } from "./_generated/server";
@@ -17,55 +18,28 @@ import {
  *
  * This deletes production rows with no undo. Taking the tables as an argument
  * would make it a general "purge whatever I name for this org" weapon, one
- * typo away from removing an org's vehicles, members or settings. The list
+ * typo away from removing an org's members or settings. The list
  * below is the exact set signed off for this operation, so the blast radius is
  * fixed at authorship time and reviewable in the diff rather than decided at
  * the call site.
  *
- * ## What is deliberately NOT here
- *
- * - `vehicles` and `vehicleValuations` — inventory and its valuation history
- *   are kept.
- * - `customers`, `leads` — the CRM survives; only the money moves.
- * - `memberships`, `roles`, `orgSettings`, `subscriptions`, `branches` — the
- *   org has to remain usable and its people have to remain able to sign in.
- * - `bankAccounts`, `financeCompanies`, `orgValuationCompanies` — configuration
- *   describing who the dealer banks and finances with, not transactions.
- * - `suppliers`, `supplierAliases`, `supplierRegistryState` (SCRUM-868) — the
- *   supplier master is identity, not money, and carries no amount. It stays so
- *   that a reset never changes who a supplier is. It is still deleted with the
- *   organization (`ORGANIZATION_DELETION_STEPS`); `scripts/supplierMasterGuards.test.ts`
- *   pins both.
- *
- * ## Known, accepted inconsistency
- *
- * Vehicle statuses are left untouched by explicit instruction, so vehicles
- * previously marked SOLD or RESERVED keep that status with no sale row behind
- * them. They will read as unavailable inventory until someone changes the
- * status by hand. This is a deliberate choice, not an oversight.
- *
- * ## Preflight: suspended org, no pending payment intent (SCRUM-559)
- *
- * A destructive run refuses, before any delete, unless the organization row is
- * `suspended` and has no `paymentIntents` row with status PENDING. The reset
- * spans several passes with no lock, and user-facing writers dereference some
- * rows this reset deletes (see the accepted optional references in
- * `scripts/orgFinancialResetReferenceCoverage.test.ts`); a suspended org cannot
- * pass tenant auth, which is what makes the unordered ones safe mid-reset. The
- * outbox, `reverseAccountingEvent` and `settleByExternalId` already refuse or
- * hold for a suspended org, so the PENDING-intent refusal (and edges E2/E3) is
- * defence in depth in case the org is unsuspended mid-reset (SCRUM-563). A
- * missing `organizations` row skips the suspension check.
- * Command-idempotency replay is closed by the reset generation (SCRUM-563, see
- * `utils/orgResetGeneration.ts`). Surviving active state such as terminal
- * payment intents is an owner decision tracked in SCRUM-565; SCRUM-563 only
- * pins today's behaviour.
+ * Vehicles and their dependents are removed under SCRUM-565 c24729. Identity,
+ * CRM, Social Inbox and configuration remain. Optional kept vehicle links are
+ * cleared before deletion; newly covered media blobs are retained because their
+ * ownership and sharing cannot be proven here. See the 2026-11-07 reset ADR.
+ * Fresh starts require complete bounded survivor evidence. Continuations retain
+ * SCRUM-563 generation semantics and existing operational refusals.
+
  */
 const RESET_TABLES = [
   "payrollItems",
   "openingCommissionLiabilities",
   "openingPayablePayments",
   "openingManagementSettlementPlans",
+  "vehicleCostCorrections",
+  "vehicleOwnershipConversions",
+  "vehicleSupplierPayables",
+  "vehicleSupplierReceivables",
   // ⚠️ SCRUM-208 c15825 — AUTHORITY LIFECYCLE FIRST, IN DEPENDENCY ORDER:
   // attempts → work → the accounting rows they reference.
   //
@@ -85,6 +59,7 @@ const RESET_TABLES = [
   // (`originalEventId`), and `accountingOutbox.reversePendingEntry` hands that id
   // to `reverseAccountingEvent`, which throws on a missing event. It stays AFTER
   // `commitmentAuthorityWork`, which is its child (see CHILD_TABLES).
+  "consignedSaleCorrections",
   "pendingAccountingEvents",
   // ⚠️ SCRUM-813. `invoiceReceiptApplications.activationEventId` names the
   // RECEIPT_CREDIT_APPLIED event that posted the application; the activation replay
@@ -160,6 +135,14 @@ const RESET_TABLES = [
   // It must go with them: once the deposit is gone nothing can decide the share,
   // and a surviving PENDING row would keep its car locked forever.
   "depositCancellationPendings",
+  "depositApplications",
+  "financeCompanyForwardSlices",
+  "financeCompanyForwards",
+  "depositVehicleHolds",
+  "depositRequests",
+  "vehicleReservations",
+  "vehicleCommitmentClaims",
+  "commitmentRoots",
   "deposits",
   "collectionPayments",
   "paymentAllocations",
@@ -176,6 +159,7 @@ const RESET_TABLES = [
   // points at (children before parents, plus the CHILD_TABLES edges).
   "supplierCostRecoveryReceipts",
   "supplierCostRecoveries",
+  "workOrders",
   "expenses",
   // SCRUM-807: derived dashboard expense totals. The expenses trigger maintains
   // only an org's latest summary generation, so a superseded or blocked one
@@ -226,6 +210,15 @@ const RESET_TABLES = [
   // both (hence after `sales`). A document references no table listed later.
   "receivableDocuments",
   "quotes",
+  "vehicleLandedCosts",
+  "vehiclePriceHistory",
+  "vehicleStatusRequests",
+  "vehicleEdits",
+  "test_drives",
+  "vehicleValuations",
+  "socialPosts",
+  "profitApprovalRequests",
+  "vehicles",
   // SCRUM-571 D-8: `unmatchedProviderFunds` is deliberately NOT listed. A held
   // provider payment is evidence that money moved at the provider with no
   // settlement, so a financial reset must not erase it (it is the recovery route,
@@ -254,7 +247,24 @@ type ResetTable = (typeof RESET_TABLES)[number];
  * anything checked it.
  */
 const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
-  financeApplications: [
+  depositApplications: ["depositCancellationPendings"],
+  financeCompanyForwards: ["financeCompanyForwardSlices"],
+  depositVehicleHolds: ["commitmentAuthorityWork", "financeCompanyForwardSlices", "depositApplications", "depositCancellationPendings"],
+  vehicleReservations: ["commitmentAuthorityWork"],
+  vehicleCommitmentClaims: ["vehicleReservations", "depositVehicleHolds"],
+  commitmentRoots: ["vehicleCommitmentClaims"],
+  vehicleSupplierPayables: ["openingPayablePayments", "vehicleCostCorrections", "vehicleOwnershipConversions"],
+  // Optional reverse lifecycle links are cleared atomically before their targets.
+  vehicles: ["commitmentAuthorityWork", "journalLines", "vehicleLandedCosts", "vehicleCostCorrections",
+    "consignedSaleCorrections", "vehicleSupplierReceivables", "supplierCostRecoveries", "supplierCostRecoveryReceipts",
+    "vehicleSupplierPayables", "vehiclePriceHistory", "vehicleOwnershipConversions", "vehicleReservations",
+    "vehicleStatusRequests", "vehicleEdits", "sales", "expenses", "test_drives", "workOrders", "vehicleValuations",
+    "quotes", "financeApplications", "financeAppraisals", "financeCompanyForwardSlices", "depositRequests",
+    "deposits", "depositVehicleHolds", "commitmentRoots", "vehicleCommitmentClaims", "depositApplications",
+    "depositCancellationPendings", "receivables", "collectionPayments", "postDatedCheques", "transactions",
+    "socialPosts", "profitApprovalRequests"],
+
+  financeApplications: ["vehicleCommitmentClaims", "financeCompanyForwardSlices", "financeCompanyForwards",
     "financeAppraisals",
     "financeApplicationOverrides",
     "financeDealCustodyEntries",
@@ -315,12 +325,12 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   // loads its lines through it. The reverse edge (`journalEntries.accountingEventId`)
   // is deliberately NOT added: it would make the graph cyclic.
   journalLines: ["bankBalanceAggregateItems"],
-  journalEntries: ["journalLines", "accountingEvents"],
-  chartOfAccounts: ["journalLines", "accountBalanceSnapshots", "bankBalanceAggregateItems", "bankBalanceAggregateStates"],
+  journalEntries: ["consignedSaleCorrections", "journalLines", "accountingEvents"],
+  chartOfAccounts: ["vehicleSupplierPayables", "vehicleSupplierReceivables", "journalLines", "accountBalanceSnapshots", "bankBalanceAggregateItems", "bankBalanceAggregateStates"],
   // `paymentVouchers.depositId` is REQUIRED; `commitmentAuthorityWork.depositId`
   // is too (not behaviour-tested: the authority preflight refuses a destructive
   // reset while those rows exist).
-  deposits: ["paymentVouchers", "commitmentAuthorityWork", "depositCancellationPendings"],
+  deposits: ["depositApplications", "financeCompanyForwardSlices", "depositVehicleHolds", "depositRequests", "vehicleReservations", "vehicleCommitmentClaims", "paymentVouchers", "commitmentAuthorityWork", "depositCancellationPendings"],
   commitmentAuthorityWork: ["commitmentAuthorityAttempt"],
   pendingAccountingEvents: ["commitmentAuthorityWork"],
   // SCRUM-559 (E3). `pendingAccountingEvents.originalEventId`: the outbox
@@ -335,14 +345,14 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
   financeDealCustody: ["financeDealCustodyEntries", "financeDealFees"],
   // SCRUM-389 — the partial-drain half for the supplier-cost recovery chain.
   supplierCostRecoveries: ["supplierCostRecoveryReceipts"],
-  expenses: ["supplierCostRecoveries"],
+  expenses: ["supplierCostRecoveries", "workOrders"],
   // SCRUM-534 — every in-scope table that references a sale or a quote. The
   // required references are financeApplications.quoteId and
   // payrollItems.commissionSaleIds; the rest are optional but are deferred the
   // same way so no pass leaves any of them dangling. SCRUM-549 adds
   // commitmentAuthorityWork.saleId (REQUIRED); it is not behaviour-tested because
   // the preflight refuses a destructive reset while authority rows exist.
-  sales: [
+  sales: ["consignedSaleCorrections", "depositApplications", "depositVehicleHolds", "commitmentRoots", "vehicleCommitmentClaims", "vehicleSupplierPayables", "vehicleSupplierReceivables",
     "invoiceReceiptApplications",
     "financeApplications",
     "deposits",
@@ -358,7 +368,8 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
     // SCRUM-724: `receiptRetainedPositions.originatingSaleId` (immutable lineage).
     "receiptRetainedPositions",
   ],
-  quotes: ["sales", "financeApplications", "deposits", "receivables"],
+  quotes: ["depositApplications", "depositRequests", "commitmentRoots", "vehicleCommitmentClaims", "sales", "financeApplications", "deposits", "receivables"],
+  transactions: ["consignedSaleCorrections"],
   openingCommissionLiabilities: ["payrollItems"],
   payrollRuns: ["payrollItems"],
   dealCommissionLines: ["payrollItems"],
@@ -368,10 +379,20 @@ const CHILD_TABLES: Partial<Record<ResetTable, readonly string[]>> = {
  * Rows removed per call.
  *
  * Well inside a mutation's write budget, and large enough that the signed-off
- * scope (196 rows) clears in a single run. A larger org would simply need the
+ * scope fits a bounded pass for small organizations. A larger org would simply need the
  * command repeated until `remaining` reports zero.
  */
 const RESET_DELETE_BATCH = 500;
+/** Shared across tables so widening the graph cannot multiply the write budget. */
+const RESET_TOTAL_DELETE_BATCH = 500;
+
+export const NEW_RESET_TABLES = [
+  "vehicleCommitmentClaims", "commitmentRoots", "depositApplications", "financeCompanyForwards",
+  "financeCompanyForwardSlices", "vehicles", "vehicleLandedCosts", "vehicleCostCorrections",
+  "consignedSaleCorrections", "vehicleSupplierReceivables", "vehicleSupplierPayables", "vehiclePriceHistory",
+  "vehicleOwnershipConversions", "vehicleReservations", "vehicleStatusRequests", "vehicleEdits", "test_drives",
+  "workOrders", "vehicleValuations", "depositRequests", "depositVehicleHolds", "socialPosts", "profitApprovalRequests",
+] as const satisfies readonly ResetTable[];
 
 /**
  * The index each reset table is read through, so every read is an index range
@@ -386,6 +407,30 @@ const RESET_DELETE_BATCH = 500;
  * only detects that more remain.
  */
 const RESET_ORG_INDEX: Record<ResetTable, string> = {
+  vehicleCommitmentClaims: "by_org_vehicle_status",
+  commitmentRoots: "by_org_vehicle_status",
+  depositApplications: "by_org",
+  financeCompanyForwards: "by_org_application",
+  financeCompanyForwardSlices: "by_org_forward",
+  vehicles: "by_org",
+  vehicleLandedCosts: "by_org_vehicle",
+  vehicleCostCorrections: "by_org_vehicle",
+  consignedSaleCorrections: "by_org",
+  vehicleSupplierReceivables: "by_org",
+  vehicleSupplierPayables: "by_org",
+  vehiclePriceHistory: "by_org_vehicle",
+  vehicleOwnershipConversions: "by_org_vehicle",
+  vehicleReservations: "by_org_vehicle",
+  vehicleStatusRequests: "by_org",
+  vehicleEdits: "by_org",
+  test_drives: "by_org",
+  workOrders: "by_org",
+  vehicleValuations: "by_org",
+  depositRequests: "by_org_status",
+  depositVehicleHolds: "by_org_vehicle_active",
+  socialPosts: "by_org",
+  profitApprovalRequests: "by_org",
+
   commitmentAuthorityAttempt: "by_org_status",
   commitmentAuthorityWork: "by_org_status",
   openingPayablePayments: "by_org",
@@ -485,15 +530,36 @@ export const resetOrgFinancialData = internalMutation({
     dryRun: v.optional(v.boolean()),
     batchSize: v.optional(v.number()),
   },
+  returns: v.object({
+    dryRun: v.boolean(), orgName: v.union(v.string(), v.null()),
+    preflight: v.object({
+      verdict: v.union(v.literal("PASS"), v.literal("REFUSED"), v.literal("UNAVAILABLE"), v.literal("CONTINUATION")),
+      counts: v.record(v.string(), v.number()),
+      refusals: v.array(v.object({ table: v.string(), count: v.number(),
+        reason: v.union(v.literal("SURVIVOR"), v.literal("RISKY_STATE"), v.literal("OVER_BOUND"), v.literal("READ_FAILED")) })),
+    }),
+    countScope: v.union(v.literal("OPENING_PAYABLE_CLEANUP"), v.literal("RESET_TABLE_BATCH")),
+    perTable: v.record(v.string(), v.number()),
+    newTableCounts: v.record(v.string(), v.union(v.number(), v.null())),
+    resetGeneration: v.number(), resetCompleted: v.boolean(),
+    total: v.number(), remaining: v.number(), authorityLifecyclePresent: v.boolean(),
+    orgSuspended: v.boolean(), pendingPaymentIntentsPresent: v.boolean(),
+    heldProviderCapturesPresent: v.boolean(), cashDrawerStatePresent: v.boolean(),
+  }),
   handler: async (
     ctx,
     args
   ): Promise<{
     dryRun: boolean;
+    preflight: SurvivorPreflight;
     orgName: string | null;
     /** All counts describe this batch and scope, never a complete organization inventory. */
     countScope: "OPENING_PAYABLE_CLEANUP" | "RESET_TABLE_BATCH";
     perTable: Record<string, number>;
+    /** Observed new-table rows, capped at batchSize + 1, including deferred parents. */
+    newTableCounts: Record<string, number | null>;
+    resetGeneration: number;
+    resetCompleted: boolean;
     total: number;
     remaining: number;
     /**
@@ -521,6 +587,9 @@ export const resetOrgFinancialData = internalMutation({
     cashDrawerStatePresent: boolean;
   }> => {
     const dryRun = args.dryRun ?? true;
+    if (args.batchSize !== undefined && (!Number.isSafeInteger(args.batchSize) || args.batchSize < 1)) {
+      throw new ConvexError("batchSize must be a positive safe integer.");
+    }
     const limit = Math.min(Math.max(args.batchSize ?? RESET_DELETE_BATCH, 1), RESET_DELETE_BATCH);
 
     // Named in the result so an operator can see, in the output they are about
@@ -528,26 +597,14 @@ export const resetOrgFinancialData = internalMutation({
     const org = await ctx.db.get(args.orgId);
     const orgName = org?.name ?? null;
 
-    // ⚠️ SCRUM-565 D-19 — THE NO-NEW-START BARRIER. FIRST REFUSAL A DESTRUCTIVE
-    // CALL CAN HIT, BEFORE ANY OTHER CHECK AND BEFORE ANY WRITE.
-    //
-    // Invariant: once this is deployed and older invocations have finished, no
-    // organization can NEWLY enter "reset in progress"; a reset already in
-    // progress can only continue. A fresh start is a destructive call for an org
-    // that has no row (nowhere to record a generation, so it would delete
-    // unrecorded) or whose reset is not in progress (`generation === completed`).
-    // Continuations and every dry run are untouched.
-    //
-    // Why first: the barrier is a property of the call, not of the org's data, so
-    // the answer must not depend on suspension, pending intents, authority or
-    // cash state — otherwise an operator fixing those in turn would reach the
-    // barrier last and still be refused. Nothing above this line writes (only
-    // `ctx.db.get`), and nothing below it runs, so the refusal commits no change.
-    if (isFreshResetStartRefused(org, dryRun)) {
-      throw new ConvexError(
-        "Fresh financial resets are disabled (SCRUM-565 D-19). Only an already in-progress " +
-          "reset can continue. Refusing before any deletion."
-      );
+    if (!dryRun && !org) throw new ConvexError("Organization not found. Refusing before any deletion.");
+    const resetState = orgResetState(org);
+    const preflight: SurvivorPreflight = resetState.inProgress && !dryRun
+      ? { verdict: "CONTINUATION", counts: {}, refusals: [] }
+      : await resetSurvivorPreflight(ctx.db, args.orgId, RESET_TABLES);
+    if (isFreshResetStartRefused(org, dryRun, preflight.verdict === "PASS")) {
+      throw new ConvexError(`${preflight.verdict}: ` + preflight.refusals
+        .map(refusal => `${refusal.table} count ${refusal.count} (${refusal.reason})`).join("; "));
     }
 
     // Deletion owns destructive progress across invocations, including failed purges awaiting retry.
@@ -616,7 +673,7 @@ export const resetOrgFinancialData = internalMutation({
     // A PENDING payment intent blocks as defence in depth: settlement already
     // holds for a suspended org, but the org could be unsuspended mid-reset
     // (SCRUM-563). A destructive call for a missing organizations row never
-    // reaches this point: D-19 refuses it above as a fresh start, so the
+    // reaches this point: the missing-org guard refuses it above, so the
     // `org !== null` guard below only serves dry runs.
     // Rationale and limits: see the header docblock. The suspension and
     // pending-intent refusals (like the authority-lifecycle and cash-drawer
@@ -692,20 +749,18 @@ export const resetOrgFinancialData = internalMutation({
     // batch finds a reset in progress and does not bump again. Dry runs and
     // refused runs (thrown above) write nothing.
     //
-    // SCRUM-565 D-19: while `FRESH_RESET_STARTS_BLOCKED` holds, the bump below is
-    // unreachable (a destructive call with no reset in progress was refused at the
-    // top). It stays so that flipping the switch restores the SCRUM-563 protocol
-    // unchanged — the bump still happens BEFORE the first delete, in this same
-    // mutation.
-    const resetState = orgResetState(org);
+    // The survivor verdict above admits only a clean fresh start. The generation
+    // bump still precedes deletion in this same transaction.
     let resetGeneration = resetState.generation;
     if (!dryRun && org !== null && !resetState.inProgress) {
       const beginPatch = beginResetGenerationPatch(org);
       resetGeneration = beginPatch.financialResetGeneration;
       await ctx.db.patch(args.orgId, beginPatch);
     }
+    if (!dryRun) await clearResetVehicleReferences(ctx, args.orgId);
 
     const perTable: Record<string, number> = {};
+    const newTableCounts: Record<string, number | null> = Object.fromEntries(NEW_RESET_TABLES.map(table => [table, null]));
     let total = 0;
     let remaining = 0;
     const openingCleanup = await clearOpeningPayablesBatch(ctx, args.orgId, limit, dryRun);
@@ -719,7 +774,9 @@ export const resetOrgFinancialData = internalMutation({
     resetTables: for (const table of openingCleanup.remaining > 0 ? [] : RESET_TABLES) {
       // One past the limit, so `remaining` reports honestly whether another
       // run is needed instead of silently stopping at a full batch.
-      const rows = await orgRows(ctx.db, table, args.orgId, limit + 1);
+      const tableLimit = Math.min(limit, Math.max(RESET_TOTAL_DELETE_BATCH - total, 0));
+      const rows = await orgRows(ctx.db, table, args.orgId, tableLimit + 1);
+      if (Object.hasOwn(newTableCounts, table)) newTableCounts[table] = rows.length;
 
       // Deleting a parent while a child still has rows leaves those rows
       // pointing at nothing. Defer the parent entirely — it is reported in
@@ -752,10 +809,10 @@ export const resetOrgFinancialData = internalMutation({
         continue;
       }
 
-      const batch = rows.slice(0, limit);
+      const batch = rows.slice(0, tableLimit);
       if (batch.length > 0) perTable[table] = batch.length;
       total += batch.length;
-      if (rows.length > limit) {
+      if (rows.length > tableLimit) {
         remaining += rows.length - batch.length;
         stillPopulated.add(table);
       }
@@ -773,7 +830,7 @@ export const resetOrgFinancialData = internalMutation({
           // path, and billed indefinitely. An orphaned row is recoverable; an
           // unreferenced blob is not.
           const storageIds =
-            "documentStorageIds" in row ? (row.documentStorageIds ?? []) : [];
+            (table === "financeAppraisals" || table === "financeDealFees") && "documentStorageIds" in row ? (row.documentStorageIds ?? []) : [];
           for (const storageId of storageIds) {
             const metadata = await ctx.db.system.get("_storage", storageId);
             if (metadata) await ctx.storage.delete(storageId);
@@ -785,7 +842,9 @@ export const resetOrgFinancialData = internalMutation({
             ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"openingCommissionLiabilities"> })
             : table === "supplierCostRecoveries"
               ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"supplierCostRecoveries"> })
-              : true;
+              : table === "vehicleSupplierPayables"
+                ? await clearNewOpeningResultReference(ctx, args.orgId, { table, id: row._id as Id<"vehicleSupplierPayables"> })
+                : true;
           if (!referencesCleared) {
             total -= batch.length - index;
             if (index > 0) perTable[table] = index;
@@ -808,9 +867,13 @@ export const resetOrgFinancialData = internalMutation({
     // BEFORE typing the destructive form, rather than discovering it as an error.
     return {
       dryRun,
+      preflight,
       orgName,
       countScope: openingCleanup.remaining > 0 ? "OPENING_PAYABLE_CLEANUP" : "RESET_TABLE_BATCH",
       perTable,
+      newTableCounts,
+      resetGeneration,
+      resetCompleted: !dryRun && org !== null && remaining === 0,
       total,
       remaining,
       authorityLifecyclePresent,

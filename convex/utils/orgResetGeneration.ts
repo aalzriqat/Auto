@@ -1,14 +1,11 @@
 import type { Doc } from "../_generated/dataModel";
 
 /**
- * SCRUM-565 D-19 — the single switch for the no-new-start barrier.
- *
- * While true, a destructive `resetOrgFinancialData` is refused unless the
- * organization is ALREADY mid-reset (a continuation). The same constant is
- * attested by `orgResetPreflight:countOrgsWithResetInProgress`, so the release
- * workflow reads from the live backend the value the guard actually enforces.
+ * SCRUM-565 c24729 replaces D-19 with survivor admission. This attests ONLY
+ * the blanket barrier, not the conditional survivor guard. The release script
+ * must refuse false until a separately authorized synchronization protocol exists.
  */
-export const FRESH_RESET_STARTS_BLOCKED = true as const;
+export const FRESH_RESET_STARTS_BLOCKED = false as const;
 
 /** The org fields the reset protocol reads. */
 type OrgResetFields = Pick<
@@ -45,13 +42,13 @@ export function orgResetState(
 }
 
 /**
- * SCRUM-565 D-19 — the one barrier predicate. True when a call must be refused
- * because it would START a destructive reset: the switch is on, the call is
- * destructive (`!dryRun`), and the org has no row or no reset in progress.
- * Continuations and every dry run are never refused.
+ * Fresh destructive starts require a present org and a complete PASS verdict.
+ * Defaulting to false prevents a caller that omits evidence from admitting a reset.
+ * Continuations and dry runs retain their prior semantics.
  */
-export function isFreshResetStartRefused(org: OrgResetFields | null, dryRun: boolean): boolean {
-  return FRESH_RESET_STARTS_BLOCKED && !dryRun && (org === null || !orgResetState(org).inProgress);
+export function isFreshResetStartRefused(org: OrgResetFields | null, dryRun: boolean, preflightPassed = false): boolean {
+  return !dryRun && (org === null || (!orgResetState(org).inProgress &&
+    (FRESH_RESET_STARTS_BLOCKED || !preflightPassed)));
 }
 
 /**

@@ -1,0 +1,72 @@
+{
+  "id": "scrum565-survivor-manualjournaldrafts-refuses-by-table-before-any-write",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "table": "manualJournalDrafts",
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dryRun.preflight.verdict",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "reset.writes",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "survivor manualJournalDrafts refuses by table before any write"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+  },
+  "fingerprint": "03293b824c45ca14647894fde66d0e778bac400c88fa99fcca358c9b61e4d7d0"
+}

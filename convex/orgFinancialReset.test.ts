@@ -62,7 +62,7 @@ async function seedOrg(t: ReturnType<typeof setup>, name: string) {
       category: "OTHER" as const,
     });
 
-    // Protected: must survive the reset.
+    // Inventory is deleted under SCRUM-565 c24729; CRM remains protected.
     await ctx.db.insert("vehicles", {
       orgId,
       make: "Toyota",
@@ -131,7 +131,7 @@ describe("resetOrgFinancialData", () => {
       return id;
     });
     const result = await runContinuationBatch(t, orgId, 1);
-    expect(result.total).toBe(3);
+    expect(result.total).toBe(4);
     expect(await countFor(t, "transactions", orgId)).toBe(0);
     expect((await t.run(ctx => ctx.db.get(requestId)))?.status).toBe(status);
     expect((await t.run(ctx => ctx.db.get(orgId)))?.deletionRequestId).toBe(requestId);
@@ -366,15 +366,15 @@ describe("resetOrgFinancialData", () => {
 
     // D-19: fresh starts are refused; exercised as a continuation.
     const result = await runContinuationBatch(t, orgId);
-    expect(result.total).toBe(3);
+    expect(result.total).toBe(4);
     expect(result.remaining).toBe(0);
 
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(0);
     expect(await countFor(t, "transactions", orgId)).toBe(0);
     expect(await countFor(t, "expenses", orgId)).toBe(0);
 
-    // Inventory and CRM are explicitly out of scope.
-    expect(await countFor(t, "vehicles", orgId)).toBe(1);
+    // Inventory is reset; CRM remains.
+    expect(await countFor(t, "vehicles", orgId)).toBe(0);
     expect(await countFor(t, "customers", orgId)).toBe(1);
   });
 
@@ -425,7 +425,7 @@ describe("resetOrgFinancialData", () => {
     expect(await countFor(t, "expenses", bystander)).toBe(1);
   });
 
-  test("leaves vehicle status alone, including SOLD with no sale behind it", async () => {
+  test("deletes SOLD vehicles with their erased sale basis (SCRUM-213 superseded by SCRUM-565 c24729)", async () => {
     // Accepted inconsistency, chosen deliberately — pinned so a later edit
     // cannot quietly start rewriting inventory.
     const t = setup();
@@ -440,8 +440,7 @@ describe("resetOrgFinancialData", () => {
         .collect()
         .then((all) => all.filter((row) => row.orgId === orgId))
     );
-    expect(vehicles).toHaveLength(1);
-    expect(vehicles[0].status).toBe("SOLD");
+    expect(vehicles).toHaveLength(0);
   });
 
   test("deletes an appraisal's stored report rather than orphaning it", async () => {
@@ -544,12 +543,10 @@ describe("resetOrgFinancialData", () => {
     });
   });
 
-  test("the signed-off scope excludes inventory, CRM, people and org config", async () => {
+  test("the signed-off scope removes inventory and keeps CRM, people and org config", async () => {
     // A guard on the constant itself. Adding a table here is a decision that
     // should fail this test and be made on purpose, not slipped in.
     const forbidden = [
-      "vehicles",
-      "vehicleValuations",
       "customers",
       "leads",
       "memberships",
@@ -642,8 +639,8 @@ describe("resetOrgFinancialData", () => {
     // Their approved reset lifecycle clears the new obligations and invalidates
     // exact new result references; this does not add legacy supplier AP or change
     // inventory/CRM/people/config retention. payrollItems moved, not duplicated.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(50);
-    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(50);
+    expect(RESET_TABLES_FOR_TEST).toHaveLength(73);
+    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(73);
     expect(RESET_TABLES_FOR_TEST).toContain("openingCommissionLiabilities");
     expect(RESET_TABLES_FOR_TEST).toContain("openingPayablePayments");
     expect(RESET_TABLES_FOR_TEST).toContain("openingManagementSettlementPlans");
@@ -676,18 +673,19 @@ describe("resetOrgFinancialData", () => {
  * records. A refusal costs an operator an error message.
  */
 async function seedAuthorityLifecycle(t: ReturnType<typeof setup>, orgId: Id<"organizations">) {
-  return await t.run(async (ctx: any) => {
+  return await t.run(async (ctx) => {
     const userId = await ctx.db.insert("users", {
       clerkId: `reset_auth_${orgId}`,
       email: "a@b.com",
       name: "Op",
     });
     const vehicle = (await ctx.db.query("vehicles").collect()).find(
-      (v: any) => String(v.orgId) === String(orgId)
+      (v) => String(v.orgId) === String(orgId)
     );
     const customer = (await ctx.db.query("customers").collect()).find(
-      (c: any) => String(c.orgId) === String(orgId)
+      (c) => String(c.orgId) === String(orgId)
     );
+    if (!vehicle || !customer) throw new Error("Missing authority fixture parents");
     const depositId = await ctx.db.insert("deposits", {
       orgId,
       vehicleId: vehicle._id,
@@ -760,7 +758,7 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(before.chart);
     expect(await countFor(t, "transactions", orgId)).toBe(before.tx);
     expect(await countFor(t, "expenses", orgId)).toBe(before.exp);
-    const survivingWork = await t.run(async (ctx: any) =>
+    const survivingWork = await t.run(async (ctx) =>
       (await ctx.db.query("commitmentAuthorityWork").collect()).length
     );
     expect(survivingWork, "and the authority row itself is untouched").toBe(1);
@@ -793,7 +791,7 @@ describe("resetOrgFinancialData refuses an org carrying authority lifecycle stat
     expect(await countFor(t, "chartOfAccounts", orgId)).toBe(0);
     expect(await countFor(t, "transactions", orgId)).toBe(0);
     // Protected tables still survive, as before.
-    expect(await countFor(t, "vehicles", orgId)).toBe(1);
+    expect(await countFor(t, "vehicles", orgId)).toBe(0);
     expect(await countFor(t, "customers", orgId)).toBe(1);
   });
 });
