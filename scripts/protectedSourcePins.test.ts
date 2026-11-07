@@ -929,8 +929,13 @@ describe("protected source content pins", () => {
       // SCRUM-928: preserves the full-file pin over decisions extracted from
       // applications.ts under the same authorized implementation scope above.
       file: "convex/utils/dealSettlementFigures.ts",
-      bytes: 18674,
-      sha256: "041177a4e533abefb587f644b1d91792c63d8cbf4aaa52546d7b3ff0bd41e954",
+      // SCRUM-928 Sonar S3863 renewal 2026-11-07: the authorized import merge
+      // combines financingEconomics bindings, retaining inline type imports;
+      // all declarations below the imports are byte-identical to 4f42be7ac.
+      // Implementer source review only; exact-SHA seat certification remains required.
+      // Previous postimage: 18674 bytes, sha256 041177a4e533abefb587f644b1d91792c63d8cbf4aaa52546d7b3ff0bd41e954.
+      bytes: 18635,
+      sha256: "b02d35ea76b40397707a53d0042da52dd70ce55818c7203c5c3e522278254a60",
     },
   ] as const;
 

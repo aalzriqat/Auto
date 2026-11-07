@@ -1,4 +1,4 @@
-import { loadReportDealFigures, reportContributionFor, MAX_REPORT_SALES } from "./utils/reportDealFigures";
+import { loadReportDealFigures, reportContributionFor, MAX_REPORT_SALES, type ReportDealFigures } from "./utils/reportDealFigures";
 import { v, ConvexError } from "convex/values";
 import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { query, QueryCtx } from "./_generated/server";
@@ -45,6 +45,21 @@ function assertReportRange(startDate: number, endDate: number): void {
   if (endDate - startDate > MAX_REPORT_RANGE_MS) {
     throw new ConvexError("Interactive reports are limited to 366 days. Narrow the range.");
   }
+}
+
+function commissionReportContribution(
+  figure: ReportDealFigures,
+  contribution: ReturnType<typeof reportContributionFor>,
+  orgCurrency: string
+): { totalCommissions: number; totalNetProfitAfterCommissions: number; commissionIncompleteSaleCount: number } {
+  if (!contribution.available || !figure.profit.available || figure.commissionsTotal === null) {
+    return { totalCommissions: 0, totalNetProfitAfterCommissions: 0, commissionIncompleteSaleCount: 1 };
+  }
+  return {
+    totalCommissions: figure.commissionsTotal,
+    totalNetProfitAfterCommissions: fromMinorUnits(figure.profit.amountMinor, orgCurrency),
+    commissionIncompleteSaleCount: 0,
+  };
 }
 
 export const getSalesAndProfitReport = query({
@@ -128,11 +143,10 @@ export const getSalesAndProfitReport = query({
       totalSupplierSettlement += economics.supplierSettlement ?? 0;
       if (economics.isAgentSale) agentSaleCount += 1;
       if (canSeeCommissions) {
-        if (!contribution.available || !profit.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
-        else {
-          totalCommissions += figure.commissionsTotal;
-          totalNetProfitAfterCommissions += fromMinorUnits(profit.amountMinor, orgCurrency);
-        }
+        const commissions = commissionReportContribution(figure, contribution, orgCurrency);
+        totalCommissions += commissions.totalCommissions;
+        totalNetProfitAfterCommissions += commissions.totalNetProfitAfterCommissions;
+        commissionIncompleteSaleCount += commissions.commissionIncompleteSaleCount;
       }
       return {
         ...projectSaleRow(sale, role),
@@ -769,7 +783,7 @@ export const getSalespersonPerformance = query({
       for (const sale of userSales) {
         const figure = figuresBySale.get(sale._id);
         if (!figure) throw new Error("Missing report sale figure");
-        const { economics, profit } = figure;
+        const { economics } = figure;
         const contribution = reportContributionFor(figure, orgCurrency);
         if (!contribution.available) unknownMarginSaleCount += 1;
         else {
@@ -778,11 +792,10 @@ export const getSalespersonPerformance = query({
         }
         totalGrossTransactionValue += economics.grossTransactionValue;
         if (canSeeCommissions) {
-          if (!contribution.available || !profit.available || figure.commissionsTotal === null) commissionIncompleteSaleCount += 1;
-          else {
-            totalCommissions += figure.commissionsTotal;
-            totalNetProfitAfterCommissions += fromMinorUnits(profit.amountMinor, orgCurrency);
-          }
+          const commissions = commissionReportContribution(figure, contribution, orgCurrency);
+          totalCommissions += commissions.totalCommissions;
+          totalNetProfitAfterCommissions += commissions.totalNetProfitAfterCommissions;
+          commissionIncompleteSaleCount += commissions.commissionIncompleteSaleCount;
         }
       }
 

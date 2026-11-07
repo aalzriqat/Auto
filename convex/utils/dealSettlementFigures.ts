@@ -1,9 +1,8 @@
 import { summarizeFees } from "../financeDealCosts";
 import { executionFeePosition, executionFeeHeadline, executionFeeUnrecorded, type ExecutionFeeHeadline } from "./executionFeePosition";
-import { composeCustomerGapToDealer, deriveManagementProfit, type ManagementProfit } from "./financingEconomics";
+import { composeCustomerGapToDealer, deriveManagementProfit, settlementStatusForFacts, obligationFromRow, type ManagementProfit, type ObligationState } from "./financingEconomics";
 import type { Doc } from "../_generated/dataModel";
 import { manualPayerOf } from "./manualFinancePayer";
-import { settlementStatusForFacts, obligationFromRow, type ObligationState } from "./financingEconomics";
 import { financedSaleRecognitionApplies, type DealMode } from "./financedSaleRecognition";
 import { dealershipCollectsGross, consignedSettlementRoute } from "./vehicleOwnership";
 import { toMinorSameCurrencyOrUndefined } from "./money";

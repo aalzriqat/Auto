@@ -293,6 +293,19 @@ function useReportsViewModel() {
 
 type ReportsViewModel = ReturnType<typeof useReportsViewModel>;
 
+function reportAccessMessage({ permissionsLoading, canSeeCost, report, requiresUpdate }: {
+  permissionsLoading: boolean;
+  canSeeCost: boolean;
+  report: ReportsViewModel["salesReport"] | ReportsViewModel["performanceReport"];
+  requiresUpdate: boolean;
+}): "ReportsCostAccessRequired" | "ReportUpdateRequired" | "Loading" | null {
+  if (!permissionsLoading && !canSeeCost) return "ReportsCostAccessRequired";
+  if (report != null) return null;
+  if (requiresUpdate) return "ReportUpdateRequired";
+  if (report === null) return "ReportsCostAccessRequired";
+  return "Loading";
+}
+
 function SalesReportTab({
   t,
   format,
@@ -313,6 +326,7 @@ function SalesReportTab({
   dateFilterProps,
 }: Readonly<ReportsViewModel>) {
   const { locale } = useLanguage();
+  const accessMessage = reportAccessMessage({ permissionsLoading, canSeeCost, report: salesReport, requiresUpdate: salesReportRequiresUpdate });
   const rowMoney = (amount: number | null, currency: string) => amount === null ? "—" : formatMoneyDisplay(amount, currency, locale);
   const exportSales = () => {
     if (!filteredSales) return;
@@ -335,7 +349,7 @@ function SalesReportTab({
   };
   return (
           <TabsContent value="sales" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : salesReport == null ? <CostAccessNote>{t(salesReportRequiresUpdate ? "ReportUpdateRequired" : salesReport === null ? "ReportsCostAccessRequired" : "Loading")}</CostAccessNote> : (<>
+            {accessMessage !== null ? <CostAccessNote>{t(accessMessage)}</CostAccessNote> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
@@ -776,9 +790,10 @@ function PerformanceReportTab({
   handlePrint,
   dateFilterProps,
 }: Readonly<ReportsViewModel>) {
+  const accessMessage = reportAccessMessage({ permissionsLoading, canSeeCost, report: performanceReport, requiresUpdate: performanceReportRequiresUpdate });
   return (
           <TabsContent value="performance" className="space-y-4 m-0">
-            {!permissionsLoading && !canSeeCost ? <CostAccessNote>{t("ReportsCostAccessRequired")}</CostAccessNote> : performanceReport == null ? <CostAccessNote>{t(performanceReportRequiresUpdate ? "ReportUpdateRequired" : performanceReport === null ? "ReportsCostAccessRequired" : "Loading")}</CostAccessNote> : (<>
+            {accessMessage !== null ? <CostAccessNote>{t(accessMessage)}</CostAccessNote> : (<>
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>

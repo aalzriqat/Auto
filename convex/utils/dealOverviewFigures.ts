@@ -12,7 +12,6 @@ export type OverviewMoney = Pick<DealFinancialSummaryInputs, "currency" | "route
   expenses: { actualTotalMinor: number; awaitingActuals: number };
   profit: ManagementProfit | AccountingProfit;
 };
-type CockpitMoney = OverviewMoney;
 function frozenMajorAmountToMinorOrUnreadable(amount: number, currency: string): number {
   try {
     return toMinorUnits(amount, currency);
@@ -123,7 +122,7 @@ export function dealerBorneLinesMixed(
 function routeSpecificProfit(args: {
   app: Doc<"financeApplications">;
   consigned: boolean | null;
-  money: CockpitMoney;
+  money: OverviewMoney;
   /** The vehicle's WHOLE book value (no cutoff), or why it cannot be stated. */
   fullCostBasis: VehicleCostBasis | null;
   expectedExpensesMinor?: number;

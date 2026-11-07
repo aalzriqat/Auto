@@ -262,4 +262,39 @@ describe("SCRUM-928 report matches the deal page", () => {
     });
     await expectParity(s, 1023700, 1133.7);
   });
+  test("out-of-order application and invoice ids retain fees and settled allocations at both range endpoints", async () => {
+    const s = await fixture();
+    const secondSaleId = await s.t.run(async (ctx) => {
+      const app = await ctx.db.get(s.applicationId!);
+      const sale = await ctx.db.get(s.saleId);
+      const fee = await ctx.db.get(s.feeId!);
+      if (!app || !sale || !fee) throw new Error("fixture missing financed deal");
+      const { _id: _appId, _creationTime: _appTime, finalizedSaleId: _finalizedSaleId, ...appFields } = app;
+      const secondAppId = await ctx.db.insert("financeApplications", appFields);
+      const { _id: _saleId, _creationTime: _saleTime, ...saleFields } = sale;
+      // The indexed sale-date read encounters the newer ids first.
+      const secondSaleId = await ctx.db.insert("sales", { ...saleFields, applicationId: secondAppId, saleDate: DATE - 1 });
+      const { _id: _feeId, _creationTime: _feeTime, ...feeFields } = fee;
+      await ctx.db.insert("financeDealFees", { ...feeFields, applicationId: secondAppId, actualAmountMinor: 500000, reconciledAt: DATE });
+      await ctx.db.patch(s.feeId!, { reconciledAt: DATE });
+      for (const [applicationId, saleId] of [[s.applicationId!, s.saleId], [secondAppId, secondSaleId]] as const) {
+        await ctx.db.patch(applicationId, { finalizedSaleId: saleId, estimatedDealerBorneExpensesMinor: 600000, supplierDisbursedAmountMinor: 12000000 });
+        await ctx.db.insert("vehicleSupplierReceivables", {
+          orgId: s.orgId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Supplier",
+          amountDue: 2100, amountReceived: 2100, currency: "JOD", status: "PAID",
+          createdBy: s.userId, createdAt: DATE, updatedAt: DATE,
+        });
+        await seedSaleInvoice(ctx, { orgId: s.orgId, saleId, userId: s.userId,
+          customerId: s.customerId, originalMinor: 100000, openMinor: 0, posting: "POSTED" });
+      }
+      return secondSaleId;
+    });
+    const report = await s.asUser.query(api.reports.getSalesAndProfitReport, { orgId: s.orgId, startDate: DATE - 1, endDate: DATE });
+    expect(report?.sales).toMatchObject([
+      { _id: s.saleId, netProfit: 1133.7, netProfitAfterCommissions: 1023.7 },
+      { _id: secondSaleId, netProfit: 1085, netProfitAfterCommissions: 975 },
+    ]);
+    expect(report?.totalProfit).toBeCloseTo(2218.7, 8);
+    expect(report?.totalNetProfitAfterCommissions).toBeCloseTo(1998.7, 8);
+  });
 });

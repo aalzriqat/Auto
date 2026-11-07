@@ -38,6 +38,13 @@ function groupBy<T, K>(rows: T[], key: (row: T) => K): Map<K, T[]> {
   return groups;
 }
 
+function compareIds(left: string, right: string): number {
+  // Preserve the default sort's code-unit order for the indexed range bounds.
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 export type ReportDealFigures = {
   sale: Doc<"sales">;
   vehicle: Doc<"vehicles"> | null;
@@ -155,9 +162,10 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   // The deal page's authority is application-keyed, including a malformed
   // tenant stamp on a linked fee. Preserve that input set without publishing
   // any intervening application's rows. A bounded envelope may over-refuse.
-  const sortedAppIds = [...appIds].sort();
-  const fees = sortedAppIds.length ? accept(await ctx.db.query("financeDealFees").withIndex("by_application", (q) =>
-    q.gte("applicationId", sortedAppIds[0]).lte("applicationId", sortedAppIds[sortedAppIds.length - 1])).take(remaining + 1)) : [];
+  const sortedAppIds = [...appIds].sort(compareIds);
+  const lastAppId = sortedAppIds.at(-1);
+  const fees = lastAppId !== undefined ? accept(await ctx.db.query("financeDealFees").withIndex("by_application", (q) =>
+    q.gte("applicationId", sortedAppIds[0]).lte("applicationId", lastAppId)).take(remaining + 1)) : [];
   const claims = appIds.length ? accept(await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org_sale", (q) => q.eq("orgId", orgId)).take(remaining + 1)) : [];
   const payables = appIds.length ? accept(await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).take(remaining + 1)) : [];
   const expensesByVehicle = groupBy(expenses, (e) => e.vehicleId);
@@ -240,9 +248,10 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   const invoices = new Map(invoiceRows.flatMap((d) => d ? [[d._id, d] as const] : []));
   // Match the existing by_receivable reader even for malformed foreign linked
   // allocations. Scope the one range to the referenced canonical ids, then group.
-  const sortedInvoiceIds = [...invoiceIds].sort();
-  const allocations = sortedInvoiceIds.length ? accept(await ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) =>
-    q.gte("receivableDocumentId", sortedInvoiceIds[0]).lte("receivableDocumentId", sortedInvoiceIds[sortedInvoiceIds.length - 1])).take(remaining + 1)) : [];
+  const sortedInvoiceIds = [...invoiceIds].sort(compareIds);
+  const lastInvoiceId = sortedInvoiceIds.at(-1);
+  const allocations = lastInvoiceId !== undefined ? accept(await ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) =>
+    q.gte("receivableDocumentId", sortedInvoiceIds[0]).lte("receivableDocumentId", lastInvoiceId)).take(remaining + 1)) : [];
   const allocationsByInvoice = groupBy(allocations, (a) => a.receivableDocumentId);
   const events = invoiceIds.length ? accept(await ctx.db.query("accountingEvents").withIndex("by_org_idempotency", (q) =>
     q.eq("orgId", orgId).gte("idempotencyKey", "sale_completed_").lt("idempotencyKey", "sale_completed_\uffff")).take(remaining + 1)) : [];
