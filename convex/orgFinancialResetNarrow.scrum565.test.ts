@@ -174,7 +174,7 @@ describe("SCRUM-565 narrow reset", () => {
       await expect(reset(t, a)).rejects.toThrow(new RegExp(`${table}.*[1-9]`));
       expect(await snapshot(t)).toEqual(before);
   }
-  test("risky family dealCommissionLines refuses by table before any write", () => refusesRiskyFamily("dealCommissionLines"));
+  test("owner ruling 2026-11-07 wipes owed deal commission lines, books start from zero", () => wipesOwedCommissions("dealCommissionLines"));
   test("risky family supplierCostRecoveries refuses by table before any write", () => refusesRiskyFamily("supplierCostRecoveries"));
   test("risky family postDatedCheques refuses by table before any write", () => refusesRiskyFamily("postDatedCheques"));
   test("risky family unmatchedProviderFunds refuses by table before any write", () => refusesRiskyFamily("unmatchedProviderFunds"));
@@ -283,19 +283,87 @@ describe("SCRUM-565 narrow reset", () => {
     expect(await t.run(ctx => ctx.storage.getUrl(blob))).not.toBeNull();
   });
 
-  test("an unpaid sale commission refuses before deleting its sales or ledger basis", async () => {
-    const { t, a } = await fixture();
-    await t.run(ctx => document(ctx, a, "sales", { status: "COMPLETED", commissionAmount: 1 }));
+  async function wipesOwedCommissions(table: "dealCommissionLines" | "sales" | "openingCommissionLiabilities") {
+    const { t, a, b } = await fixture();
+    const owed = {
+      dealCommissionLines: { amountMinor: 2 },
+      sales: { status: "COMPLETED", commissionAmount: 2 },
+      // A timestamp alone does not settle a partially paid opening liability.
+      openingCommissionLiabilities: { amountMinor: 2, paidMinor: 1, paidAt: 1 },
+    };
+    const settled = {
+      dealCommissionLines: { amountMinor: 2, paidAt: 1 },
+      sales: { status: "COMPLETED", commissionAmount: 2, commissionPaidAt: 1 },
+      openingCommissionLiabilities: { amountMinor: 2, paidMinor: 2 },
+    };
+    const link = {
+      dealCommissionLines: "commissionLineIds", sales: "commissionSaleIds",
+      openingCommissionLiabilities: "openingCommissionLiabilityIds",
+    };
+    await t.run(async ctx => {
+      for (const org of [a, b]) {
+        const cache = new Map<string, string>();
+        const ids: string[] = [];
+        for (let i = 0; i < 2; i += 1) ids.push(await document(ctx, org, table, owed[table], cache));
+        await document(ctx, org, table, settled[table], cache);
+        // Historical liabilities can outlive their draft. A live draft independently refuses reset.
+        if (table === "openingCommissionLiabilities") {
+          const draftId = ctx.db.normalizeId("openingBalanceDrafts", cache.get("openingBalanceDrafts") ?? "");
+          if (!draftId) throw new Error("Missing historical draft fixture");
+          await ctx.db.delete(draftId);
+        }
+        await document(ctx, org, "payrollItems", { commissionSaleIds: [] }, cache);
+        await document(ctx, org, "payrollItems", { commissionSaleIds: [], [link[table]]: ids }, cache);
+      }
+    });
     const before = await snapshot(t);
-    await expect(reset(t, a)).rejects.toThrow(/sales count 1/);
+    const counts = { dealCommissionLines: 0, sales: 0, openingCommissionLiabilities: 0, [table]: 2 };
+    expect(await reset(t, a, true)).toMatchObject({
+      preflight: { verdict: "PASS", owedCommissionCounts: counts, refusals: [] },
+    });
     expect(await snapshot(t)).toEqual(before);
-  });
 
-  test("an unpaid opening commission liability refuses even with a paid timestamp", async () => {
-    const { t, a } = await fixture();
-    await t.run(ctx => document(ctx, a, "openingCommissionLiabilities", { amountMinor: 2, paidMinor: 1, paidAt: 1 }));
-    const before = await snapshot(t);
-    await expect(reset(t, a)).rejects.toThrow(/openingCommissionLiabilities count 1/);
-    expect(await snapshot(t)).toEqual(before);
+    let result = await reset(t, a);
+    expect(result.remaining).toBeGreaterThan(0);
+    const partial = await snapshot(t);
+    const ownedByA = (rows: unknown[]) => (rows as Array<{ orgId?: string }>).filter(row => row.orgId === a);
+    // The second payslip still names the owed rows, so all parents must survive this committed batch.
+    expect(ownedByA(partial.payrollItems)).toHaveLength(1);
+    expect(ownedByA(partial[table])).toEqual(ownedByA(before[table]));
+    for (let pass = 0; pass < 80 && result.remaining > 0; pass += 1) result = await reset(t, a);
+    expect(result).toMatchObject({ remaining: 0, resetCompleted: true, resetGeneration: 1 });
+    const after = await snapshot(t);
+    for (const deleted of [table, "payrollItems", "payrollRuns", "journalEntries", "journalLines"]) {
+      expect(ownedByA(after[deleted]), deleted).toEqual([]);
+    }
+    for (const name of Object.keys(tables)) {
+      const ownedByB = (rows: unknown[]) => (rows as Array<{ orgId?: string; _id: string }>).filter(row => row.orgId === b || row._id === b);
+      expect(ownedByB(after[name]), name).toEqual(ownedByB(before[name]));
+    }
+    expect(after.customers).toEqual(before.customers);
+    expect(after.users).toEqual(before.users);
+    expect(await reset(t, a, true)).toMatchObject({
+      preflight: { verdict: "PASS", owedCommissionCounts: { dealCommissionLines: 0, sales: 0, openingCommissionLiabilities: 0 } },
+    });
+  }
+
+  test("owner ruling 2026-11-07 wipes unpaid sale commissions, books start from zero", () => wipesOwedCommissions("sales"));
+
+  test("owner ruling 2026-11-07 wipes historical unpaid opening commissions with missing draft and paid timestamp", () => wipesOwedCommissions("openingCommissionLiabilities"));
+
+  test("owner ruling 2026-11-07 keeps over-bound commission evidence UNAVAILABLE with no invented count", async () => {
+    for (const table of ["dealCommissionLines", "sales", "openingCommissionLiabilities"]) {
+      const { t, a } = await fixture();
+      await t.run(async ctx => {
+        const cache = new Map<string, string>();
+        for (let i = 0; i < 101; i += 1) await document(ctx, a, table, {}, cache);
+      });
+      const before = await snapshot(t);
+      expect(await reset(t, a, true)).toMatchObject({
+        preflight: { verdict: "UNAVAILABLE", owedCommissionCounts: { [table]: null } },
+      });
+      await expect(reset(t, a)).rejects.toThrow(new RegExp(`${table} count 101`));
+      expect(await snapshot(t)).toEqual(before);
+    }
   });
 });
