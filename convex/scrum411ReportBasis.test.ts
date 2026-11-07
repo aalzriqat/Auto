@@ -156,7 +156,8 @@ describe("SCRUM-411 - owned car: reports agree with the ledger's net revenue K -
     expect(r.saleTransaction?.recognizedRevenueAmount).toBe(11_125);
     // Revenue less cost of sales is the profit - the identity the report is built on.
     expect(r.row.recognizedRevenue).not.toBeNull();
-    expect((r.row.recognizedRevenue ?? 0) - r.row.totalCost).toBe(r.row.netProfit);
+    if (r.row.recognizedRevenue === null || r.row.totalCost === null) throw new Error("Expected complete deal figures");
+    expect(r.row.recognizedRevenue - r.row.totalCost).toBe(r.row.netProfit);
   });
 
   test("with a customer gap R 500: K 13,000, ledger net 11,625, profit 2,625", async () => {
@@ -333,7 +334,8 @@ describe("SCRUM-411 - rows without the frozen net basis keep the legacy reading"
 
     const r = await readEveryConsumer(s);
     expect(r.row.recognizedRevenue).toBe(12_500);
-    expect(r.row.netProfit).toBe(3_500);
+    // SCRUM-928: management net still includes the frozen 1,375 contribution.
+    expect(r.row.netProfit).toBe(2_125);
   });
 
   test("a consigned sale with no frozen net revenue reads its frozen margin K - E", async () => {
@@ -343,7 +345,8 @@ describe("SCRUM-411 - rows without the frozen net basis keep the legacy reading"
 
     const r = await readEveryConsumer(s);
     expect(r.row.recognizedRevenue).toBe(3_500);
-    expect(r.row.netProfit).toBe(3_500);
+    // SCRUM-928: management net still includes the frozen 1,375 contribution.
+    expect(r.row.netProfit).toBe(2_125);
   });
 
 });
@@ -378,7 +381,9 @@ describe("SCRUM-411 - a frozen net revenue that is present but untrustworthy is 
 
       const r = await readEveryConsumer(s);
       expect(r.row.recognizedRevenue).toBeNull();
-      expect(r.row.netProfit).toBeNull();
+      // The deal page derives management net from application evidence, separately from the corrupt revenue snapshot.
+      expect(r.row.netProfit).toBe(2_125);
+      expect(r.row.netProfitAfterCommissions).toBe(2_125);
       expect(r.report.unknownMarginSaleCount).toBe(1);
       expect(r.report.totalRevenue).toBe(0);
       expect(r.report.totalProfit).toBe(0);
@@ -397,7 +402,9 @@ describe("SCRUM-411 - a frozen net revenue that is present but untrustworthy is 
 
     const r = await readEveryConsumer(s);
     expect(r.row.recognizedRevenue).toBeNull();
-    expect(r.row.netProfit).toBeNull();
+    // The deal page derives management net from application evidence, separately from the corrupt revenue snapshot.
+      expect(r.row.netProfit).toBe(2_125);
+      expect(r.row.netProfitAfterCommissions).toBe(2_125);
     expect(r.report.unknownMarginSaleCount).toBe(1);
     // The supplier's share is its own frozen fact and is unaffected.
     expect(r.row.supplierSettlement).toBe(9_000);

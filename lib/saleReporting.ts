@@ -17,6 +17,7 @@ export interface ReportedSaleRow {
   recognizedRevenue?: number | null;
   totalCost?: number | null;
   netProfit?: number | null;
+  includedInTotals?: boolean;
 }
 
 function finiteOrZero(value: number | null | undefined): number {
@@ -35,7 +36,7 @@ function finiteOrZero(value: number | null | undefined): number {
  * refusal into the largest wrong number available.
  */
 export function marginIsUnknown(sale: ReportedSaleRow): boolean {
-  return sale?.netProfit === null || sale?.recognizedRevenue === null;
+  return sale?.includedInTotals === false || sale?.netProfit === null || sale?.recognizedRevenue === null;
 }
 
 /** How many of these rows contribute nothing to the totals because their earning is unknown. */
@@ -89,9 +90,9 @@ export function sumRecognizedRevenue(sales: ReportedSaleRow[] | undefined | null
 }
 
 export function sumReportedCost(sales: ReportedSaleRow[] | undefined | null): number {
-  return (sales ?? []).reduce((sum, sale) => sum + finiteOrZero(sale?.totalCost), 0);
+  return (sales ?? []).reduce((sum, sale) => sum + (marginIsUnknown(sale) ? 0 : finiteOrZero(sale?.totalCost)), 0);
 }
 
 export function sumReportedProfit(sales: ReportedSaleRow[] | undefined | null): number {
-  return (sales ?? []).reduce((sum, sale) => sum + finiteOrZero(sale?.netProfit), 0);
+  return (sales ?? []).reduce((sum, sale) => sum + (marginIsUnknown(sale) ? 0 : finiteOrZero(sale?.netProfit)), 0);
 }

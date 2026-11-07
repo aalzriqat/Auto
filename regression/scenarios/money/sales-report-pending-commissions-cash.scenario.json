@@ -1,0 +1,75 @@
+{
+  "id": "sales-report-pending-commissions-cash",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-owner-before-commissions",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ADMIN",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "financingType": "CASH",
+        "commissionPending": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfitMinor",
+      "value": 1900000
+    },
+    {
+      "observable": "row.netAfterCommissionsMinor",
+      "value": null
+    },
+    {
+      "observable": "report.totalProfitMinor",
+      "value": 1900000
+    },
+    {
+      "observable": "report.commissionIncompleteSaleCount",
+      "value": 1
+    },
+    {
+      "observable": "report.unknownMarginSaleCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.matchesDeal.test.ts",
+    "testName": "pending commissions keep CASH profit available"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "ead75b8819a74d14e8a0f9ddb82329219bc65015"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/sales.ts",
+    "convex/applications.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/utils/cashDealFigures.ts",
+    "convex/utils/dealProfitReads.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
+  ],
+  "fingerprint": "e68947993cc646d1296ea8af01288b245d0fa0b49613e2df70a7fedcfbe3b9b9"
+}

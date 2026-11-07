@@ -656,8 +656,8 @@ describe("inventory intelligence", () => {
 
   test("reports combine purchase price and landed costs (not one or the other)", async () => {
     const { t, orgId, userId, roleId, asUser } = await setup();
-    // SCRUM-886: the landed-cost breakdown is cost, so writing it needs view:cost_price as well.
-    await t.run((ctx) => ctx.db.patch(roleId, { permissions: [...PERMISSIONS, "view:cost_price"] }));
+    // SCRUM-928: the management-net report needs the same finance and commission access as the deal page.
+    await t.run((ctx) => ctx.db.patch(roleId, { permissions: [...PERMISSIONS, "view:cost_price", "view:finance", "view:commissions"] }));
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       idempotencyKey: crypto.randomUUID(),
       orgId,
@@ -684,6 +684,7 @@ describe("inventory intelligence", () => {
         salePrice: 15000,
         saleDate,
         status: "COMPLETED",
+        commissionAmount: 0,
       })
     );
 
