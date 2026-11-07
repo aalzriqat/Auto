@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
 
 const DATE = Date.UTC(2026, 10, 7);
@@ -64,7 +64,7 @@ async function fixture(options: { cash?: boolean; stock?: boolean; direct?: bool
       includedInQuotation: false, deductedFromSettlement: false, refundable: false, source: "MANUAL",
       createdBy: userId, createdAt: DATE, updatedAt: DATE,
     }) : null;
-    return { orgId, userId, customerId, vehicleId, saleId, applicationId, expenseId, feeId };
+    return { orgId, userId, roleId, customerId, vehicleId, saleId, applicationId, expenseId, feeId };
   });
   const asUser = t.withIdentity({ subject: "parity" });
   const report = () => asUser.query(api.reports.getSalesAndProfitReport, { orgId: ids.orgId, startDate: DATE, endDate: DATE });
@@ -121,13 +121,28 @@ describe("SCRUM-928 report matches the deal page", () => {
     expect(report!.sales[0]).toMatchObject({ profitUnavailableReason: reason });
     expect(report!.unknownMarginSaleCount).toBe(1);
   });
-  test("without view:commissions, both withhold management net", async () => {
+  test("without view:commissions, reports retain profit and withhold commission fields", async () => {
     const s = await fixture({ without: "view:commissions" });
     expect((await s.deal()).profit).toEqual({ available: false, reason: "CommissionAccessRequired" });
     const report = await s.report();
-    expect(report!.sales[0].netProfit).toBeNull();
+    expect(report!.sales[0].netProfit).toBe(1023.7);
+    expect(report!.sales[0].salePrice).toBe(12100);
+    expect(report!.sales[0].profitUnavailableReason).toBeNull();
     expect(report!.sales[0].netProfitAfterCommissions).toBeNull();
     expect(report!.sales[0].commissionsTotal).toBeNull();
+    expect(report!.sales[0].commissionPending).toBe(false);
+    expect(report!.totalProfit).toBe(1023.7);
+    expect(report!.totalRevenue).toBe(1885);
+    expect(report!.totalCost).toBeCloseTo(861.3, 8);
+    expect(report!.unknownMarginSaleCount).toBe(0);
+    expect(report!.totalCommissions).toBeNull();
+    expect(report!.totalNetProfitAfterCommissions).toBeNull();
+    expect(report!.commissionIncompleteSaleCount).toBeNull();
+    const performance = await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE });
+    expect(performance).toMatchObject([{
+      totalRevenue: 1885, totalProfit: 1023.7, marginComplete: true,
+      totalCommissions: null, totalNetProfitAfterCommissions: null, commissionIncompleteSaleCount: null,
+    }]);
   });
   test("without view:cost_price, report remains null", async () => {
     const s = await fixture({ without: "view:cost_price" });
@@ -198,14 +213,46 @@ describe("SCRUM-928 report matches the deal page", () => {
     await s.t.run((ctx) => ctx.db.patch(s.expenseId, { isDeleted: true }));
     await expectParity(s, 1323700);
   });
-  test("finance withholding is named truthfully when cost access exists", async () => {
+  test("Keep today's view: without view:finance, reports retain figures with report and cost access", async () => {
     const s = await fixture({ without: "view:finance" });
     expect((await s.deal()).profit).toBeUndefined();
     const report = await s.report();
-    expect(report!.sales[0].netProfit).toBeNull();
-    expect(report!.sales[0].profitUnavailableReason).toBe("FinanceAccessRequired");
-    expect(report!.sales[0].salePrice).toBeNull();
-    expect(report!.sales[0].salePriceUnavailableReason).toBe("ACCESS_REQUIRED");
+    expect(report!.sales[0]).toMatchObject({
+      netProfit: 1023.7, netProfitAfterCommissions: 1023.7, salePrice: 12100,
+      profitUnavailableReason: null, salePriceUnavailableReason: null, includedInTotals: true,
+    });
+    const performance = await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE });
+    await s.t.run((ctx) => ctx.db.patch(s.roleId, { permissions: ALL_PERMISSIONS }));
+    const withFinance = await s.report();
+    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, ...financeRow } = withFinance!.sales[0];
+    expect(report).toEqual({ ...withFinance, sales: [financeRow] });
+    expect(performance).toEqual(await s.asUser.query(api.reports.getSalespersonPerformance, { orgId: s.orgId, startDate: DATE, endDate: DATE }));
+  });
+  test.each([
+    { cash: true, label: "CASH", net: 1790 },
+    { cash: false, label: "SOURCED financed", net: 1023.7 },
+  ])("MANAGER template sees the owner's report figures for $label", async ({ cash, net }) => {
+    const manager = DEFAULT_ROLE_TEMPLATES.find((role) => role.name === "MANAGER");
+    if (!manager) throw new Error("MANAGER template missing");
+    expect(manager.permissions).toEqual(expect.arrayContaining(["view:reports", "view:cost_price", "view:commissions"]));
+    expect(manager.permissions).not.toContain("view:finance");
+    const s = await fixture({ cash });
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.roleId, { name: "OWNER", isSystemOwnerRole: true });
+      const roleId = await ctx.db.insert("roles", { orgId: s.orgId, ...manager, isSystemOwnerRole: false });
+      const userId = await ctx.db.insert("users", { clerkId: "manager", email: "manager@example.com", name: "Manager" });
+      await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+    });
+    const asManager = s.t.withIdentity({ subject: "manager" });
+    const args = { orgId: s.orgId, startDate: DATE, endDate: DATE };
+    const ownerReport = await s.report();
+    const managerReport = await asManager.query(api.reports.getSalesAndProfitReport, args);
+    expect(managerReport!.sales[0]).toMatchObject({ salePrice: 12100, netProfit: net, netProfitAfterCommissions: net });
+    const { commissionBase: _commissionBase, consignedSupplierConcessionMinor: _concession, ...ownerRow } = ownerReport!.sales[0];
+    expect(managerReport).toEqual({ ...ownerReport, sales: [ownerRow] });
+    const ownerPerformance = await s.asUser.query(api.reports.getSalespersonPerformance, args);
+    expect(ownerPerformance).toMatchObject([{ totalProfit: net, totalNetProfitAfterCommissions: net }]);
+    expect(await asManager.query(api.reports.getSalespersonPerformance, args)).toEqual(ownerPerformance);
   });
   test("fee evidence uses application linkage even if its tenant stamp is inconsistent", async () => {
     const s = await fixture();

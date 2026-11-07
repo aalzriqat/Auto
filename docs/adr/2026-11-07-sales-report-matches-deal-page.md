@@ -5,10 +5,49 @@ Date: 2026-11-07. Issue: SCRUM-928, part 1. Status: accepted for implementation.
 ## Invariant and scope
 
 For each completed, live sale, the report's customer sale price, profit and net
-after commissions equal the deal page's figures for the same role, to the minor
-unit, or have the same unavailable reason. Unknown is never zero. The report
-moves to the deal page's definition. It does not change deal economics, posting,
-commission amounts, permissions or lifecycle rules.
+after commissions use the deal page's shared value derivation, to the minor
+unit, with the same evidence refusals. Unknown is never zero. Access follows
+main's report rules at `684ba04d0`, independently of deal-page access. The report
+does not change deal economics, posting, commission amounts or lifecycle rules.
+
+## Permission ruling: "Keep today's view"
+
+The owner's 2026-11-07 ruling supersedes role-parity withholding from the initial
+implementation. The reports keep main's permission gates exactly. A caller who
+could see a figure on main still sees it, and a caller who could not still
+cannot. `view:finance` must not become a new requirement for report profit,
+sale price, net after commissions, totals, Performance or CSV. Parity with the
+deal page applies to values. Access follows main's report rules.
+
+Both Sales and Performance require tenant membership and `view:reports`, and
+return null without `view:cost_price`. System owners retain their existing
+bypass. Base profit, revenue, costs and sale price require no commission or
+finance grant. Commission fields and the separate net-after-commissions fields
+retain `view:commissions`. The loader reads the complete commission operands
+internally for profit, and the queries project the commission fields using
+that separate grant. Stored sale FINANCE fields still pass through
+`projectSaleRow`, retaining their own finance gate. CSV uses the same projected
+report fields. The deal page's own authorization is unchanged.
+
+The access comparison below uses R = `view:reports`, C = `view:cost_price`,
+M = `view:commissions`, and F = `view:finance`. Existing system-owner bypasses
+apply. Evidence refusals for genuinely unreadable amounts remain separate.
+
+| Report fields | Main `684ba04d0` | Initial head `1bcd76af2` | Fixed |
+| --- | --- | --- | --- |
+| Sales customer sale price | R+C | R+C+F | R+C |
+| Sales base profit, recognized revenue, costs and their totals/completeness | R+C | R+C+F+M | R+C |
+| Sales commission total and pending flag | R+C+M | R+C+M | R+C+M |
+| Sales separate net after commissions and its totals/completeness | R+C+M | R+C+F+M | R+C+M |
+| Sales vehicle cost, gross volume, supplier settlement, agent count and metadata | R+C | R+C | R+C |
+| Projected sale `commissionBase` and `consignedSupplierConcessionMinor` | R+C+F | R+C+F | R+C+F |
+| Remaining projected sale fields | R+C | R+C | R+C |
+| Performance revenue/profit totals and completeness | R+C | R+C+F+M | R+C |
+| Performance commission/net totals and completeness | R+C+M | R+C+F+M | R+C+M |
+| Performance salesperson, count and gross volume | R+C | R+C | R+C |
+| Inventory, Expenses and legacy P&L, unchanged query bodies | R+C | R+C | R+C |
+| Lead conversion, unchanged query body | R | R | R |
+| CSV base fields; separate commission/net columns | R+C; R+C+M | Inherits added backend gates | R+C; R+C+M |
 
 The owner confirmed the mismatch on a production test deal; its identifier
 stays out of this public repository. The test fixtures reproduce its shape: a
@@ -19,7 +58,7 @@ showroom preparation cost and commissions.
 
 | Candidate | Read cost | Freshness | Permissions |
 | --- | --- | --- | --- |
-| A. Shared pure derivation, with report inputs loaded in batches | Load distinct applications and vehicles once, and indexed child collections once per report batch. No per-sale query invocation. Bound reads and refuse an incomplete report rather than publish a prefix. | Live fees, removed expenses and commission changes appear on both reactive readers. | The caller's existing finance, cost and commission rights are inputs. The report stays null without cost access. No commission-free substitute for a withheld net. |
+| A. Shared pure derivation, with report inputs loaded in batches | Load distinct applications and vehicles once, and indexed child collections once per report batch. No per-sale query invocation. Bound reads and refuse an incomplete report rather than publish a prefix. | Live fees, removed expenses and commission changes appear on both reactive readers. | Main's report and cost gates authorize base figures. Commission fields retain their separate grant. Deal-page finance access is not a report prerequisite. |
 | B. Freeze management net and customer price at completion | Cheap date-indexed sales reads, but requires new stored fields, a backfill and invalidation at every later cost edit. | Incorrect after a late execution-fee actual, expense removal or commission correction unless every writer maintains the snapshot. | A single stored net cannot replace current role-specific withholding. A second permission projection is still needed. |
 
 Choose A. Completion is not the last time costs can change. B would introduce a
@@ -91,7 +130,7 @@ formatting a row without its new currency field. Loading also states no number.
 | State transitions | Late costs are live; cancelled and deleted sales remain excluded. |
 | Reversal | Deleted, reversed, voided and supplier-borne costs retain the existing exclusion rules. |
 | Idempotency | Read-only; repeated reads do not write. |
-| Authorization | Preserve finance, cost and commission withholding. No unknown-to-zero fallback. |
+| Authorization | Preserve main's report gates field by field, including the projected sale FINANCE fields. No unknown-to-zero fallback. |
 | Tenancy | Tenant indexes and reciprocal application-sale linkage; no cross-tenant evidence. |
 | Ledger | No postings, events or journal changes. |
 | Audit | Failing-first commit, regression record and certification-matrix row. |
@@ -107,6 +146,24 @@ evidence becomes zero. Permission, cancelled-sale and repeated-vehicle fixtures
 also exercise the public readers.
 
 ## Local evidence and remaining certification
+
+The permission follow-up reproduced four failing role cases before its fix.
+Afterward, all 19 report tests and all 70 scenario validators pass. The real
+`DEFAULT_ROLE_TEMPLATES` MANAGER permissions are used for CASH and SOURCED
+financed sales, and match a system owner's report figures. Both TypeScript
+checks pass. The scenario's executable test name includes the verbatim ruling
+"Keep today's view"; the closed JSON schemas still reject free-form ruling
+text. The supplied source identifies c24730 as the problem comment, not the
+owner answer. The answer's comment id remains unverified.
+
+The untouched `dealCommissions.test.ts` exposes a separate contract conflict.
+It requires `netProfit` and `totalProfit` to remain pre-commission margin 5000,
+and the separate net-after-commissions fields to be 4875. The PR defines both
+as management net. After restoring access, the assertion fails with 4875
+versus 5000, rather than null versus 5000. Changing only permission inputs
+cannot satisfy both definitions. This follow-up does not change the test or
+introduce a role-dependent value formula. Resolving that contract needs an
+explicit scope decision before this PR can pass its required suite.
 
 The first public-query red run at `173185b2d` was 9 failed, 1 passed. The expanded
 tests against committed snapshot `442fa7d18` were 20 failed, 14 passed. The
@@ -124,7 +181,7 @@ checks. Expectations are literal amounts from the finding and worked fixtures.
 Design review additionally caught that settlement can change the amount. Posted
 canonical-invoice fixtures prove legacy forecast 600,000 versus actual 451,300:
 unsettled net is 875,000; settled net is 1,023,700. Application-linked malformed
-fee stamps, finance withholding and corrupt strongest price documents also have
+fee stamps, finance-less report access and corrupt strongest price documents also have
 public-query controls. A frontend legacy-payload reproduction failed with the
 missing-currency `.trim()` crash before the figure-basis gate; it passes with
 the explicit update-required state.

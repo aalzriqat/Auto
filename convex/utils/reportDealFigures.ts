@@ -44,9 +44,9 @@ export type ReportDealFigures = {
   vehicle: Doc<"vehicles"> | null;
   economics: ReturnType<typeof saleEconomics>;
   vehicleCost: number;
-  profit: DealProfit | { available: false; reason: "FinanceAccessRequired" };
+  profit: DealProfit;
   salePrice: number | null;
-  salePriceUnavailableReason: "UNSAFE_AMOUNT" | "NOT_RECORDED" | "DEAL_UNAVAILABLE" | "ACCESS_REQUIRED" | null;
+  salePriceUnavailableReason: "UNSAFE_AMOUNT" | "NOT_RECORDED" | "DEAL_UNAVAILABLE" | null;
   currency: string;
   commissionsTotal: number | null;
   commissionPending: boolean;
@@ -107,8 +107,6 @@ type ReportInputs = {
   orgId: Id<"organizations">;
   sales: Doc<"sales">[];
   orgCurrency: string;
-  mayReadCommissions: boolean;
-  mayReadFinance: boolean;
 };
 
 export async function loadReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise<ReportDealFigures[]> {
@@ -148,8 +146,10 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
   const expenses = accept(await ctx.db.query("expenses").withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId)).take(remaining + 1));
   const workOrders = expenses.some((e) => e.accountingTreatment === undefined && e.status === "PAID" && !e.isDeleted && e.reversedAt === undefined)
     ? accept(await ctx.db.query("workOrders").withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId)).take(remaining + 1)) : [];
-  const commissions = args.mayReadCommissions
-    ? accept(await ctx.db.query("dealCommissionLines").withIndex("by_org_sale", (q) => q.eq("orgId", orgId)).take(remaining + 1)) : [];
+  // SCRUM-928 "Keep today's view": report profit is authorized by report and
+  // cost access. Read its full operands, then project commission fields at the
+  // query boundary using the report's separate view:commissions permission.
+  const commissions = accept(await ctx.db.query("dealCommissionLines").withIndex("by_org_sale", (q) => q.eq("orgId", orgId)).take(remaining + 1));
   // The deal page's authority is application-keyed, including a malformed
   // tenant stamp on a linked fee. Preserve that input set without publishing
   // any intervening application's rows. A bounded envelope may over-refuse.
@@ -183,7 +183,7 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
       externallyFinanced: sale.financingType === "FINANCED" || sale.financingType === "LEASE",
     });
     const commission = profitCommissionsFromRows({ sale, rows: commissionsBySale.get(sale._id) ?? [], currency,
-      mayReadCommissions: args.mayReadCommissions });
+      mayReadCommissions: true });
     const basis = vehicle ? deriveVehicleCostBasis({ vehicle, expenses: expenseRows, cutoffCreationTime: null, dealCurrency: currency, orgCurrency }) : null;
     const preparation = vehicle && !vehicle.isDeleted ? deriveDealerPreparationExpenses({
       expenses: expenseRows, cutoffCreationTime: null, dealCurrency: currency, orgCurrency,
@@ -268,9 +268,6 @@ async function readReportDealFigures(ctx: QueryCtx, args: ReportInputs): Promise
       });
       result = resultFor(derive(moneySettled));
     }
-    // The deal page's money is withheld without finance access. Keep a reason
-    // on report rows rather than publishing a second, less restricted figure.
-    if (!args.mayReadFinance) return { ...result, profit: { available: false, reason: "FinanceAccessRequired" }, salePrice: null, salePriceUnavailableReason: "ACCESS_REQUIRED" };
     return result;
   });
 }

@@ -105,8 +105,7 @@ export const getSalesAndProfitReport = query({
 
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
     const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency, mayReadCommissions: canSeeCommissions,
-      mayReadFinance: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE),
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
     });
     let totalCommissions = 0;
     let totalNetProfitAfterCommissions = 0;
@@ -140,9 +139,9 @@ export const getSalesAndProfitReport = query({
         salePrice: figure.salePrice,
         salePriceUnavailableReason: figure.salePriceUnavailableReason,
         currency,
-        commissionsTotal: figure.commissionsTotal,
-        commissionPending: figure.commissionPending,
-        netProfitAfterCommissions: netProfit,
+        commissionsTotal: canSeeCommissions ? figure.commissionsTotal : null,
+        commissionPending: canSeeCommissions && figure.commissionPending,
+        netProfitAfterCommissions: canSeeCommissions ? netProfit : null,
         profitUnavailableReason: profit.available ? null : profit.reason,
         includedInTotals: included,
         vehicleMake: vehicle?.make, vehicleModel: vehicle?.model,
@@ -747,8 +746,7 @@ export const getSalespersonPerformance = query({
     const userMap = new Map(users.flatMap((user) => user ? [[user._id, user] as const] : []));
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
     const figures = await loadReportDealFigures(ctx, {
-      orgId: args.orgId, sales: salesInDateRange, orgCurrency, mayReadCommissions: canSeeCommissions,
-      mayReadFinance: isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_FINANCE),
+      orgId: args.orgId, sales: salesInDateRange, orgCurrency,
     });
     const figuresBySale = new Map(figures.map((figure) => [figure.sale._id, figure]));
 

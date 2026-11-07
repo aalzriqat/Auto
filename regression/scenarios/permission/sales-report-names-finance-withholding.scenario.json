@@ -18,7 +18,9 @@
       "input": {
         "permission": "view:finance",
         "access": false,
-        "costAccess": true
+        "costAccess": true,
+        "reportAccess": true,
+        "commissionAccess": true
       }
     },
     {
@@ -26,20 +28,33 @@
         "role": "ReportOperator",
         "org": "A"
       },
-      "action": "dealOverview.financedDealOverview",
+      "action": "reports.getSalespersonPerformance",
       "input": {
-        "sameDeal": true
+        "sameDeal": true,
+        "financeAccess": false
       }
     }
   ],
   "expected": [
     {
-      "observable": "row.profitReason",
-      "value": "FinanceAccessRequired"
+      "observable": "row.netProfit",
+      "value": 1023.7
     },
     {
-      "observable": "row.priceReason",
-      "value": "ACCESS_REQUIRED"
+      "observable": "row.netProfitAfterCommissions",
+      "value": 1023.7
+    },
+    {
+      "observable": "row.salePrice",
+      "value": 12100
+    },
+    {
+      "observable": "report.financePermissionParity",
+      "value": true
+    },
+    {
+      "observable": "performance.financePermissionParity",
+      "value": true
     }
   ],
   "rulings": [
@@ -50,7 +65,7 @@
   ],
   "impl": {
     "file": "convex/reports.matchesDeal.test.ts",
-    "testName": "finance withholding is named truthfully when cost access exists"
+    "testName": "Keep today's view: without view:finance, reports retain figures with report and cost access"
   },
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
   "bugRef": {
@@ -69,5 +84,5 @@
     "convex/utils/dealProfitReads.ts",
     "convex/utils/dealFinancialSummary.ts"
   ],
-  "fingerprint": "dbaa2163060eaca7308dc3f9111f990b7d8d2c9c5b470bce030e8a1b25ef1f7b"
+  "fingerprint": "527db016148cd70ee720bb697d0125f22d78f63acf7a2bddf3c3dd23a0344a5a"
 }

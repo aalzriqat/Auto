@@ -34,11 +34,23 @@
   "expected": [
     {
       "observable": "row.netProfit",
-      "value": "unavailable"
+      "value": 1023.7
     },
     {
       "observable": "row.netAfterCommissions",
       "value": "unavailable"
+    },
+    {
+      "observable": "row.commissionsTotal",
+      "value": "unavailable"
+    },
+    {
+      "observable": "report.totalProfit",
+      "value": 1023.7
+    },
+    {
+      "observable": "performance.totalProfit",
+      "value": 1023.7
     },
     {
       "observable": "deal.reason",
@@ -53,7 +65,7 @@
   ],
   "impl": {
     "file": "convex/reports.matchesDeal.test.ts",
-    "testName": "without view:commissions, both withhold management net"
+    "testName": "without view:commissions, reports retain profit and withhold commission fields"
   },
   "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
   "bugRef": {
@@ -72,5 +84,5 @@
     "convex/utils/dealProfitReads.ts",
     "convex/utils/dealFinancialSummary.ts"
   ],
-  "fingerprint": "b9c3f00f0f34c4671fb68faece3f4d01385ce2183419b4088efb604988e37f9e"
+  "fingerprint": "1b28107a6c867c95693be5160feea4a828ad508ac026ae5f777c5b71c1a6708a"
 }
