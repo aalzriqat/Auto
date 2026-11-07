@@ -19,6 +19,7 @@ import { customerInvoicePositionFromRows } from "./customerInvoiceObligation";
 import { fromMinorUnits, toMinorSameCurrencyOrUndefined } from "./money";
 import { MAX_LIVE_DEAL_FEE_LINES } from "./dealCostLimits";
 import type { MarginEvidence } from "./dealSettlementFigures";
+import { inTurn } from "./transactionReadHeadroom";
 
 export const MAX_REPORT_SALES = 800;
 const MAX_BATCH_CHILD_ROWS = 10000;
@@ -26,11 +27,10 @@ const REPORT_READ_CHUNK_SIZE = 100;
 
 /** Keep each phase below Convex's per-function concurrent I/O limit, preserving ID order. */
 async function readInChunks<I, D>(ids: I[], read: (id: I) => Promise<D>): Promise<D[]> {
+  const chunks: I[][] = [];
+  for (let offset = 0; offset < ids.length; offset += REPORT_READ_CHUNK_SIZE) chunks.push(ids.slice(offset, offset + REPORT_READ_CHUNK_SIZE));
   const documents: D[] = [];
-  for (let offset = 0; offset < ids.length; offset += REPORT_READ_CHUNK_SIZE) {
-    const chunk = ids.slice(offset, offset + REPORT_READ_CHUNK_SIZE);
-    documents.push(...await Promise.all(chunk.map(read)));
-  }
+  await inTurn(chunks, async (chunk) => { documents.push(...await Promise.all(chunk.map(read))); });
   return documents;
 }
 
