@@ -228,18 +228,119 @@ describe("SCRUM-565 narrow reset", () => {
     expect(fields.filter(r => r.orgId === b)).toEqual((before.orgCustomFieldValues as Array<Record<string, unknown>>).filter(r => r.orgId === b));
   });
 
-  test("a linked event amid an over-bound retained thread refuses before triggers or deletion", async () => {
+  test("more than 20 vehicle-linked events are UNAVAILABLE before triggers or deletion", async () => {
     const { t, a } = await fixture();
     await t.run(async ctx => {
       const cache = new Map<string, string>();
       const vehicleId = await document(ctx, a, "vehicles", {}, cache);
       const customerId = await document(ctx, a, "customers", {}, cache);
       for (let i = 0; i < 21; i += 1) await document(ctx, a, "instagramEvents",
-        { externalId: `event-${i}`, customerId, ...(i === 20 ? { vehicleId } : {}) }, cache);
+        { externalId: `event-${i}`, customerId, vehicleId }, cache);
     });
     const before = await snapshot(t);
     expect(await reset(t, a, true)).toMatchObject({ preflight: { verdict: "UNAVAILABLE" } });
     await expect(reset(t, a)).rejects.toThrow(/instagramEvents count 21/);
+    expect(await snapshot(t)).toEqual(before);
+  });
+
+  test("owner ruling 2026-11-07 bounds only vehicle writes: large kept tables reset through batches without changing unrelated rows or org B", async () => {
+    const { t, a, b } = await fixture();
+    const kept = ["leads", "tasks", "instagramEvents", "facebookEvents", "socialConversations",
+      "marketplaceRequestMatches", "marketplaceResponses", "orgCustomFieldValues"];
+    const unrelatedIds = new Set<string>();
+    await t.run(async ctx => {
+      for (const org of [a, b]) {
+        const cache = new Map<string, string>();
+        const vehicleId = await document(ctx, org, "vehicles", {}, cache);
+        await document(ctx, org, "vehicles");
+        for (const table of kept) {
+          for (let i = 0; i < 26; i += 1) {
+            const extra: Record<string, unknown> = {};
+            if (table === "leads") extra.notes = "unrelated".repeat(350);
+            if (table === "instagramEvents" || table === "facebookEvents") {
+              extra.text = "unrelated".repeat(350);
+              extra.externalId = `unrelated-${i}`;
+            }
+            if (table === "socialConversations") {
+              extra.conversationKey = `unrelated-${i}`;
+              extra.latestText = "unrelated".repeat(350);
+            }
+            if (table === "orgCustomFieldValues") extra.entityType = "customer";
+            unrelatedIds.add(await document(ctx, org, table, extra, cache));
+          }
+          const link: Record<string, unknown> = { vehicleId };
+          if (table === "socialConversations") {
+            delete link.vehicleId;
+            Object.assign(link, { vehicleIds: [vehicleId], vehicleCount: 1, conversationKey: "linked" });
+          }
+          if (table === "marketplaceRequestMatches") {
+            delete link.vehicleId;
+            Object.assign(link, { matchedVehicleId: vehicleId, matchTier: "INVENTORY" });
+          }
+          if (table === "orgCustomFieldValues") {
+            delete link.vehicleId;
+            Object.assign(link, { entityType: "vehicle", entityId: vehicleId });
+          }
+          await document(ctx, org, table, link, cache);
+        }
+      }
+    });
+    const before = await snapshot(t);
+    expect(JSON.stringify(kept.map(table => before[table])).length).toBeGreaterThan(256_000);
+    expect(await reset(t, a, true)).toMatchObject({ preflight: { verdict: "PASS" } });
+    expect(await snapshot(t)).toEqual(before);
+    const first = await reset(t, a);
+    expect(first).toMatchObject({ preflight: { verdict: "PASS" }, resetGeneration: 1, resetCompleted: false });
+    expect(first.remaining).toBeGreaterThan(0);
+    let remaining = first.remaining;
+    for (let batch = 0; batch < 10 && remaining > 0; batch += 1) remaining = (await reset(t, a)).remaining;
+    expect(remaining).toBe(0);
+    const after = await snapshot(t);
+    for (const table of kept) {
+      const rows = after[table] as Array<Record<string, unknown>>;
+      expect(rows.filter(row => unrelatedIds.has(String(row._id))), table)
+        .toEqual((before[table] as Array<Record<string, unknown>>).filter(row => unrelatedIds.has(String(row._id))));
+      for (const row of rows.filter(row => row.orgId === a)) {
+        expect(row.vehicleId, table).toBeUndefined();
+        expect(row.matchedVehicleId, table).toBeUndefined();
+        if (table === "socialConversations") expect(row).toMatchObject({ vehicleIds: [], vehicleCount: 0 });
+        if (table === "orgCustomFieldValues") expect(row.entityType).toBe("customer");
+      }
+    }
+    expect((after.vehicles as Array<{ orgId: string }>).filter(row => row.orgId === a)).toEqual([]);
+    for (const table of Object.keys(tables)) {
+      const foreign = (rows: unknown[]) => (rows as Array<{ orgId?: string; _id: string }>).filter(row => row.orgId === b || row._id === b);
+      expect(foreign(after[table]), table).toEqual(foreign(before[table]));
+    }
+    expect(await t.run(ctx => ctx.db.get(a))).toMatchObject({ financialResetGeneration: 1, financialResetCompletedGeneration: 1 });
+  });
+
+  test("kept scan past 1000 rows is UNAVAILABLE even with no vehicle references", async () => {
+    const { t, a } = await fixture();
+    await t.run(async ctx => {
+      const cache = new Map<string, string>();
+      for (let i = 0; i < 1001; i += 1) await document(ctx, a, "leads", {}, cache);
+    });
+    const before = await snapshot(t);
+    expect(await reset(t, a, true)).toMatchObject({ preflight: { verdict: "UNAVAILABLE" } });
+    await expect(reset(t, a)).rejects.toThrow(/UNAVAILABLE.*leads/);
+    expect(await snapshot(t)).toEqual(before);
+  });
+
+  test("a continuation with 21 vehicle custom fields refuses without partial reference cleanup", async () => {
+    const { t, a, b } = await fixture();
+    await t.run(async ctx => {
+      const cache = new Map<string, string>();
+      const vehicleId = await document(ctx, a, "vehicles", {}, cache);
+      await document(ctx, a, "leads", { vehicleId }, cache);
+      for (let i = 0; i < 21; i += 1) await document(ctx, a, "orgCustomFieldValues",
+        { entityType: "vehicle", entityId: vehicleId }, cache);
+      await document(ctx, b, "vehicles");
+      await ctx.db.patch(a, { financialResetGeneration: 1 });
+    });
+    const before = await snapshot(t);
+    expect(await reset(t, a, true)).toMatchObject({ preflight: { verdict: "UNAVAILABLE" } });
+    await expect(reset(t, a)).rejects.toThrow(/UNAVAILABLE.*orgCustomFieldValues/);
     expect(await snapshot(t)).toEqual(before);
   });
 
@@ -261,7 +362,10 @@ describe("SCRUM-565 narrow reset", () => {
 
   test("wide retained evidence is UNAVAILABLE even below the row bound", async () => {
     const { t, a } = await fixture();
-    await t.run(ctx => document(ctx, a, "leads", { notes: "x".repeat(270_000) }));
+    await t.run(async ctx => {
+      const cache = new Map<string, string>();
+      for (let i = 0; i < 2; i += 1) await document(ctx, a, "leads", { notes: "x".repeat(300_000) }, cache);
+    });
     const before = await snapshot(t);
     expect(await reset(t, a, true)).toMatchObject({ preflight: { verdict: "UNAVAILABLE" } });
     await expect(reset(t, a)).rejects.toThrow(/UNAVAILABLE.*leads count/);
