@@ -44,7 +44,7 @@ import {
 import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
 import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
-import { SupplierDiscardDialog, useSupplierNavigationGuard } from "./SupplierDiscardDialog";
+import { SupplierDiscardDialog, useSupplierNavigationGuard, closeSupplierEditorBeforeNavigation } from "./SupplierDiscardDialog";
 import { SupplierSummaryTiles } from "./SupplierSummaryTiles";
 import {
   DuplicateCandidatesPanel,
@@ -366,7 +366,7 @@ function SupplierEditForm({
     <SupplierAliasesSection orgId={orgId} supplierId={supplier._id} aliases={supplier.aliases ?? []} canManage onEditStateChange={setAliasState} />
     </DialogContent>
     </Dialog>
-    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => { onClose(); if (pendingHref) router.push(pendingHref); }} />
+    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => closeSupplierEditorBeforeNavigation(onClose, () => { if (pendingHref) router.push(pendingHref); })} />
     </>
   );
 }

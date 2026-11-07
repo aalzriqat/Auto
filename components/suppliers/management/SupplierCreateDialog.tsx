@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { describeSupplierError, useSupplierCreateFlow } from "../useSupplierCreateFlow";
-import { SupplierDiscardDialog, useSupplierNavigationGuard } from "./SupplierDiscardDialog";
+import { SupplierDiscardDialog, useSupplierNavigationGuard, closeSupplierEditorBeforeNavigation } from "./SupplierDiscardDialog";
 import {
   createFieldsFrom,
   DuplicateCandidatesPanel,
@@ -78,8 +78,7 @@ function SupplierCreateDialogBody({
     const supplierId = await flow.submit(createFieldsFrom(values), options);
     if (supplierId) {
       toast.success(translate("SuppliersCreated"));
-      onOpenChange(false);
-      router.push(supplierHref(orgId, supplierId));
+      closeSupplierEditorBeforeNavigation(() => onOpenChange(false), () => router.push(supplierHref(orgId, supplierId)));
     }
   }
 
@@ -147,7 +146,7 @@ function SupplierCreateDialogBody({
         </form>
       </DialogContent>
     </Dialog>
-    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => { onOpenChange(false); if (pendingHref) router.push(pendingHref); }} />
+    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => closeSupplierEditorBeforeNavigation(() => onOpenChange(false), () => { if (pendingHref) router.push(pendingHref); })} />
     </>
   );
 }

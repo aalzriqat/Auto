@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import { flushSync } from "react-dom";
 import { useNavigationGuard } from "nextjs-nav-guard";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -8,9 +9,15 @@ import { useTranslate } from "./shared";
 
 export function useSupplierNavigationGuard({ dirty, busy }: Readonly<{ dirty: boolean; busy: boolean }>) {
   const translate = useTranslate();
-  // A maintained App Router guard covers Back/Forward as well as full-page unloads. Busy writes never authorize departure.
+  // Busy writes refuse guarded same-document navigation; full-page unload uses the browser's prompt.
   const confirm = useCallback(() => !busy && window.confirm(translate("SuppliersDiscardTitle")), [busy, translate]);
   useNavigationGuard({ enabled: dirty || busy, confirm });
+}
+
+/** Unregister the editor's dirty guard before an already-authorized route change. */
+export function closeSupplierEditorBeforeNavigation(close: () => void, navigate: () => void) {
+  flushSync(close);
+  navigate();
 }
 
 export function SupplierDiscardDialog({ open, onKeep, onDiscard }: Readonly<{ open: boolean; onKeep: () => void; onDiscard: () => void }>) {
