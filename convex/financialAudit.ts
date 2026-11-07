@@ -18,6 +18,9 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 type AuditActionType =
+  | "EDIT_OPENING_DRAFT"
+  | "REQUEST_OPENING_VOID"
+  | "APPROVE_OPENING_VOID"
   | "CREATE_PERIOD"
   | "POST_EVENT"
   | "POST_MANUAL_JOURNAL"

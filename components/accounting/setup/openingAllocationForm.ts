@@ -1,5 +1,6 @@
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
+import { fromMinorUnits, scaleForCurrency } from "@/convex/utils/money";
 
 export type OpeningAllocationKind = "CUSTOMER_RECEIVABLE" | "EMPLOYEE_ADVANCE" | "PARTNER_CAPITAL" | "PREPAID_EXPENSE" | "VEHICLE_INVENTORY" |
   "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "EMPLOYEE_COMMISSION" | "UNALLOCATED_LIABILITY" |
@@ -57,6 +58,24 @@ export type OpeningAllocationDraft = OpeningAllocationFields & (
   | { kind: "PARTNER_CAPITAL"; partyId: Id<"partnerEquity"> | "" }
   | { kind: "PREPAID_EXPENSE" | "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "UNALLOCATED_LIABILITY"; partyId: "" }
 );
+
+/** Rehydrate the server-validated draft without rounding or discarding hidden
+ * family fields. Party labels are display-only and resolved by the picker. */
+export function restoreOpeningAllocation(row: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number], currency: string): OpeningAllocationDraft {
+  const base = { rowKey: row.rowKey, accountId: row.accountId, partyLabel: "", amount: fromMinorUnits(row.amountMinor, currency).toFixed(scaleForCurrency(currency)),
+    title: "title" in row ? row.title : "", dueDate: "", note: "note" in row ? row.note ?? "" : "" };
+  if (row.kind === "CUSTOMER_RECEIVABLE") {
+    const due = new Date(row.dueDate);
+    return { ...base, kind: row.kind, partyId: row.customerId, dueDate: Number.isFinite(due.getTime()) ? due.toISOString().slice(0, 10) : "" };
+  }
+  if (row.kind === "CUSTOMER_DEPOSIT") return { ...base, kind: row.kind, partyId: row.customerId, depositKind: row.depositKind, depositVehicleId: row.vehicleId ?? "" };
+  if (row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION") return { ...base, kind: row.kind, partyId: row.userId };
+  if (row.kind === "VEHICLE_INVENTORY") return { ...base, kind: row.kind, partyId: row.vehicleId };
+  if (row.kind === "PARTNER_CAPITAL") return { ...base, kind: row.kind, partyId: row.partnerId };
+  if (row.kind === "PREPAID_EXPENSE") return { ...base, kind: row.kind, partyId: "", startYearMonth: row.startYearMonth,
+    termMonths: String(row.termMonths), expenseSystemKey: row.expenseSystemKey, attestedUnexpiredBenefit: row.attestedUnexpiredBenefit };
+  return { ...base, ...row, partyId: "" };
+}
 
 export type OpeningAllocationGroup = {
   accountId: Id<"chartOfAccounts">;

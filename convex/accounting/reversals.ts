@@ -139,7 +139,7 @@ export async function reverseAccountingEvent(
   // reset may undo it. Before any write, so the refusal is atomic even for a caller that catches.
   if (original.journalEntryId) {
     const originalJournal = await ctx.db.get(original.journalEntryId);
-    if (originalJournal?.category === "OPENING_BALANCE") {
+    if (originalJournal?.category === "OPENING_BALANCE" || originalJournal?.sourceType === "openingBalanceVoid") {
       throw new ConvexError("The opening balance journal cannot be reversed through the generic ledger reversal.");
     }
   }

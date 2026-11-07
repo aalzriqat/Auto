@@ -48,6 +48,8 @@ import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
 import { orgResetState } from "./utils/orgResetGeneration";
 import { hasNamedOpeningDeposit, refuseOpeningDepositDirectPost } from "./utils/openingDepositContainment";
+import { openingLedgerHasActivity } from "./utils/openingVoidProof";
+import { openingChangeBoundary, refuseOpeningChange } from "./utils/openingMaintenanceErrors";
 
 /**
  * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
@@ -236,19 +238,11 @@ async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizatio
  * state, decides: a REVERSED entry is still history, and a later period being
  * open says nothing about earlier postings. DRAFT/VALIDATED never count.
  *
- * Deliberately no category filter: an ordinary new opening after the reversal of
- * an old one is refused too. No correction path exists yet (SCRUM-850); the
- * refusal only tells the finance owner a cutover correction needs review.
+ * SCRUM-850: an ordinary reversed journal still counts. The shared inspector
+ * excuses only an exactly verified governed opening void pair.
  */
 async function hasPostedLedgerActivity(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
-  for (const status of ["POSTED", "REVERSED"] as const) {
-    const entry = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .first();
-    if (entry) return true;
-  }
-  return false;
+  return openingLedgerHasActivity(ctx, orgId);
 }
 
 /**
@@ -435,6 +429,41 @@ export const draftOpeningBalance = mutation({
 
     return { draftId: draftId.toString() };
   },
+});
+
+/** SCRUM-850: retains the original preparer and pending state. The same
+ * preflight used by posting validates the complete replacement, including
+ * allocations and payroll authority, rather than trusting edited UI fields. */
+export const editOpeningBalanceDraft = mutation({
+  args: {
+    orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"),
+    lines: v.array(v.object({ accountId: v.id("chartOfAccounts"), debitMinor: v.number(), creditMinor: v.number(),
+      description: v.optional(v.string()), bankAccountId: v.optional(v.id("bankAccounts")) })),
+    asOfDate: v.number(), memo: v.optional(v.string()), expectedCurrency: v.string(),
+    allocations: v.optional(v.array(openingAllocationValidator)),
+  },
+  returns: v.object({ draftId: v.string() }),
+  handler: async (ctx, args) => openingChangeBoundary(async () => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
+    if (draft.status !== "PENDING_APPROVAL") refuseOpeningChange("OPENING_CHANGE_STATE");
+    if (draft.createdBy !== user._id) refuseOpeningChange("OPENING_CHANGE_PREPARER");
+    if (await containsEmployeeAdvanceControl(ctx, args.orgId, draft)) await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    const replacement = { ...draft, lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency };
+    try { await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
+    catch (error) {
+      if (error instanceof OpeningPreflightError) throw error.original;
+      throw error;
+    }
+    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency });
+    await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
+      resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
+      before: { lines: draft.lines, allocations: draft.allocations ?? [], asOfDate: draft.asOfDate, memo: draft.memo ?? null, currency: draft.currency ?? null },
+      after: { lines, allocations: args.allocations ?? [], asOfDate: args.asOfDate, memo: args.memo ?? null, currency: args.expectedCurrency } });
+    return { draftId: String(draft._id) };
+  }),
 });
 
 export const approveOpeningBalance = mutation({
@@ -1148,7 +1177,7 @@ export const openingBalanceStatus = query({
     canReadOpeningStockCost: boolean;
     currency: string;
   }> => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const { role, user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
     const postedEntry = await findPostedOpeningBalanceJournal(ctx, args.orgId);
@@ -1161,7 +1190,7 @@ export const openingBalanceStatus = query({
     const isOwner = isSystemOwnerRole(role);
     const canManageFinance =
       isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
-    const canEnter = canManageFinance && postedEntry === null && pending === null;
+    const canEnter = canManageFinance && postedEntry === null && (pending === null || pending.createdBy === user._id);
 
     const mayViewPayroll = isOwner || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
       role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);

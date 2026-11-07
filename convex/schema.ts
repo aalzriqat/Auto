@@ -1118,6 +1118,9 @@ export default defineSchema({
     orgId: v.id("organizations"),
     actorId: v.id("users"),
     actionType: v.union(
+      v.literal("EDIT_OPENING_DRAFT"),
+      v.literal("REQUEST_OPENING_VOID"),
+      v.literal("APPROVE_OPENING_VOID"),
       v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
       v.literal("POST_MANUAL_JOURNAL"),
@@ -1301,6 +1304,7 @@ export default defineSchema({
       v.literal("PENDING_APPROVAL"),
       v.literal("POSTED"),
       v.literal("REJECTED"),
+      v.literal("VOIDED"),
     ),
     lines: v.array(v.object({
       accountId: v.id("chartOfAccounts"),
@@ -1343,6 +1347,16 @@ export default defineSchema({
     // Older rows have neither field; approval revalidates any required detail.
     allocations: v.optional(v.array(openingAllocationValidator)),
     allocationResults: v.optional(v.array(openingAllocationResultValidator)),
+    // SCRUM-850: the request never changes the posted economics. Approval and
+    // the complete unwind commit together; retained results remain audit proof.
+    voidRequest: v.optional(v.object({
+      requestedBy: v.id("users"),
+      requestedAt: v.number(),
+      reason: v.string(),
+      approvedBy: v.optional(v.id("users")),
+      approvedAt: v.optional(v.number()),
+      reversalJournalEntryId: v.optional(v.id("journalEntries")),
+    })),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
@@ -1559,6 +1573,7 @@ export default defineSchema({
     // lot — and discard almost all of them.
     .index("by_org_sourceType_status", ["orgId", "sourceType", "status"])
     .index("by_org_sourceType_status_isDeleted", ["orgId", "sourceType", "status", "isDeleted"])
+    .index("by_org_openingBalanceDraftId", ["orgId", "openingBalanceDraftId"])
     .index("by_org_vin", ["orgId", "vin"])
     // SCRUM-868 P1: a supplier's consignment cars. Unread until the identity slices land.
     .index("by_org_and_sourcedSupplierId", ["orgId", "sourcedSupplierId"])
