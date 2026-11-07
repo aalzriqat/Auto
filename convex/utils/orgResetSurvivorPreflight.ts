@@ -4,9 +4,18 @@ import { KNOWN_SURVIVING_REFERENCES } from "./orgResetReferences";
 import { convexToJson } from "convex/values";
 
 export const RESET_FAMILY_READ_BOUND = 100;
-// Event patches recompute their threads. Bounding the whole org also bounds that fanout.
+// Owner 2026-11-07: bound trigger-producing writes, not unrelated retained history.
 export const RESET_KEPT_READ_BOUND = 20;
 export const RESET_EVIDENCE_BYTES = 256_000;
+// Eight independent budgets. A fresh destructive call scans twice: at most
+// 2 * 8 * 1001 = 16,016 documents and 2 * 8 * 512 KiB = 8 MiB serialized data.
+// This leaves 15,984 documents / 8 MiB for the 500-row RESET_TOTAL_DELETE_BATCH,
+// overflow probes, survivor/family evidence and triggers. It is direct-scan
+// headroom, not a total transaction guarantee: social triggers reread customer
+// history, and large deletion rows can exhaust it. Platform limits abort the
+// mutation atomically. See the reset ADR and docs.convex.dev/production/state/limits.
+export const RESET_KEPT_SCAN_BOUND = 1_000;
+export const RESET_KEPT_SCAN_BYTES = 512 * 1024;
 
 export const RESET_KEPT_REFERENCE_INDEX = {
   leads: "by_org", tasks: "by_org", instagramEvents: "by_org", facebookEvents: "by_org",
@@ -103,17 +112,37 @@ export function survivingReferenceTables(resetTables: readonly string[]): Surviv
 }
 
 async function rows<Table extends ReadableTable>(db: DatabaseReader, table: Table, index: string,
-  orgId: Id<"organizations">, bound: number, budget: { bytes: number }): Promise<Doc<Table>[]> {
+  orgId: Id<"organizations">, bound: number, budget: { bytes: number; limit?: number }): Promise<Doc<Table>[]> {
   // Dynamic table/index pairs are checked against the real schema in the reference-coverage test.
   const found: Doc<Table>[] = [];
   const query = db.query(table as "vehicles").withIndex(index as "by_org", q => q.eq("orgId", orgId));
   for await (const row of query) {
     budget.bytes += new TextEncoder().encode(JSON.stringify(convexToJson(row))).byteLength;
-    if (budget.bytes > RESET_EVIDENCE_BYTES) throw new Error("Reset evidence byte bound exceeded");
+    if (budget.bytes > (budget.limit ?? RESET_EVIDENCE_BYTES)) throw new Error("Reset evidence byte bound exceeded");
     found.push(row as unknown as Doc<Table>);
     if (found.length >= bound) break;
   }
   return found;
+}
+
+/** This predicate is shared by admission and cleanup, including vehicle custom fields. */
+function keptReferenceNeedsWrite(table: KeptTable, row: Doc<KeptTable>): boolean {
+  switch (table) {
+    case "orgCustomFieldValues": return "entityType" in row && row.entityType === "vehicle";
+    case "socialConversations": return "vehicleIds" in row && row.vehicleIds.length > 0;
+    case "marketplaceRequestMatches": return "matchedVehicleId" in row && !!row.matchedVehicleId;
+    default: return "vehicleId" in row && !!row.vehicleId;
+  }
+}
+
+async function keptReferences(db: DatabaseReader, table: KeptTable, orgId: Id<"organizations">) {
+  const found = await rows(db, table, RESET_KEPT_REFERENCE_INDEX[table], orgId,
+    RESET_KEPT_SCAN_BOUND + 1, { bytes: 0, limit: RESET_KEPT_SCAN_BYTES });
+  const docs = found.filter(row => keptReferenceNeedsWrite(table, row));
+  let overflowCount = 0;
+  if (found.length > RESET_KEPT_SCAN_BOUND) overflowCount = found.length;
+  else if (docs.length > RESET_KEPT_READ_BOUND) overflowCount = docs.length;
+  return { docs, scanned: found.length, overflowCount };
 }
 
 export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"organizations">,
@@ -132,12 +161,12 @@ export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"orga
         reason: found.length > RESET_FAMILY_READ_BOUND ? "OVER_BOUND" : "SURVIVOR" });
     }
     await measureFamilies(db, orgId, result, evidence);
-    for (const [name, index] of Object.entries(RESET_KEPT_REFERENCE_INDEX)) {
+    for (const name of Object.keys(RESET_KEPT_REFERENCE_INDEX)) {
       const table = name as KeptTable;
       evidence.table = table;
-      const found = await rows(db, table, index, orgId, RESET_KEPT_READ_BOUND + 1, evidence);
-      result.counts[table] = found.length;
-      if (found.length > RESET_KEPT_READ_BOUND) result.refusals.push({ table, count: found.length, reason: "OVER_BOUND" });
+      const found = await keptReferences(db, table, orgId);
+      result.counts[table] = found.scanned;
+      if (found.overflowCount > 0) result.refusals.push({ table, count: found.overflowCount, reason: "OVER_BOUND" });
     }
   } catch (error) {
     console.error("Financial reset preflight evidence unavailable", error);
@@ -151,12 +180,14 @@ export async function resetSurvivorPreflight(db: DatabaseReader, orgId: Id<"orga
 /** Bounded before writes, including social-trigger fanout. Runs before any vehicle can be deleted. */
 export async function clearResetVehicleReferences(ctx: MutationCtx, orgId: Id<"organizations">): Promise<void> {
   const groups: Array<{ table: KeptTable; docs: Doc<KeptTable>[] }> = [];
-  const budget = { bytes: 0 };
-  for (const [name, index] of Object.entries(RESET_KEPT_REFERENCE_INDEX)) {
+  for (const name of Object.keys(RESET_KEPT_REFERENCE_INDEX)) {
     const table = name as KeptTable;
-    const docs = await rows(ctx.db, table, index, orgId, RESET_KEPT_READ_BOUND + 1, budget);
-    if (docs.length > RESET_KEPT_READ_BOUND) throw new Error(`UNAVAILABLE ${table} count ${docs.length}`);
-    groups.push({ table, docs });
+    const found = await keptReferences(ctx.db, table, orgId).catch(error => {
+      console.error("Financial reset kept-reference evidence unavailable", error);
+      throw new Error(`UNAVAILABLE ${table} evidence could not be completed`);
+    });
+    if (found.overflowCount > 0) throw new Error(`UNAVAILABLE ${table} count ${found.overflowCount}`);
+    groups.push({ table, docs: found.docs });
   }
   // Clear events first: their normal triggers rebuild conversation projections.
   groups.sort((a, b) => Number(a.table === "socialConversations") - Number(b.table === "socialConversations"));

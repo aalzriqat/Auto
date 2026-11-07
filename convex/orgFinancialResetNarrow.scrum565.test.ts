@@ -253,6 +253,7 @@ describe("SCRUM-565 narrow reset", () => {
         const cache = new Map<string, string>();
         const vehicleId = await document(ctx, org, "vehicles", {}, cache);
         await document(ctx, org, "vehicles");
+        const customerId = await document(ctx, org, "customers", {}, cache);
         for (const table of kept) {
           for (let i = 0; i < 26; i += 1) {
             const extra: Record<string, unknown> = {};
@@ -260,15 +261,18 @@ describe("SCRUM-565 narrow reset", () => {
             if (table === "instagramEvents" || table === "facebookEvents") {
               extra.text = "unrelated".repeat(350);
               extra.externalId = `unrelated-${i}`;
+              extra.customerId = customerId;
             }
             if (table === "socialConversations") {
               extra.conversationKey = `unrelated-${i}`;
               extra.latestText = "unrelated".repeat(350);
+              extra.vehicleCount = 0;
             }
             if (table === "orgCustomFieldValues") extra.entityType = "customer";
             unrelatedIds.add(await document(ctx, org, table, extra, cache));
           }
           const link: Record<string, unknown> = { vehicleId };
+          if (table === "instagramEvents" || table === "facebookEvents") link.customerId = customerId;
           if (table === "socialConversations") {
             delete link.vehicleId;
             Object.assign(link, { vehicleIds: [vehicleId], vehicleCount: 1, conversationKey: "linked" });

@@ -51,7 +51,21 @@ Keep customers, leads, Social Inbox conversations and events, finance companies,
 
 Storage choice: retain blobs referenced by vehicle, edit, ownership-conversion and social-post rows. A blob id has no tenant ownership metadata and may be shared with kept rows or another organization; deleting it without a complete ownership/reference proof risks another tenant's data. This operation removes metadata, not a certified physical erasure of media. Existing finance-appraisal blob handling remains as before. This is a deliberate residual, not a claim that files were erased.
 
-The preflight must finish before generation changes or cleanup writes. Excluded tables use bounded org-index reads. State-family scans stop at 101 rows (100 plus an overflow sentinel). Kept-reference scans stop at 21 rows (20 plus a sentinel), including the entire org event set, which bounds social-trigger thread rebuilds. The shared serialized evidence budget is 256,000 bytes. Each deletion pass has a shared 500-row deletion cap as well as the existing per-table cap. `newTableCounts` is null when a table was not measured, and otherwise an observed prefix capped at batchSize + 1. Any read-bound overflow returns UNAVAILABLE. Runtime read errors abort without writes. Dry runs report the verdict, bounded counts and count scope. Continuations do not reacquire a fresh-start survivor certificate against partially deleted data.
+The preflight must finish before generation changes or cleanup writes. Excluded tables use bounded org-index reads. State-family scans stop at 101 rows (100 plus an overflow sentinel). Their shared serialized evidence budget stays 256,000 bytes. Each deletion pass has a shared 500-row deletion cap as well as the existing per-table cap. `newTableCounts` is null when a table was not measured, and otherwise an observed prefix capped at batchSize + 1. Any read-bound overflow returns UNAVAILABLE. Runtime read errors abort without writes. Dry runs report the verdict, bounded counts and count scope. Continuations do not reacquire a fresh-start survivor certificate against partially deleted data.
+
+### Owner ruling, 2026-11-07, round 3
+
+The owner approved bounding only kept rows that need a vehicle write. The 20-row bound now applies per kept table to a present vehicleId, a present matchedVehicleId, a nonempty vehicleIds array, or a custom-field value whose entityType is vehicle. One shared predicate and scan helper supply admission and cleanup. All eight tables are measured before any reference repair, so a later-table overflow cannot commit an earlier partial repair. Every destructive continuation repeats this check. No survivor or risky-family refusal changes.
+
+Each kept table has its own 1,000-row scan bound and 512 KiB serialized byte budget. The iterator reads at most 1,001 rows to distinguish completion from overflow. A scan past either bound is UNAVAILABLE, even with zero references. More than 20 candidates also remains UNAVAILABLE. Preflight counts report scanned rows; an OVER_BOUND refusal reports the offending scan or write count. The kept scans do not consume the survivor/family evidence budget. No schema index is added.
+
+These bounds account for the current mutation's two scans on a fresh destructive call. Eight tables times two scans times 1,001 is at most 16,016 direct document reads. Eight times two times 512 KiB is 8 MiB serialized evidence. Reserving the existing 500-row RESET_TOTAL_DELETE_BATCH leaves 15,484 documents under the documented 32,000-document transaction limit, before existing probes and helpers. The unchanged 256,000-byte survivor/family budget leaves approximately 7.76 MiB of the 16 MiB read limit after direct kept evidence, for deletion rows and other reads. Dry runs and destructive continuations scan kept tables once.
+
+This arithmetic reserves headroom, not a universal full-mutation ceiling. Blocked-parent probes, opening cleanup, aggregate triggers and deletion-row sizes consume it. In particular, an event patch recomputes its conversation by reading the customer's platform history before filtering the thread. Twenty writes can cause twenty such reads. Serialized JSON size is an evidence budget, not a measurement of Convex engine bytes. A large row or trigger workload can still exhaust platform limits; an uncaught platform error aborts the entire mutation, including the generation patch. No partial scan or platform error certifies PASS. Cloud execution and transaction usage remain unverified in this lane.
+
+The two-org regression seeds 27 rows in every kept table, only one needing a vehicle write per table. It includes customer-linked event threads and more than 256,000 bytes of retained content, then runs the real entrypoint with batchSize 1 through completion. It checks dry-run immutability, removed vehicle references, byte-identical unrelated rows and org B, and a completed generation. Separate controls preserve refusal for 21 linked events, 21 vehicle custom fields on a continuation, 1,001 unrelated rows and a table over 512 KiB.
+
+The existing generation tests now follow c24729's conditional admission. Their dry runs and survivor refusals retain no-write checks. The opening-payable tests expect same-org legacy vehicle AP to be deleted once reset reaches those rows, while other-org AP and historical allocation assertions stay unchanged. The stock test proves the sale replay's exact VEHICLE_NOT_FOUND code and snapshots all schema tables around both the sale and opening replay refusals. Its opening allocation attempt retains the existing native ConvexError not-found refusal. Neither attempt posts or restores the removed car.
 
 ## Five predicted failures
 
@@ -92,7 +106,7 @@ Red and green runs, final table lists, release-attestation disposition and unver
 
 The advisory pre-code design review found five relevant gaps. All findings were validated against this checkout: missing vehicle-dependent tables, retained-reference projections, social-trigger fanout, lifecycle cycles/child deferral, and the incompatible release attestation. The first four are addressed by the enumerated scope, real-trigger repair tests, row/byte bounds, required-reference schema coverage and batchSize-1 parent-retention controls. Optional self-lineage and reverse lifecycle links have exact pinned dispositions; reservation sources drain before claims so the expiry cron cannot operate a surviving reservation against deleted claim/root authority. Reset protocol cursor links are optional internal cleanup metadata, consumed by openingResetCleanup and removed at completion, not a live financial authority.
 
-The release finding remains an operational blocker. The existing `SCRUM-565/N9/v2` query now truthfully returns `freshStartsBlocked: false`. The controller in `scripts/resetInProgressPreflight.mjs` still requires true, and refuses false. No replacement synchronization guarantee or gate weakening is authorized. The owner must decide that protocol before this can become a deployable release path. Removing the script's hashbang fixes the local Vite import parser; its release decision logic is unchanged.
+The existing `SCRUM-565/N9/v2` query truthfully returns `freshStartsBlocked: false`. The controller in `scripts/resetInProgressPreflight.mjs` still requires true and refuses false. Round 3 enumerated tracked references with `git grep -n -E 'resetInProgressPreflight|runResetPreflight' -- .github package.json scripts` and a whole tracked-tree search excluding generated graft cards and fixture timing data. The matches are the controller, its tests, the query's documentation and this ADR. No workflow, package script or release script calls it in this branch. Per the round-3 instruction, leave this unused controller unchanged. It does not attest conditional admission or solve the older no-new-start synchronization problem. Any future wiring needs a separately authorized protocol decision. No release gate is weakened here.
 
 ## Executed evidence
 
@@ -140,3 +154,65 @@ The exact kept vehicle fields cleared are leads.vehicleId, tasks.vehicleId, inst
 - `pnpm exec vitest run --maxWorkers=1 scripts/regression/localExecution.test.ts`: 193 passed, exit 0. This validates the local regression runner contract, not production reset behavior.
 - Advisory pre-code design review identified the live-opening-draft limitation. It is preserved and disclosed above. This advisory review is not either independent review seat. No browser hunter, cloud/OCC run, production data access, deployment, merge or push occurred. Jira refresh/update remains unavailable due to reauthentication. The existing release-attestation blocker remains unchanged.
 - Local review-state check remains BLOCKED with independent coverage 0/2 and no closing approval; CodeRabbit is UNAVAILABLE. These gates were not bypassed or claimed as passing. The owner/coordinator retains the independent review and release steps.
+
+## Round-3 executed evidence
+
+- The original CI expectations reproduced at `8e770ccf076a0cd0a495a164bfdfdb461bd98e11`: generation 2 failed / 14 passed, remaining families 2 failed / 3 passed, stock replay 1 failed / 12 passed. Total: 5 failed / 29 passed, exit 1. The payable failure is the widened RESET_TABLES vehicleSupplierPayables deletion, not an opening-cleanup authorization change. Every other payable assertion stays intact; intermediate batches still retain the legacy AP while payment children remain.
+- Failing-first commit `e911b34d228b70ad0ce761b39eed82be190647d9` contains the new large-kept-table test. With production files explicitly checked out from `8e770ccf0`, the narrow suite had 1 failed / 33 passed, exit 1: admission returned UNAVAILABLE instead of PASS. Production files were restored from HEAD afterward. The current narrow suite passes 34 tests.
+- The whole-org-bound mutant changes only the scan-overflow decision back to `found.length > RESET_KEPT_READ_BOUND`, retaining the independent larger byte budget. The new positive test kills it: 1 failed / 33 passed, exit 1. Candidate source bytes were restored in a finally block. This separates the incorrect 20-row whole-org bound from the earlier shared-byte-budget failure.
+- The requested checks plus additional regression tooling ran with `pnpm exec vitest run --maxWorkers=1` on named files. All 792 test cases in 29 files passed, with zero failed, pending or todo cases. The command nevertheless exited 1 because an extra author-tool suite, scripts/regression/refreshRulings.test.ts, failed to import its unchanged hashbang-bearing refreshRulings.mjs under Vite/Rolldown on this workstation. It executed zero tests. Both files are byte-identical to 8e770ccf0; they remain outside this reset change. This run is not reported as a green aggregate command.
+- The remaining reset-caller sweep ran ten more named files with one worker: 524 passed, zero failures or skips, exit 0. The preview/rehearsal-named tests ran only in convex-test or injected test boundaries, not a deployment. Across the two commands, 1,316 cases passed in 39 files; the extra failed-to-load author-tool suite remains explicitly unavailable.
+- Search scope: rg is unavailable on this workstation, so tracked-file git grep covered convex/, scripts/ and test-utils/. No test still asserts Fresh financial resets are disabled or FRESH_RESET_STARTS_BLOCKED. The remaining FRESH_RESET_STARTS_BLOCKED matches are the false constant, its admission predicate, and its query import/output. A second search enumerated reset entrypoint/helper callers and retained-vehicle or legacy-survival phrases. Every reset-calling test file found was executed. Unrelated legacy-survival matches in accountingPhase12, documents, noCompanyChequeFlags and supplierDueAging are not reset assertions. No caller or guard pin was relaxed.
+- Root pnpm typecheck passed, exit 0. Its root inputs exclude convex, test-utils, apps, packages, dealer-worker and node_modules; imported dependencies can still enter. pnpm typecheck:convex passed, exit 0; it includes convex and test-utils and excludes convex/_generated as root inputs. Neither check certifies mobile or worker builds.
+- Touched-source/test ESLint with --max-warnings=0 passed. A local SonarJS 4.2.2 comparison against 8e770ccf0 used cognitive complexity capped at 14, nested-condition and nested-ternary rules, and duplicated-branch checks: zero new issues. The unchanged clearVehicleReference function has the same pre-existing complexity 17 finding. No NOSONAR was added. Hosted Sonar is not verified.
+- GitHub run 42372131031's convex-backend log independently confirms exactly the two imports and two fullApi entries added by Linux codegen. Those four lines were applied by hand. No Windows codegen was run or trusted; a new Linux CI run is not claimed.
+- Contract identity: 945 matched, zero stranded, exit 0. The reviewed-evidence freshness command is recorded after the implementation commit below; no baseline entry has been changed.
+- Tenant guard pins stay totalMutations 571, analysed 383, skippedNoArgsBlock 15, skippedNoOrgId 173. Economic-command population stays 156. Public inventory stays 405: EXCLUDED_GUARDED 30, ENABLED_CERTIFIED 35, UNCLASSIFIED 170, NON_FINANCIAL 170. The guards and inventories are unchanged and their tests passed.
+- The ten scenario records changed or added are the large-kept-table admission record (retaining the original linked-thread id), independent kept-byte overflow, actual-reference write overflow, kept scan overflow, continuation custom-field overflow, clean fresh generation admission, cash survivor generation refusal, selected-control opening supplier payable, queued opening other payable, and old opening stock replay. Preventive overflow/generation controls claim no invented failing-first bug. The changed large-history bugRef names e911b34d228b70ad0ce761b39eed82be190647d9; the unchanged byte-overflow regression title exists at its historical 9b584a38bcabd2735393acb807cb807a7d1b8f59. Both title bindings were verified with git show and Select-String.
+- The advisory design review is not either independent certification seat. Final seats, /simplify, CodeRabbit coverage, hosted CI/Sonar, scripted browser E2E, screen audit, explorer swarm, cloud/OCC and production verification remain unverified. CodeRabbit's PR conversation says review was skipped; review and inline-comment arrays were empty when read. Jira refresh/update is unavailable because the connector requires reauthentication. No push, merge, deployment, environment listing, production data access or reset execution occurred.
+
+### Per-file execution counts
+
+Counts below come from the two native Vitest JSON reports. Every listed row passed. The failed-to-import refreshRulings suite is excluded from these passing rows and disclosed above.
+
+| File | Passed |
+| --- | ---: |
+| convex/adminOrgs.test.ts | 18 |
+| convex/openingRemainingFamilies.test.ts | 5 |
+| convex/openingStockCashBankReplay.test.ts | 13 |
+| convex/orgDeletionManifestRatchet.scrum563.test.ts | 7 |
+| convex/orgFinancialReset.test.ts | 31 |
+| convex/orgFinancialResetBeginPath.scrum565.test.ts | 4 |
+| convex/orgFinancialResetFreshStart.scrum565.test.ts | 8 |
+| convex/orgFinancialResetNarrow.scrum565.test.ts | 34 |
+| convex/orgFinancialResetOrgIndex.test.ts | 3 |
+| convex/orgFinancialResetPayroll.test.ts | 1 |
+| convex/orgFinancialResetReferences.test.ts | 21 |
+| convex/orgFinancialResetRequiredRefs.test.ts | 18 |
+| convex/orgPurgeLifecycle.scrum297.test.ts | 8 |
+| convex/orgResetGeneration.scrum563.test.ts | 16 |
+| convex/orgResetPreflight.test.ts | 10 |
+| scripts/authorityLifecycleManifests.test.ts | 3 |
+| scripts/economicCommandCensus.test.ts | 19 |
+| scripts/orgDeletionCoverage.test.ts | 8 |
+| scripts/orgFinancialResetReferenceCoverage.test.ts | 51 |
+| scripts/resetInProgressPreflight.test.ts | 26 |
+| scripts/supplierMasterGuards.test.ts | 47 |
+| scripts/tenantWriteGuard.test.ts | 13 |
+| test-utils/pilotConfigParity.test.ts | 54 |
+| scripts/regression/implFixture.test.ts | 1 |
+| scripts/regression/localExecution.test.ts | 193 |
+| scripts/regression/pilotDoorAnalysis.test.ts | 39 |
+| scripts/regression/pilotDoorInventory.test.ts | 13 |
+| scripts/regression/prRunner.test.ts | 58 |
+| scripts/regression/scenarioRecord.test.ts | 70 |
+| convex/accountingPhase17.test.ts | 56 |
+| convex/accountingReceiptMovement.test.ts | 52 |
+| convex/openingAllocatedPrepaids.test.ts | 13 |
+| convex/openingAllocatedReceivables.test.ts | 46 |
+| convex/openingBankReconciliation.scrum858.test.ts | 38 |
+| convex/openingCleanupPreviewRehearsal.test.ts | 26 |
+| convex/openingCommissionPayroll.test.ts | 24 |
+| convex/openingManagementSettlement.test.ts | 46 |
+| convex/supplierReceivablesReconciliation.scrum869.test.ts | 105 |
+| scripts/accountingPreviewRehearsal.test.ts | 118 |

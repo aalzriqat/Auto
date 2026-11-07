@@ -17,7 +17,10 @@
       "action": "fixtures.seedTwoOrganizations",
       "input": {
         "batchSize": 1,
-        "case": "byteBound"
+        "case": "independentKeptByteBound",
+        "leads": 2,
+        "notesBytesPerLead": 300000,
+        "keptTableByteBudget": 524288
       }
     },
     {
@@ -68,5 +71,5 @@
     "key": "SCRUM-565",
     "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
   },
-  "fingerprint": "1fc81c28181b674a136477baf65431b41f1093e551850cc0012356c945d94fca"
+  "fingerprint": "84c7f13209ed231a2814b26bcb068d48e4bcf9165df52d6e35bbfc43c02cdd42"
 }

@@ -17,7 +17,10 @@
       "action": "fixtures.seedTwoOrganizations",
       "input": {
         "batchSize": 1,
-        "case": "socialThreadOverBound"
+        "case": "largeKeptTablesWithFewVehicleReferences",
+        "keptRowsPerTable": 27,
+        "vehicleWritesPerTable": 1,
+        "ownerRuling": "OWNER_2026_11_07_SCRUM565"
       }
     },
     {
@@ -46,11 +49,23 @@
   "expected": [
     {
       "observable": "dryRun.preflight.verdict",
-      "value": "UNAVAILABLE"
+      "value": "PASS"
     },
     {
-      "observable": "reset.writes",
+      "observable": "reset.remainingAfterRepeatedBatches",
       "value": 0
+    },
+    {
+      "observable": "kept.vehicleReferences",
+      "value": 0
+    },
+    {
+      "observable": "kept.nonReferencingRowsByteIdentical",
+      "value": true
+    },
+    {
+      "observable": "orgB.allRowsByteIdentical",
+      "value": true
     }
   ],
   "rulings": [
@@ -61,12 +76,12 @@
   ],
   "impl": {
     "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
-    "testName": "a linked event amid an over-bound retained thread refuses before triggers or deletion"
+    "testName": "owner ruling 2026-11-07 bounds only vehicle writes: large kept tables reset through batches without changing unrelated rows or org B"
   },
   "matrixRow": "SCRUM565-narrow-reset",
   "bugRef": {
     "key": "SCRUM-565",
-    "failingFirst": "9b584a38bcabd2735393acb807cb807a7d1b8f59"
+    "failingFirst": "e911b34d228b70ad0ce761b39eed82be190647d9"
   },
-  "fingerprint": "132993c7fbc0d03c57d8dc988578e10280cb84ea456876675c19332fc70be470"
+  "fingerprint": "96b01afe96defda44c3044d0be07de6397b02895ff7dbe678a82e06d2006261d"
 }

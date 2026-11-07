@@ -49,6 +49,17 @@
       "input": {
         "remainingMinor": 60000
       }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "mode": "IN_PROGRESS_CONTINUATION",
+        "ownerRuling": "OWNER_2026_11_07_SCRUM565"
+      }
     }
   ],
   "expected": [
@@ -59,18 +70,30 @@
     {
       "observable": "pendingAccountingEvents.amountMinor",
       "value": 60000
+    },
+    {
+      "observable": "reset.sameOrgLegacyVehiclePayable",
+      "value": "DELETED"
+    },
+    {
+      "observable": "reset.otherOrgPayable",
+      "value": "PRESERVED"
     }
   ],
   "rulings": [
     {
       "id": "SCRUM-760#c22465",
       "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    },
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
     }
   ],
   "impl": {
     "file": "convex/openingRemainingFamilies.test.ts",
-    "testName": "opening other payable revalidates authentic queued settlement before retry posting"
+    "testName": "owner ruling 2026-11-07: opening other payable revalidates queued settlement; reset wipes same-org legacy vehicle debt"
   },
   "matrixRow": "SCRUM-858-remaining-native-liabilities",
-  "fingerprint": "8c33b47c8f52e3065724811d8fb21e20344f0b340c839af96d04dd09e4d3d494"
+  "fingerprint": "dfbf5dc76f070e166ed29c3ae7d7f8c69448f174f1dc12ce0e19381a54f91368"
 }

@@ -989,7 +989,8 @@ async function replayRemainingOpeningFamily({
       ).toHaveLength(allocation.kind === "SUPPLIER_PAYABLE" ? 0 : 1);
       // A second committed batch removes the AP after its payment child. The
       // retained historical header must atomically lose only this new result
-      // reference; its allocation/economics and all legacy AP remain intact.
+      // reference; its allocation/economics remain intact. Owner 2026-11-07
+      // wipes vehicles and their dependents, including this org's legacy AP.
       const historicalBefore = await t.run((ctx) => ctx.db.get(result.draftId as Id<"openingBalanceDrafts">));
       if (!historicalBefore) throw new Error("Missing authentic opening parent");
       expect(historicalBefore.allocationResults).toEqual([
@@ -1006,7 +1007,9 @@ async function replayRemainingOpeningFamily({
           legacy:await ctx.db.get(guards.legacyId),
           foreign:await ctx.db.get(guards.otherId),
         }));
-        expect(afterSourceDelete.legacy).not.toBeNull();
+        // While payment children remain, cleanup has not reached the vehicle AP.
+        if (afterSourceDelete.payable === null) expect(afterSourceDelete.legacy).toBeNull();
+        else expect(afterSourceDelete.legacy).not.toBeNull();
         expect(afterSourceDelete.foreign).not.toBeNull();
         expect(afterSourceDelete.parent?.allocations).toEqual(historicalBefore.allocations);
         if(afterSourceDelete.payable === null) {
@@ -1023,7 +1026,7 @@ async function replayRemainingOpeningFamily({
       expect(sourceDeleted,"bounded reset must actually reach source deletion").toBe(true);
       await resetOrgToCompletion(t, orgId, 100, 40);
       expect(await t.run((ctx) => ctx.db.get(payable._id))).toBeNull();
-      expect(await t.run((ctx) => ctx.db.get(guards.legacyId))).not.toBeNull();
+      expect(await t.run((ctx) => ctx.db.get(guards.legacyId))).toBeNull();
       expect(await t.run((ctx) => ctx.db.get(guards.otherId))).not.toBeNull();
       await t.run((ctx) => ctx.db.patch(orgId, { suspended: false }));
       await owner.mutation(api.chartOfAccounts.initialize, { orgId });
@@ -1056,9 +1059,9 @@ async function replayRemainingOpeningFamily({
 
 test("opening supplier recoverable collects reverses and resets without fake expense", () =>
   replayRemainingOpeningFamily(families[0]));
-test("opening supplier payable settles selected control and resets without deleting legacy debt", () =>
+test("owner ruling 2026-11-07: opening supplier payable settles selected control; reset wipes same-org legacy vehicle debt", () =>
   replayRemainingOpeningFamily(families[1]));
-test("opening other payable revalidates authentic queued settlement before retry posting", () =>
+test("owner ruling 2026-11-07: opening other payable revalidates queued settlement; reset wipes same-org legacy vehicle debt", () =>
   replayRemainingOpeningFamily(families[2]));
 test("unallocated opening customer deposit stays held through current credit and refund", () =>
   replayRemainingOpeningFamily(families[3]));
