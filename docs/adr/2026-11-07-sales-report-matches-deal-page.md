@@ -10,9 +10,10 @@ unit, or have the same unavailable reason. Unknown is never zero. The report
 moves to the deal page's definition. It does not change deal economics, posting,
 commission amounts, permissions or lifecycle rules.
 
-The confirmed example is D-000005: customer sale price 12,100.000 JOD and
-management net 1,023.700 JOD, including the 451.300 execution fee, 300.000
-showroom preparation cost and 110.000 commissions.
+The owner confirmed the mismatch on a production test deal; its identifier
+stays out of this public repository. The test fixtures reproduce its shape: a
+SOURCED financed deal whose management net includes the execution fee, a
+showroom preparation cost and commissions.
 
 ## Two designs
 
