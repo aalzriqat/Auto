@@ -22,6 +22,18 @@ import {
 const AGENT_SALE = { salePrice: 12_500, recognizedRevenue: 3_000, totalCost: 0, netProfit: 3_000 };
 const OWNED_SALE = { salePrice: 8_000, recognizedRevenue: 8_000, totalCost: 6_000, netProfit: 2_000 };
 
+test("SCRUM-928 filtered cards include the same complete rows, excluding another denomination", () => {
+  const rows = [
+    { recognizedRevenue: 1885, totalCost: 861.3, netProfit: 1023.7, includedInTotals: true },
+    { recognizedRevenue: null, totalCost: null, netProfit: 1000, includedInTotals: false },
+    { recognizedRevenue: null, totalCost: null, netProfit: null, includedInTotals: false },
+  ];
+  expect(sumRecognizedRevenue(rows)).toBe(1885);
+  expect(sumReportedCost(rows)).toBe(861.3);
+  expect(sumReportedProfit(rows)).toBe(1023.7);
+  expect(countUnknownMargin(rows)).toBe(2);
+});
+
 describe("what the client counts as revenue", () => {
   test("a consigned sale contributes its margin, not the car's price", () => {
     expect(recognizedRevenueOf(AGENT_SALE)).toBe(3_000);

@@ -3,6 +3,7 @@ import { convexTestWithComponents, registerRateLimiter } from "../test-utils/con
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+import { seedSaleInvoice } from "../test-utils/saleInvoiceFixtures";
 
 const DATE = Date.UTC(2026, 10, 7);
 const modules = import.meta.glob("./**/*.*s");
@@ -37,7 +38,7 @@ async function fixture(options: { cash?: boolean; stock?: boolean; direct?: bool
       submittedQuotationMinor: 12200000, legalInvoiceAmountMinor: 12100000,
       approvedDealerPurchaseAmountMinor: 12000000, dealerContributionMinor: 215000,
       estimatedDealerBorneExpensesMinor: 451300,
-      supplierSettlementRoute: options.direct === false ? "THROUGH_SHOWROOM" : "DIRECT_TO_SUPPLIER",
+      supplierSettlementRoute: options.direct === false ? "THROUGH_DEALERSHIP" : "DIRECT_TO_SUPPLIER",
       createdAt: DATE, updatedAt: DATE,
     });
     const saleId = await ctx.db.insert("sales", {
@@ -157,6 +158,60 @@ describe("SCRUM-928 report matches the deal page", () => {
       const { _id: _id, _creationTime: _creationTime, ...fields } = sale;
       await ctx.db.insert("sales", { ...fields, status: "CANCELLED" });
       await ctx.db.insert("sales", { ...fields, isDeleted: true });
+    });
+    await expectParity(s, 1023700);
+  });
+  test("THROUGH_SHOWROOM reads this sale's supplier payable", async () => {
+    const s = await fixture({ direct: false });
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("vehicleSupplierPayables", {
+        orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Supplier",
+        amountDue: 9900, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: DATE, updatedAt: DATE,
+      });
+    });
+    await expectParity(s, 1023700);
+  });
+  test.each([false, true])("legacy forecast above actual, settled=%s, preserves the page's fee basis", async (settled) => {
+    const s = await fixture();
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(s.applicationId!, { estimatedDealerBorneExpensesMinor: 600000, supplierDisbursedAmountMinor: 12000000 });
+      await ctx.db.patch(s.feeId!, { reconciledAt: DATE });
+      await ctx.db.insert("vehicleSupplierReceivables", {
+        orgId: s.orgId, vehicleId: s.vehicleId, saleId: s.saleId, sourcedFromName: "Supplier",
+        amountDue: 2100, amountReceived: 2100, currency: "JOD", status: "PAID",
+        createdBy: s.userId, createdAt: DATE, updatedAt: DATE,
+      });
+      await seedSaleInvoice(ctx, { orgId: s.orgId, saleId: s.saleId, userId: s.userId,
+        customerId: s.customerId, originalMinor: 100000, openMinor: settled ? 0 : 100000, posting: "POSTED" });
+    });
+    await expectParity(s, settled ? 1023700 : 875000);
+  });
+  test("an unreadable legal invoice does not fall back to a readable quotation", async () => {
+    const s = await fixture();
+    await s.t.run((ctx) => ctx.db.patch(s.applicationId!, { legalInvoiceAmountMinor: Number.NaN }));
+    expect((await s.deal()).price).toBeUndefined();
+    expect((await s.report())!.sales[0].salePrice).toBeNull();
+    expect((await s.report())!.sales[0].salePriceUnavailableReason).toBe("UNSAFE_AMOUNT");
+  });
+  test("removed preparation expense changes both management nets", async () => {
+    const s = await fixture();
+    await s.t.run((ctx) => ctx.db.patch(s.expenseId, { isDeleted: true }));
+    await expectParity(s, 1323700);
+  });
+  test("finance withholding is named truthfully when cost access exists", async () => {
+    const s = await fixture({ without: "view:finance" });
+    expect((await s.deal()).profit).toBeUndefined();
+    const report = await s.report();
+    expect(report!.sales[0].netProfit).toBeNull();
+    expect(report!.sales[0].profitUnavailableReason).toBe("FinanceAccessRequired");
+    expect(report!.sales[0].salePrice).toBeNull();
+    expect(report!.sales[0].salePriceUnavailableReason).toBe("ACCESS_REQUIRED");
+  });
+  test("fee evidence uses application linkage even if its tenant stamp is inconsistent", async () => {
+    const s = await fixture();
+    await s.t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other", createdAt: DATE });
+      await ctx.db.patch(s.feeId!, { orgId: otherOrgId });
     });
     await expectParity(s, 1023700);
   });
