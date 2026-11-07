@@ -1,41 +1,10 @@
-/**
- * SCRUM-565 N9 — the dormant "begin a reset" path keeps the SCRUM-563 properties.
- *
- * INVARIANT: if `FRESH_RESET_STARTS_BLOCKED` is ever flipped to false, the first
- * destructive call on a clean org still bumps `financialResetGeneration` in the
- * SAME transaction as its first deletions, a refused call bumps and deletes
- * nothing, and a dry run writes nothing.
- *
- * D-19 made that path unreachable, so every other test now reaches the reset
- * through a seeded continuation. This file is the only thing that executes the
- * bump in `resetOrgFinancialData`, so a regression in it would otherwise be
- * invisible until someone flips the switch.
- *
- * The switch is read inside `isFreshResetStartRefused` (a module-local binding),
- * so overriding the exported constant alone does not reach it. The mock below
- * therefore replaces both, driven by one flag; the CONTROL test turns the flag
- * on and proves the mock really is what the reset module calls.
- */
+/** SCRUM-563 generation behavior through the shipped survivor guard, without mocking the guard. */
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedOrgWithMember } from "../test-utils/seedOrg";
 import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-
-const flags = vi.hoisted(() => ({ blocked: false }));
-
-vi.mock("./utils/orgResetGeneration", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./utils/orgResetGeneration")>();
-  return {
-    ...original,
-    FRESH_RESET_STARTS_BLOCKED: false as const,
-    isFreshResetStartRefused: (
-      org: Parameters<typeof original.isFreshResetStartRefused>[0],
-      dryRun: boolean
-    ) => flags.blocked && !dryRun && (org === null || !original.orgResetState(org).inProgress),
-  };
-});
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -45,7 +14,6 @@ vi.mock("./rateLimit", () => ({
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
 beforeEach(() => {
-  flags.blocked = false;
   process.env.SUPER_ADMIN_EMAILS = "admin@autoflow.dev";
   process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
   process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
@@ -112,13 +80,19 @@ async function expenseCount(t: Harness, orgId: Id<"organizations">) {
 }
 
 describe("SCRUM-565 N9 — begin path with fresh starts allowed (switch flipped off)", () => {
-  test("CONTROL: with the switch on, the same call is refused and writes nothing (the mock reaches the reset module)", async () => {
-    flags.blocked = true;
+  test("CONTROL: a real prepaid survivor refuses and writes nothing", async () => {
     const s = await setup();
     await createExpense(s, "A");
     await suspend(s.t, s.orgId);
 
-    await expect(destructive(s)).rejects.toThrow(/Fresh financial resets are disabled/);
+    await s.t.run(async ctx => {
+      const expense = await ctx.db.query("expenses").first();
+      if (!expense) throw new Error("Missing expense fixture");
+      await ctx.db.insert("prepaidExpenseSchedules", { orgId: s.orgId, expenseId: expense._id,
+        currency: "JOD", totalMinor: 100, termMonths: 1, expenseSystemKey: "fixture", startYearMonth: "2026-01",
+        recognizedMinor: 0, status: "ACTIVE", createdAt: 1 });
+    });
+    await expect(destructive(s)).rejects.toThrow(/prepaidExpenseSchedules count 1/);
     expect(await orgState(s.t, s.orgId)).toEqual({ generation: undefined, completed: undefined, suspended: true });
     expect(await expenseCount(s.t, s.orgId)).toBe(1);
   });

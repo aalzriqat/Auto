@@ -93,14 +93,13 @@ describe("countOrgsWithResetInProgress", () => {
   });
 
   // D-19: the attestation the release workflow reads from the LIVE backend.
-  test("attests protocol v2 and that fresh starts are blocked", async () => {
+  test("attests protocol v2 and truthfully reports conditional fresh admission", async () => {
     const t = await seed([{}]);
     const r = await page(t, 10);
     expect(RESET_PREFLIGHT_PROTOCOL).toBe("SCRUM-565/N9/v2");
     expect(r.protocol).toBe("SCRUM-565/N9/v2");
-    expect(r.freshStartsBlocked).toBe(true);
-    // The release contract is the literal true, not "whatever the constant is".
-    expect(r.freshStartsBlocked).toBe(true);
+    expect(r.freshStartsBlocked).toBe(false);
+    // The old release contract requires literal true; this is not that attestation.
   });
 
   test("reports the deployment url from the runtime environment, or null", async () => {

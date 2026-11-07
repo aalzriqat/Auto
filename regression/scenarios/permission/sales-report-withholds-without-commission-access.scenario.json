@@ -1,0 +1,89 @@
+{
+  "id": "sales-report-withholds-without-commission-access",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-local-public-seam",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "permission": "view:commissions",
+        "access": false
+      }
+    },
+    {
+      "actor": {
+        "role": "ReportOperator",
+        "org": "A"
+      },
+      "action": "dealOverview.financedDealOverview",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "row.netAfterCommissions",
+      "value": "unavailable"
+    },
+    {
+      "observable": "row.commissionsTotal",
+      "value": "unavailable"
+    },
+    {
+      "observable": "report.totalProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "performance.totalProfit",
+      "value": 1133.7
+    },
+    {
+      "observable": "deal.reason",
+      "value": "CommissionAccessRequired"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.matchesDeal.test.ts",
+    "testName": "without view:commissions, reports retain profit and withhold commission fields"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "a7d31e68aa8e55f3f07c995ae20eebaa1c8cf28b"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/sales.ts",
+    "convex/applications.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/utils/cashDealFigures.ts",
+    "convex/utils/dealProfitReads.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
+  ],
+  "fingerprint": "81d19a22cb2c28e3fcd4d058b3c139f9df7ff0ca1589265560346c8a096ba1e0"
+}

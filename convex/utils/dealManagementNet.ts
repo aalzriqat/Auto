@@ -6,23 +6,53 @@ export type ProfitCommissions =
   | { available: true; totalMinor: number }
   | { available: false; reason: "CommissionAccessRequired" | "CommissionsPending" | "CommissionsUnreadable" | "CommissionsReadBoundExceeded" };
 
-/** Derive the headline from the same signed lines the screen renders. */
-export function withDealManagementCosts(args: {
+type ManagementCostInputs = {
   profit: ManagementProfit | AccountingProfit;
   showroomExpenses: { available: true; totalMinor: number } | {
     available: false;
     reason?: Exclude<DealerPreparationExpenses, { available: true }>["reason"] | "VehicleCostBasisUnreadable";
   };
   commissions: ProfitCommissions;
-}): DealProfit {
-  const { profit, showroomExpenses, commissions } = args;
+};
+
+/** Both report figures come from the deal page's signed operands. */
+export function deriveDealManagementCosts(args: ManagementCostInputs): {
+  profitBeforeCommissions: DealProfit;
+  profit: DealProfit;
+} {
+  const profitBeforeCommissions = beforeCommissionCosts(args);
+  const { profit, commissions } = args;
+  if (!profit.available) return { profitBeforeCommissions, profit };
+  if (!commissions.available) return { profitBeforeCommissions, profit: { available: false, reason: commissions.reason } };
+  if (!profitBeforeCommissions.available) return { profitBeforeCommissions, profit: profitBeforeCommissions };
+  const amountMinor = profitBeforeCommissions.amountMinor - commissions.totalMinor;
+  if (!isMinorAmount(commissions.totalMinor) || !Number.isSafeInteger(amountMinor)) {
+    return { profitBeforeCommissions, profit: { available: false, reason: "CorruptInput" } };
+  }
+  const commissionLine = { key: "COMMISSIONS" as const, sign: -1 as const, amountMinor: commissions.totalMinor };
+  if (profitBeforeCommissions.basis === "MANAGEMENT_ESTIMATE") {
+    return { profitBeforeCommissions, profit: { ...profitBeforeCommissions, amountMinor,
+      lines: [...profitBeforeCommissions.lines, commissionLine] } };
+  }
+  return { profitBeforeCommissions, profit: { ...profitBeforeCommissions, amountMinor,
+    lines: [...profitBeforeCommissions.lines, commissionLine] } };
+}
+
+/** Preserve the deal page's existing headline and refusal precedence. */
+export function withDealManagementCosts(args: ManagementCostInputs): DealProfit {
+  return deriveDealManagementCosts(args).profit;
+}
+
+type ManagementNetProfit = Exclude<DealProfit, { basis: "ACCOUNTING_RESULT" }>;
+
+function beforeCommissionCosts(args: ManagementCostInputs): ManagementNetProfit {
+  const { profit, showroomExpenses } = args;
   if (!profit.available) return profit;
-  if (!commissions.available) return { available: false, reason: commissions.reason };
   if (!showroomExpenses.available) return {
     available: false,
     reason: showroomExpenses.reason === "VehicleCostBasisUnreadable" ? "VehicleCostBasisUnreadable" : "PreparationExpensesUnreadable",
   };
-  if (!isMinorAmount(showroomExpenses.totalMinor) || !isMinorAmount(commissions.totalMinor)) {
+  if (!isMinorAmount(showroomExpenses.totalMinor)) {
     return { available: false, reason: "CorruptInput" };
   }
   const accountingMarginLine = {
@@ -33,7 +63,6 @@ export function withDealManagementCosts(args: {
   const baseLines = profit.lines.length > 0 ? profit.lines : [accountingMarginLine];
   const deductions = [
     { key: "PREPARATION_EXPENSES" as const, sign: -1 as const, amountMinor: showroomExpenses.totalMinor },
-    { key: "COMMISSIONS" as const, sign: -1 as const, amountMinor: commissions.totalMinor },
   ];
   const lines = [...baseLines, ...deductions];
   const amountMinor = lines.reduce((total, line) => total + line.sign * line.amountMinor, 0);

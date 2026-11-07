@@ -54,9 +54,6 @@ export async function computeVehicleCapitalizedCost(
     return vehicle.sourceCost ?? 0;
   }
 
-  const base = vehicle.purchasePrice ?? 0;
-  const landed = vehicle.landedCostTotal ?? 0;
-
   const expenses = await ctx.db
     .query("expenses")
     .withIndex("by_org_vehicle", (q) => q.eq("orgId", vehicle.orgId).eq("vehicleId", vehicle._id))
@@ -67,7 +64,16 @@ export async function computeVehicleCapitalizedCost(
   // inference — a post-sale repair is permanently PERIOD_EXPENSE even if this
   // runs long after the sale, and capitalizedAmount already excludes VAT so it
   // matches exactly what was debited to Vehicle Inventory in the GL.
+  return vehicleCapitalizedCostFromExpenses(vehicle, expenses);
+}
+
+/** Pure counterpart used when a report has already loaded the vehicle's rows. */
+export function vehicleCapitalizedCostFromExpenses(vehicle: Doc<"vehicles">, expenses: Doc<"expenses">[]): number {
+  if (vehicle.sourceType === "SOURCED") return vehicle.sourceCost ?? 0;
+  const base = vehicle.purchasePrice ?? 0;
+  const landed = vehicle.landedCostTotal ?? 0;
   const capitalizedExpenses = expenses
+    .filter((e) => !e.isDeleted)
     .filter((e) => e.accountingTreatment === "CAPITALIZED_INVENTORY")
     .reduce((sum, e) => sum + (e.capitalizedAmount ?? 0), 0);
 

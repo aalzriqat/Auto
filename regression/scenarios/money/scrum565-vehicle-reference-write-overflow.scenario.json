@@ -1,0 +1,68 @@
+{
+  "id": "scrum565-vehicle-reference-write-overflow",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-round3-bound-controls",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "linkedInstagramEvents": 21,
+        "ownerRuling": "OWNER_2026_11_07_SCRUM565"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dryRun.preflight.verdict",
+      "value": "UNAVAILABLE"
+    },
+    {
+      "observable": "reset.writes",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "more than 20 vehicle-linked events are UNAVAILABLE before triggers or deletion"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "fingerprint": "6b27657927eb76fa95db6b4555b255e386f119877c9d2b0fc781f159a90a07c5"
+}

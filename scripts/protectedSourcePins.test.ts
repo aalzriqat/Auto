@@ -799,8 +799,18 @@ describe("protected source content pins", () => {
       // SCRUM-808 RENEWAL 2026-11-04 (PR #773, per-organization deal number; covered by the owner's standing grant, relayed by the pilot coordinator: "Don't stop working until the pilot is ready in production, You have my full authorization on anything but deleting repo files"; NOT authorized by Sol 6 and NOT yet independently reviewed; both seats review this exact head before merge; read the hunks): six added lines and no removed ones. One import of `allocateDealNumber`; `createFromQuote` allocates the organization's next deal number inside its own transaction (a comment, the allocation, and the `dealNumber` field on the insert); `dealCockpit` projects the stored `dealNumber` when present (a comment and one spread). No permission, schema, index, posting or idempotency change in this file. Allocating from a hidden financeApplications insert trigger instead would leave this file untouched but make financed numbering an invisible side effect while cash numbering stays explicit in insertSaleRecord. Byte-additive proof: 310990 (main 644d785d) + 439 = 311429 (sha256 5f58d735034d8d4085d5eb2f38ed73e39be3e627d83fa876c48ca3b77265dcca). MERGE 2026-11-05 with origin/main 88658d2a0 (SCRUM-908 #772 dealCockpit cost gate, postimage 311584 / b69e46e66d0de8ea87dda332646d5420e35d46a6853150365a92f408785314ac): both chains preserved, no hunk composed; byte-additive 311584 + 439 = 312023. New postimage bytes 312023, sha256 8104ae8d0fd1d5fc33e9ba4cd90dfcdfb2140ddc38d9bed5d50b99641a8705ca. Recomputed from the merged file with this test's own normalization (CRLF to LF, UTF-8): bareCR=false, conflict markers=false.
       // MERGE 2026-11-05 - SCRUM-902 PR #766 with origin/main f5dc1424bf2a61c4b487704ec7e6738390486b16: both renewal chains preserved. dealCockpit gate hunk takes main canReadVehicleCost (same system-owner/cost-grant rule); supplier-withholding comment hunk takes ours. No hunk composed. Main transaction-local dealNumber allocation and projection preserved. New postimage bytes 312127, sha256 20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428. Recomputed from the merged file with this test's own normalization (CRLF to LF, UTF-8); bareCR=false, conflict markers=false. Implementer evidence, not independent certification.
       // MERGE 2026-11-05 - SCRUM-858 PR #710 with origin/main 075eaff37306f84b9b0400829aa90ffba3351a3f: applications.ts takes main's complete postimage; no hunk composed. Branch postimage 310990 / a71be444808a78c22d32a1573f20ff37acd07b1a9a36d547292d35603fb4955f becomes 312127 / 20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428. Recomputed from the merged file with this test's normalization (CRLF to LF, UTF-8); bareCR=false. dealWorkspace.ts is unchanged at 10142 / 9b3110fb3e3d79b783c09acb18bd9c7b9fdc060edc0385b4561cc501324d4ce1. Implementer evidence, not independent certification.
-      bytes: 312127,
-      sha256: "20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428",
+      // SCRUM-928 RENEWAL 2026-11-07: the owner's explicit "Match the deal page"
+      // implementation brief requires one shared server derivation. Read-only supplier
+      // evidence, fee summarization and cockpit profit composition move unchanged to
+      // utils/dealSettlementFigures.ts so the report can batch its inputs. Async loaders
+      // delegate to those pure functions; no mutation, permission, posting, validator,
+      // lifecycle decision or commission amount changes. The helper is pinned below
+      // as well, preserving change-control coverage of the moved decisions. Previous
+      // postimage 312127 / 20a736a051a91a5bb00be90742b77950b43bff3292da181d27be4909d5bb4428.
+      // Implementer source/serial-harness evidence only. Independent exact-head Opus
+      // and Codex certification remains required before merge; neither is claimed here.
+      bytes: 295282,
+      sha256: "f0eae1d0ae859f20fc6209a1ee3f9b1e6abbe38660ce35e5a7aebd984d31d091",
     },
     {
       /**
@@ -914,6 +924,18 @@ describe("protected source content pins", () => {
       // SCRUM-444 RENEWAL 2026-09-29: the financed cockpit additionally returns `pendingDepositRequests` (read-only, tenant-scoped); previous postimage bytes 9216, sha256 1eb4f689e0082d3b4fbe591cc0a3bf62924734eedf3679c7d011981565aa7ab4. Recomputed from the file with this test's own normalization.
       bytes: 10142,
       sha256: "9b3110fb3e3d79b783c09acb18bd9c7b9fdc060edc0385b4561cc501324d4ce1",
+    },
+    {
+      // SCRUM-928: preserves the full-file pin over decisions extracted from
+      // applications.ts under the same authorized implementation scope above.
+      file: "convex/utils/dealSettlementFigures.ts",
+      // SCRUM-928 Sonar S3863 renewal 2026-11-07: the authorized import merge
+      // combines financingEconomics bindings, retaining inline type imports;
+      // all declarations below the imports are byte-identical to 4f42be7ac.
+      // Implementer source review only; exact-SHA seat certification remains required.
+      // Previous postimage: 18674 bytes, sha256 041177a4e533abefb587f644b1d91792c63d8cbf4aaa52546d7b3ff0bd41e954.
+      bytes: 18635,
+      sha256: "b02d35ea76b40397707a53d0042da52dd70ce55818c7203c5c3e522278254a60",
     },
   ] as const;
 

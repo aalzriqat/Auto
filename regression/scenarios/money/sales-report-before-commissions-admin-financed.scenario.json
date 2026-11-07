@@ -1,0 +1,89 @@
+{
+  "id": "sales-report-before-commissions-admin-financed",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum928-owner-before-commissions",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "ADMIN",
+        "org": "A"
+      },
+      "action": "reports.getSalesAndProfitReport",
+      "input": {
+        "financingType": "FINANCED",
+        "sourceType": "SOURCED",
+        "feeActualMinor": 451300,
+        "preparationMinor": 300000,
+        "saleCommissionMinor": 110000,
+        "lineCommissionMinor": 25000
+      }
+    },
+    {
+      "actor": {
+        "role": "ADMIN",
+        "org": "A"
+      },
+      "action": "reports.getSalespersonPerformance",
+      "input": {
+        "sameDeal": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "row.netProfitMinor",
+      "value": 1133700
+    },
+    {
+      "observable": "row.netAfterCommissionsMinor",
+      "value": 998700
+    },
+    {
+      "observable": "performance.totalProfitMinor",
+      "value": 1133700
+    },
+    {
+      "observable": "performance.totalNetAfterMinor",
+      "value": 998700
+    },
+    {
+      "observable": "row.commissionsMinor",
+      "value": 135000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-928#c24715",
+      "digest": "24af67ad1c0e5296bf4a5933f1c2e512aa2dd65833503316bb2a12a7eda16032"
+    }
+  ],
+  "impl": {
+    "file": "convex/reports.commissionLines.test.ts",
+    "testName": "owner before commissions: ADMIN SOURCED financed"
+  },
+  "matrixRow": "SCRUM-486-REPORT-MATCHES-DEAL",
+  "bugRef": {
+    "key": "SCRUM-928",
+    "failingFirst": "4f42be7ac89c08dd55a2e87cec0984bcf5a18f2b"
+  },
+  "sourceGlobs": [
+    "convex/reports.ts",
+    "convex/dealOverview.ts",
+    "convex/sales.ts",
+    "convex/applications.ts",
+    "convex/utils/reportDealFigures.ts",
+    "convex/utils/dealOverviewFigures.ts",
+    "convex/utils/dealSettlementFigures.ts",
+    "convex/utils/cashDealFigures.ts",
+    "convex/utils/dealProfitReads.ts",
+    "convex/utils/dealFinancialSummary.ts",
+    "convex/utils/dealManagementNet.ts"
+  ],
+  "fingerprint": "74949ba455f411293738fc7831afa640eec3821205bd463d02ee5a0a3ec20186"
+}

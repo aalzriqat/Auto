@@ -1,7 +1,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { saleCompletedKey } from "../accounting/postingRules";
-import { outstandingFromReceivableDoc } from "../subledger";
+import { outstandingFromReceivableDoc, receivableOutstandingFromRows } from "../subledger";
 import type { ObligationState } from "./financingEconomics";
 
 /**
@@ -57,27 +57,34 @@ export async function resolveCustomerInvoicePosition(
   const receivableId = sale?.canonicalReceivableDocumentId;
   if (!sale || sale.orgId !== scope.orgId || !receivableId) return unknown;
   const receivable = await ctx.db.get(receivableId);
-  if (
-    !receivable ||
-    receivable.orgId !== scope.orgId ||
-    receivable.currency !== scope.currency ||
-    receivable.documentType !== "INVOICE" ||
-    receivable.payerType !== "CUSTOMER" ||
-    receivable.sourceType !== "sales" ||
-    receivable.sourceId !== sale._id.toString()
-  ) {
+  if (!invoiceBelongsToSale(sale, scope, receivable)) {
     return unknown;
   }
   // The posting proof and the allocations are independent reads off the same
   // receivable, so they run together. The proof is still enforced before the
   // balance is trusted: a failed proof returns UNKNOWN whatever the balance is.
-  const postingRequired = sale.glPostingRequired !== false && receivable.originalAmountMinor !== 0;
+  const postingRequired = invoiceRequiresPosting(sale, receivable);
   const [postingProven, outstandingMinor] = await Promise.all([
     postingRequired ? saleCompletedPostingIsPosted(ctx, sale) : Promise.resolve(true),
     outstandingFromReceivableDoc(ctx, receivable),
   ]);
   if (!postingProven) return unknown;
+  return positionForBalance(outstandingMinor);
+}
+
+function invoiceBelongsToSale(sale: Doc<"sales">, scope: { orgId: Id<"organizations">; currency: string },
+  receivable: Doc<"receivableDocuments"> | null): receivable is Doc<"receivableDocuments"> {
+  return receivable !== null && sale.orgId === scope.orgId && sale.canonicalReceivableDocumentId === receivable._id &&
+    receivable.orgId === scope.orgId && receivable.currency === scope.currency && receivable.documentType === "INVOICE" &&
+    receivable.payerType === "CUSTOMER" && receivable.sourceType === "sales" && receivable.sourceId === sale._id.toString();
+}
+
+function positionForBalance(outstandingMinor: number): CustomerInvoicePosition {
   return { state: outstandingMinor > 0 ? "OPEN" : "CLOSED", outstandingMinor: Math.max(0, outstandingMinor) };
+}
+
+function invoiceRequiresPosting(sale: Doc<"sales">, receivable: Doc<"receivableDocuments">): boolean {
+  return sale.glPostingRequired !== false && receivable.originalAmountMinor !== 0;
 }
 
 /** The sale's own SALE_COMPLETED event stands POSTED, with a POSTED journal of this organization. */
@@ -87,6 +94,10 @@ async function saleCompletedPostingIsPosted(ctx: QueryCtx, sale: Doc<"sales">): 
     .withIndex("by_org_idempotency", (q) => q.eq("orgId", sale.orgId).eq("idempotencyKey", saleCompletedKey(sale._id)))
     .first();
   const journal = event?.journalEntryId ? await ctx.db.get(event.journalEntryId) : null;
+  return salePostingEvidenceIsPosted(sale, event, journal);
+}
+
+function salePostingEvidenceIsPosted(sale: Doc<"sales">, event: Doc<"accountingEvents"> | null, journal: Doc<"journalEntries"> | null): boolean {
   return (
     event?.status === "POSTED" &&
     event.eventType === "SALE_COMPLETED" &&
@@ -96,4 +107,22 @@ async function saleCompletedPostingIsPosted(ctx: QueryCtx, sale: Doc<"sales">): 
     journal.status === "POSTED" &&
     journal.accountingEventId === event._id
   );
+}
+
+/** Pure projection of the same canonical invoice and posting proof for a batch reader. */
+export function customerInvoicePositionFromRows(args: {
+  sale: Doc<"sales">;
+  scope: { orgId: Id<"organizations">; currency: string };
+  receivable: Doc<"receivableDocuments"> | null;
+  event: Doc<"accountingEvents"> | null;
+  journal: Doc<"journalEntries"> | null;
+  allocations: Doc<"paymentAllocations">[];
+}): CustomerInvoicePosition {
+  const { sale, scope, receivable, event, journal, allocations } = args;
+  if (!invoiceBelongsToSale(sale, scope, receivable) ||
+    (invoiceRequiresPosting(sale, receivable) && !salePostingEvidenceIsPosted(sale, event, journal))) {
+    return { state: "UNKNOWN", outstandingMinor: null };
+  }
+  const outstandingMinor = receivableOutstandingFromRows(receivable, allocations);
+  return positionForBalance(outstandingMinor);
 }

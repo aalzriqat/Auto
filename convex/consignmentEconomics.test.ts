@@ -485,8 +485,10 @@ describe("SCRUM-33 — a sale with no basis on the row and no vehicle to ask", (
       salesTrend: Array<{ Revenue: number; Profit: number }>;
     };
 
-    // The report recognizes what the sale froze.
-    expect(report.totalProfit).toBe(MARGIN);
+    // SCRUM-928: management net requires the missing vehicle's preparation evidence.
+    expect(report.totalProfit).toBe(0);
+    expect(report.unknownMarginSaleCount).toBe(1);
+    expect(report.sales[0].profitUnavailableReason).toBe("PreparationExpensesUnreadable");
     // So does the dashboard's headline...
     expect(dash.salesVolumeThisMonth).toBe(MARGIN);
     // ...and so must the chart beneath it. This was 0.
@@ -1261,7 +1263,12 @@ describe("CX-C — an id that references nothing is not provenance", () => {
     const s = await seedDealer("cxcValid");
     const { saleId, vehicleId } = await financedDirectWithReceipt(s, "VINCXC4");
     const appId = await makeApplication(s, vehicleId, { finalizedSaleId: saleId });
-    await s.t.run(async (ctx) => await ctx.db.patch(saleId, { applicationId: appId }));
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(saleId, { applicationId: appId });
+      // SCRUM-928: a real application must also carry the deal page's profit operands.
+      await ctx.db.patch(appId, { approvedDealerPurchaseAmountMinor: 12500000,
+        dealerContributionMinor: 0, economicsCurrency: "JOD", targetSellingAmountMinor: 12500000 });
+    });
 
     const report = await profitOf(s);
 

@@ -13,6 +13,27 @@ function readableSaleCommission(sale: Doc<"sales">, currency: string): boolean {
   return sale.commissionAmount === 0 || parseCommissionAmountMinor(sale.commissionAmount, denomination.scale).ok;
 }
 
+/** The same completeness and denomination rules for single and batched readers. */
+export function profitCommissionsFromRows(args: {
+  sale: Doc<"sales"> | null;
+  rows: Doc<"dealCommissionLines">[];
+  currency: string;
+  mayReadCommissions: boolean;
+}): ProfitCommissions {
+  const { sale, rows, currency } = args;
+  if (!args.mayReadCommissions) return { available: false, reason: "CommissionAccessRequired" };
+  if (!sale || sale.isDeleted) return { available: false, reason: "CommissionsUnreadable" };
+  if (sale.commissionAmount == null) return { available: false, reason: "CommissionsPending" };
+  if (!readableSaleCommission(sale, currency)) return { available: false, reason: "CommissionsUnreadable" };
+  const active = rows.filter((row) => row.removedAt === undefined);
+  if (rows.length > MAX_DEAL_COMMISSION_LINE_ROWS || active.length > MAX_DEAL_COMMISSION_LINES) {
+    return { available: false, reason: "CommissionsReadBoundExceeded" };
+  }
+  const totals = dealCommissionTotals(sale, active, currency);
+  if (totals.salePending || totals.totalMinor === null) return { available: false, reason: "CommissionsUnreadable" };
+  return { available: true, totalMinor: totals.totalMinor };
+}
+
 /** A cap refuses a profit instead of throwing and blanking the deal screen. */
 export async function loadProfitCommissions(ctx: QueryCtx, args: {
   orgId: Id<"organizations">;
@@ -29,13 +50,7 @@ export async function loadProfitCommissions(ctx: QueryCtx, args: {
   if (sale.commissionAmount == null) return { available: false, reason: "CommissionsPending" };
   if (!readableSaleCommission(sale, args.currency)) return { available: false, reason: "CommissionsUnreadable" };
   const rows = await boundedLineRowsForSale(ctx, args.orgId, saleId);
-  const active = rows.filter((row) => row.removedAt === undefined);
-  if (rows.length > MAX_DEAL_COMMISSION_LINE_ROWS || active.length > MAX_DEAL_COMMISSION_LINES) {
-    return { available: false, reason: "CommissionsReadBoundExceeded" };
-  }
-  const totals = dealCommissionTotals(sale, active, args.currency);
-  if (totals.salePending || totals.totalMinor === null) return { available: false, reason: "CommissionsUnreadable" };
-  return { available: true, totalMinor: totals.totalMinor };
+  return profitCommissionsFromRows({ sale, rows, currency: args.currency, mayReadCommissions: true });
 }
 
 /**
@@ -55,6 +70,11 @@ export async function loadVehicleProfitExpenses(ctx: QueryCtx, vehicle: Doc<"veh
     .withIndex("by_org_vehicle", (q) => q.eq("orgId", vehicle.orgId).eq("vehicleId", vehicle._id))
     .take(MAX_COST_BASIS_EXPENSES + 1);
   if (workOrders.length > MAX_COST_BASIS_EXPENSES) return expenses;
+  return normalizeProfitExpenses(expenses, workOrders);
+}
+
+export function normalizeProfitExpenses(expenses: Doc<"expenses">[], workOrders: Doc<"workOrders">[]): Doc<"expenses">[] {
+  if (expenses.length > MAX_COST_BASIS_EXPENSES || workOrders.length > MAX_COST_BASIS_EXPENSES) return expenses;
   const workOrderAmounts = new Map(workOrders.map((row) => [row.expenseId, row.totalCost]));
   return expenses.map((row) => row.accountingTreatment === undefined && row.category === "REPAIR" &&
     row.isPrepaid !== true && row.capitalizedAmount === undefined && workOrderAmounts.get(row._id) === row.amount

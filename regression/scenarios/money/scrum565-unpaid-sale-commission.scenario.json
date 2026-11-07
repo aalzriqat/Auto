@@ -1,0 +1,93 @@
+{
+  "id": "scrum565-unpaid-sale-commission",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "audit",
+    "runId": "scrum565-narrow-reset-local",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "fixtures.seedTwoOrganizations",
+      "input": {
+        "table": "sales",
+        "batchSize": 1,
+        "owedRows": 2,
+        "settledRows": 1,
+        "payrollItems": 2,
+        "ownerRuling": "2026-11-07-wipe-owed-commissions"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": true,
+        "batchSize": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "orgFinancialReset.resetOrgFinancialData",
+      "input": {
+        "dryRun": false,
+        "batchSize": 1,
+        "repeatUntilComplete": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "preflight.owedCommissionCounts.sales",
+      "value": 2
+    },
+    {
+      "observable": "reset.remaining",
+      "value": 0
+    },
+    {
+      "observable": "reset.resetCompleted",
+      "value": true
+    },
+    {
+      "observable": "reset.payrollChildrenDrainBeforeSources",
+      "value": true
+    },
+    {
+      "observable": "reset.sourceRowsRemaining",
+      "value": 0
+    },
+    {
+      "observable": "orgB.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-565#c24729",
+      "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d"
+    }
+  ],
+  "impl": {
+    "file": "convex/orgFinancialResetNarrow.scrum565.test.ts",
+    "testName": "owner ruling 2026-11-07 wipes unpaid sale commissions, books start from zero"
+  },
+  "matrixRow": "SCRUM565-narrow-reset",
+  "bugRef": {
+    "key": "SCRUM-565",
+    "failingFirst": "8ce619aa9594c55a81f029c768affb251a04a440"
+  },
+  "fingerprint": "694fcbe679b686a6db23c88d0eda1aa55f56cb53f4afdd5a8ff31214d395724d"
+}

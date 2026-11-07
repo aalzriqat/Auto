@@ -16,6 +16,16 @@ Read-only report and alert projection. `convex/supplierBalances.scrum929.test.ts
 
 The records under `regression/scenarios/{money,permission}/supplier-*` with `source.runId` `scrum929-supplier-balances` bind these cells. No money is posted or implicitly offset.
 
+## SCRUM565-narrow-reset
+
+Owner ruling SCRUM-565 c24729, 2026-11-07, supersedes the blanket D-19 refusal and the broad wipe brief in c24724. Outside the pilot train.
+
+| Operation | Required result | Bound check |
+| --- | --- | --- |
+| Internal reset, two orgs, batchSize 1 | Clean admission deletes the vehicle graph and accounting rows, retries complete one generation, kept identity/configuration and org B stay identical; excluded survivors and incomplete evidence refuse before writes | `convex/orgFinancialResetNarrow.scrum565.test.ts`, 30 exact scenario bindings under `regression/scenarios/money/scrum565-*` |
+
+Failing first at `9b584a38bcabd2735393acb807cb807a7d1b8f59`: 30 failed against unchanged main `684ba04d002edfcbee20162bdad1a2fbfc61a7a5`. Serial convex-test evidence only. No real-backend, OCC, browser-hunter, review-seat or production certification is claimed. Shared newly covered media blobs are retained. The release no-new-start attestation remains false and its existing controller refuses it.
+
 ## SCRUM-760-DECISION-B-BLOCKED-DOORS
 
 Owner rulings SCRUM-795 c22479 (2026-10-08, Q2 selective containment: do not activate a new retained-credit
@@ -1350,3 +1360,33 @@ all rows/scheduler state; the explicit-payee web control accepts 300000.
 A literal table also refuses unconfirmed amount/title/category/date/tax/vehicle/
 method/status/prepaid edits. Restoring the payment-only confirmation predicate
 kills two tests. These are money findings, not deferred test-only follow-ups.
+
+## SCRUM-486-REPORT-MATCHES-DEAL (SCRUM-928)
+
+| Check | Expected result | Executable evidence |
+| --- | --- | --- |
+| Financed SOURCED DIRECT and STOCK | 1,133,700 minor before commissions and 1,023,700 after, with 451,300 fee, 300,000 preparation and 110,000 commissions; price 12,100,000 | `convex/reports.matchesDeal.test.ts`, literal public report and overview assertions |
+| Cash without application | 1,900,000 minor before commissions, cash cockpit net 1,790,000 after, price 12,100,000 | same suite, cash case |
+| MANAGER template and ADMIN, sale plus line commissions | SOURCED financed 1,133,700 before and 998,700 after; CASH 1,900,000 before and 1,765,000 after; commission component 135,000 | same suite, four owner-ruling cases and their scenario records |
+| Pending commissions | Base profit remains available; after figure is null and counted. Settled/unsettled fee selection still applies to the base | same suite, pending CASH, financed and settlement cases |
+| Permission and unreadable evidence | Main's report and cost gates remain. Without finance access, the real MANAGER template sees the owner's CASH and SOURCED financed values. Commission-only fields retain their gate; unsafe or mixed fee evidence never becomes zero | same suite, role and fee cases |
+| Post-completion changes and routes | Late fee actual, removed preparation, supplier-borne expenses, both supplier routes and cancelled siblings preserve report/deal parity | same suite, literal self-attack cases |
+| Settlement-dependent legacy estimate | Unsettled net 875,000; settled net 1,023,700, using posted canonical invoice evidence | same suite, settled/unsettled cases |
+| Cards, performance, CSV | Included revenue minus costs and reconciliation equals before-commission profit; performance sums before and after separately; CSV uses the same row values | backend suite, `lib/saleReporting.test.ts`, and explicit CSV projection in the report page |
+| Rollout and bilingual page | Legacy backend is withheld, current figures render with EN/AR labels and RTL direction | `components/reports/ReportsPage.matchesDeal.test.tsx` |
+
+Failing-first commits are `173185b2d12a767be6b91bb6c46f829530eccf94`
+(9 failed, 1 passed) and `442fa7d1837942da2e71d36b16eb058e51eb5744`
+(20 failed, 14 passed across the expanded backend, card and page suites).
+The permission follow-up records the 2026-11-07 owner quote "Keep today's view"
+in its bound test name and ADR. The answer's comment id is not supplied; c24730
+identifies the problem comment. Ruling attribution remains pending confirmation.
+The owner ruling on 2026-11-07, asked in Arabic, resolves the profit contract:
+"قبل العمولات (مقترح)". Base profit is before commissions; the separate after
+figure equals the deal page. The unchanged commission suite requires 5000 / 4875.
+The ADR records the supplied answer. No Jira answer id is invented.
+
+The scenario records retain the stable SCRUM-928 c24715 brief digest. This is local,
+serial harness and jsdom evidence. It does not certify rendered viewport
+layout, a signed-in browser flow, cloud limits, OCC, production figures or the
+independent review seats. No posting, journal or lifecycle definition changed.
