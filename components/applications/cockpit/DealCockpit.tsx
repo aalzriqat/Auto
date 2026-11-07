@@ -884,7 +884,7 @@ export function DealCockpit({
   const resolveFinancingReconciliation = useMutation(
     api.financingEconomics.resolveFinancingReconciliation
   );
-  const { hasPermission, isLoading: permissionsLoading, membership, isOwner } = usePermissions();
+  const { hasPermission, isLoading: permissionsLoading, membership } = usePermissions();
   const router = useRouter();
 
   /**
@@ -2199,7 +2199,7 @@ export function DealCockpit({
    * live in `DealStageView` (see `stageNotApplicableReasonKey`).
    */
   const liveStage = deal?.stages.find(
-    (stage) => stage.state === "CURRENT" || stage.state === "BLOCKED"
+    (stage) => isLiveStageState(stage.state)
   );
 
   /**
@@ -2758,8 +2758,7 @@ export function DealCockpit({
             // From the STAGE RAIL, which the server derives from the unredacted
             // row — not from the amount below, which is also absent when it was
             // redacted. See `FinanceDecisionFacts`.
-            approvedPurchaseRecorded:
-              deal.stages.find((stage) => stage.key === "APPROVED_PURCHASE")?.state === "COMPLETE",
+            approvedPurchaseRecorded,
             submittedQuotationMinor: economicsApp.submittedQuotationMinor ?? null,
             approvedPurchaseAmountMinor: economicsApp.approvedDealerPurchaseAmountMinor ?? null,
             financeCompanyFundedPortionMinor:
@@ -2775,8 +2774,7 @@ export function DealCockpit({
             // vehicle has gone out `recordAppraisal` refuses rather than
             // superseding, so the action is withdrawn instead of promising
             // something the server will decline.
-            handedOver:
-              deal.stages.find((stage) => stage.key === "HANDOVER")?.state === "COMPLETE",
+            handedOver: handoverStage?.state === "COMPLETE",
             // The same live appraisal the approval bases are offered against,
             // so the row and those options can never disagree about whether one
             // exists.
@@ -4218,7 +4216,7 @@ export function SaleDealCockpit({
    * only while the step is live and usable. Until it arrives the step offers
    * no button: the dialog opened with no sale is the NEW-sale form.
    */
-  const cashLive = deal?.stages.find((stage) => stage.state === "CURRENT" || stage.state === "BLOCKED");
+  const cashLive = deal?.stages.find((stage) => isLiveStageState(stage.state));
   const canWriteSale =
     !permissionsLoading && hasPermission(PERMISSIONS.CREATE_SALES) && hasPermission(PERMISSIONS.EDIT_SALES);
   /**
@@ -5837,10 +5835,7 @@ export function DealCockpitView({
         true;
   const denominationUnusable = hasDenominationProjection && denomination === null && economicsRecorded;
   const dealCurrency = denomination?.code ?? deal?.money?.currency ?? currency.code;
-  const factor = useMemo(
-    () => Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2)),
-    [denomination, dealCurrency]
-  );
+  const factor = Math.pow(10, denomination?.scale ?? safeScaleForCurrency(dealCurrency, 2));
   // A SHORT currency marker, and a locale-appropriate one.
   //
   // `currency.format` renders "دينار اردني" in Arabic, which on a screen
@@ -5886,10 +5881,7 @@ export function DealCockpitView({
   // wrong on screen, but internally consistent, and it round-trips exactly.
   const discrepancy = deal?.settlementAdviceDiscrepancy ?? null;
   const discrepancyCurrency = discrepancy?.currency ?? dealCurrency;
-  const discrepancyFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2)),
-    [discrepancyCurrency]
-  );
+  const discrepancyFactor = Math.pow(10, safeScaleForCurrency(discrepancyCurrency, 2));
   const discrepancyMarker = viewCurrencyMarker(discrepancyCurrency);
   const discrepancyMoney = (minor: number) =>
     `${formatMinorAmount(minor, discrepancyFactor)} ${discrepancyMarker}`;
@@ -5900,10 +5892,7 @@ export function DealCockpitView({
   // deal's and then the org's mirrors what the server does rather than
   // rescaling a JOD figure at a USD scale.
   const decisionCurrency = financeDecision?.currency ?? dealCurrency;
-  const decisionFactor = useMemo(
-    () => Math.pow(10, safeScaleForCurrency(decisionCurrency, 2)),
-    [decisionCurrency]
-  );
+  const decisionFactor = Math.pow(10, safeScaleForCurrency(decisionCurrency, 2));
   const decisionMarker = viewCurrencyMarker(decisionCurrency);
   /**
    * What the handover confirmation shows — from the COCKPIT's own payload, not
