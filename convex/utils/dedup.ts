@@ -10,6 +10,7 @@ export function normalizePhone(phone: string): string {
   return hasPlus ? `+${digits}` : digits;
 }
 
+// SCRUM-350 G4 post-#580 swarm probe: comment-only marker, no behavior change.
 /** Case-insensitive, whitespace-trimmed name comparison for fuzzy dedup nudges. */
 export function namesSimilar(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
