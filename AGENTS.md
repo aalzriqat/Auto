@@ -22,7 +22,7 @@ Invocation is enforced, not optional. A session hook (`.claude/settings.json`) b
 
 ### Issue tracker
 
-User-invoked `to-spec` and `to-tickets` use this project's existing Jira workflow. See `docs/agents/issue-tracker.md`. This setup does not adopt other upstream workflows or change the rules and gates above or below this section.
+User-invoked `to-spec`, `to-tickets`, `wayfinder` and `implement-spec` use this project's existing Jira workflow. See `docs/agents/issue-tracker.md`, and the `implement-spec` conditions in `.claude/skills/README.md`. This setup does not adopt other upstream workflows or change the rules and gates above or below this section.
 
 ### Domain docs
 

@@ -20,7 +20,7 @@ A skill never lowers a gate. In particular:
   - The only change is a clean update from main and the PR's own diff is identical, including whitespace: carry the certification forward only with the complete API proof described under Enforcement. Re-run CI on the new head and note the original and carried SHAs on the PR and the Jira issue.
   - That clean update brought in main changes to code the PR touches or depends on: run one short, scoped re-review of only the interaction, recorded against the new head SHA before merging. On a money PR, both seats do it, Seat 1 in a session separate from the implementer. On other PRs, one independent read-only reviewer does it.
   - A re-check that was not run is recorded as not run. Never claim a seat for a head it did not read.
-- Skills that ask a person a question are answered by the decision rule in the project instructions (consult Codex sol6, medium effort at most). Codex quota is low, so skills do not trigger extra Codex runs.
+- Skills that ask a person a question are answered by the decision rule in the project instructions (consult Codex sol6, medium effort at most). Codex quota is low, so skills do not trigger extra Codex runs. The exception is `grilling`, which `grill-with-docs` and `wayfinder` grilling tickets also load. When the owner is in the conversation, the owner answers its questions. An agent never answers its own grilling questions. An unattended thread uses the decision rule.
 
 ## Which skill when
 
@@ -36,6 +36,25 @@ A skill never lowers a gate. In particular:
 | PR bodies, commit messages, docs, runbooks, RFCs | `technical-writing`, then `unslop` on the text. The PR template and attribution block still apply. |
 | Replies, Jira comments, review notes | `unslop` |
 | The same agent mistake has shown up twice in this repo, including across sessions | `correct`. Invoke automatically on the second occurrence without waiting for a user request. Record evidence for both occurrences. Raise a normal PR; it needs its own review. |
+| Stress-testing a plan or design with the owner, and recording the terms and decisions it settles | `/grill-with-docs` (user-invoked; loads `grilling` and `domain-modeling`). Only with the owner in the conversation. `GLOSSARY.md` holds terms only, never implementation detail. An ADR goes in `docs/adr/` only when the decision is hard to reverse, surprising and a real trade-off. Neither file overrides an owner ruling or Jira. |
+| Naming a module, seam or interface, or designing a deeper module | `codebase-design`. Use its vocabulary exactly: module, interface, implementation, depth, seam, adapter, leverage, locality. Apply the deletion test before creating a module. |
+| Periodic architecture survey of churn hot spots (SCRUM-418 §6 A10) | `/improve-codebase-architecture` (user-invoked). The HTML report goes to the OS temp directory, never the repo. Map each candidate onto an existing Jira issue before filing a new one. |
+| Turning a settled conversation into a spec, then into vertical-slice tickets | `/to-spec`, then `/to-tickets` (user-invoked), in Jira. See `docs/agents/issue-tracker.md`. |
+| An effort too big for one session, where the way to the goal is still unclear | `/wayfinder` (user-invoked). The map and its decision tickets live in Jira. See "Wayfinding operations" in `docs/agents/issue-tracker.md`. Tickets resolve decisions, not code. One ticket per session, except research tickets. |
+| Building a spec whose tickets are already in Jira | `/implement-spec` (user-invoked), under the conditions in "Running `implement-spec` here" below. |
+
+### Running `implement-spec` here
+
+The upstream skill builds every ticket on one integration branch, with many implementer subagents running in the background. In this repository:
+
+- The integration branch is a normal branch off fresh `origin/main` in a worktree under `C:\tmp\auto-*`. It opens a pull request and **never merges itself into `main`**. Merging stays with the repository gates.
+- The merger subagent merges ticket branches into the integration branch only.
+- If the whole spec would be too large to review as one PR, ship each ticket as its own PR against `main` in frontier order instead. Prefer small PRs to one large integration PR.
+- At most **2** implementer subagents run at once, and at most 2 test or typecheck jobs run at once across all of them. Vitest runs with `maxWorkers=1`. This is the workstation's thermal cap.
+- Implementer subagents use model `sonnet` at effort `high`. Money tickets follow `invariant-closure-workflow` and `tdd` with a failing-first test.
+- Upstream step 7 (`code-review`) is `two-axis-review` here. It is advisory and is not a seat.
+- The two-seat review, all required CI, `skill-evidence` and the Production deploy approval apply to the integration PR, or to each ticket PR, exactly as to any other PR.
+- Close each Jira ticket only after its PR has merged. Merged, deployed and production-verified stay separate states.
 
 ## Enforcement (owner request, 2026-10-20)
 
@@ -87,11 +106,12 @@ From pstack (56 skills): These were read and left out on purpose:
 
 From Matt Pocock's skills (27 listed at aihero.dev/skills, MIT, `mattpocock/skills`):
 
-- `grilling`, `grill-me`, `grill-with-docs`, `to-questionnaire`: interview the user and wait for answers. Threads here work without approval waits and use the decision rule instead.
-- `to-spec`, `to-tickets`, `implement`, `implement-spec`, `triage`, `setup-matt-pocock-skills`: built around GitHub or GitLab issues and parallel worktree fleets that merge themselves. `wizard` generates a script that writes `.env` values and GitHub secrets, so it is rejected on security grounds. The tracker here is Jira, and merges follow the repository gates.
+- `grill-me`, `to-questionnaire`: `grill-with-docs` covers the interview and also records the glossary and ADRs.
+- `implement`, `triage`, `setup-matt-pocock-skills`: built around GitHub or GitLab issues. The tracker here is Jira, already configured in `docs/agents/`. `wizard` generates a script that writes `.env` values and GitHub secrets, so it is rejected on security grounds.
 - `pr`: its PR body template conflicts with the required attribution block and Before/After/How format. Its one-way or two-way door and blast radius idea is already covered by `blast-radius`.
-- `domain-modeling`, `codebase-design`, `improve-codebase-architecture`: would create a glossary and decision records, or propose refactors, in a money codebase without an owner ruling. Revisit if the owner wants a glossary.
-- `wayfinder`, `prototype`, `research`, `retro`, `handoff`, `teach`, `wait-what`, `ask-matt`, `writing-for-agents`: overlap `correct`, the existing handoff flow, or what Claude does by default.
+- `prototype`, `research`, `retro`, `handoff`, `teach`, `wait-what`, `ask-matt`, `writing-for-agents`: overlap `correct`, the existing handoff flow, or what Claude does by default. `wayfinder` may still call `prototype` and `research` for its own tickets.
+
+Re-adopted by owner approval on 2026-11-08 (SCRUM-933) for the SCRUM-418 refactor: `grilling`, `grill-with-docs`, `domain-modeling`, `codebase-design`, `improve-codebase-architecture`, `to-spec`, `to-tickets`, `wayfinder` and `implement-spec`. The earlier reasons were "no owner ruling for a glossary" (SCRUM-418 §6 A4 now requires one), "threads work without approval waits" (these run with the owner present), and "fleets that merge themselves" (the conditions above remove self-merge). They come from the installed `mattpocock-skills` Claude Code plugin (version 1.3.1, read in full on 2026-11-08) and are not copied into this directory.
 - The `misc` and `in-progress` skills, including `git-guardrails-claude-code`, which blocks `git push` and would stop threads from delivering work.
 - Its `diagnosing-bugs` and `code-review` are adopted in adapted form. `code-review` is renamed `two-axis-review` so it does not shadow the built-in `/code-review`. Its `tdd` rules are folded into the existing `tdd` skill.
 
