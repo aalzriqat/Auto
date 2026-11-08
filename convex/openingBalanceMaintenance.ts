@@ -43,7 +43,7 @@ async function inspectVoid(ctx: QueryCtx, draft: Opening) {
   const source = await loadOpeningSourceIdentity(ctx, draft.orgId);
   if (source.status !== "AVAILABLE" || source.parent._id !== draft._id) refuseOpeningChange("OPENING_VOID_CONFLICT");
   const original = await ctx.db.get(draft.journalEntryId);
-  if (!original || original.status !== "POSTED" || original.reversedByJournalEntryId) refuseOpeningChange("OPENING_VOID_CONFLICT");
+  if (original?.status !== "POSTED" || original.reversedByJournalEntryId) refuseOpeningChange("OPENING_VOID_CONFLICT");
   const lines = await openingJournalLines(ctx, draft, original);
   if (!lines) refuseOpeningChange("OPENING_VOID_CONFLICT");
   const period = await getOpenPeriodForDate(ctx, draft.orgId, draft.asOfDate);
@@ -65,22 +65,24 @@ async function inspectVoid(ctx: QueryCtx, draft: Opening) {
 export const requestVoid = mutation({
   args: { orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"), reason: v.string() },
   returns: v.null(),
-  handler: async (ctx, args) => openingChangeBoundary(async () => {
+  handler: async (ctx, args) => {
+    await openingChangeBoundary(async () => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
     const { user } = await requireOpeningMaintenanceAuthority(ctx, draft);
-    if (draft.status === "VOIDED" && await verifiedOpeningVoidPair(ctx, draft)) return null;
+    if (draft.status === "VOIDED" && await verifiedOpeningVoidPair(ctx, draft)) return;
     const reason = args.reason.trim();
     if (!reason || reason.length > 500) refuseOpeningChange("OPENING_VOID_REASON");
     await inspectVoid(ctx, draft);
     // Stable identity is the posted draft. A retry cannot replace the requester
     // or reason behind a different approver's screen.
-    if (draft.voidRequest) return null;
+    if (draft.voidRequest) return;
     await ctx.db.patch(draft._id, { voidRequest: { requestedBy: user._id, requestedAt: Date.now(), reason } });
     await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "REQUEST_OPENING_VOID", resourceType: "openingBalanceDrafts",
       resourceId: String(draft._id), description: "Opening balance void requested.", after: { reason, journalEntryId: draft.journalEntryId } });
-    return null;
-  }),
+    return;
+    });
+  },
 });
 
 async function postVoidReversal(ctx: MutationCtx, draft: Opening, plan: Awaited<ReturnType<typeof inspectVoid>>, actorId: Id<"users">) {

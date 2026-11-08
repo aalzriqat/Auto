@@ -37,13 +37,13 @@ export async function assertNoOpeningVoidReferences(ctx: QueryCtx, orgId: Id<"or
     // checks these dynamic pairs; the cast does not weaken row ownership.
     const rows = await ctx.db.query(table as "receivables").withIndex(index as "by_org", q => q.eq("orgId", orgId)).take(101);
     if (rows.length > 100) refuseOpeningChange("OPENING_VOID_CONFLICT");
-    await inTurn(rows, async row => {
+    for (const row of rows) {
       bytes += new TextEncoder().encode(JSON.stringify(convexToJson(row))).byteLength;
       if (bytes > 2 * 1024 * 1024 || row.orgId !== orgId) refuseOpeningChange("OPENING_VOID_CONFLICT");
       // Opening-created rows may refer to each other. Their complete identities
       // have already been checked; anything outside that set is later history.
       if (!targetIds.has(row._id) && referencesTarget(row, targetIds)) refuseOpeningChange("OPENING_VOID_CONFLICT");
-    });
+    }
   });
   const statements = await ctx.db.query("bankStatementLines").withIndex("by_org_bankAccount", q => q.eq("orgId", orgId)).take(101);
   if (statements.length > 100 || statements.some(row => referencesTarget(row, originalLineIds))) refuseOpeningChange("OPENING_VOID_CONFLICT");
