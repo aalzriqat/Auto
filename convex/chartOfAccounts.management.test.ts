@@ -28,6 +28,75 @@ async function fixture() {
   return { t, ...finance };
 }
 
+// SCRUM-932 F1: account identity must be enforced at the public write doors.
+test.each(["", "   "])("empty account code %j is refused", async (code) => {
+  const { orgId, identity } = await fixture();
+  await expect(
+    identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+  ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_INVALID" } });
+  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+});
+
+test.each(["2500 ", "٢٥٠٠", "۲۵۰۰"])(
+  "canonical duplicate account code %j is refused",
+  async (code) => {
+    const { orgId, identity } = await fixture();
+    await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_EXISTS" } });
+    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toMatchObject([
+      { code: "2500", name: "Partner Payables" },
+    ]);
+  },
+);
+
+test.each([" 2600 ", "٢٦٠٠", "۲۶۰۰"])(
+  "account code %j is stored as canonical ASCII",
+  async (code) => {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId, ...account, code,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code: "2600" });
+  },
+);
+
+test.each(["", "   "])("blank account name %j is refused on create", async (name) => {
+  const { orgId, identity } = await fixture();
+  await expect(
+    identity.mutation(api.chartOfAccounts.create, { orgId, ...account, name }),
+  ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+});
+
+test.each([
+  [false, ""], [false, "   "], [true, ""], [true, "   "],
+] as const)("system=%s account refuses blank name %j on update", async (system, name) => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  if (system) {
+    await t.run((ctx) => ctx.db.patch(accountId, { systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" }));
+  }
+  const before = await t.run((ctx) => ctx.db.get(accountId));
+  await expect(
+    identity.mutation(api.chartOfAccounts.update, { orgId, accountId, name }),
+  ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toEqual(before);
+});
+
+test("valid account names are stored trimmed on create and update", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, name: "  Partner Payables  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ name: "Partner Payables" });
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId, accountId, name: "  Service Provider Payables  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ name: "Service Provider Payables" });
+});
+
 test("duplicate account codes are refused with a localized code, including inactive accounts", async () => {
   const { t, orgId, identity } = await fixture();
   const accountId = await identity.mutation(api.chartOfAccounts.create, {
