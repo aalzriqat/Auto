@@ -19,7 +19,7 @@ An ADR is written in two cases:
 - **`GLOSSARY-MAP.md`** at the repo root if it exists: it points at one `GLOSSARY.md` per context. Read each one relevant to the topic.
 - **`docs/adr/`**: read ADRs that touch the area you're about to work in. In multi-context repos, also check `src/<context>/docs/adr/` for context-scoped decisions.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence or suggest creating them upfront. Record new domain decisions only in the two cases in "Who writes the glossary and ADRs" above, under the existing repository review gates.
+If any of these files don't exist, **proceed silently**. Don't flag their absence or suggest creating them upfront. A skill records a new decision as an ADR only in the two cases in "Who writes the glossary and ADRs" above. Other authorized work, such as a CI or release change, may also add an ADR. The existing repository review gates apply to every ADR.
 
 ## File structure
 
