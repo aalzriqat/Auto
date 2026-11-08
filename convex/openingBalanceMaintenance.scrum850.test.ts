@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id, TableNames } from "./_generated/dataModel";
 import schema from "./schema";
 import { inTurn } from "./utils/transactionReadHeadroom";
+import { restoreOpeningAllocation, buildOpeningAllocationPayload } from "../components/accounting/setup/openingAllocationForm";
 
 // Real registered-function references allow the failing-first commit to compile
 // before these public commands exist. No handler or business helper is mocked.
@@ -94,6 +95,108 @@ async function fixture(allFamilies = false) {
   return { t, owner, reviewer, employee, ...ids, period, asOfDate, account, payload };
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
+
+test("SCRUM-850 R1 unchanged large allocation survives registered edit approval and posting", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const amountMinor = 9_007_199_254_740_812;
+  const input: OpeningInput = { ...s.payload, lines: [
+    { accountId: s.account("EMPLOYEE_ADVANCES"), debitMinor: amountMinor, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: amountMinor },
+  ], allocations: [{ kind: "EMPLOYEE_ADVANCE", rowKey: "large", accountId: s.account("EMPLOYEE_ADVANCES"), userId: s.employeeId, amountMinor }] };
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, input);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft?.allocations) throw new Error("Missing draft");
+  const allocations = buildOpeningAllocationPayload(draft.allocations.map(row => restoreOpeningAllocation(row, "JOD")), "JOD");
+  expect(allocations?.[0].amountMinor).toBe(9_007_199_254_740_812);
+  await s.owner.mutation(edit, { ...input, draftId: draft._id, allocations: allocations ?? undefined });
+  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  const lines = await s.t.run(ctx => ctx.db.query("journalLines").collect());
+  expect(lines.map(row => [row.debitMinor, row.creditMinor])).toEqual([[9_007_199_254_740_812, 0], [0, 9_007_199_254_740_812]]);
+}));
+
+async function reconciliationReaders(s: Seed) {
+  return {
+    advances: await s.owner.query(api.accountingReports.employeeAdvancesReconciliation, { orgId: s.orgId }),
+    recoverables: await s.owner.query(api.accountingReports.supplierRecoverablesReconciliation, { orgId: s.orgId }),
+    receivables: await s.owner.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId }),
+    warnings: (await s.owner.query(api.accountingPeriods.closeChecklist, { orgId: s.orgId, periodId: s.period._id })).warnings,
+  };
+}
+
+test("SCRUM-850 F1 verified void and reentry preserve all three reconciliations and checklist warnings", async () => withFrozenScheduler(async () => {
+  const s = await fixture(true);
+  const draftId = await posted(s);
+  const control = await reconciliationReaders(s);
+  for (const result of [control.advances, control.recoverables, control.receivables]) expect(result).toMatchObject({ status: "AVAILABLE", isReconciled: true });
+  await request(s, draftId);
+  await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
+  await posted(s);
+  expect(await reconciliationReaders(s)).toEqual(control);
+}));
+
+test("SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations", async () => withFrozenScheduler(async () => {
+  const s = await fixture(true);
+  const draftId = await posted(s);
+  await request(s, draftId);
+  const { reversalJournalId } = await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
+  await posted(s);
+  await s.t.run(async ctx => {
+    const line = await ctx.db.query("journalLines").withIndex("by_journal_entry", q => q.eq("journalEntryId", reversalJournalId)).first();
+    if (!line) throw new Error("Missing reversal line");
+    await ctx.db.patch(line._id, { creditMinor: line.creditMinor + 1 });
+  });
+  const actual = await reconciliationReaders(s);
+  for (const result of [actual.advances, actual.recoverables, actual.receivables]) expect(result.status).toBe("UNAVAILABLE");
+}));
+
+const reviewedApprove = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; expectedVersion: number }, { journalId: string }>("accountingCutover:approveOpeningBalance");
+const reviewedReject = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; expectedVersion: number; rejectionReason: string }, null>("accountingCutover:rejectOpeningBalanceDraft");
+
+test("SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing draft");
+  await s.owner.mutation(edit, { ...s.payload, draftId: draft._id, memo: "Changed after review" });
+  const before = await entireDatabase(s);
+  await expect(s.reviewer.mutation(reviewedApprove, { orgId: s.orgId, draftId: draft._id, expectedVersion: 0 })).rejects.toThrow(/OPENING_DRAFT_CHANGED/);
+  expect(await entireDatabase(s)).toEqual(before);
+  expect(await s.t.run(ctx => ctx.db.get(draft._id))).toMatchObject({ status: "PENDING_APPROVAL" });
+  expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual([]);
+  const pending = await s.reviewer.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: s.orgId });
+  expect(pending[0]).toMatchObject({ version: 1, memo: "Changed after review" });
+  await s.reviewer.mutation(reviewedApprove, { orgId: s.orgId, draftId: draft._id, expectedVersion: 1 });
+  expect(await s.t.run(ctx => ctx.db.get(draft._id))).toMatchObject({ status: "POSTED" });
+}));
+
+test("SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing draft");
+  await s.owner.mutation(edit, { ...s.payload, draftId: draft._id, memo: "Changed after review" });
+  const before = await entireDatabase(s);
+  await expect(s.reviewer.mutation(reviewedReject, { orgId: s.orgId, draftId: draft._id, expectedVersion: 0, rejectionReason: "Old decision" })).rejects.toThrow(/OPENING_DRAFT_CHANGED/);
+  expect(await entireDatabase(s)).toEqual(before);
+  await s.reviewer.mutation(reviewedReject, { orgId: s.orgId, draftId: draft._id, expectedVersion: 1, rejectionReason: "Current decision" });
+  expect(await s.t.run(ctx => ctx.db.get(draft._id))).toMatchObject({ status: "REJECTED", rejectionReason: "Current decision" });
+}));
+
+test.each(["approve", "reject"] as const)("SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing", async decision => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing draft");
+  const legacyApprove = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts"> }, unknown>("accountingCutover:approveOpeningBalance");
+  const legacyReject = makeFunctionReference<"mutation", { orgId: Id<"organizations">; draftId: Id<"openingBalanceDrafts">; rejectionReason: string }, unknown>("accountingCutover:rejectOpeningBalanceDraft");
+  await s.owner.mutation(edit, { ...s.payload, draftId: draft._id, memo: "Unseen replacement" });
+  const before = await entireDatabase(s);
+  const result = decision === "approve"
+    ? s.reviewer.mutation(legacyApprove, { orgId: s.orgId, draftId: draft._id })
+    : s.reviewer.mutation(legacyReject, { orgId: s.orgId, draftId: draft._id, rejectionReason: "Legacy" });
+  await expect(result).rejects.toThrow();
+  expect(await entireDatabase(s)).toEqual(before);
+}));
 
 async function entireDatabase(s: Seed) {
   return s.t.run(async (ctx) => {

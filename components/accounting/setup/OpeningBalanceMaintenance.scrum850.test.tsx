@@ -4,6 +4,7 @@ import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { OpeningBalanceCard } from "./OpeningBalanceCard";
 
 const boundary = vi.hoisted(() => ({
+  amountMinor: 200_003,
   mode: "edit" as "edit" | "request" | "approve" | "unavailable",
   calls: {
     edit: vi.fn(), request: vi.fn(), approve: vi.fn(), direct: vi.fn(), draft: vi.fn(),
@@ -25,8 +26,8 @@ vi.mock("convex/react", async () => {
         return { canRequestVoid: boundary.mode === "request", canApproveVoid: boundary.mode === "approve", postedDraftId: "posted-s850",
           voidReason: boundary.mode === "approve" ? "Synthetic documented reason" : null,
           editable: boundary.mode === "edit" ? { _id: "pending-s850", currency: "JOD", asOfDate: Date.UTC(2026, 0, 1), memo: "Original memo", allocations: [], lines: [
-            { accountId: "cash-s850", debitMinor: 200_003, creditMinor: 0, description: "Preserved description" },
-            { accountId: "retained-s850", debitMinor: 0, creditMinor: 200_003 },
+            { accountId: "cash-s850", debitMinor: boundary.amountMinor, creditMinor: 0, description: "Preserved description" },
+            { accountId: "retained-s850", debitMinor: 0, creditMinor: boundary.amountMinor },
           ] } : null };
       }
       if (name === "chartOfAccounts:list") return [
@@ -55,9 +56,23 @@ vi.mock("convex/react", async () => {
 vi.mock("@/components/ui/sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 beforeEach(() => {
+  boundary.amountMinor = 200_003;
   vi.clearAllMocks();
   Object.values(boundary.calls).forEach(call => call.mockResolvedValue(null));
   vi.stubGlobal("confirm", vi.fn(() => true));
+});
+
+test("SCRUM-850 R1 unchanged large draft saves the original exact minor units and empty zero sides", async () => {
+  boundary.amountMinor = 9_007_199_254_740_991;
+  show("en", "edit");
+  fireEvent.click(screen.getByRole("button", { name: "Edit draft" }));
+  expect((screen.getAllByPlaceholderText("Debit")[1] as HTMLInputElement).value).toBe("");
+  expect((screen.getAllByPlaceholderText("Credit")[0] as HTMLInputElement).value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Save changes for approval" }));
+  await waitFor(() => expect(boundary.calls.edit).toHaveBeenCalledWith(expect.objectContaining({ lines: [
+    { accountId: "cash-s850", debitMinor: 9_007_199_254_740_991, creditMinor: 0, description: "Preserved description" },
+    { accountId: "retained-s850", debitMinor: 0, creditMinor: 9_007_199_254_740_991, description: undefined },
+  ] })));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 function show(locale: "en" | "ar", mode: typeof boundary.mode) {
