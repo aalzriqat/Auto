@@ -1,19 +1,20 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "5ae8c111e9207ff003892de3a112632f871dc008",
+  "sourceCommit": "95ffa13e91e9c619336ac9d4274c560d3b132121",
   "sizeCeilings": {
-    "app/(dashboard)/[orgId]/commissions/page.tsx": 868,
-    "app/(dashboard)/[orgId]/dashboard/page.tsx": 922,
-    "app/(dashboard)/[orgId]/leads/page.tsx": 1169,
-    "app/(dashboard)/[orgId]/payroll/page.tsx": 712,
-    "app/(dashboard)/[orgId]/reports/page.tsx": 1055,
+    "app/(dashboard)/[orgId]/commissions/page.tsx": 1204,
+    "app/(dashboard)/[orgId]/dashboard/page.tsx": 950,
+    "app/(dashboard)/[orgId]/leads/page.tsx": 1185,
+    "app/(dashboard)/[orgId]/payroll/page.tsx": 951,
+    "app/(dashboard)/[orgId]/reports/page.tsx": 1349,
     "app/(dashboard)/[orgId]/settings/general/page.tsx": 609,
     "app/(dashboard)/[orgId]/settings/integrations/client.tsx": 1372,
     "app/(dashboard)/[orgId]/settings/website/page.tsx": 1099,
-    "app/(dashboard)/[orgId]/social-inbox/page.tsx": 661,
-    "app/(dashboard)/[orgId]/tasks/page.tsx": 634,
-    "app/(dashboard)/[orgId]/team/page.tsx": 662,
-    "app/(dashboard)/[orgId]/vehicles/page.tsx": 1803,
+    "app/(dashboard)/[orgId]/social-inbox/page.tsx": 658,
+    "app/(dashboard)/[orgId]/sourcing/client.tsx": 632,
+    "app/(dashboard)/[orgId]/tasks/page.tsx": 631,
+    "app/(dashboard)/[orgId]/team/page.tsx": 661,
+    "app/(dashboard)/[orgId]/vehicles/page.tsx": 1861,
     "app/dealer-site/[[...slug]]/page.tsx": 1227,
     "app/dealer-site/[[...slug]]/themes/avant-theme.tsx": 1313,
     "app/dealer-site/[[...slug]]/themes/kinetic-inventory.tsx": 840,
@@ -22,8 +23,8 @@
     "app/dealer-site/[[...slug]]/themes/velocity-theme.tsx": 1421,
     "app/marketplace/cars/page.tsx": 672,
     "apps/mobile/app/(auth)/sign-in.tsx": 604,
-    "apps/mobile/src/features/dashboard/HomePanels.tsx": 1858,
-    "apps/mobile/src/features/dashboard/OrgDashboardScreen.tsx": 862,
+    "apps/mobile/src/features/dashboard/HomePanels.tsx": 1875,
+    "apps/mobile/src/features/dashboard/OrgDashboardScreen.tsx": 874,
     "apps/mobile/src/features/marketplace/BuyerIntakePanels.tsx": 1308,
     "apps/mobile/src/features/marketplace/DealerMarketplaceScreen.tsx": 1064,
     "apps/mobile/src/features/marketplace/MarketplaceHomeScreen.tsx": 952,
@@ -31,100 +32,135 @@
     "apps/mobile/src/features/marketplace/RequestRoomScreen.tsx": 1373,
     "apps/mobile/src/features/marketplace/SellCarScreen.tsx": 731,
     "apps/mobile/src/features/workspace/CustomerDetailScreen.tsx": 878,
-    "apps/mobile/src/features/workspace/VehicleDetailScreen.tsx": 1452,
+    "apps/mobile/src/features/workspace/VehicleDetailScreen.tsx": 1893,
     "apps/mobile/src/features/workspace/modules/financeCompanies.tsx": 678,
     "apps/mobile/src/features/workspace/modules/leads.tsx": 613,
     "apps/mobile/src/features/workspace/modules/messages.tsx": 740,
-    "apps/mobile/src/features/workspace/modules/moduleShared.tsx": 1594,
-    "apps/mobile/src/features/workspace/modules/sales.tsx": 693,
-    "apps/mobile/src/features/workspace/modules/vehicles.tsx": 917,
+    "apps/mobile/src/features/workspace/modules/moduleShared.tsx": 1615,
+    "apps/mobile/src/features/workspace/modules/sales.tsx": 722,
+    "apps/mobile/src/features/workspace/modules/vehicles.tsx": 1267,
     "apps/mobile/src/features/workspace/modules/website.tsx": 769,
-    "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx": 2592,
-    "components/accounting/CollectionsTab.tsx": 2070,
-    "components/accounting/FixedAssetsTab.tsx": 722,
-    "components/accounting/GeneralLedgerTab.tsx": 743,
-    "components/accounting/PrepaidExpensesTab.tsx": 1307,
-    "components/applications/cockpit/DealCockpit.tsx": 7751,
-    "components/applications/cockpit/DealCustodyDialogs.tsx": 906,
-    "components/applications/cockpit/DealCustodyPanel.tsx": 1082,
-    "components/applications/cockpit/DealFinancialOverview.tsx": 687,
-    "components/applications/cockpit/HandoverCostsPanel.tsx": 2910,
-    "components/customers/CustomerDetailsDialog.tsx": 778,
-    "components/expenses/ExpenseDialog.tsx": 676,
+    "apps/mobile/src/features/workspace/salesWizard/SalesWizardScreen.tsx": 2619,
+    "components/accounting/CollectionsTab.tsx": 2461,
+    "components/accounting/FixedAssetsTab.tsx": 921,
+    "components/accounting/GeneralLedgerTab.tsx": 768,
+    "components/accounting/ManualJournalTab.tsx": 618,
+    "components/accounting/PartnerEquityTab.tsx": 816,
+    "components/accounting/PrepaidExpensesTab.tsx": 1402,
+    "components/accounting/collections/CashDrawerPanel.tsx": 647,
+    "components/accounting/collections/PaymentLinksPanel.tsx": 731,
+    "components/accounting/setup/OpeningAllocationEditor.tsx": 940,
+    "components/accounting/setup/OpeningBalanceApprovalPanel.tsx": 863,
+    "components/accounting/setup/OpeningBalanceCard.tsx": 879,
+    "components/applications/cockpit/DealCockpit.tsx": 9300,
+    "components/applications/cockpit/DealCustodyDialogs.tsx": 956,
+    "components/applications/cockpit/DealCustodyPanel.tsx": 1146,
+    "components/applications/cockpit/DealFinancialOverview.tsx": 734,
+    "components/applications/cockpit/DealInvoiceReceiptsPanel.tsx": 1021,
+    "components/applications/cockpit/FinanceCompanyDecisionCard.tsx": 631,
+    "components/applications/cockpit/HandoverCostsPanel.tsx": 4084,
+    "components/applications/cockpit/ResolveGapDialog.tsx": 725,
+    "components/applications/cockpit/UnwindDealDialog.tsx": 945,
+    "components/customers/CustomerDetailsDialog.tsx": 794,
+    "components/deals/DealsListView.tsx": 1171,
+    "components/deposits/QuoteDepositManager.tsx": 611,
+    "components/expenses/ExpenseDialog.tsx": 957,
     "components/import/ImportWizard.tsx": 652,
-    "components/leads/LeadDialog.tsx": 669,
+    "components/leads/LeadDialog.tsx": 689,
     "components/leads/SocialConversationDialog.tsx": 611,
     "components/marketing/home/CreativeMarketingPage.tsx": 997,
     "components/marketing/home/content.ts": 801,
-    "components/sales/QuoteDialog.tsx": 620,
-    "components/sales/SaleDialog.tsx": 887,
-    "components/sales/wizard/steps/Step1QuoteSetup.tsx": 681,
-    "components/sales/wizard/steps/Step4QuoteSuccess.tsx": 737,
+    "components/sales/QuoteDialog.tsx": 618,
+    "components/sales/SaleDialog.tsx": 888,
+    "components/sales/wizard/components/VehiclePicker.tsx": 625,
+    "components/sales/wizard/steps/Step1QuoteSetup.tsx": 811,
+    "components/sales/wizard/steps/Step4QuoteSuccess.tsx": 739,
+    "components/suppliers/management/SupplierDetailScreen.tsx": 681,
+    "components/suppliers/management/SupplierStatementSection.tsx": 614,
     "components/ui/sidebar.tsx": 724,
-    "components/vehicles/VehicleDetailsDialog.tsx": 1507,
-    "components/vehicles/VehicleDialog.tsx": 1314,
-    "components/vehicles/VehicleImportDialog.tsx": 1057,
-    "convex/accounting/postingEngine.ts": 673,
-    "convex/accounting/postingRules.ts": 4035,
-    "convex/accounting/receiptMovement.ts": 636,
+    "components/vehicles/VehicleDetailsDialog.tsx": 1909,
+    "components/vehicles/VehicleDialog.tsx": 1690,
+    "components/vehicles/VehicleImportDialog.tsx": 1235,
+    "convex/accounting/accountSnapshots.ts": 923,
+    "convex/accounting/invoiceReceiptActivation.ts": 692,
+    "convex/accounting/openingAllocations.ts": 1168,
+    "convex/accounting/postingEngine.ts": 843,
+    "convex/accounting/postingRules.ts": 4895,
+    "convex/accounting/receiptMovement.ts": 650,
     "convex/accounting/receiptOccurrence.ts": 883,
-    "convex/accounting/workflowHooks.ts": 3895,
-    "convex/accountingCutover.ts": 986,
-    "convex/accountingOutbox.ts": 2118,
-    "convex/accountingPeriods.ts": 812,
-    "convex/accountingReports.ts": 1580,
-    "convex/adminOrgs.ts": 1185,
-    "convex/adminSystem.ts": 634,
-    "convex/aggregates.ts": 1049,
-    "convex/applications.ts": 5418,
+    "convex/accounting/workflowHooks.ts": 4204,
+    "convex/accountingCutover.ts": 2356,
+    "convex/accountingOutbox.ts": 2538,
+    "convex/accountingPeriods.ts": 1043,
+    "convex/accountingReports.ts": 4616,
+    "convex/adminOrgs.ts": 1444,
+    "convex/aggregates.ts": 1060,
+    "convex/applications.ts": 6640,
     "convex/changelog.ts": 1648,
-    "convex/chartOfAccounts.ts": 1268,
-    "convex/collections.ts": 3615,
-    "convex/commitments.ts": 2836,
-    "convex/crons.ts": 856,
-    "convex/customers.ts": 825,
-    "convex/dashboard.ts": 1623,
-    "convex/dealOverview.ts": 642,
-    "convex/deposits.ts": 1223,
-    "convex/e2eBootstrap.ts": 1192,
-    "convex/email.ts": 909,
-    "convex/expenses.ts": 1059,
-    "convex/facebookEngagement.ts": 1179,
-    "convex/financeDealCosts.ts": 4573,
-    "convex/financialAudit.ts": 651,
-    "convex/financingEconomics.ts": 3314,
-    "convex/http.ts": 2000,
-    "convex/instagramEngagement.ts": 1128,
+    "convex/chartOfAccounts.ts": 1366,
+    "convex/collections.ts": 5472,
+    "convex/commitments.ts": 2944,
+    "convex/crons.ts": 1229,
+    "convex/customers.ts": 901,
+    "convex/dashboard.ts": 1769,
+    "convex/dealUnwind.ts": 1406,
+    "convex/deposits.ts": 1368,
+    "convex/e2eBootstrap.ts": 1926,
+    "convex/email.ts": 1079,
+    "convex/expenses.ts": 1442,
+    "convex/facebookEngagement.ts": 1186,
+    "convex/facebookIntegrations.ts": 823,
+    "convex/financeCompanyForward.ts": 766,
+    "convex/financeDealCosts.ts": 5318,
+    "convex/financialAudit.ts": 682,
+    "convex/financingEconomics.ts": 3856,
+    "convex/fixedAssets.ts": 872,
+    "convex/http.ts": 2050,
+    "convex/instagramEngagement.ts": 1133,
     "convex/liveChat.ts": 1194,
     "convex/marketplaceListings.ts": 1117,
-    "convex/marketplaceRequests.ts": 710,
+    "convex/marketplaceReports.ts": 885,
+    "convex/marketplaceRequests.ts": 727,
     "convex/marketplaceWhatsAppIntake.ts": 669,
-    "convex/memberships.ts": 1688,
-    "convex/paymentIntents.ts": 781,
-    "convex/payroll.ts": 1629,
-    "convex/prepaidExpenses.ts": 1646,
-    "convex/quotes.ts": 619,
-    "convex/reports.ts": 1224,
-    "convex/sales.ts": 2974,
+    "convex/memberships.ts": 1720,
+    "convex/orgFinancialReset.ts": 1128,
+    "convex/partnerEquity.ts": 601,
+    "convex/paymentIntents.ts": 1331,
+    "convex/payroll.ts": 2045,
+    "convex/prepaidExpenses.ts": 1849,
+    "convex/quotes.ts": 670,
+    "convex/reports.ts": 1750,
+    "convex/retainedCreditRefunds.ts": 602,
+    "convex/sales.ts": 3708,
     "convex/socialInbox.ts": 986,
     "convex/socialInboxBackfill.ts": 840,
-    "convex/socialIntegrations.ts": 683,
-    "convex/subledger.ts": 618,
+    "convex/socialIntegrations.ts": 765,
+    "convex/sourcingPayables.ts": 1033,
+    "convex/subledger.ts": 681,
     "convex/subscriptions.ts": 807,
-    "convex/supplierCostRecoveries.ts": 633,
+    "convex/supplierCostRecoveries.ts": 765,
+    "convex/supplierReceivables.ts": 739,
+    "convex/suppliers.ts": 1246,
     "convex/utils/commitmentKernel.ts": 617,
-    "convex/utils/custodySourceLedger.ts": 2307,
-    "convex/utils/defaultChart.ts": 839,
-    "convex/utils/depositHelpers.ts": 1168,
-    "convex/utils/financedSalePostingPlan.ts": 674,
-    "convex/utils/financedSaleRecognition.ts": 1051,
-    "convex/utils/financingEconomics.ts": 2509,
-    "convex/utils/saleCancellation.ts": 861,
-    "convex/utils/saleCompletion.ts": 2116,
-    "convex/utils/vehicleOwnership.ts": 1121,
-    "convex/vehicles.ts": 3937,
+    "convex/utils/custodySourceLedger.ts": 2333,
+    "convex/utils/dealFinancialSummary.ts": 612,
+    "convex/utils/defaultChart.ts": 856,
+    "convex/utils/depositHelpers.ts": 1350,
+    "convex/utils/financeCompanyForward.ts": 720,
+    "convex/utils/financedSalePostingPlan.ts": 1020,
+    "convex/utils/financedSaleRecognition.ts": 1466,
+    "convex/utils/financingEconomics.ts": 2908,
+    "convex/utils/reportDealFigures.ts": 689,
+    "convex/utils/saleCancellation.ts": 1061,
+    "convex/utils/saleCompletion.ts": 3250,
+    "convex/utils/supplierObligationDue.ts": 1117,
+    "convex/utils/supplierRegistry.ts": 758,
+    "convex/utils/vehicleOwnership.ts": 1248,
+    "convex/vehicleEdits.ts": 930,
+    "convex/vehicles.ts": 5569,
     "convex/websites.ts": 1704,
-    "packages/shared/src/financingEconomics.ts": 1319
+    "lib/i18n/domains/notifications.ts": 614,
+    "packages/shared/src/financingEconomics.ts": 1516
   },
   "importGrandfather": [
     {
@@ -145,12 +181,57 @@
     {
       "rule": "components-no-convex-utils",
       "from": "components/accounting/CollectionsTab.tsx",
+      "to": "convex/utils/legacyCollectionRefundContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/CollectionsTab.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/CollectionsTab.tsx",
+      "to": "convex/utils/postDeliveryDoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/FinancialReportsTab.tsx",
       "to": "convex/utils/permissions"
     },
     {
       "rule": "components-no-convex-utils",
       "from": "components/accounting/FixedAssetsTab.tsx",
       "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/GeneralLedgerTab.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/ManualJournalTab.tsx",
+      "to": "convex/utils/pilotSwitches"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/OpeningManagementSettlementPanel.tsx",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/OpeningManagementSettlementPanel.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/PartnerEquityTab.tsx",
+      "to": "convex/utils/partnerDistributionContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/PartnerEquityTab.tsx",
+      "to": "convex/utils/partnerEquityBank"
     },
     {
       "rule": "components-no-convex-utils",
@@ -169,8 +250,38 @@
     },
     {
       "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/ChartOfAccountsManagement.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/ClosePeriodReviewDialog.tsx",
+      "to": "convex/utils/closeWarnings"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/ClosePeriodReviewDialog.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/OpeningAllocationEditor.tsx",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
       "from": "components/accounting/setup/OpeningBalanceCard.tsx",
       "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/openingMoneyInput.ts",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/ChequeReturnedByBankDialog.tsx",
+      "to": "convex/utils/fcCheque"
     },
     {
       "rule": "components-no-convex-utils",
@@ -185,11 +296,41 @@
     {
       "rule": "components-no-convex-utils",
       "from": "components/applications/cockpit/DealCockpit.tsx",
+      "to": "convex/utils/dealNumberFormat"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealCockpit.tsx",
       "to": "convex/utils/financeStatuses"
     },
     {
       "rule": "components-no-convex-utils",
       "from": "components/applications/cockpit/DealCockpit.tsx",
+      "to": "convex/utils/financingEconomics"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealCockpit.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealCockpit.tsx",
+      "to": "convex/utils/rt11DoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealCustodyDialogs.tsx",
+      "to": "convex/utils/rt11DoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealCustodyPanel.tsx",
+      "to": "convex/utils/rt11DoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/DealInvoiceReceiptsPanel.tsx",
       "to": "convex/utils/permissions"
     },
     {
@@ -199,13 +340,38 @@
     },
     {
       "rule": "components-no-convex-utils",
+      "from": "components/applications/cockpit/SupplierSettlementDialog.tsx",
+      "to": "convex/utils/supplierSettlementContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
       "from": "components/applications/settlementDenomination.ts",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/commissions/DealCommissionLinesDialog.tsx",
+      "to": "convex/utils/dealCommissionLines"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/commissions/DealCommissionsRow.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/commissions/OpeningCommissionLiabilitiesPanel.tsx",
       "to": "convex/utils/money"
     },
     {
       "rule": "components-no-convex-utils",
       "from": "components/customers/CustomerDetailsDialog.tsx",
       "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/deals/DealsListView.tsx",
+      "to": "convex/utils/dealNumberFormat"
     },
     {
       "rule": "components-no-convex-utils",
@@ -240,6 +406,11 @@
     {
       "rule": "components-no-convex-utils",
       "from": "components/sales/wizard/components/RecordDepositDialog.tsx",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/sales/wizard/components/RecordDepositDialog.tsx",
       "to": "convex/utils/permissions"
     },
     {
@@ -259,6 +430,11 @@
     },
     {
       "rule": "components-no-convex-utils",
+      "from": "components/search/GlobalSearchModal.tsx",
+      "to": "convex/utils/dealNumberFormat"
+    },
+    {
+      "rule": "components-no-convex-utils",
       "from": "components/sourcing/SupplierCostRecoveriesSection.tsx",
       "to": "convex/utils/money"
     },
@@ -269,8 +445,58 @@
     },
     {
       "rule": "components-no-convex-utils",
+      "from": "components/sourcing/SupplierPaymentDialog.tsx",
+      "to": "convex/utils/supplierSettlementContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/SupplierSelect.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierBalancesScreen.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierBalancesScreen.tsx",
+      "to": "convex/utils/supplierDueDates"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierDetailScreen.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierListScreen.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierStatementSection.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierStatementSection.tsx",
+      "to": "convex/utils/supplierDueDates"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/suppliers/management/SupplierSummaryTiles.tsx",
+      "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
       "from": "components/team/RolePermissionsEditor.tsx",
       "to": "convex/utils/permissions"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/vehicles/ApprovalOwnershipChooser.tsx",
+      "to": "convex/utils/vehicleSourceShape"
     },
     {
       "rule": "components-no-convex-utils",
@@ -279,8 +505,23 @@
     },
     {
       "rule": "components-no-convex-utils",
+      "from": "components/vehicles/VehicleDetailsDialog.tsx",
+      "to": "convex/utils/rt11DoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/vehicles/VehicleDialog.tsx",
+      "to": "convex/utils/rt11DoorContainment"
+    },
+    {
+      "rule": "components-no-convex-utils",
       "from": "components/vehicles/VehicleImportDialog.tsx",
       "to": "convex/utils/importLimits"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/vehicles/VehicleImportDialog.tsx",
+      "to": "convex/utils/permissions"
     },
     {
       "rule": "components-no-convex-utils",
