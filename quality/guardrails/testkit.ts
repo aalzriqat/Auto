@@ -34,7 +34,6 @@ export interface FixtureConfig {
   exemptions: Entry[];
   generated: Entry[];
   migrations: Entry[];
-  nonDoors: Entry[];
 }
 export interface Grandfather {
   rule: string;
@@ -81,7 +80,6 @@ export function baseConfig(): FixtureConfig {
     exemptions: [{ path: "convex/data.ts", reason }],
     generated: [{ path: "convex/_generated/server.ts", reason }],
     migrations: [{ path: "convex/migrateOld.ts", reason }],
-    nonDoors: [{ path: "convex/schema.ts", reason }],
   };
 }
 
@@ -126,7 +124,6 @@ const FIXTURE_POLICY = {
   maxLines: 600,
   productionRoots: ["components/", "convex/"],
   extensions: [".ts", ".tsx"],
-  nonDoors: ["convex/schema.ts"],
 };
 
 export function bootstrapCheck(root: string) {

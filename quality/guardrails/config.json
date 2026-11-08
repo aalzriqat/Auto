@@ -124,11 +124,5 @@
       "path": "convex/seedDocuments.ts",
       "reason": "Seed data for document templates; data, not feature code."
     }
-  ],
-  "nonDoors": [
-    {
-      "path": "convex/schema.ts",
-      "reason": "Table definitions only — no Convex functions, so it is not a door."
-    }
   ]
 }

@@ -11,15 +11,15 @@ export const BASELINE_PATH = "quality/guardrails/baseline.json";
 /**
  * The owner-approved policy (SCRUM-418) that the FIRST guardrail PR is
  * held to. On bootstrap the target has no config yet, so the PR's own config is
- * the only candidate; it may be tighter than this, never looser. `nonDoors` is
- * the reviewed set of top-level Convex modules that export no functions — path
- * shape alone cannot prove that.
+ * the only candidate; it may be tighter than this, never looser.
+ *
+ * These values deliberately duplicate config.json: this copy is the bootstrap
+ * trust anchor, so the first PR cannot loosen its own policy.
  */
 export const BOOTSTRAP_POLICY = Object.freeze({
   maxLines: 600,
   productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
   extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
-  nonDoors: ["convex/schema.ts"],
 });
 
 /** Migration/seed modules whose names predate the `convex/migrate*` convention. */
@@ -73,9 +73,8 @@ const CONFIG_KEYS = [
   "exemptions",
   "generated",
   "migrations",
-  "nonDoors",
 ];
-export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations", "nonDoors"];
+export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations"];
 
 function assertKeys(doc, allowed, label) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
@@ -186,7 +185,6 @@ const TEST_LIKE = [
 ];
 const GENERATED_DIR = "convex/_generated/";
 const MIGRATION_FILE = /^convex\/migrate[^/]*\.[cm]?[jt]s$/u;
-const TOP_LEVEL_CONVEX_MODULE = /^convex\/[^/]+\.[cm]?[jt]sx?$/u;
 
 export function isTestLike(repoPath) {
   return TEST_LIKE.some((pattern) => pattern.test(repoPath));
@@ -497,11 +495,6 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
       errors.push(`UNDISCOVERED-MIGRATION ${entry.path}: not a convex/migrate* file or a pinned legacy migration`);
     }
   }
-  for (const entry of proposed.config.nonDoors) {
-    if (!TOP_LEVEL_CONVEX_MODULE.test(entry.path)) {
-      errors.push(`INVALID-NONDOOR ${entry.path}: only a top-level convex/<module> can be a door`);
-    }
-  }
   const pMax = proposed.config.maxLines;
   for (const [filePath, lines] of counts) {
     if (lines <= pMax || classify(filePath, proposed.config) !== "production") continue;
@@ -552,11 +545,6 @@ function bootstrapChecks(proposed, measured, policy, errors) {
       } else if (!measured.unchangedFromTarget?.has(entry.path)) {
         errors.push(`BOOTSTRAP-CHANGED-ALLOWANCE ${listName}: "${entry.path}" differs from the target`);
       }
-    }
-  }
-  for (const entry of p.nonDoors) {
-    if (!policy.nonDoors.includes(entry.path)) {
-      errors.push(`BOOTSTRAP-POLICY nonDoors: "${entry.path}" is not a pinned reviewed non-door`);
     }
   }
 }

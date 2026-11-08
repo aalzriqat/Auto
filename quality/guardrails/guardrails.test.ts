@@ -313,12 +313,10 @@ describe("enumerated lists against independent discovery", () => {
     const config = baseConfig();
     config.generated.push({ path: "convex/applications.ts", reason: "not actually generated code" });
     config.migrations.push({ path: "convex/utils/money.ts", reason: "not actually a migration file" });
-    config.nonDoors.push({ path: "convex/utils/money.ts", reason: "not a top-level convex module" });
     writeConfig(root, config);
     const result = await check(root);
     expectFailure(result.errors, /^UNDISCOVERED-GENERATED convex\/applications\.ts/);
     expectFailure(result.errors, /^UNDISCOVERED-MIGRATION convex\/utils\/money\.ts/);
-    expectFailure(result.errors, /^INVALID-NONDOOR convex\/utils\/money\.ts/);
   }, TIMEOUT);
 });
 
@@ -362,7 +360,6 @@ describe("bootstrap", () => {
       maxLines: 600,
       productionRoots: ["app/", "apps/", "components/", "convex/", "dealer-worker/src/", "hooks/", "lib/", "packages/"],
       extensions: [".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"],
-      nonDoors: ["convex/schema.ts"],
     });
   });
 
@@ -414,19 +411,6 @@ describe("bootstrap", () => {
     await writeBaseline(root, target, "main");
     const result = await bootstrapCheck(root);
     expectFailure(result.errors, /^BOOTSTRAP-CHANGED-ALLOWANCE exemptions: "convex\/big\.ts" differs from the target/);
-  }, TIMEOUT);
-
-  test("negative control: bootstrap nonDoors are the pinned reviewed set", async () => {
-    const root = fixtureRepo({ withGuardrails: false });
-    const target = git(root, "rev-parse", "HEAD");
-    const config = baseConfig();
-    config.nonDoors.push({ path: "convex/applications.ts", reason: "a real door mislabelled as a non-door" });
-    writeConfig(root, config);
-    await writeBaseline(root, target, "main");
-    const result = await bootstrapCheck(root);
-    expect(result.errors).toEqual([
-      'BOOTSTRAP-POLICY nonDoors: "convex/applications.ts" is not a pinned reviewed non-door',
-    ]);
   }, TIMEOUT);
 
   test("negative control: bootstrap from an older commit cannot carry a ceiling above the target's size", async () => {

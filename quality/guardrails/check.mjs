@@ -314,8 +314,7 @@ function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
 /**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
  *   log?: (message: string) => void,
- *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[],
- *     nonDoors: string[] } }} options
+ *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[] } }} options
  */
 export async function runGuardrails({ cwd, env = process.env, base, log = () => {}, bootstrapPolicy }) {
   const baseRef = resolveBaseRef(env, base);
