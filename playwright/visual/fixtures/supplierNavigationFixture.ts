@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { LanguageProvider } from "../../../components/providers/LanguageProvider";
 import { SupplierCreateDialog } from "../../../components/suppliers/management/SupplierCreateDialog";
@@ -18,10 +18,12 @@ function RouteFixture({ path, setPath }: Readonly<{ path: string; setPath: (path
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [mode, setPath]);
-  if (path === "/suppliers") return <p>Supplier list reached</p>;
-  if (path === "/org/suppliers/created" || path === "/org/suppliers/existing") return <p>Supplier statement reached</p>;
+  if (path === "/suppliers") return createElement("p", null, "Supplier list reached");
+  if (path === "/org/suppliers/created" || path === "/org/suppliers/existing") return createElement("p", null, "Supplier statement reached");
   const orgId = "org" as Id<"organizations">;
-  return mode === "create" ? <SupplierCreateDialog orgId={orgId} open={open} onOpenChange={setOpen} /> : <SupplierDetailScreen orgId={orgId} supplierId={"supplier" as Id<"suppliers">} />;
+  return mode === "create"
+    ? createElement(SupplierCreateDialog, { orgId, open, onOpenChange: setOpen })
+    : createElement(SupplierDetailScreen, { orgId, supplierId: "supplier" as Id<"suppliers"> });
 }
 
 function RouterFixture() {
@@ -32,9 +34,15 @@ function RouterFixture() {
     push: href => { history.pushState(history.state, "", href); setPath(new URL(href, location.href).pathname); },
     replace: href => { history.replaceState(history.state, "", href); setPath(new URL(href, location.href).pathname); },
   }), []);
-  return <AppRouterContext.Provider value={router}><NavigationGuardProvider><LanguageProvider><RouteFixture path={path} setPath={setPath} /></LanguageProvider></NavigationGuardProvider></AppRouterContext.Provider>;
+  return createElement(AppRouterContext.Provider, { value: router },
+    createElement(NavigationGuardProvider, null,
+      createElement(LanguageProvider, null,
+        createElement(RouteFixture, { path, setPath }),
+      ),
+    ),
+  );
 }
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Fixture root unavailable");
-createRoot(root).render(<RouterFixture />);
+createRoot(root).render(createElement(RouterFixture));

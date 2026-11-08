@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { createElement, type ReactNode } from "react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
 
@@ -16,4 +16,4 @@ export function useMutation() { return (args: Record<string, unknown>) => {
   return Promise.resolve({ supplierId: "created", version: 1, revision: 2 });
 }; }
 export function usePermissions() { return { isLoading: false, hasPermission: (permission: string) => ["view:finance", "manage:finance"].includes(permission) }; }
-export default function Link({ href, children, ...props }: Readonly<{ href: string; children: ReactNode }>) { return <a href={href} {...props}>{children}</a>; }
+export default function Link({ href, children, ...props }: Readonly<{ href: string; children: ReactNode }>) { return createElement("a", { href, ...props }, children); }
