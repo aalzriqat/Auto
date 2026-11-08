@@ -1,0 +1,125 @@
+{
+  "id": "coa-custom-liabilities-opening-approval",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.initialize",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "codes": [
+          "2500",
+          "2510"
+        ],
+        "type": "LIABILITY",
+        "normalBalance": "CREDIT"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "code": "2500",
+        "active": false
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "allocationKind": "OTHER_PAYABLE",
+        "inactive": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "code": "2500",
+        "active": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "allocationKind": "OTHER_PAYABLE",
+        "amountsMinor": [
+          100000,
+          50000
+        ],
+        "currency": "JOD"
+      }
+    },
+    {
+      "actor": {
+        "role": "separate-finance-approver",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "seeded2500and2510",
+      "value": false
+    },
+    {
+      "observable": "inactiveDraft",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "approvedDraft.status",
+      "value": "POSTED"
+    },
+    {
+      "observable": "payables.amountDue",
+      "value": [
+        100,
+        50
+      ]
+    }
+  ],
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "553f4e856bcd17dace9031ac8bd48e08007abcf990804d36e52f5b1787d5356d"
+}

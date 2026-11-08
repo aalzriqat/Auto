@@ -10,6 +10,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey, SYSTEM_KEYS } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
+import { NORMAL_BALANCE_BY_ACCOUNT_TYPE } from "../lib/accounting/accountNormalBalance";
 
 const accountTypeValidator = v.union(
   v.literal("ASSET"),
@@ -801,6 +802,13 @@ export const repairMissingSystemAccounts = mutation({
   },
 });
 
+function normalizeAccountCode(code: string): string {
+  // Normalize Arabic keyboard digits rather than refuse them, so stored codes have one canonical form.
+  return code.trim()
+    .replace(/[\u0660-\u0669]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
+}
+
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -819,12 +827,39 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
+    if (args.normalBalance !== NORMAL_BALANCE_BY_ACCOUNT_TYPE[args.type]) {
+      throw new ConvexError({
+        code: "NORMAL_BALANCE_MISMATCH",
+        message: "The normal balance must match the account type.",
+      });
+    }
+
+    const code = normalizeAccountCode(args.code);
+    // Codes allow only ASCII letters, digits, dot and hyphen after normalization.
+    // Reject every other character rather than enumerate invisible Unicode lookalikes.
+    if (!/^[A-Za-z0-9.-]+$/.test(code)) {
+      throw new ConvexError({
+        code: "ACCOUNT_CODE_INVALID",
+        message: "Enter an account code using only English letters, digits, dots and hyphens.",
+      });
+    }
+    const name = args.name.trim();
+    if (!name) {
+      throw new ConvexError({
+        code: "ACCOUNT_NAME_REQUIRED",
+        message: "Enter an English account name.",
+      });
+    }
+
     const existing = await ctx.db
       .query("chartOfAccounts")
-      .withIndex("by_org_code", (q) => q.eq("orgId", args.orgId).eq("code", args.code))
+      .withIndex("by_org_code", (q) => q.eq("orgId", args.orgId).eq("code", code))
       .unique();
     if (existing) {
-      throw new ConvexError(`Account code "${args.code}" already exists in this organization.`);
+      throw new ConvexError({
+        code: "ACCOUNT_CODE_EXISTS",
+        message: "This account code already exists in this organization.",
+      });
     }
 
     if (args.parentAccountId) {
@@ -837,9 +872,9 @@ export const create = mutation({
     const now = Date.now();
     return await ctx.db.insert("chartOfAccounts", {
       orgId: args.orgId,
-      code: args.code,
-      name: args.name,
-      nameAr: args.nameAr,
+      code,
+      name,
+      nameAr: args.nameAr?.trim() || undefined,
       type: args.type,
       subtype: args.subtype,
       normalBalance: args.normalBalance,
@@ -881,11 +916,19 @@ export const update = mutation({
       throw new ConvexError("The bank control account cannot allow manual posting because manual journals cannot identify a physical bank.");
     }
 
+    const name = args.name?.trim();
+    if (name !== undefined && !name) {
+      throw new ConvexError({
+        code: "ACCOUNT_NAME_REQUIRED",
+        message: "Enter an English account name.",
+      });
+    }
+
     await ctx.db.patch(args.accountId, {
       updatedAt: Date.now(),
       updatedBy: user._id,
-      ...(args.name !== undefined ? { name: args.name } : {}),
-      ...(args.nameAr !== undefined ? { nameAr: args.nameAr } : {}),
+      ...(name !== undefined ? { name } : {}),
+      ...(args.nameAr !== undefined ? { nameAr: args.nameAr.trim() || undefined } : {}),
       ...(args.allowManualPosting !== undefined ? { allowManualPosting: args.allowManualPosting } : {}),
       ...(args.active !== undefined ? { active: args.active } : {}),
       ...(args.currencyRestriction !== undefined ? { currencyRestriction: args.currencyRestriction } : {}),

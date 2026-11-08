@@ -1,0 +1,98 @@
+{
+  "id": "coa-arabic-name-trimmed-create",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        },
+        "nameAr": {
+          "unicodeCodePoints": [
+            32,
+            32,
+            1584,
+            1605,
+            1605,
+            32,
+            1575,
+            1604,
+            1588,
+            1585,
+            1603,
+            1575,
+            1569,
+            32,
+            32
+          ]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "storedAccount.nameAr",
+      "value": {
+        "unicodeCodePoints": [
+          1584,
+          1605,
+          1605,
+          32,
+          1575,
+          1604,
+          1588,
+          1585,
+          1603,
+          1575,
+          1569
+        ]
+      }
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "c08c8f39959b92446313fa5bfcfe9e865bf2ef33"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-round4-account-identity",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "Arabic account names are trimmed on create"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "59166c59a218bab76eef0c0be8bc46c6f6fb8dec379ff6dce579772a2989e5a9"
+}

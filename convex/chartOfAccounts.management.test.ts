@@ -1,0 +1,516 @@
+import { expect, test } from "vitest";
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import { seedOrgWithMember } from "../test-utils/seedOrg";
+import { api } from "./_generated/api";
+import schema from "./schema";
+import { PERMISSIONS } from "./utils/permissions";
+
+const modules = import.meta.glob("./**/*.ts");
+const grants = [
+  PERMISSIONS.MANAGE_FINANCE,
+  PERMISSIONS.VIEW_FINANCE,
+  PERMISSIONS.VIEW_COST_PRICE,
+];
+const account = {
+  code: "2500",
+  name: "Partner Payables",
+  nameAr: "ذمم الشركاء",
+  type: "LIABILITY",
+  normalBalance: "CREDIT",
+} as const;
+
+async function fixture() {
+  const t = convexTestWithComponents(schema, modules);
+  const finance = await seedOrgWithMember(t, {
+    clerkId: "coa-finance",
+    permissions: grants,
+  });
+  return { t, ...finance };
+}
+
+async function expectNormalBalanceMismatch(type: "LIABILITY" | "ASSET", normalBalance: "DEBIT" | "CREDIT") {
+  const { t, orgId, identity } = await fixture();
+  await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  const before = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
+  const refusal = identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, code: "2599", type, normalBalance,
+  });
+  await expect(refusal).rejects.toMatchObject({ data: { code: "NORMAL_BALANCE_MISMATCH" } });
+  const after = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
+  expect(after).toHaveLength(before.length);
+  expect(after).toEqual(before);
+}
+
+test("create LIABILITY with DEBIT is refused without writing accounts", async () => {
+  await expectNormalBalanceMismatch("LIABILITY", "DEBIT");
+});
+
+test("create ASSET with CREDIT is refused without writing accounts", async () => {
+  await expectNormalBalanceMismatch("ASSET", "CREDIT");
+});
+
+test("every account type creates with its normal balance", async () => {
+  const { t, orgId, identity } = await fixture();
+  const pairs = [
+    ["ASSET", "DEBIT"],
+    ["LIABILITY", "CREDIT"],
+    ["EQUITY", "CREDIT"],
+    ["REVENUE", "CREDIT"],
+    ["COGS", "DEBIT"],
+    ["EXPENSE", "DEBIT"],
+    ["OTHER_INCOME", "CREDIT"],
+    ["OTHER_EXPENSE", "DEBIT"],
+  ] as const;
+  for (const [type, normalBalance] of pairs) {
+    const code = type === "LIABILITY" ? "2500" : `CUSTOM-${type.replaceAll("_", "-")}`;
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId, ...account, code, type, normalBalance,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({
+      orgId, code, type, normalBalance, name: "Partner Payables",
+    });
+  }
+});
+
+async function expectInvalidAccountCode(code: string) {
+  const { orgId, identity } = await fixture();
+  await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  const before = await identity.query(api.chartOfAccounts.list, { orgId });
+  await expect(
+    identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+  ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_INVALID" } });
+  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual(before);
+}
+
+test("account codes containing a right-to-left mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u200F");
+});
+
+test("account codes containing a zero-width space are refused", async () => {
+  await expectInvalidAccountCode("\u200B2500");
+});
+
+test("account codes containing internal spaces are refused", async () => {
+  await expectInvalidAccountCode("25 00");
+});
+
+test("account codes containing an Arabic letter mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u061C");
+});
+
+test("account codes containing a left-to-right mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u200E");
+});
+
+test("account codes outside ASCII letters digits dot and hyphen are refused", async () => {
+  for (const code of ["25\u200C00", "25\u200D00", "25\t00", "25\n00", "25_00", "25/00", "حساب", "２５００"]) {
+    await expectInvalidAccountCode(code);
+  }
+});
+
+test("numeric dotted and hyphenated ASCII account codes can be created", async () => {
+  const { t, orgId, identity } = await fixture();
+  for (const code of ["2500", "2500.10", "AR-01", "ar-02"]) {
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId, ...account, code,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code });
+  }
+});
+
+test("Arabic account names are trimmed on create", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, nameAr: "  ذمم الشركاء  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم الشركاء" });
+});
+
+test("blank Arabic account names are omitted on create", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, nameAr: "   ",
+  });
+  expect((await t.run((ctx) => ctx.db.get(accountId)))?.nameAr).toBeUndefined();
+});
+
+test("Arabic account names are trimmed on update and preserved when omitted", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId, accountId, nameAr: "  ذمم مقدمي الخدمات  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم مقدمي الخدمات" });
+  await identity.mutation(api.chartOfAccounts.update, { orgId, accountId, active: false });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم مقدمي الخدمات" });
+});
+
+test("blank Arabic account names clear the stored name on update", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  await identity.mutation(api.chartOfAccounts.update, { orgId, accountId, nameAr: "   " });
+  expect((await t.run((ctx) => ctx.db.get(accountId)))?.nameAr).toBeUndefined();
+});
+
+// SCRUM-932 F1: account identity must be enforced at the public write doors.
+// One registration per scenario lets the regression runner select every case.
+test("empty account codes are refused without creating accounts", async () => {
+  for (const code of ["", "   "]) {
+    const { orgId, identity } = await fixture();
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_INVALID" } });
+    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+  }
+});
+
+test("account codes are stored as canonical ASCII", async () => {
+  for (const code of [" 2600 ", "٢٦٠٠", "۲۶۰۰"]) {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId,
+      ...account,
+      code,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code: "2600" });
+  }
+});
+
+test("blank account names are refused on create without creating accounts", async () => {
+  for (const name of ["", "   "]) {
+    const { orgId, identity } = await fixture();
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, name }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+  }
+});
+
+test("custom and system accounts refuse blank names on update without changing the row", async () => {
+  for (const [system, name] of [
+    [false, ""], [false, "   "], [true, ""], [true, "   "],
+  ] as const) {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+    if (system) {
+      await t.run((ctx) => ctx.db.patch(accountId, { systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" }));
+    }
+    const before = await t.run((ctx) => ctx.db.get(accountId));
+    await expect(
+      identity.mutation(api.chartOfAccounts.update, { orgId, accountId, name }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toEqual(before);
+  }
+});
+
+test("valid account names are stored trimmed on create and update", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, name: "  Partner Payables  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ name: "Partner Payables" });
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId, accountId, name: "  Service Provider Payables  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ name: "Service Provider Payables" });
+});
+
+test("duplicate account codes are refused with a localized code, including inactive accounts", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId,
+    ...account,
+  });
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId,
+    accountId,
+    active: false,
+  });
+  for (const code of ["2500", "2500 ", "٢٥٠٠", "۲۵۰۰"]) {
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_EXISTS" } });
+  }
+  expect(
+    await identity.query(api.chartOfAccounts.list, { orgId }),
+  ).toHaveLength(1);
+  const other = await seedOrgWithMember(t, {
+    clerkId: "coa-other",
+    permissions: grants,
+  });
+  await expect(
+    other.identity.mutation(api.chartOfAccounts.create, {
+      orgId: other.orgId,
+      ...account,
+    }),
+  ).resolves.toBeDefined();
+});
+
+test("chart roles respect separate read and write grants", async () => {
+  // The scenario library binds one concrete test. Keep its role table bounded
+  // inside that registration so every row runs under the same named check.
+  const roles: { role: string; permissions: string[]; canList: boolean }[] = [
+    { role: "sales", permissions: [], canList: false },
+    {
+      role: "finance-reader",
+      permissions: [PERMISSIONS.VIEW_FINANCE],
+      canList: true,
+    },
+    {
+      role: "manage-without-view",
+      permissions: [PERMISSIONS.MANAGE_FINANCE],
+      canList: false,
+    },
+  ];
+  for (const { role, permissions, canList } of roles) {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId,
+      ...account,
+    });
+    await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        clerkId: role,
+        email: `${role}@example.test`,
+      });
+      const roleId = await ctx.db.insert("roles", {
+        orgId,
+        name: role,
+        permissions,
+      });
+      await ctx.db.insert("memberships", { orgId, userId, roleId });
+    });
+    const user = t.withIdentity({ subject: role });
+    if (canList)
+      expect(
+        await user.query(api.chartOfAccounts.list, { orgId }),
+      ).toHaveLength(1);
+    else
+      await expect(
+        user.query(api.chartOfAccounts.list, { orgId }),
+      ).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+    if (!new Set<string>(permissions).has(PERMISSIONS.MANAGE_FINANCE)) {
+      await expect(
+        user.mutation(api.chartOfAccounts.create, {
+          orgId,
+          ...account,
+          code: "2510",
+        }),
+      ).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+      await expect(
+        user.mutation(api.chartOfAccounts.update, {
+          orgId,
+          accountId,
+          name: "Changed",
+        }),
+      ).rejects.toMatchObject({ data: { code: "FORBIDDEN" } });
+    }
+    expect(
+      (await identity.query(api.chartOfAccounts.list, { orgId }))[0].name,
+    ).toBe("Partner Payables");
+  }
+});
+
+test("foreign organizations are refused for chart create update and list", async () => {
+  const { t, orgId, identity } = await fixture();
+  const other = await seedOrgWithMember(t, {
+    clerkId: "foreign-finance",
+    permissions: grants,
+  });
+  const foreignAccountId = await other.identity.mutation(
+    api.chartOfAccounts.create,
+    { orgId: other.orgId, ...account },
+  );
+  await expect(
+    identity.query(api.chartOfAccounts.list, { orgId: other.orgId }),
+  ).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
+  await expect(
+    identity.mutation(api.chartOfAccounts.create, {
+      orgId: other.orgId,
+      ...account,
+      code: "2510",
+    }),
+  ).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
+  await expect(
+    identity.mutation(api.chartOfAccounts.update, {
+      orgId: other.orgId,
+      accountId: foreignAccountId,
+      active: false,
+    }),
+  ).rejects.toMatchObject({ data: { code: "UNAUTHORIZED" } });
+  await expect(
+    identity.mutation(api.chartOfAccounts.update, {
+      orgId,
+      accountId: foreignAccountId,
+      active: false,
+    }),
+  ).rejects.toThrow(/not found/i);
+  expect(
+    await other.identity.query(api.chartOfAccounts.list, {
+      orgId: other.orgId,
+    }),
+  ).toMatchObject([{ active: true }]);
+});
+
+test("custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts", async () => {
+  const { t, orgId, identity } = await fixture();
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", {
+      orgId,
+      currency: "JOD",
+      currencySymbol: "JD",
+      enabledPaymentTypes: ["CASH"],
+    }),
+  );
+  await identity.mutation(api.chartOfAccounts.initialize, { orgId });
+  await expect(
+    identity.mutation(api.chartOfAccounts.initialize, { orgId }),
+  ).rejects.toThrow(/already initialized/);
+  const seeded = await identity.query(api.chartOfAccounts.list, { orgId });
+  expect(seeded.filter((row) => ["2500", "2510"].includes(row.code))).toEqual(
+    [],
+  );
+  expect(new Set(seeded.map((row) => row.code)).size).toBe(seeded.length);
+  const retained = seeded.find((row) => row.systemKey === "RETAINED_EARNINGS");
+  if (!retained) throw new Error("Missing seeded retained earnings");
+  const partnerId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId,
+    ...account,
+  });
+  const serviceId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId,
+    ...account,
+    code: "2510",
+    name: "Service Provider Payables",
+  });
+  const policies = await identity.query(
+    api.accountingCutover.listOpeningAccountPolicies,
+    { orgId },
+  );
+  for (const accountId of [partnerId, serviceId]) {
+    expect(policies.find((row) => row.accountId === accountId)).toMatchObject({
+      policy: "DECLARED_LIABILITY",
+      allowedKinds: expect.arrayContaining(["OTHER_PAYABLE"]),
+    });
+  }
+  const asOfDate = Date.UTC(2026, 10, 8);
+  await identity.mutation(api.accountingPeriods.create, {
+    orgId,
+    fiscalYear: 2026,
+    periodNumber: 1,
+    startDate: Date.UTC(2026, 0, 1),
+    endDate: Date.UTC(2026, 11, 31),
+    openImmediately: true,
+  });
+  const opening = {
+    orgId,
+    asOfDate,
+    expectedCurrency: "JOD",
+    lines: [
+      { accountId: partnerId, debitMinor: 0, creditMinor: 100_000 },
+      { accountId: serviceId, debitMinor: 0, creditMinor: 50_000 },
+      { accountId: retained._id, debitMinor: 150_000, creditMinor: 0 },
+    ],
+    allocations: [
+      {
+        kind: "OTHER_PAYABLE" as const,
+        rowKey: "partner",
+        accountId: partnerId,
+        amountMinor: 100_000,
+        title: "Partner obligation",
+        counterpartyName: "Synthetic partner",
+      },
+      {
+        kind: "OTHER_PAYABLE" as const,
+        rowKey: "service",
+        accountId: serviceId,
+        amountMinor: 50_000,
+        title: "Service obligation",
+        counterpartyName: "Synthetic provider",
+      },
+    ],
+  };
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId,
+    accountId: partnerId,
+    active: false,
+  });
+  expect(
+    (
+      await identity.query(api.accountingCutover.listOpeningAccountPolicies, {
+        orgId,
+      })
+    ).find((row) => row.accountId === partnerId)?.allowedKinds,
+  ).not.toContain("OTHER_PAYABLE");
+  await expect(
+    identity.mutation(api.accountingCutover.draftOpeningBalance, opening),
+  ).rejects.toThrow(/inactive/);
+  expect(
+    await t.run((ctx) => ctx.db.query("openingBalanceDrafts").collect()),
+  ).toEqual([]);
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId,
+    accountId: partnerId,
+    active: true,
+  });
+  await identity.mutation(api.accountingCutover.draftOpeningBalance, opening);
+  const [draft] = await identity.query(
+    api.accountingCutover.listPendingOpeningBalanceDrafts,
+    { orgId },
+  );
+  expect(draft).toBeDefined();
+  await expect(
+    identity.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId,
+      draftId: draft._id,
+    }),
+  ).rejects.toThrow(/same as the preparer/);
+  const approver = await t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", {
+      clerkId: "coa-approver",
+      email: "approver@example.test",
+    });
+    const roleId = await ctx.db.insert("roles", {
+      orgId,
+      name: "APPROVER",
+      permissions: grants,
+    });
+    await ctx.db.insert("memberships", { orgId, userId, roleId });
+    return userId;
+  });
+  await t
+    .withIdentity({ subject: "coa-approver" })
+    .mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId,
+      draftId: draft._id,
+    });
+  expect(await t.run((ctx) => ctx.db.get(draft._id))).toMatchObject({
+    status: "POSTED",
+    reviewedBy: approver,
+  });
+  const payables = await t.run((ctx) =>
+    ctx.db.query("vehicleSupplierPayables").collect(),
+  );
+  expect(payables).toHaveLength(2);
+  expect(payables).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        openingKind: "OTHER_PAYABLE",
+        openingRowKey: "partner",
+        amountDue: 100,
+        amountPaid: 0,
+      }),
+      expect.objectContaining({
+        openingKind: "OTHER_PAYABLE",
+        openingRowKey: "service",
+        amountDue: 50,
+        amountPaid: 0,
+      }),
+    ]),
+  );
+  expect(
+    (await identity.query(api.chartOfAccounts.list, { orgId })).filter((row) =>
+      ["2500", "2510"].includes(row.code),
+    ),
+  ).toHaveLength(2);
+});

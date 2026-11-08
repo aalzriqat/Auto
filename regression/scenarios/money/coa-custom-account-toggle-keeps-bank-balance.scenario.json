@@ -1,0 +1,155 @@
+{
+  "id": "coa-custom-account-toggle-keeps-bank-balance",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        },
+        "type": "LIABILITY",
+        "normalBalance": "CREDIT"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.create",
+      "input": {
+        "name": "Operating",
+        "currency": "JOD",
+        "openingBalanceMinor": 1000000,
+        "isReconciliationTarget": true
+      }
+    },
+    {
+      "actor": {
+        "role": "test-fixture",
+        "org": "A"
+      },
+      "action": "fixture.seedBankLine",
+      "input": {
+        "debitMinor": 125000,
+        "bank": "Operating",
+        "status": "POSTED"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "code": "2500",
+        "active": false
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "code": "2500",
+        "active": true
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "beforeToggle.bookBalance",
+      "value": {
+        "status": "OK",
+        "balanceMinor": 125000
+      }
+    },
+    {
+      "observable": "afterDeactivation.bookBalance",
+      "value": {
+        "status": "OK",
+        "balanceMinor": 125000
+      }
+    },
+    {
+      "observable": "afterReactivation.bookBalance",
+      "value": {
+        "status": "OK",
+        "balanceMinor": 125000
+      }
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "02fe2162f331cb5e8c8fad5875ddd0c4720d8bc6"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-round5-bank-trigger",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/bankAccounts.test.ts",
+    "testName": "deactivating and reactivating a custom account keeps the bank book balance available"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "003618f059bc9a426939482bb01ab5e1b04104266769a197c15d5d692849de6e"
+}

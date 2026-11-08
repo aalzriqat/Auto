@@ -1,0 +1,146 @@
+{
+  "id": "coa-arabic-name-trimmed-update",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        },
+        "nameAr": {
+          "unicodeCodePoints": [
+            1584,
+            1605,
+            1605,
+            32,
+            1575,
+            1604,
+            1588,
+            1585,
+            1603,
+            1575,
+            1569
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "accountCode": "2500",
+        "nameAr": {
+          "unicodeCodePoints": [
+            32,
+            32,
+            1584,
+            1605,
+            1605,
+            32,
+            1605,
+            1602,
+            1583,
+            1605,
+            1610,
+            32,
+            1575,
+            1604,
+            1582,
+            1583,
+            1605,
+            1575,
+            1578,
+            32,
+            32
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "accountCode": "2500",
+        "active": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "storedAccount.nameArAfterEachUpdate",
+      "value": {
+        "unicodeCodePoints": [
+          1584,
+          1605,
+          1605,
+          32,
+          1605,
+          1602,
+          1583,
+          1605,
+          1610,
+          32,
+          1575,
+          1604,
+          1582,
+          1583,
+          1605,
+          1575,
+          1578
+        ]
+      }
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "c08c8f39959b92446313fa5bfcfe9e865bf2ef33"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-round4-account-identity",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "Arabic account names are trimmed on update and preserved when omitted"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "78336c536993946d03c4af19d615bcb56fa3d421614b12355ef64fc7ab9c02a4"
+}

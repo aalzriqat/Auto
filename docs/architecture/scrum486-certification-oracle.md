@@ -1390,3 +1390,257 @@ The scenario records retain the stable SCRUM-928 c24715 brief digest. This is lo
 serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
 independent review seats. No posting, journal or lifecycle definition changed.
+
+## SCRUM-932 chart management regressions
+
+Matrix row `SCRUM932-coa-management` binds the following registered-function
+checks in `convex/chartOfAccounts.management.test.ts`. Opening policy is unchanged.
+
+| Scenario | Expected | Executable check |
+| --- | --- | --- |
+| Duplicate code, including an inactive account and canonical variants `2500 `, `٢٥٠٠`, `۲۵۰۰` | `ACCOUNT_CODE_EXISTS`; one account remains; another org can use the same code | `duplicate account codes are refused with a localized code, including inactive accounts` |
+| Empty or whitespace code | `ACCOUNT_CODE_INVALID`; no account is created | `empty account codes are refused without creating accounts` |
+| Padded ASCII, Arabic-Indic and Eastern Arabic-Indic codes | Each of ` 2600 `, `٢٦٠٠`, `۲۶۰۰` is stored as `2600` in an independent organization | `account codes are stored as canonical ASCII` |
+| Empty or whitespace English name on create | `ACCOUNT_NAME_REQUIRED`; no account is created | `blank account names are refused on create without creating accounts` |
+| Empty or whitespace English name on custom or system account update | `ACCOUNT_NAME_REQUIRED`; the entire account row stays unchanged | `custom and system accounts refuse blank names on update without changing the row` |
+| Valid padded English name | Create stores `Partner Payables`; update stores `Service Provider Payables`, without surrounding spaces | `valid account names are stored trimmed on create and update` |
+| Separate read and write grants | Missing `view:finance` refuses list; missing `manage:finance` refuses create and update | `chart roles respect separate read and write grants` |
+| Foreign organization and document | Foreign org create, list and update refuse; own org plus a foreign account id refuses; foreign row stays active | `foreign organizations are refused for chart create update and list` |
+| Custom 2500 and 2510 | Initialization creates neither account. User-created LIABILITY/CREDIT accounts advertise OTHER_PAYABLE. Inactive draft refuses. A different preparer and approver post obligations of JOD 100 and 50 | `custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts` |
+
+At `d7a759ad18851b53669220fdb040884cdfaf82ea`, the duplicate-code test fails
+because the refusal has no code. The other five checks already pass. Their
+scenario records are regressions, not new defects, and carry no invented
+`failingFirst` SHA. No opening policy, posting path, or pilot switch changes.
+The role table later becomes one concrete test registration so the regression
+runner can select its exact name; each of the same three role cases still runs.
+This is serial convex-test evidence, not cloud runtime or concurrency evidence.
+The coordinator verifies rendered screens and obtains the independent review seats.
+
+Round 3 reproduces invalid account identity at `cee22464d`: 15 failing cases and
+four passing existing checks before the fix. The same cases are grouped under
+concrete test titles for scenario-runner selection. The duplicate scenario now
+includes canonical variants; the five identity scenarios cite that red commit.
+Scenario inputs and expected names use `unicodeCodePoints` arrays for literal
+strings that the library's space-free token rules cannot represent directly.
+Removing only the normalization call caused six failures before restoration.
+Repeating that mutation after grouping caused both selected tests to fail
+(canonical storage and duplicate refusal); the source was restored byte-for-byte.
+The component suite checks both coded refusals in English and Arabic, including
+name refusal on update, without displaying technical error text.
+
+Codes normalize rather than reject Arabic keyboard digits so identifiers have
+one stored form. The mapping uses Unicode's [Arabic-Indic U+0660–U+0669 and
+Eastern Arabic-Indic U+06F0–U+06F9 ranges](https://www.unicode.org/charts/PDF/U0600.pdf).
+Expected refusals use [Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors)
+with structured `data.code`. Early returns replace nested conditional rendering,
+as recommended by [Sonar's nested-ternary guidance](https://www.sonarsource.com/blog/stop-nesting-ternaries-javascript/).
+Status messages use native [HTML output](https://html.spec.whatwg.org/multipage/form-elements.html#the-output-element)
+and retain advisory [WAI-ARIA status semantics](https://www.w3.org/TR/wai-aria-1.2/#status),
+following [Sonar S6819's preference for native elements](https://github.com/SonarSource/SonarJS/blob/master/packages/analysis/src/jsts/rules/README.md).
+
+The implementation keeps authorization and validators at the existing backend
+entry points, following [Convex authorization](https://docs.convex.dev/auth/overview)
+and [validation guidance](https://docs.convex.dev/functions/validation). The UI
+uses the repository's shared components and SupplierCreateDialog mounting pattern,
+with labelled dialogs and native table semantics, following
+[WAI-ARIA dialogs](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/),
+[WAI-ARIA tables](https://www.w3.org/WAI/ARIA/apg/patterns/table/), and
+[shadcn Dialog](https://ui.shadcn.com/docs/components/radix/dialog).
+
+### SCRUM-932 round 4: account code alphabet and optional Arabic names
+
+Red commit: `c08c8f39959b92446313fa5bfcfe9e865bf2ef33`. It contains only
+the management test additions. All ten new bug records below bind unchanged
+test names registered in that commit. The four existing empty/canonical-code
+and blank-English-name records are untouched in this round.
+
+The repeated mistake class is validating a few spellings rather than defining
+the identifier alphabet. Round 3 (`bebc7cb61`, followed by `b49071337`)
+canonicalized Arabic digits and boundary spaces; round 4's red run reproduced
+the same near-duplicate class through format controls and internal whitespace.
+The structural correction is one admission rule in public `create`, immediately
+after normalization: `^[A-Za-z0-9.-]+$`. Empty strings and every other character
+refuse with the existing `ACCOUNT_CODE_INVALID` payload and existing EN/AR keys.
+No new length cap is imposed: the compatibility inventory does not establish a
+business limit. Convex's existing value/document limits still apply. Case remains
+significant. Stored rows and other `by_org_code` readers are unchanged.
+
+The decision follows [OWASP's allowlist validation guidance](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html).
+[Unicode's character database](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+classifies U+200B through U+200F and U+061C as Cf, format controls.
+Rejecting outside a defined alphabet covers this class without a character blacklist.
+[Sonar's rule mapping](https://github.com/SonarSource/SonarJS/blob/master/packages/analysis/src/jsts/rules/README.md)
+maps S7758 to [prefer-code-point](https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-code-point.md).
+The digit replacement now uses indexOf on the two ten-digit strings, requiring
+neither charCodeAt nor a non-null assertion. Expected refusals retain structured
+[ConvexError application errors](https://docs.convex.dev/functions/error-handling/application-errors);
+an uncaught error rolls back the mutation. Arabic names are trimmed at both
+public write doors; blank input removes the optional field. Omitting nameAr
+on update preserves the stored name.
+
+#### Compatibility inventory
+
+Scope: tracked TS/TSX/JS/MJS source at the supplied round-3 baseline, including
+code properties in files referencing chartOfAccounts/defaultChart, every public
+create call and direct chart insert, and manually resolved shorthand, spread,
+rehearsal-helper and generated-code inputs. The literal inventory is a conservative
+superset of account codes; error-code properties and keyboard/currency codes
+were excluded. This is a repository compatibility check, not a production-data census.
+
+The default chart is imported from `convex/utils/defaultChart.ts`; that file
+has no imports and defines all 57 default rows plus the system-key identifiers.
+System-key strings such as CASH_ON_HAND identify mappings, not stored account codes.
+initialize, ensureSystemAccount, general-expense/supplier-payable creation and
+e2eBootstrap seed from those definitions. Copy-based bank/cheque fixtures inherit
+their existing default row codes.
+
+All 57 default codes pass:
+
+`1100`, `1110`, `1120`, `1130`, `1200`, `1210`, `1240`, `1230`, `1250`, `1300`, `1310`, `1400`, `1450`, `1500`, `1510`, `1900`, `2100`, `2110`, `2200`, `2210`, `2220`, `2300`, `2310`, `2320`, `2400`, `2410`, `2420`, `3100`, `3200`, `3300`, `4100`, `4150`, `4160`, `4170`, `4180`, `4200`, `4300`, `4400`, `5100`, `6100`, `6200`, `6300`, `6400`, `6500`, `6600`, `6700`, `6800`, `6810`, `6820`, `6830`, `6840`, `6850`, `6860`, `6870`, `6880`, `6890`, `6900`.
+
+All 92 distinct candidate account literals checked pass, including legacy and
+synthetic fixtures:
+
+`0000`, `1`, `100`, `1000`, `1010`, `1100`, `1110`, `1120`, `1130`, `1200`, `1210`, `1220`, `1230`, `1240`, `1250`, `1300`, `1310`, `1360`, `1400`, `1450`, `1500`, `1510`, `1891`, `1892`, `1893`, `1895`, `1900`, `1998`, `1999`, `2`, `2100`, `2110`, `2110-DUP`, `2200`, `2210`, `2220`, `2300`, `2310`, `2320`, `2391`, `2392`, `2393`, `2394`, `2400`, `2410`, `2420`, `2500`, `2510`, `2600`, `2998`, `2999`, `3000`, `3100`, `3200`, `3300`, `3998`, `3999`, `4000`, `4100`, `4150`, `4160`, `4170`, `4180`, `4200`, `4300`, `4400`, `4410`, `5000`, `5100`, `6000`, `6100`, `6200`, `6300`, `6400`, `6500`, `6600`, `6700`, `6800`, `6810`, `6820`, `6830`, `6840`, `6850`, `6860`, `6870`, `6880`, `6890`, `6900`, `6999`, `QA-CAPITAL-EXPLICIT`, `QA-DUPLICATE-ADVANCE`, `QA-DUPLICATE-AR`.
+
+Additional resolved callers:
+
+- `scripts/accountingOpeningRehearsal.mjs`: 1891, 1892, 1893, 2391, 2392, 2393.
+- `scripts/accountingCleanupRehearsal.mjs`: 1998 and 2998.
+- `convex/openingCommissionReadBudget.test.ts`: `29` + index padded to three digits, indices 0 through 99; all 100 outputs 29000 through 29099 pass.
+- `convex/supplierReceivablesReconciliation.scrum869.test.ts`: `19` + index padded to two digits, indices 0 through 60; all 61 outputs 1900 through 1960 pass.
+- `convex/orgFinancialResetRequiredRefs.test.ts`: shorthand 1000 and 1100.
+- `convex/supplierStatement.scrum869.test.ts`: shorthand 1110 and 1240.
+- Existing public canonical/duplicate fixtures normalize padded 2500/2600 and both Arabic digit sets to ASCII.
+- New positive control creates 2500, 2500.10, AR-01 and ar-02 through the public mutation.
+
+#### New bug records
+
+| Record | Exact executable test name in the red commit |
+| --- | --- |
+| `coa-arabic-name-trimmed-create` | `Arabic account names are trimmed on create` |
+| `coa-arabic-name-trimmed-update` | `Arabic account names are trimmed on update and preserved when omitted` |
+| `coa-blank-arabic-name-create` | `blank Arabic account names are omitted on create` |
+| `coa-blank-arabic-name-update` | `blank Arabic account names clear the stored name on update` |
+| `coa-code-arabic-letter-mark-refused` | `account codes containing an Arabic letter mark are refused` |
+| `coa-code-internal-space-refused` | `account codes containing internal spaces are refused` |
+| `coa-code-ltr-mark-refused` | `account codes containing a left-to-right mark are refused` |
+| `coa-code-outside-allowlist-refused` | `account codes outside ASCII letters digits dot and hyphen are refused` |
+| `coa-code-rtl-mark-refused` | `account codes containing a right-to-left mark are refused` |
+| `coa-code-zero-width-space-refused` | `account codes containing a zero-width space are refused` |
+
+Each refusal scenario first creates ordinary 2500, then attempts the invalid code,
+asserts ACCOUNT_CODE_INVALID and compares the complete account list. The broader
+alphabet test covers U+200C/U+200D, internal tab/newline, underscore, slash, Arabic
+letters and fullwidth digits. The Arabic-name tests read the stored rows; update
+also checks that an omitted nameAr preserves the trimmed value.
+
+#### Local evidence
+
+Red run, against round-3 production source:
+
+```text
+pnpm exec vitest run --maxWorkers=1 convex/chartOfAccounts.management.test.ts
+FAIL: six invalid-code checks: promise resolved instead of rejecting
+FAIL: Arabic name create/update: expected trimmed value, received padded value
+FAIL: blank Arabic name create/update: expected '   ' to be undefined
+Test Files  1 failed (1)
+Tests       10 failed | 10 passed (20)
+Exit        1
+```
+
+- Requested management, component and pilotDoorInventory command: 3 files, 61 tests passed.
+- `scripts/regression/scenarioRecord.test.ts`: 70 tests passed, including ruling-snapshot and live-library validation after adding the records.
+- `scripts/regression/refreshRulings.test.ts`: FAIL before collection, zero executed tests. Vite/Rolldown inserts imports before the script's shebang and reports Invalid Character !. Reproduced under Node 26.4.0 and 24.22.1, plus Node test environment. The script's blob is unchanged from the baseline (16f58b33880c3743fd6f244b6bbe05f328b41e9e); native node --check passes. No test or infrastructure was changed to bypass it.
+- ESLint on both touched TypeScript files: exit 0.
+- `pnpm typecheck`: exit 0; root tsc excludes convex/, test-utils/, apps/, packages/ and dealer-worker/.
+- `pnpm typecheck:convex`: exit 0; separate backend tsc with convex/tsconfig.json.
+- Allowlist mutation: replace only the alphabet predicate with round 3's `!code`; 6 failed, 14 passed, exit 1. Restored byte-for-byte, SHA256 before/after `3bc4b912c02b35a86bb9ab6fddac9284355b814d18f67ee6b24978691a3c2720`. Restored management suite: 20 passed.
+- Provenance check: all 10 new records bind exact names among the red commit's 20 registered tests and cite that full red SHA.
+
+Source and test self-review applied clean-code-guard and test-guard: one backend
+predicate, existing error handling, no parallel validation mechanism, no mocks
+of business logic, and no changes to the prior canonical/duplicate assertions.
+This is local serial convex-test evidence. A fresh Sonar analysis proving zero
+new issues, CI, independent seats and cloud/platform behavior remain unverified.
+No Playwright, deploy, production-data operation, Jira/GitHub post or push was performed.
+
+### SCRUM-932 round 6: custom account normal balances
+
+Owner ruling 2026-11-08, SCRUM-932 c24767/c24768: a custom account created
+through public `chartOfAccounts.create` has its type's normal balance. The
+eight-type mapping is shared with the dialog and keyed by the schema-derived
+`Doc<"chartOfAccounts">["type"]`, so adding a schema type requires a mapping.
+The backend checks it after tenant authorization and the accounting feature
+check, before writes. Create derives the displayed balance; edit displays the
+stored balance. Existing rows, update, initialization, repair and system
+definitions retain their behavior, including the two contra defaults among
+57 definitions: 1510 Accumulated Depreciation (ASSET/CREDIT) and 3300 Partner
+Drawings (EQUITY/DEBIT).
+
+| Matrix row | Scenario | Expected | Executable check |
+| --- | --- | --- | --- |
+| `SCRUM932-coa-normal-balance` | `coa-normal-balance-mismatch-refused`: create LIABILITY/DEBIT after a valid 2500 Partner Payables LIABILITY/CREDIT | `NORMAL_BALANCE_MISMATCH`; row count remains 1 and all rows are unchanged. The sibling ASSET/CREDIT case also refuses; the literal table of all eight correct pairs succeeds. | `convex/chartOfAccounts.management.test.ts`: `create LIABILITY with DEBIT is refused without writing accounts`; sibling `create ASSET with CREDIT is refused without writing accounts`; positive control `every account type creates with its normal balance` |
+
+Initial backend red commit `dc9795d09953f9619f01ba0a6e23d414adf27e29`
+ran against unchanged `e5b311c9822eb16a1abbde846d1798c5f23aef4b` backend
+source: 2 failed, 21 passed; both mismatches resolved instead of rejecting.
+The scenario runner requires concrete registrations. Test-only commit
+`badb0817ee409c7a4de87b85b3688e7668f3db9b` retains the same assertions
+under literal test names; the same baseline-source replay produced 2 failed,
+21 passed, exit 1. The record binds its exact LIABILITY test name and that
+red-replayed commit. Backend source was restored afterward.
+
+Component red commit `b7957f8a7aa0a3fda60188eee645d8126011b959` ran
+against the unchanged baseline dialog: 1 failed, 29 passed. Choosing LIABILITY
+sent DEBIT instead of CREDIT; the EXPENSE/DEBIT control passed. The UI fix
+also removes the old duplicate-code test's manual balance-selection steps;
+every existing assertion is retained.
+
+The type/balance decision follows the normal-balance table in
+[OpenStax Principles of Accounting, section 3.1](https://openstax.org/books/principles-financial-accounting/pages/3-1-describe-principles-assumptions-and-concepts-of-accounting-and-their-relationship-to-financial-statements).
+COGS and other expenses follow expense balances; other income follows revenue.
+Contra creation is excluded by the owner ruling. Structured refusal follows
+[Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors),
+using an uncaught `ConvexError` with a code and safe English message.
+Deriving the create balance during render follows
+[React's guidance on avoiding redundant state](https://react.dev/learn/choosing-the-state-structure#avoid-redundant-state).
+
+The safety boundary is the public custom-create door. No journal amounts,
+posting rules, cancellation/reversal paths, historical rows or audit conventions
+change. The five predicted failures checked locally are reversed debit/credit
+mapping, an omitted type, stale UI balance after a type change, reclassification
+of a stored contra balance on edit, and a refusal that writes an account.
+The all-types control, schema-derived exhaustive mapping, component interaction
+checks, stored-contra edit check and before/after document comparison address
+those respectively. Harness results do not establish cloud runtime behavior,
+OCC, browser layout or production-data parity. Independent review and release
+evidence remain the coordinator's responsibility.
+
+Local round-6 checks: all 13 backend caller files plus the component file
+passed (581 tests across completed runs, one Vitest worker). An earlier combined
+run was interrupted without a verdict; the smaller completed groups cover the
+same requested files. The six executable scenario-validator files passed all
+374 tests across the initial run and the corrected-record rerun, including the
+70-test live-library validator. The new record uses the existing
+`unicodeCodePoints` name format; its initial prose name was rejected and fixed.
+`refreshRulings.test.ts` remains unavailable: Vite/Rolldown rejects the imported
+script's shebang before collecting tests. Its script blob matches the baseline
+(`16f58b33880c3743fd6f244b6bbe05f328b41e9e`); native `node --check` passes.
+No runner or gate was changed to hide that failure.
+
+ESLint passed on all six touched TS/TSX files. `pnpm typecheck:convex` passed
+with `convex/tsconfig.json` (includes convex and test-utils, excludes generated
+files as roots); `pnpm typecheck` passed with the root config (excludes convex,
+test-utils, apps, packages, dealer-worker and node_modules as roots; imported
+types may still be followed). Both checks are needed. All 43 baseline backend
+and 45 baseline component assertion calls were preserved, comparing source
+with line endings normalized.
+
+Mutation proof removed only the public-create refusal. Both negative cases
+failed with a resolved account id instead of a refusal, exit 1. Restoring the
+file from its saved bytes produced SHA256
+`8a9934b478e1fd7ad67496c6a4228666463bf2eeb266cd39aa021d527144e7a4`
+and an empty diff against backend fix commit
+`4fe8a46c03a979ff253629963ccf587c1b07bd89`.

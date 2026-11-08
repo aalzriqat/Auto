@@ -19,6 +19,7 @@ import { SetupStatusCards } from "./setup/SetupStatusCards";
 import { OpeningBalanceCard } from "./setup/OpeningBalanceCard";
 import { OpeningBalanceApprovalPanel } from "./setup/OpeningBalanceApprovalPanel";
 import { SystemAccountConflictsPanel } from "./setup/SystemAccountConflictsPanel";
+import { ChartOfAccountsManagement } from "./setup/ChartOfAccountsManagement";
 import {
   dateInputToEndOfDayMs,
   dateInputToStartOfDayMs,
@@ -149,6 +150,8 @@ export function AccountingSetupTab({ view = "all" }: Readonly<{ view?: Accountin
           <p className="text-sm text-muted-foreground">{t("AccountingSetupDesc")}</p>
         </div>
       )}
+
+      {showSettings && <ChartOfAccountsManagement key={activeOrgId} orgId={activeOrgId} />}
 
       <div className={view === "settings" ? "grid gap-6 lg:items-start lg:[grid-template-columns:repeat(auto-fit,minmax(22rem,1fr))]" : "contents"}>
       <SetupStatusCards
