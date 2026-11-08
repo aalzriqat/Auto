@@ -185,7 +185,29 @@ export function OpeningBalanceCard() {
   const [editingDraftId, setEditingDraftId] = useState<Id<"openingBalanceDrafts"> | null>(null);
   const [entryOrgId, setEntryOrgId] = useState<string | null>(null);
 
-  const { status, postedReadback, maintenance, accounts, accountPolicies, bankAccounts } = useOpeningBalanceData(activeOrgId, open);
+  const status = useQuery(
+    api.accountingCutover.openingBalanceStatus,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+  const postedReadback = useQuery(
+    api.accountingCutover.postedOpeningAllocationReadback,
+    activeOrgId && status?.posted && status.canReadOpeningStockCost ? { orgId: activeOrgId } : "skip"
+  );
+  const maintenance = useQuery(api.openingBalanceMaintenance.status,
+    activeOrgId && status?.canManageFinance ? { orgId: activeOrgId } : "skip");
+  const accounts = useQuery(
+    api.chartOfAccounts.list,
+    activeOrgId ? { orgId: activeOrgId, activeOnly: true } : "skip"
+  );
+  const accountPolicies = useQuery(
+    api.accountingCutover.listOpeningAccountPolicies,
+    activeOrgId && open ? { orgId: activeOrgId } : "skip"
+  );
+
+  const bankAccounts = useQuery(
+    api.bankAccounts.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   const postDirect = useMutation(api.accountingCutover.postOpeningBalanceDirect);
   const draftForApproval = useMutation(api.accountingCutover.draftOpeningBalance);
@@ -675,32 +697,4 @@ function OpeningVoidActions({ orgId, maintenance }: Readonly<{
       {maintenance.canApproveVoid ? t("OpeningApproveVoid") : t("OpeningRequestVoid")}
     </Button>}
   </section>;
-}
-
-function useOpeningBalanceData(activeOrgId: ReturnType<typeof useOrg>["activeOrgId"], open: boolean) {
-  const status = useQuery(
-    api.accountingCutover.openingBalanceStatus,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-  const postedReadback = useQuery(
-    api.accountingCutover.postedOpeningAllocationReadback,
-    activeOrgId && status?.posted && status.canReadOpeningStockCost ? { orgId: activeOrgId } : "skip"
-  );
-  const maintenance = useQuery(api.openingBalanceMaintenance.status,
-    activeOrgId && status?.canManageFinance ? { orgId: activeOrgId } : "skip");
-  const accounts = useQuery(
-    api.chartOfAccounts.list,
-    activeOrgId ? { orgId: activeOrgId, activeOnly: true } : "skip"
-  );
-  const accountPolicies = useQuery(
-    api.accountingCutover.listOpeningAccountPolicies,
-    activeOrgId && open ? { orgId: activeOrgId } : "skip"
-  );
-
-  const bankAccounts = useQuery(
-    api.bankAccounts.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
-  return { status, postedReadback, maintenance, accounts, accountPolicies, bankAccounts };
 }
