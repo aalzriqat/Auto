@@ -16,6 +16,12 @@ export const TIMEOUT = 60_000;
 export const ZERO_SHA = "0".repeat(40);
 const repos: string[] = [];
 
+/** Register a throwaway repository so `registerFixtureCleanup` removes it. */
+export function trackRepo(root: string): string {
+  repos.push(root);
+  return root;
+}
+
 interface Entry {
   path: string;
   reason: string;
@@ -96,8 +102,7 @@ export function writeBaselineDoc(root: string, baseline: FixtureBaseline): void 
  * given extra files already committed (so they are part of the TARGET tree).
  */
 export function fixtureRepo(files: Record<string, string> = {}, { withGuardrails = true } = {}): string {
-  const root = mkdtempSync(path.join(tmpdir(), "guardrails-rt-"));
-  repos.push(root);
+  const root = trackRepo(mkdtempSync(path.join(tmpdir(), "guardrails-rt-")));
   git(root, "init", "-q", "-b", "main");
   write(root, "convex/_generated/server.ts", "export const query = 1;\n");
   write(root, "convex/schema.ts", "export default {};\n");

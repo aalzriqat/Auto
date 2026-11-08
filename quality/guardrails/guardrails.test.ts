@@ -1,88 +1,45 @@
 // @vitest-environment node
 /**
- * SCRUM-426 — negative and positive controls for the blocking size + import
- * guardrails. Every fixture is a real throwaway git repository: the "target
- * branch" is a commit on `main`, and the PR is the working tree on top of it,
- * so the trust model (allowance read from the target via git, never from the
- * PR tree) is exercised end to end rather than mocked.
+ * Negative and positive controls for the blocking size + import guardrails.
+ * Every fixture is a real throwaway git repository: the "target branch" is a
+ * commit on `main`, and the PR is the working tree on top of it, so the trust
+ * model (allowance read from the target via git, never from the PR tree) is
+ * exercised end to end rather than mocked.
  */
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import { resolveBaseRef, runGuardrails, writeBaseline } from "./check.mjs";
 import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, countNonBlank, importViolations, measureLines, parseConfig } from "./rules.mjs";
+import {
+  TIMEOUT,
+  ZERO_SHA,
+  baseConfig,
+  bootstrapCheck,
+  check,
+  expectFailure,
+  git,
+  json,
+  registerFixtureCleanup,
+  remove,
+  trackRepo,
+  write,
+  writeBaselineDoc,
+  writeConfig,
+  type FixtureBaseline,
+  type Grandfather,
+} from "./testkit";
 
-const TIMEOUT = 60_000;
-const ZERO_SHA = "0".repeat(40);
-const repos: string[] = [];
-
-interface Entry {
-  path: string;
-  reason: string;
-}
-interface FixtureConfig {
-  schemaVersion: number;
-  maxLines: number;
-  productionRoots: string[];
-  extensions: string[];
-  exemptions: Entry[];
-  generated: Entry[];
-  migrations: Entry[];
-  nonDoors: Entry[];
-}
-interface Grandfather {
-  rule: string;
-  from: string;
-  to: string;
-}
-interface FixtureBaseline {
-  schemaVersion: number;
-  sourceCommit: string;
-  sizeCeilings: Record<string, number>;
-  importGrandfather: Grandfather[];
-}
-
-function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync(
-    "git",
-    ["-c", "user.email=guardrails@test", "-c", "user.name=guardrails", "-c", "core.autocrlf=false", ...args],
-    { cwd, encoding: "utf8" },
-  );
-  if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-  return result.stdout.trim();
-}
-
-function write(root: string, file: string, text: string): void {
-  mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-  writeFileSync(path.join(root, file), text);
-}
-
-function remove(root: string, file: string): void {
-  rmSync(path.join(root, file));
-}
+registerFixtureCleanup();
 
 /** n statements; Prettier keeps exactly one non-blank line per statement. */
 function lines(n: number, prefix = "v"): string {
   return Array.from({ length: n }, (_, i) => `export const ${prefix}${i} = ${i};`).join("\n") + "\n";
 }
 
-function baseConfig(): FixtureConfig {
-  const reason = "fixture justification for this entry";
-  return {
-    schemaVersion: 1,
-    maxLines: 600,
-    productionRoots: ["components/", "convex/"],
-    extensions: [".ts", ".tsx"],
-    exemptions: [{ path: "convex/data.ts", reason }],
-    generated: [{ path: "convex/_generated/server.ts", reason }],
-    migrations: [{ path: "convex/migrateOld.ts", reason }],
-    nonDoors: [{ path: "convex/schema.ts", reason }],
-  };
-}
-
+/** The target's allowance in this file's fixture: one grandfathered size and one grandfathered import. */
 function baseBaseline(): FixtureBaseline {
   return {
     schemaVersion: 1,
@@ -94,22 +51,9 @@ function baseBaseline(): FixtureBaseline {
   };
 }
 
-function json(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
-}
-
-function writeConfig(root: string, config: FixtureConfig): void {
-  write(root, "quality/guardrails/config.json", json(config));
-}
-
-function writeBaselineDoc(root: string, baseline: FixtureBaseline): void {
-  write(root, "quality/guardrails/baseline.json", json(baseline));
-}
-
 /** A repo whose `main` commit is the trusted target, with guardrail files. */
 function fixtureRepo({ withGuardrails = true } = {}): string {
-  const root = mkdtempSync(path.join(tmpdir(), "guardrails-"));
-  repos.push(root);
+  const root = trackRepo(mkdtempSync(path.join(tmpdir(), "guardrails-")));
   git(root, "init", "-q", "-b", "main");
   write(root, "convex/_generated/server.ts", "export const query = 1;\n");
   write(root, "convex/schema.ts", "export default {};\n");
@@ -127,30 +71,6 @@ function fixtureRepo({ withGuardrails = true } = {}): string {
   git(root, "commit", "-q", "-m", "target");
   return root;
 }
-
-async function check(root: string) {
-  return runGuardrails({ cwd: root, env: {}, base: "main" });
-}
-
-/** The fixture's own scope stands in for the pinned owner policy on bootstrap. */
-const FIXTURE_POLICY = {
-  maxLines: 600,
-  productionRoots: ["components/", "convex/"],
-  extensions: [".ts", ".tsx"],
-  nonDoors: ["convex/schema.ts"],
-};
-
-async function bootstrapCheck(root: string) {
-  return runGuardrails({ cwd: root, env: {}, base: "main", bootstrapPolicy: FIXTURE_POLICY });
-}
-
-function expectFailure(errors: string[], pattern: RegExp): void {
-  expect(errors.some((e) => pattern.test(e)), `expected ${pattern} in:\n${errors.join("\n")}`).toBe(true);
-}
-
-afterEach(() => {
-  while (repos.length) rmSync(repos.pop() as string, { recursive: true, force: true });
-});
 
 describe("file size", () => {
   test("positive control: the unchanged target tree and a new 600-line file pass", async () => {
@@ -199,6 +119,90 @@ describe("file size", () => {
   }, TIMEOUT);
 });
 
+describe("size ceilings and scope changes", () => {
+  test("negative control: a root added by the PR is size-checked in the same PR", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    writeConfig(root, config);
+    write(root, "lib/big.ts", lines(700));
+    write(root, "lib/small.ts", lines(10));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW lib/big.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("scope adoption: an UNCHANGED oversized file brought into scope may carry a ceiling; a changed one may not", async () => {
+    const root = fixtureRepo();
+    write(root, "lib/legacy.ts", lines(700, "l"));
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "legacy outside scope");
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    writeConfig(root, config);
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 700 } });
+    const adopted = await check(root);
+    expect(adopted.errors).toEqual([]);
+    expect(adopted.notices).toContain("SCOPE-ADOPTED lib/legacy.ts: 700 lines, unchanged from the target");
+
+    write(root, "lib/legacy.ts", lines(701, "l"));
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 701 } });
+    const grown = await check(root);
+    expectFailure(grown.errors, /^SIZE-NEW lib\/legacy\.ts: 701 lines/);
+    expectFailure(grown.errors, /^RATCHET new size ceiling for lib\/legacy\.ts/);
+  }, TIMEOUT);
+
+  test("negative control: removing a ceiling from a still-oversized file fails in the same run", async () => {
+    const root = fixtureRepo();
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: {} });
+    const result = await check(root);
+    expectFailure(result.errors, /^MISSING-CEILING convex\/big\.ts: 700 lines > 600/);
+  }, TIMEOUT);
+
+  test("negative control: a root added with its own exemption is still size-checked", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.productionRoots.push("lib/");
+    config.exemptions.push({ path: "lib/new.ts", reason: "exempting a file in the root it adds" });
+    writeConfig(root, config);
+    write(root, "lib/new.ts", lines(700));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW lib/new.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("negative control: an extension added with its own exemption is still size-checked", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.extensions.push(".js");
+    config.exemptions.push({ path: "convex/newScript.js", reason: "exempting a file of the extension it adds" });
+    writeConfig(root, config);
+    write(root, "convex/newScript.js", lines(700));
+    const result = await check(root);
+    expect(result.errors).toEqual(["SIZE-NEW convex/newScript.js: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("control: an exemption in trusted scope is not effective in its own PR, and trusted exemptions still hold", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.exemptions.push({ path: "convex/newModule.ts", reason: "exempting its own new file" });
+    writeConfig(root, config);
+    write(root, "convex/newModule.ts", lines(700));
+    const result = await check(root);
+    // convex/data.ts (900 lines, trusted exemption) produces nothing.
+    expect(result.errors).toEqual(["SIZE-NEW convex/newModule.ts: 700 lines > limit 600 (not grandfathered)"]);
+  }, TIMEOUT);
+
+  test("positive control: removing a trusted exemption adopts the unchanged file with its exact ceiling", async () => {
+    const root = fixtureRepo();
+    const config = baseConfig();
+    config.exemptions = [];
+    writeConfig(root, config);
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "convex/data.ts": 900 } });
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+    expect(result.notices).toContain("SCOPE-ADOPTED convex/data.ts: 900 lines, unchanged from the target");
+  }, TIMEOUT);
+});
+
 describe("trusted target-branch allowance", () => {
   test("negative control: a PR-side threshold edit is ignored — the target's 600 applies — and itself fails", async () => {
     const root = fixtureRepo();
@@ -241,19 +245,33 @@ describe("trusted target-branch allowance", () => {
     expect(resolveBaseRef({ GITHUB_BASE_REF: "main" }, "abc123")).toBe("abc123");
   });
 
-  test("bootstrap: a target without guardrail files trusts only a baseline equal to the recomputation", async () => {
-    const root = fixtureRepo({ withGuardrails: false });
-    const target = git(root, "rev-parse", "HEAD");
-    writeConfig(root, baseConfig());
-    await writeBaseline(root, target, "main");
-    const good = await bootstrapCheck(root);
-    expect(good.bootstrap).toBe(true);
-    expect(good.errors).toEqual([]);
+  test("negative control: a push is judged against the pre-push SHA, not HEAD^", async () => {
+    const root = fixtureRepo();
+    const before = git(root, "rev-parse", "HEAD");
+    writeConfig(root, { ...baseConfig(), maxLines: 5000 });
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "A: raise allowance");
+    write(root, "convex/newModule.ts", lines(700));
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "B: add debt");
+    const result = await runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: before } });
+    expect(result.baseCommit).toBe(before);
+    expectFailure(result.errors, /^SIZE-NEW convex\/newModule\.ts: 700 lines > limit 600/);
+  }, TIMEOUT);
 
-    const tampered = { ...baseBaseline(), sourceCommit: target, sizeCeilings: { "convex/big.ts": 900 } };
-    writeBaselineDoc(root, tampered);
-    const bad = await bootstrapCheck(root);
-    expectFailure(bad.errors, /^BOOTSTRAP baseline does not equal the recomputation/);
+  test("a push without a usable pre-push SHA, or a non-fast-forward push, fails closed", async () => {
+    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push" }, undefined)).toThrow(/pre-push SHA/);
+    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: ZERO_SHA }, undefined)).toThrow(/pre-push SHA/);
+    const root = fixtureRepo();
+    git(root, "checkout", "-q", "-b", "side");
+    write(root, "convex/side.ts", "export const s = 1;\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "side");
+    const side = git(root, "rev-parse", "HEAD");
+    git(root, "checkout", "-q", "main");
+    await expect(
+      runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: side } }),
+    ).rejects.toThrow(/not an ancestor/);
   }, TIMEOUT);
 });
 
@@ -285,48 +303,8 @@ describe("enumerated lists against independent discovery", () => {
     const result = await check(root);
     expectFailure(result.errors, /^STALE-CEILING convex\/big\.ts: 10 lines is within 600/);
   }, TIMEOUT);
-});
 
-describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
-  test("negative control (Codex 426-3): a root added by the PR is size-checked in the same PR", async () => {
-    const root = fixtureRepo();
-    const config = baseConfig();
-    config.productionRoots.push("lib/");
-    writeConfig(root, config);
-    write(root, "lib/big.ts", lines(700));
-    write(root, "lib/small.ts", lines(10));
-    const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW lib/big.ts: 700 lines > limit 600 (not grandfathered)"]);
-  }, TIMEOUT);
-
-  test("scope adoption: an UNCHANGED oversized file brought into scope may carry a ceiling; a changed one may not", async () => {
-    const root = fixtureRepo();
-    write(root, "lib/legacy.ts", lines(700, "l"));
-    git(root, "add", ".");
-    git(root, "commit", "-q", "-m", "legacy outside scope");
-    const config = baseConfig();
-    config.productionRoots.push("lib/");
-    writeConfig(root, config);
-    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 700 } });
-    const adopted = await check(root);
-    expect(adopted.errors).toEqual([]);
-    expect(adopted.notices).toContain("SCOPE-ADOPTED lib/legacy.ts: 700 lines, unchanged from the target");
-
-    write(root, "lib/legacy.ts", lines(701, "l"));
-    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "lib/legacy.ts": 701 } });
-    const grown = await check(root);
-    expectFailure(grown.errors, /^SIZE-NEW lib\/legacy\.ts: 701 lines/);
-    expectFailure(grown.errors, /^RATCHET new size ceiling for lib\/legacy\.ts/);
-  }, TIMEOUT);
-
-  test("negative control (S426-low): removing a ceiling from a still-oversized file fails now, not on the next run", async () => {
-    const root = fixtureRepo();
-    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: {} });
-    const result = await check(root);
-    expectFailure(result.errors, /^MISSING-CEILING convex\/big\.ts: 700 lines > 600/);
-  }, TIMEOUT);
-
-  test("negative control (S426-04): list entries must match independent discovery in both directions", async () => {
+  test("negative control: list entries must match independent discovery in both directions", async () => {
     const root = fixtureRepo();
     const config = baseConfig();
     config.generated.push({ path: "convex/applications.ts", reason: "not actually generated code" });
@@ -337,6 +315,37 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
     expectFailure(result.errors, /^UNDISCOVERED-GENERATED convex\/applications\.ts/);
     expectFailure(result.errors, /^UNDISCOVERED-MIGRATION convex\/utils\/money\.ts/);
     expectFailure(result.errors, /^INVALID-NONDOOR convex\/utils\/money\.ts/);
+  }, TIMEOUT);
+});
+
+describe("bootstrap", () => {
+  /** A target whose history has an OLDER commit, `old`, and the tip `main`. */
+  function repoWithHistory(atOld: (root: string) => void, atTarget: (root: string) => void) {
+    const root = fixtureRepo({ withGuardrails: false });
+    atOld(root);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "old");
+    const old = git(root, "rev-parse", "HEAD");
+    atTarget(root);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "target");
+    writeConfig(root, baseConfig());
+    return { root, old };
+  }
+
+  test("bootstrap: a target without guardrail files trusts only a baseline equal to the recomputation", async () => {
+    const root = fixtureRepo({ withGuardrails: false });
+    const target = git(root, "rev-parse", "HEAD");
+    writeConfig(root, baseConfig());
+    await writeBaseline(root, target, "main");
+    const good = await bootstrapCheck(root);
+    expect(good.bootstrap).toBe(true);
+    expect(good.errors).toEqual([]);
+
+    const tampered = { ...baseBaseline(), sourceCommit: target, sizeCeilings: { "convex/big.ts": 900 } };
+    writeBaselineDoc(root, tampered);
+    const bad = await bootstrapCheck(root);
+    expectFailure(bad.errors, /^BOOTSTRAP baseline does not equal the recomputation/);
   }, TIMEOUT);
 
   test("pinned legacy migrations and the bootstrap policy are the reviewed values", () => {
@@ -353,8 +362,7 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
     });
   });
 
-
-  test("negative control (S426-02 / Codex 426-1): bootstrap cannot raise the limit, narrow scope, or exempt a new file", async () => {
+  test("negative control: bootstrap cannot raise the limit, narrow scope, or exempt a new file", async () => {
     const root = fixtureRepo({ withGuardrails: false });
     const target = git(root, "rev-parse", "HEAD");
     const config = baseConfig();
@@ -371,7 +379,7 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
     expectFailure(result.errors, /^BOOTSTRAP-NEW-ALLOWANCE exemptions: "convex\/newModule\.ts" does not exist on the target/);
   }, TIMEOUT);
 
-  test("negative control (S426-02): bootstrap formats with the TARGET's Prettier options, not the PR's", async () => {
+  test("negative control: bootstrap formats with the target's Prettier options, not the PR's", async () => {
     const root = fixtureRepo({ withGuardrails: false });
     const target = git(root, "rev-parse", "HEAD");
     writeConfig(root, baseConfig());
@@ -392,82 +400,7 @@ describe("round-1 review findings (Sol S426-01..04, Codex 426-1..3)", () => {
     expect(result.errors).toEqual([]);
   }, TIMEOUT);
 
-  test("negative control (S426-03): a push is judged against the pre-push SHA, not HEAD^", async () => {
-    const root = fixtureRepo();
-    const before = git(root, "rev-parse", "HEAD");
-    writeConfig(root, { ...baseConfig(), maxLines: 5000 });
-    git(root, "add", ".");
-    git(root, "commit", "-q", "-m", "A: raise allowance");
-    write(root, "convex/newModule.ts", lines(700));
-    git(root, "add", ".");
-    git(root, "commit", "-q", "-m", "B: add debt");
-    const result = await runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: before } });
-    expect(result.baseCommit).toBe(before);
-    expectFailure(result.errors, /^SIZE-NEW convex\/newModule\.ts: 700 lines > limit 600/);
-  }, TIMEOUT);
-
-  test("a push without a usable pre-push SHA, or a non-fast-forward push, fails closed", async () => {
-    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push" }, undefined)).toThrow(/pre-push SHA/);
-    expect(() => resolveBaseRef({ GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: ZERO_SHA }, undefined)).toThrow(/pre-push SHA/);
-    const root = fixtureRepo();
-    git(root, "checkout", "-q", "-b", "side");
-    write(root, "convex/side.ts", "export const s = 1;\n");
-    git(root, "add", ".");
-    git(root, "commit", "-q", "-m", "side");
-    const side = git(root, "rev-parse", "HEAD");
-    git(root, "checkout", "-q", "main");
-    await expect(
-      runGuardrails({ cwd: root, env: { GITHUB_EVENT_NAME: "push", GUARDRAILS_PUSH_BEFORE: side } }),
-    ).rejects.toThrow(/not an ancestor/);
-  }, TIMEOUT);
-});
-
-describe("round-2 review findings (Sol S426-05, Codex 426-1 r2)", () => {
-  test("negative control (S426-05): a root added with its own exemption is still size-checked", async () => {
-    const root = fixtureRepo();
-    const config = baseConfig();
-    config.productionRoots.push("lib/");
-    config.exemptions.push({ path: "lib/new.ts", reason: "exempting a file in the root it adds" });
-    writeConfig(root, config);
-    write(root, "lib/new.ts", lines(700));
-    const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW lib/new.ts: 700 lines > limit 600 (not grandfathered)"]);
-  }, TIMEOUT);
-
-  test("negative control (S426-05): an extension added with its own exemption is still size-checked", async () => {
-    const root = fixtureRepo();
-    const config = baseConfig();
-    config.extensions.push(".js");
-    config.exemptions.push({ path: "convex/newScript.js", reason: "exempting a file of the extension it adds" });
-    writeConfig(root, config);
-    write(root, "convex/newScript.js", lines(700));
-    const result = await check(root);
-    expect(result.errors).toEqual(["SIZE-NEW convex/newScript.js: 700 lines > limit 600 (not grandfathered)"]);
-  }, TIMEOUT);
-
-  test("control (S426-05): an exemption in trusted scope is still not effective in its own PR, and trusted exemptions still hold", async () => {
-    const root = fixtureRepo();
-    const config = baseConfig();
-    config.exemptions.push({ path: "convex/newModule.ts", reason: "exempting its own new file" });
-    writeConfig(root, config);
-    write(root, "convex/newModule.ts", lines(700));
-    const result = await check(root);
-    // convex/data.ts (900 lines, trusted exemption) produces nothing.
-    expect(result.errors).toEqual(["SIZE-NEW convex/newModule.ts: 700 lines > limit 600 (not grandfathered)"]);
-  }, TIMEOUT);
-
-  test("positive control (S426-05): removing a trusted exemption still adopts the unchanged file with its exact ceiling", async () => {
-    const root = fixtureRepo();
-    const config = baseConfig();
-    config.exemptions = [];
-    writeConfig(root, config);
-    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 700, "convex/data.ts": 900 } });
-    const result = await check(root);
-    expect(result.errors).toEqual([]);
-    expect(result.notices).toContain("SCOPE-ADOPTED convex/data.ts: 900 lines, unchanged from the target");
-  }, TIMEOUT);
-
-  test("negative control (Codex 426-1 r2): bootstrap cannot exempt a target file and change it in the same PR", async () => {
+  test("negative control: bootstrap cannot exempt a target file and change it in the same PR", async () => {
     const root = fixtureRepo({ withGuardrails: false });
     const target = git(root, "rev-parse", "HEAD");
     const config = baseConfig();
@@ -479,7 +412,7 @@ describe("round-2 review findings (Sol S426-05, Codex 426-1 r2)", () => {
     expectFailure(result.errors, /^BOOTSTRAP-CHANGED-ALLOWANCE exemptions: "convex\/big\.ts" differs from the target/);
   }, TIMEOUT);
 
-  test("negative control (Codex 426-1 r2): bootstrap nonDoors are the pinned reviewed set", async () => {
+  test("negative control: bootstrap nonDoors are the pinned reviewed set", async () => {
     const root = fixtureRepo({ withGuardrails: false });
     const target = git(root, "rev-parse", "HEAD");
     const config = baseConfig();
@@ -491,24 +424,8 @@ describe("round-2 review findings (Sol S426-05, Codex 426-1 r2)", () => {
       'BOOTSTRAP-POLICY nonDoors: "convex/applications.ts" is not a pinned reviewed non-door',
     ]);
   }, TIMEOUT);
-});
 
-describe("CodeRabbit review on #356 (CR-1..3)", () => {
-  /** A target whose history has an OLDER commit, `old`, and the tip `main`. */
-  function repoWithHistory(atOld: (root: string) => void, atTarget: (root: string) => void) {
-    const root = fixtureRepo({ withGuardrails: false });
-    atOld(root);
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "old");
-    const old = git(root, "rev-parse", "HEAD");
-    atTarget(root);
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "target");
-    writeConfig(root, baseConfig());
-    return { root, old };
-  }
-
-  test("negative control (CR-1): bootstrap from an older commit cannot carry a ceiling above the target's size", async () => {
+  test("negative control: bootstrap from an older commit cannot carry a ceiling above the target's size", async () => {
     const { root, old } = repoWithHistory(
       (r) => write(r, "convex/big.ts", lines(1000)),
       (r) => write(r, "convex/big.ts", lines(700)),
@@ -518,7 +435,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expectFailure(result.errors, /^BOOTSTRAP-STALE-SOURCE convex\/big\.ts: ceiling 1000 exceeds the target's 700/);
   }, TIMEOUT);
 
-  test("negative control (CR-1): a file deleted on the target cannot come back under the old ceiling", async () => {
+  test("negative control: a file deleted on the target cannot come back under the old ceiling", async () => {
     const { root, old } = repoWithHistory(
       (r) => write(r, "convex/gone.ts", lines(900, "g")),
       (r) => remove(r, "convex/gone.ts"),
@@ -529,7 +446,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expectFailure(result.errors, /^BOOTSTRAP-STALE-SOURCE convex\/gone\.ts: ceiling 900 exceeds the target's none/);
   }, TIMEOUT);
 
-  test("negative control (CR-1): an import removed on the target cannot come back grandfathered", async () => {
+  test("negative control: an import removed on the target cannot come back grandfathered", async () => {
     const legacy = 'import { toMinor } from "@/convex/utils/money";\nexport const y = toMinor(3);\n';
     const { root, old } = repoWithHistory(
       (r) => write(r, "components/Old.tsx", legacy),
@@ -544,7 +461,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     );
   }, TIMEOUT);
 
-  test("positive control (CR-1/CR-2): an older source whose allowances equal the target's passes, even when its Prettier options differed", async () => {
+  test("positive control: an older source whose allowances equal the target's passes, even when its Prettier options differed", async () => {
     const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
     const { root, old } = repoWithHistory(
       (r) => {
@@ -557,8 +474,10 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     const result = await bootstrapCheck(root);
     expect(result.errors).toEqual([]);
   }, TIMEOUT);
+});
 
-  test("negative control (CR-3): a prettier-ignore pragma does not let a crammed file evade the size limit", async () => {
+describe("line measurement with Prettier", () => {
+  test("negative control: a prettier-ignore pragma does not let a crammed file evade the size limit", async () => {
     const root = fixtureRepo();
     const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
     write(root, "convex/crammed.ts", `// prettier-ignore\nexport const crammed = [${items}];\n`);
@@ -566,7 +485,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expectFailure(result.errors, /^SIZE-NEW convex\/crammed\.ts/);
   }, TIMEOUT);
 
-  test("negative control (CR-3): a JSX prettier-ignore comment does not let a crammed file evade the size limit", async () => {
+  test("negative control: a JSX prettier-ignore comment does not let a crammed file evade the size limit", async () => {
     const root = fixtureRepo();
     const items = Array.from({ length: 700 }, (_, i) => `"item-number-${i}"`).join(", ");
     write(root, "components/Crammed.tsx", `export const C = () => (\n  <div>\n    {/* prettier-ignore */}\n    <span>{[${items}]}</span>\n  </div>\n);\n`);
@@ -574,7 +493,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expectFailure(result.errors, /^SIZE-NEW components\/Crammed\.tsx/);
   }, TIMEOUT);
 
-  test("positive control (S426-06 / CR-3-FP): the literal text prettier-ignore in ordinary strings does not inflate the count", async () => {
+  test("positive control: the literal text prettier-ignore in ordinary strings does not inflate the count", async () => {
     const root = fixtureRepo();
     const declarations = Array.from({ length: 151 }, (_, i) =>
       `export const x${String(i).padStart(3, "0")} = ["prettier-ignore", "prettier-ignore", "prettier-ignore"];`);
@@ -583,7 +502,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expect(result.errors).toEqual([]);
   }, TIMEOUT);
 
-  test("positive control (S426-06): across the wrap boundary, ordinary prettier-ignore text is counted exactly as Prettier lays it out", async () => {
+  test("positive control: across the wrap boundary, ordinary prettier-ignore text is counted exactly as Prettier lays it out", async () => {
     const prettier = await import("prettier");
     // Identifier widths 1..30 carry each declaration across printWidth 80.
     const source = Array.from({ length: 30 }, (_, i) =>
@@ -592,7 +511,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: expected });
   }, TIMEOUT);
 
-  test("negative control (S426-07): prettier-ignore as ordinary CODE is counted as Prettier lays it out, never below", async () => {
+  test("negative control: prettier-ignore as ordinary code is counted as Prettier lays it out, never below", async () => {
     // `prettier-ignore` here is subtraction, which Prettier widens to
     // `prettier - ignore`; turning it into one identifier measured 153, not 757.
     const root = fixtureRepo();
@@ -603,7 +522,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expectFailure(result.errors, /^SIZE-NEW convex\/expressions\.ts: 757 lines/);
   }, TIMEOUT);
 
-  test("negative control (Codex CR-3-INLINE-GQL): an inline GraphQL ignore comment cannot hide a crammed query", async () => {
+  test("negative control: an inline GraphQL ignore comment cannot hide a crammed query", async () => {
     // `query Q { # prettier-ignore` is honoured mid-line; a line-start grammar
     // missed it and measured 601 lines as 7. No grammar is trusted any more.
     const root = fixtureRepo();
@@ -628,7 +547,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expect(await measureLines("a.ts", source, {}, prettier)).toEqual({ lines: unignored });
   }, TIMEOUT);
 
-  test("negative control (Sol S426-08): a count Prettier cannot produce fails closed, in either pass", async () => {
+  test("negative control: a count Prettier cannot produce fails closed, in either pass", async () => {
     const plainFails = { format: async () => { throw new RangeError("Maximum call stack size exceeded"); } };
     const neutralisedFails = {
       format: async (text: string) => {
@@ -641,7 +560,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     await expect(measureLines("lib/a.ts", source, {}, neutralisedFails)).rejects.toThrow(/^COUNT-UNAVAILABLE lib\/a\.ts/);
   }, TIMEOUT);
 
-  test("negative control (Sol S426-09): a count-unavailable error names the file and position, never its source", async () => {
+  test("negative control: a count-unavailable error names the file and position, never its source", async () => {
     const prettier = await import("prettier");
     const source = 'const internalSecret = "SENTINEL_SECRET_426";\nexport const = ;\n';
     const error = await measureLines("convex/broken.ts", source, {}, prettier).then(
@@ -653,7 +572,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     expect(error?.message).not.toContain("export const");
   }, TIMEOUT);
 
-  test("negative control (Sol S426-09 residual): malformed or hostile error positions never reach the message", async () => {
+  test("negative control: malformed or hostile error positions never reach the message", async () => {
     const SECRET = "SENTINEL_SECRET_426";
     const throwing = (value: unknown) => ({ format: async () => { throw value; } });
     const hostileLoc = Object.defineProperty(new Error(SECRET), "loc", {
@@ -678,7 +597,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     );
   }, TIMEOUT);
 
-  test("negative control (Sol S426-08): an unformattable file blocks the check and the baseline writer, never a notice", async () => {
+  test("negative control: an unformattable file blocks the check and the baseline writer, never a notice", async () => {
     const root = fixtureRepo();
     write(root, "convex/broken.ts", "export const = ;\n");
     await expect(check(root)).rejects.toThrow(/COUNT-UNAVAILABLE convex\/broken\.ts/);
@@ -694,7 +613,7 @@ describe("CodeRabbit review on #356 (CR-1..3)", () => {
     const items = Array.from({ length: 60 }, (_, i) => `"item-${i}"`).join(", ");
     const code = `export const crammed = [${items}];`;
     const jsx = (pragma: string) => `export const C = () => (\n  <div>\n    ${pragma}\n    <span>{[${items}]}</span>\n  </div>\n);\n`;
-    // Measured against Prettier 3.8.4 (E:\tmp\sol-372\scrum426\pragma-grammar.txt).
+    // Each form below was observed to be honoured by Prettier 3.8.4.
     const honoured: Array<[string, string]> = [
       ["a.ts", `// prettier-ignore\n${code}\n`],
       ["a.ts", `//prettier-ignore\n${code}\n`],
@@ -768,7 +687,22 @@ describe("import boundaries", () => {
     ]);
   }, TIMEOUT);
 
-  test("negative control (S426-01 / Codex 426-2): an equivalent alias spelling is judged as the file it resolves to", () => {
+  test("import detection covers re-exports, dynamic import and require, but not comments or strings", () => {
+    const config = parseConfig(json(baseConfig()), "fixture");
+    const source = [
+      '// import { a } from "@/convex/utils/commented";',
+      'const s = "import x from \'@/convex/utils/inString\'";',
+      'export { b } from "@/convex/utils/reexport";',
+      'const lazy = () => import("@/convex/utils/dynamic");',
+      'const c = require("@/convex/utils/required");',
+    ].join("\n");
+    const found = importViolations("components/A.tsx", source, config).map((v: Grandfather) => v.to).sort();
+    expect(found).toEqual(["convex/utils/dynamic", "convex/utils/reexport", "convex/utils/required"]);
+  });
+});
+
+describe("import specifier aliases", () => {
+  test("negative control: an equivalent alias spelling is judged as the file it resolves to", () => {
     const config = parseConfig(json(baseConfig()), "fixture");
     const to = (from: string, spec: string) =>
       importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
@@ -782,7 +716,7 @@ describe("import boundaries", () => {
     expect(to("components/A.tsx", "@/../outside/convex/utils/money")).toEqual([]);
   });
 
-  test("negative control (Codex 426-2 r2): a doubled alias slash resolves to the same module and is judged as it", () => {
+  test("negative control: a doubled alias slash resolves to the same module and is judged as it", () => {
     const config = parseConfig(json(baseConfig()), "fixture");
     const to = (from: string, spec: string) =>
       importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
@@ -790,18 +724,5 @@ describe("import boundaries", () => {
     expect(to("convex/domains/d/commands/c.ts", "@///convex/applications")).toEqual(["domains-no-door convex/applications"]);
     // Control: stripping the slashes must not let an escape pass as a repo path.
     expect(to("components/A.tsx", "@//../outside/convex/utils/money")).toEqual([]);
-  });
-
-  test("import detection covers re-exports, dynamic import and require, but not comments or strings", () => {
-    const config = parseConfig(json(baseConfig()), "fixture");
-    const source = [
-      '// import { a } from "@/convex/utils/commented";',
-      'const s = "import x from \'@/convex/utils/inString\'";',
-      'export { b } from "@/convex/utils/reexport";',
-      'const lazy = () => import("@/convex/utils/dynamic");',
-      'const c = require("@/convex/utils/required");',
-    ].join("\n");
-    const found = importViolations("components/A.tsx", source, config).map((v: Grandfather) => v.to).sort();
-    expect(found).toEqual(["convex/utils/dynamic", "convex/utils/reexport", "convex/utils/required"]);
   });
 });

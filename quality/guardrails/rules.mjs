@@ -9,7 +9,7 @@ export const CONFIG_PATH = "quality/guardrails/config.json";
 export const BASELINE_PATH = "quality/guardrails/baseline.json";
 
 /**
- * The owner-approved policy (SCRUM-418 c21105) that the FIRST guardrail PR is
+ * The owner-approved policy (SCRUM-418) that the FIRST guardrail PR is
  * held to. On bootstrap the target has no config yet, so the PR's own config is
  * the only candidate; it may be tighter than this, never looser. `nonDoors` is
  * the reviewed set of top-level Convex modules that export no functions — path
@@ -232,7 +232,7 @@ export function classify(repoPath, config) {
 /**
  * The scope a PR is enforced in: the union of trusted and proposed roots and
  * extensions, excluded only by the TRUSTED lists — a list entry the PR adds can
- * never hide scope the same PR adds (Sol S426-05).
+ * never hide scope the same PR adds.
  */
 export function enforcementScope(trustedConfig, proposedConfig) {
   const union = (key) => [...new Set([...trustedConfig[key], ...proposedConfig[key]])];
@@ -252,7 +252,7 @@ async function formattedCount(repoPath, text, options, prettier) {
     return countNonBlank(await prettier.format(text, options));
   } catch (error) {
     // Prettier's message carries a code frame of the source; CI logs are
-    // public, so only a validated integer position is reported (S426-09).
+    // public, so only a validated integer position is reported.
     throw new Error(`COUNT-UNAVAILABLE ${repoPath}: Prettier could not format it${errorPosition(error)}`);
   }
 }
@@ -272,13 +272,13 @@ function errorPosition(error) {
  * (read from the target branch), then count non-blank lines.
  *
  * An ignore pragma must not preserve a crammed layout. Rather than model which
- * comment forms Prettier honours (every grammar tried missed one — CR-3,
- * CR-3-INLINE-GQL), EVERY occurrence of the word is neutralised to a same-width
- * token and the file is formatted again; the LARGER count wins, so a rewrite
- * that touched a string or identifier can never lower the result below
- * Prettier's own layout of the source (S426-07).
+ * comment forms Prettier honours (every line-start grammar missed some form,
+ * such as an inline GraphQL comment), EVERY occurrence of the word is
+ * neutralised to a same-width token and the file is formatted again; the
+ * LARGER count wins, so a rewrite that touched a string or identifier can
+ * never lower the result below Prettier's own layout of the source.
  *
- * Fail closed (S426-08): a file whose layout cannot be measured is an error,
+ * Fail closed: a file whose layout cannot be measured is an error,
  * never a pass on a raw count.
  */
 export async function measureLines(repoPath, rawText, prettierOptions, prettier) {

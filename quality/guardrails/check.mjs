@@ -45,7 +45,7 @@ import {
 const PRETTIER_RC = ".prettierrc";
 
 // An absolute Git path, never whatever `git` the inherited PATH resolves
-// (Sonar S4036); the same candidates as scripts/intelligence/jevImpact.mjs.
+// (the PATH lookup could pick up a planted binary); the same candidates as scripts/intelligence/jevImpact.mjs.
 function resolveTrustedGitExecutable() {
   const candidates =
     process.platform === "win32"
@@ -257,7 +257,7 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
     );
   }
   // An older sourceCommit must not loosen what the target itself would allow:
-  // every allowance must also be derivable from the target (CodeRabbit #356).
+  // every allowance must also be derivable from the target.
   const atTarget = source === baseCommit
     ? measured
     : await measureCommit(cwd, baseCommit, proposed.config, prettierOptions, lineCache);
