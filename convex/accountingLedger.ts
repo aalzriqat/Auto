@@ -10,6 +10,7 @@ import { postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { RECEIPT_EVENT_TYPE, RECEIPT_SOURCE_TYPE } from "./accounting/receiptOccurrence";
 import { requireFeature } from "./subscriptions";
+import { addBalanceMinor } from "./utils/money";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { assertLegacyCollectionRefundAllowed } from "./utils/legacyCollectionRefundContainment";
 
@@ -287,8 +288,8 @@ export const getAccountActivity = query({
           (l._creationTime === firstLine._creationTime && l._id < firstLine._id)
         ) {
           const b = sameDatePrecedingBalances.get(l.currency) ?? { debitMinor: 0, creditMinor: 0 };
-          b.debitMinor += l.debitMinor;
-          b.creditMinor += l.creditMinor;
+          b.debitMinor = addBalanceMinor(b.debitMinor, l.debitMinor);
+          b.creditMinor = addBalanceMinor(b.creditMinor, l.creditMinor);
           sameDatePrecedingBalances.set(l.currency, b);
         }
       }
@@ -310,8 +311,8 @@ export const getAccountActivity = query({
 
       const sameDateB = sameDatePrecedingBalances.get(currency);
       if (sameDateB) {
-        debit += sameDateB.debitMinor;
-        credit += sameDateB.creditMinor;
+        debit = addBalanceMinor(debit, sameDateB.debitMinor);
+        credit = addBalanceMinor(credit, sameDateB.creditMinor);
       }
 
       runningByCurrency.set(currency, netOf(debit, credit));
@@ -321,11 +322,11 @@ export const getAccountActivity = query({
     const totalsByCurrency = new Map<string, { debitMinor: number; creditMinor: number }>();
     const linesWithBalance = page.map((l) => {
       const t = totalsByCurrency.get(l.currency) ?? { debitMinor: 0, creditMinor: 0 };
-      t.debitMinor += l.debitMinor;
-      t.creditMinor += l.creditMinor;
+      t.debitMinor = addBalanceMinor(t.debitMinor, l.debitMinor);
+      t.creditMinor = addBalanceMinor(t.creditMinor, l.creditMinor);
       totalsByCurrency.set(l.currency, t);
 
-      const running = (runningByCurrency.get(l.currency) ?? 0) + netOf(l.debitMinor, l.creditMinor);
+      const running = addBalanceMinor(runningByCurrency.get(l.currency) ?? 0, netOf(l.debitMinor, l.creditMinor));
       runningByCurrency.set(l.currency, running);
       return { ...l, runningBalanceMinor: running };
     });

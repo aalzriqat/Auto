@@ -1,0 +1,66 @@
+{
+  "id": "opening-snapshot-cross-account-containment",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "accountBalanceSnapshots.seedCrossAccountAndLegacy",
+      "input": {
+        "eachAccountMinor": 4503599627370497,
+        "legacyUnsafeGross": "retained"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.balanceSheet",
+      "input": {
+        "cutoff": "period-end"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingReports.trialBalance",
+      "input": {
+        "cutoff": "period-end"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "report.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure"
+  },
+  "matrixRow": "SCRUM-850-opening-snapshot-exactness",
+  "fingerprint": "93fbb38be5c64c6fc147999b2b64259d4eba5ddd1240b740d5614b2f0686ceb4"
+}

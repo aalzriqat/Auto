@@ -82,7 +82,7 @@ export function parseMajorToMinor(value: string, scale: number): ParsedMinorAmou
     .trim()
     .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x660))
     .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x6f0))
-    .replace(/٫/g, ".");
+    .replaceAll("٫", ".");
   if (trimmed === "") return { ok: false, problem: "EMPTY" };
   const match = /^(\d*)(?:\.(\d*))?$/.exec(trimmed);
   if (!match || (match[1] === "" && (match[2] ?? "") === "")) {

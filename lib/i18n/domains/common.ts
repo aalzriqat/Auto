@@ -1,6 +1,10 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
+  ServerError_ACCOUNT_SNAPSHOT_UNSAFE_TOTAL: [
+    "This balance cannot be represented exactly. Ask finance to review the account totals.",
+    "لا يمكن عرض هذا الرصيد بدقة. اطلب من قسم المالية مراجعة إجماليات الحساب.",
+  ],
   ServerError_OPENING_DRAFT_CHANGED: [
     "This opening draft changed after your review. Review the updated draft before deciding.",
     "تغيّرت المسودة الافتتاحية بعد مراجعتك. راجع المسودة المحدّثة قبل اتخاذ القرار.",

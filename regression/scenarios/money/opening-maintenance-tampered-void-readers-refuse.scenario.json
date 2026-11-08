@@ -89,9 +89,5 @@
     "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
     "testName": "SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations"
   },
-  "matrixRow": "SCRUM-850-opening-maintenance-money",
-  "bugRef": {
-    "key": "SCRUM-850",
-    "failingFirst": "72f92b1d9b908ad7290843fd31632aafda340372"
-  }
+  "matrixRow": "SCRUM-850-opening-maintenance-money"
 }

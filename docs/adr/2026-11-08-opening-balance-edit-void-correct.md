@@ -16,6 +16,31 @@ The coordinator supplied these owner rulings, selected in Arabic on 2026-11-08:
 
 Invariant: an opening change preserves the same economic position in the general ledger, account snapshots, bank attribution, and native subledgers, or refuses atomically; posted journal history remains readable and approval cannot come from the requester or preparer of the relevant operation.
 
+### Round 3: exact snapshot totals
+
+Snapshot gross debit and credit operands and every accumulated balance must remain
+safe integers. The shared snapshot writer refuses an unsafe total with the coded
+`ACCOUNT_SNAPSHOT_UNSAFE_TOTAL` error before updating its shard. That exception
+must escape the mutation so earlier journal, native, audit and scheduled writes
+roll back. Readers check gross totals before netting and check downstream totals
+across accounts. They return their existing UNAVAILABLE result (OVER_LIMIT for
+bounded readers, source unavailable for deposits, incomplete history for banks)
+or a clean coded refusal for statement, ledger and VAT queries. No partial or
+rounded figure is reported, including for closed periods (SCRUM-858 c23884).
+
+This is containment with unchanged Number storage, not a historical repair.
+BigInt storage would require a schema/API migration and cannot recover precision
+already lost in a stored Number. Neither option authorizes rebuilding sealed
+snapshots. The selected checks retain shard-local writes and existing indexed
+reads; they introduce no global posting counter or additional database I/O.
+
+The decisions follow [ECMAScript safe integers](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-number.issafeinteger),
+[Convex Float64 and Int64 types](https://docs.convex.dev/database/types),
+[Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors)
+and [Convex transaction atomicity/OCC](https://docs.convex.dev/database/advanced/occ).
+Local harness evidence proves serial behavior only; it does not prove platform
+OCC, limits or production prevalence.
+
 An edited pending draft remains pending, retains its preparer, and can be edited by that preparer alone. It passes the same currency, date, account, bank, allocation, payroll, and exact-money validation as a new draft. Approval revalidates the latest stored content. An owner has no single-person void exception.
 
 ## Evidence and impact map

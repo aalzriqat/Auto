@@ -1428,6 +1428,26 @@ Owner feature rules: SCRUM-850 c24748/c24749, supplied by the coordinator on 202
 
 The composite fixture posts 1,960,018 JOD minor units per side across eleven allocation kinds. The void leaves 3,920,036 gross minor units per side and zero net on every account, with bank balance zero. A fresh opening using the same stock/partner masters restores bank balance 300,003. Original and reversal journals and immutable allocation results survive; replay changes no application table or scheduler row. Eight native source tables are empty after void. These checks do not compare component tables byte-for-byte.
 
+## SCRUM-850-opening-snapshot-exactness
+
+SCRUM-858 c23884: each snapshot-derived figure is exact or UNAVAILABLE/refused.
+Round-3 local serial harness checks; these do not certify runtime OCC or release.
+Named backend registrations are in `convex/openingBalanceMaintenance.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-snapshot-replacement-exactness` | `SCRUM-850 R3 replacement gross snapshots refuse rounded trial and balance sheet figures` |
+| `opening-snapshot-writer-atomic-refusal` | `SCRUM-850 R3 unsafe snapshot write refuses replacement atomically including scheduled work` |
+| `opening-snapshot-period-overflow` | `SCRUM-850 R3 elapsed periods with unsafe gross totals refuse public snapshot reports` |
+| `opening-snapshot-ordinary-replacement` | `SCRUM-850 R3 ordinary replacement preserves exact trial balance and balance sheet` |
+| `opening-snapshot-cross-account-containment` | `SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure` |
+| `opening-snapshot-reader-unavailable` | `SCRUM-850 R3 snapshot overflow preserves existing reconciliation unavailable contracts` |
+| `opening-vehicle-prefill-exactness` | `SCRUM-850 R3 opening vehicle selection prefills exact boundary minor units` in `components/accounting/setup/OpeningAllocationVisualFixture.test.tsx` |
+
+The first three backend defects and the vehicle prefill have red evidence at
+`adc6ec810ed7c8747dab3519b07034657b77ec50`; ordinary/cross-account/reconciliation
+records are preventive controls and claim no failing-first commit.
+
 ## SCRUM-850-opening-maintenance-permission
 
 | Scenario | Bound named test |
@@ -1706,4 +1726,4 @@ Each row remains local harness evidence, not release certification. The failing-
 | `opening-maintenance-tampered-void-readers-refuse` | `SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations` |
 | `opening-maintenance-stale-approval-refuses` | `SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts` |
 | `opening-maintenance-stale-rejection-refuses` | `SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects` |
-| `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing` |
+| `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing` |

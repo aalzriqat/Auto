@@ -74,7 +74,7 @@
   ],
   "impl": {
     "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
-    "testName": "SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing"
+    "testName": "SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing"
   },
   "matrixRow": "SCRUM-850-opening-maintenance-money",
   "bugRef": {
