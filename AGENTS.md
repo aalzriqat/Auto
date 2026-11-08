@@ -14,7 +14,7 @@ Convex agent skills for common tasks can be installed by running
 
 ## Agent skills
 
-Shared skills live in `.claude/skills/`. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
+Shared skills live in `.claude/skills/`. The adopted Matt Pocock planning skills come from the `mattpocock-skills` Claude Code plugin instead. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
 
 When evidence shows the same agent mistake has occurred twice in this repo, invoke `.claude/skills/correct/SKILL.md` automatically. Do not wait for a user request. Follow its evidence and scope rules, and keep the normal review and release gates.
 
@@ -26,7 +26,7 @@ User-invoked `to-spec`, `to-tickets`, `wayfinder` and `implement-spec` use this 
 
 ### Domain docs
 
-Use one shared AutoFlow glossary and root ADR directory (single-context). See `docs/agents/domain.md`.
+Use one shared AutoFlow glossary and root ADR directory (single-context). Only `domain-modeling`, usually through `/grill-with-docs`, writes `GLOSSARY.md` and ADRs, in a normal reviewed PR. See `docs/agents/domain.md`.
 
 ## Pilot release gate (owner standard, 2026-10-07)
 

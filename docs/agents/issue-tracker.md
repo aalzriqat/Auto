@@ -20,20 +20,23 @@ AutoFlow work lives in Jira project `SCRUM` on `https://autoflowdealer.atlassian
 
 ## Wayfinding operations
 
-How `/wayfinder` keeps its map in Jira. Owner approval: SCRUM-933, 2026-11-08.
+How `/wayfinder` keeps its map in Jira. The owner approved these operations on 2026-11-08 (SCRUM-933). Owner rulings and the decision rule bind every decision the map records. If Jira refuses a `Subtask` or a `Blocks` link, report that limitation instead of working around it.
 
 - **Map:** one Jira `Task` with the label `wayfinder:map`. Its parent is the epic the effort belongs to, for example SCRUM-418 for the architecture refactor. The Task description is the map body: Destination, Notes, Decisions so far, Not yet specified, Out of scope.
 - **Tickets:** each decision ticket is a Jira `Subtask` of the map, with exactly one label `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling` or `wayfinder:task`. The description holds only `## Question`.
-- **Claim:** assign the ticket to yourself before any work. An open ticket with no assignee is unclaimed.
+- **Claim:** assign the ticket to yourself before any work, then read the ticket back. If another assignee shows, leave it. Agent sessions share one Atlassian account, so also record the claim with `coord.mjs` and check its active claims first. An open ticket with no assignee and no claim is unclaimed.
 - **Blocking:** the native `Blocks` link, as above. Create every ticket first, then wire the links in a second pass with real keys.
-- **Frontier:** `parent = <map key> AND statusCategory != Done AND assignee is EMPTY`. Then drop every ticket that has an open `is blocked by` link.
+- **Frontier:** `parent = <map key> AND statusCategory != Done AND assignee is EMPTY`. JQL cannot filter on the state of linked issues, so read each result's `is blocked by` links and drop every ticket that has one that is not Done.
+- **Map edits:** Jira keeps the last write to a description. Read the map again just before you edit it, and change only the lines you own.
 - **Resolve:** post the answer as a comment with the usual agent prefix, move the ticket to Done, and add one line to the map's Decisions so far that links the ticket.
+- **Out of scope:** post a comment that starts with `Out of scope:` and gives the reason, move the ticket to Done, and add one line to the map's Out of scope section. Do not add it to Decisions so far.
+- **Map complete:** when the map has no open tickets and Not yet specified is empty, post the destination as a comment, move the map to Done, and continue with `/to-spec` or the next step the Destination names.
 - **Research notes:** post a research ticket's findings as a comment on the ticket. Do not push the upstream `research/<name>` branches. This repository is public, so every pushed branch is public too.
 
 The `wayfinder:` labels go only on a map and its tickets. Decision tickets never carry `ready-for-agent`. A resolved map authorizes planning only. Implementation still goes through `/to-tickets` or ordinary issues and the repository gates.
 
 ## Labels and request surfaces
 
-The `triage` skill is not installed, so this setup does not provision a triage-label vocabulary or create any labels other than the `wayfinder:` labels above. Preserve existing Jira statuses and labels. Apply `ready-for-agent` only if it already exists in SCRUM and the approved publishing scope includes applying it. If the label is absent, omit it and report its absence. Do not create the label or invent status mappings. The label never authorizes implementation or merge.
+The `triage` skill is not adopted, so this setup does not provision a triage-label vocabulary or create any labels other than the `wayfinder:` labels above. Preserve existing Jira statuses and labels. Apply `ready-for-agent` only if it already exists in SCRUM and the approved publishing scope includes applying it. If the label is absent, omit it and report its absence. Do not create the label or invent status mappings. The label never authorizes implementation or merge.
 
 GitHub remains the code/PR/CI surface, not a second issue tracker. This setup adds no Slack messages or new posting automation. Existing project communication rules remain authoritative.
