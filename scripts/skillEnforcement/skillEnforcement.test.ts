@@ -90,6 +90,8 @@ describe("invokedSkills", () => {
     const seen = invokedSkills(text, { home: HOME });
     expect(seen.has("tdd")).toBe(false);
     expect(seen.has("diagnosing-bugs")).toBe(false);
+    // The namespace alone decides, even beside a record of the repository copy.
+    expect(invokedSkills(skillCall("mattpocock-skills:tdd", false, `${REPO_SKILLS}/tdd`), { home: HOME }).size).toBe(0);
   });
   test("a bare name counts only when the repository copy is what loaded (SCRUM-934)", () => {
     // A session whose project skills are not loaded resolves a bare `tdd` to the plugin copy.
