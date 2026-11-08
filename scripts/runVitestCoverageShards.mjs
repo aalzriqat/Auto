@@ -75,6 +75,8 @@ const sonarCoverageArgs = [
   // CI helpers (.cjs) under scripts/ are exercised by suites in scripts/, so
   // they are measured rather than left outside the report (SCRUM-293).
   "--coverage.include=scripts/**/*.cjs",
+  // SCRUM-426: the guardrail checker is release tooling with its own suite.
+  "--coverage.include=quality/**/*.mjs",
   "--coverage.exclude=convex/_generated/**",
   "--coverage.exclude=**/*.test.ts",
   // node:test files (scripts/contractSkew/baselineIdentity.test.mjs) are test code, classified so in sonar-project.properties (SCRUM-866).
