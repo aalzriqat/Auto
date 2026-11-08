@@ -323,8 +323,8 @@ test.each(["en", "ar"] as const)(
 );
 
 test.each([
-  ["en", "create", "ACCOUNT_CODE_INVALID", "Enter a non-empty account code."],
-  ["ar", "create", "ACCOUNT_CODE_INVALID", "أدخل رمز حساب غير فارغ."],
+  ["en", "create", "ACCOUNT_CODE_INVALID", "Enter an account code using only English letters, digits, dots and hyphens."],
+  ["ar", "create", "ACCOUNT_CODE_INVALID", "أدخل رمز حساب يتكوّن من حروف إنجليزية وأرقام ونقاط وشرطات فقط."],
   ["en", "create", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],
   ["ar", "create", "ACCOUNT_NAME_REQUIRED", "أدخل اسم الحساب بالإنجليزية."],
   ["en", "update", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],

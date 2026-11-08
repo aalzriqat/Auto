@@ -832,7 +832,7 @@ export const create = mutation({
     if (!/^[A-Za-z0-9.-]+$/.test(code)) {
       throw new ConvexError({
         code: "ACCOUNT_CODE_INVALID",
-        message: "Enter a non-empty account code.",
+        message: "Enter an account code using only English letters, digits, dots and hyphens.",
       });
     }
     const name = args.name.trim();

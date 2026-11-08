@@ -66,8 +66,8 @@ const messages = defineBilingualMessages({
     "رمز الحساب مستخدم بالفعل في هذه المؤسسة.",
   ],
   ServerError_ACCOUNT_CODE_INVALID: [
-    "Enter a non-empty account code.",
-    "أدخل رمز حساب غير فارغ.",
+    "Enter an account code using only English letters, digits, dots and hyphens.",
+    "أدخل رمز حساب يتكوّن من حروف إنجليزية وأرقام ونقاط وشرطات فقط.",
   ],
   ServerError_ACCOUNT_NAME_REQUIRED: [
     "Enter an English account name.",

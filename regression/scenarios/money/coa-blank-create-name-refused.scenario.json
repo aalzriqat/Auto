@@ -41,7 +41,7 @@
   ],
   "bugRef": {
     "key": "SCRUM-932",
-    "failingFirst": "cee22464d79e20714166638b1b1810c855623583"
+    "failingFirst": "8bb596108f3d13d3265dd339f15a432d96cfc2a6"
   },
   "level": "backend",
   "status": "active",
