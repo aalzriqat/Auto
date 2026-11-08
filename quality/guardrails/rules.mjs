@@ -31,6 +31,8 @@ export const LEGACY_MIGRATIONS = Object.freeze([
 
 export const RULES = Object.freeze({
   componentsNoConvexUtils: "components-no-convex-utils",
+  componentsNoDomains: "components-no-domains",
+  domainsCrossDomainIndexOnly: "domains-cross-domain-index-only",
   domainsNoDoor: "domains-no-door",
   policyNoGeneratedServer: "policy-no-generated-server",
   policyNoReact: "policy-no-react",
@@ -328,6 +330,10 @@ function isDoor(moduleId, config) {
 }
 
 const DOMAIN_SCOPE = /^convex\/domains\//u;
+// A module inside one domain's directory (capture 1 = the domain). A module id has
+// no extension and no trailing /index, so a domain's index is exactly
+// `convex/domains/<name>` (no match here) and anything deeper is an internal module.
+const DOMAIN_MODULE = /^convex\/domains\/([^/]+)\/./u;
 const POLICY_SCOPE = /^convex\/domains\/(?:[^/]+\/)*policy\//u;
 const REACT_PACKAGE = /^react(?:-dom)?(?:\/|$)/u;
 
@@ -353,6 +359,13 @@ export function importViolations(fromPath, sourceText, config) {
     }
     if (DOMAIN_SCOPE.test(fromPath) && repoId && isDoor(repoId, config)) {
       add(RULES.domainsNoDoor, repoId);
+    }
+    // SCRUM-418 A1: another domain is reached only through its index.
+    if (repoId && /^convex\/domains\//u.test(repoId)) {
+      if (fromPath.startsWith("components/")) add(RULES.componentsNoDomains, repoId);
+      const own = DOMAIN_MODULE.exec(fromPath);
+      const other = DOMAIN_MODULE.exec(repoId);
+      if (own && other && own[1] !== other[1]) add(RULES.domainsCrossDomainIndexOnly, repoId);
     }
     if (POLICY_SCOPE.test(fromPath)) {
       if (repoId === "convex/_generated/server") add(RULES.policyNoGeneratedServer, repoId);
