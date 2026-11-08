@@ -1,6 +1,6 @@
 # AutoFlow
 
-AutoFlow runs a car dealership: it sells vehicles for cash or through a finance company, keeps the dealership's books, and tracks the money owed to and by customers, suppliers and staff. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. Decisions live in `docs/adr/`; owner rulings in Jira take precedence over both.
+AutoFlow runs a car dealership: it sells vehicles for cash or through a finance company, keeps the dealership's books, and tracks the money owed to and by customers, suppliers and staff. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. Decisions live in `docs/adr/`. Owner rulings in Jira take precedence over both.
 
 ## Domains
 
@@ -27,7 +27,7 @@ The completed result of a Deal for one vehicle. A deal with several vehicles has
 _Avoid_: using "sale" for a deal that has not completed
 
 **Cash deal**:
-A deal with no finance company; the customer pays the dealership directly.
+A deal with no finance company. The customer pays the dealership directly.
 
 **Financed deal**:
 A deal in which a finance company buys the vehicle from the dealership and sells it to the customer on instalments.
@@ -97,7 +97,7 @@ A vehicle held on consignment: the dealership sells it as the supplier's agent a
 _Avoid_: special order, drop-ship, consigned stock
 
 **Cost basis**:
-What a stock vehicle cost the dealership before the deal: purchase price, landed costs and capitalized costs. A sourced vehicle has no cost basis of its own; the supplier entitlement stands in its place.
+What a stock vehicle cost the dealership before the deal: purchase price, landed costs and capitalized costs. A sourced vehicle has no cost basis of its own. The supplier entitlement takes its place.
 _Avoid_: cost price (for a sourced vehicle)
 
 **Capitalized cost**:
@@ -143,10 +143,10 @@ _Avoid_: cashbook, transactions
 The dealership's list of accounts, each with a type such as asset, liability, revenue or expense.
 
 **Accounting period**:
-A span of dates the books are kept in; it is opened, closed and locked in turn.
+A span of dates that the books are kept in. Each period is opened, then closed, then locked.
 
 **Closed period**:
-An accounting period whose balances no longer change; new corrections land in a later period.
+An accounting period whose balances no longer change. A new correction is dated in a later period.
 
 **Snapshot**:
 The stored running totals of each account for a period. A closed period's balances are read from its snapshots.
@@ -183,7 +183,7 @@ A post-dated cheque from a customer, tracked until it clears, returns or is repl
 An amount a customer owes the dealership outside a sale.
 
 **Sale invoice**:
-The invoice that records what the customer owes for a sale. It is the customer's debt for that sale; no separate receivable is raised for it.
+The invoice that records what the customer owes for a sale. It is the customer's debt for that sale, so no separate receivable is raised for it.
 
 ## Expenses
 
@@ -253,7 +253,7 @@ A deal's margin as the general ledger records it.
 
 ## Architecture vocabulary
 
-Use these terms exactly; do not substitute "component", "service", "API" or "boundary".
+Use these terms exactly. Do not substitute "component", "service", "API" or "boundary".
 
 **Module**:
 Anything with an interface and an implementation, at any scale: a function, a file, a domain folder.
@@ -267,20 +267,20 @@ _Avoid_: API, signature
 What is inside a module.
 
 **Depth**:
-How much behaviour a caller gets per unit of interface it has to learn. A deep module hides a lot behind a small interface; a shallow one does not.
+How much behaviour a caller gets per unit of interface it has to learn. A deep module hides a lot behind a small interface. A shallow module does not.
 
 **Seam**:
 The place where a module's interface lives, where behaviour can be changed without editing the callers.
 _Avoid_: boundary
 
 **Adapter**:
-A concrete thing that fills an interface at a seam. One adapter is a hypothetical seam; two make it real.
+A concrete thing that fills an interface at a seam. A seam with one adapter is hypothetical. A seam with two adapters is real.
 
 **Leverage**:
 What callers gain from depth: more capability for less interface learned.
 
 **Locality**:
-What maintainers gain from depth: change, bugs and knowledge concentrate in one place.
+What maintainers gain from depth: changes, bugs and knowledge sit in one place.
 
 **Domain**:
 One of the nine business areas above, held in one folder with one interface.
