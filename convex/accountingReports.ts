@@ -1,3 +1,4 @@
+import { verifiedOpeningVoidJournalIds } from "./utils/openingVoidProof";
 import { openingDatabase, type OpeningReadCtx } from "./utils/openingSourceIdentity";
 import { createOpeningSettlementReader, requireOpeningSettlementBasis } from "./utils/openingSettlementBasis";
 import {readOpeningUnallocatedLiabilities} from "./utils/openingUnallocatedLiabilities";
@@ -1846,6 +1847,11 @@ async function controlSourceFamilyRefusal(
   const distinctJournalIds = await readControlJournalIds(ctx, orgId, controls);
   if (distinctJournalIds === "OVER_LIMIT") return "OVER_LIMIT";
   if (distinctJournalIds.size === 0) return null;
+  const voidJournals = await verifiedOpeningVoidJournalIds(ctx, orgId);
+  if (!voidJournals) return "SOURCE_FAMILY_UNSUPPORTED";
+  // Excuse only proved identities; all other source families retain refusal.
+  for (const id of voidJournals) distinctJournalIds.delete(id);
+  if (distinctJournalIds.size === 0) return null;
 
   if (3 * distinctJournalIds.size <= PROVENANCE_RANGE_BUDGET) {
     // Each point read asks the transaction for headroom first; running out answers OVER_LIMIT, never a platform error.
@@ -2430,11 +2436,16 @@ async function discoverSupplierReceivableGlAccounts(
     .withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS)).unique();
   if (canonical) addControl(canonical._id, Number.NEGATIVE_INFINITY);
 
+  const voidJournals = await verifiedOpeningVoidJournalIds(ctx, orgId, {
+    range: chargeRange, documents: chargeDocuments,
+  });
+  if (!voidJournals) refuse();
+
   // Reversed or malformed cutover journals cannot disappear behind ABSENT, even if their rows were lost.
   const cutovers = await readRows(ctx.db.query("journalEntries")
     .withIndex("by_org_source", q => q.eq("orgId", orgId).eq("sourceType", "cutover")));
   if (cutovers.some(journal => (journal.status === "POSTED" || journal.status === "REVERSED") &&
-    journal._id !== source.journal?._id)) refuse();
+    journal._id !== source.journal?._id && !voidJournals?.has(journal._id))) refuse();
 
   // Reset retains headers but deletes chart and journal authority. Prove retirement from those
   // identities; ABSENT alone would also accept a current journal that was accidentally deleted.
