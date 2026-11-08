@@ -14,7 +14,7 @@ Convex agent skills for common tasks can be installed by running
 
 ## Agent skills
 
-Shared skills live in `.claude/skills/`. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
+Shared skills live in `.claude/skills/`. The adopted Matt Pocock planning skills come from the `mattpocock-skills` Claude Code plugin instead. Read `.claude/skills/README.md` for which skill to use in which situation and for what is deliberately not adopted. The skills sit below this file and the project instructions in precedence. They never replace the two-seat review for money changes, and a subagent they suggest is not a review seat.
 
 When evidence shows the same agent mistake has occurred twice in this repo, invoke `.claude/skills/correct/SKILL.md` automatically. Do not wait for a user request. Follow its evidence and scope rules, and keep the normal review and release gates.
 
@@ -22,11 +22,11 @@ Invocation is enforced, not optional. A session hook (`.claude/settings.json`) b
 
 ### Issue tracker
 
-User-invoked `to-spec` and `to-tickets` use this project's existing Jira workflow. See `docs/agents/issue-tracker.md`. This setup does not adopt other upstream workflows or change the rules and gates above or below this section.
+User-invoked `to-spec`, `to-tickets`, `wayfinder` and `implement-spec` use this project's existing Jira workflow. See `docs/agents/issue-tracker.md`, and the `implement-spec` conditions in `.claude/skills/README.md`. This setup does not adopt other upstream workflows or change the rules and gates above or below this section.
 
 ### Domain docs
 
-Use one shared AutoFlow glossary and root ADR directory (single-context). See `docs/agents/domain.md`.
+Use one shared AutoFlow glossary and root ADR directory (single-context). An ADR is still required before every money or permission PR (owner ruling 2026-11-02, SCRUM-760 c24361). Among skills, only `domain-modeling` writes `GLOSSARY.md` and ADRs. See "Who writes the glossary and ADRs" in `docs/agents/domain.md`.
 
 ## Pilot release gate (owner standard, 2026-10-07)
 
