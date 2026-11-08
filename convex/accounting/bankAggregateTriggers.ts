@@ -258,9 +258,11 @@ export function registerBankBalanceTriggers<Ctx extends MutationCtx>(triggers: T
   });
   triggers.register("chartOfAccounts", async (ctx, change) => {
     if (change.operation !== "update") return;
-    if (change.oldDoc.systemKey !== change.newDoc.systemKey ||
+    // Only bank-control membership or mapping changes can invalidate the bank aggregate namespace.
+    if ((change.oldDoc.systemKey === SYSTEM_KEYS.BANK_ACCOUNT || change.newDoc.systemKey === SYSTEM_KEYS.BANK_ACCOUNT) &&
+        (change.oldDoc.systemKey !== change.newDoc.systemKey ||
         change.oldDoc.active !== change.newDoc.active ||
-        change.oldDoc.currencyRestriction !== change.newDoc.currencyRestriction) {
+        change.oldDoc.currencyRestriction !== change.newDoc.currencyRestriction)) {
       await bumpGeneration(ctx, change.newDoc.orgId);
     }
   });
