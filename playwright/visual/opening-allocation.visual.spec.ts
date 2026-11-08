@@ -10,7 +10,8 @@ import { newContainedContext } from "../containedContext";
 const ROOT = resolve(__dirname, "../..");
 const STATES = ["entry", "review", "readback", "redacted", "prepaid-entry", "prepaid-review", "prepaid-readback",
   "stock-entry", "stock-review", "stock-readback", "remaining-entry", "remaining-review",
-  "remaining-readback", "remaining-redacted", "choice-loading", "choice-empty", "choice-stale"] as const;
+  "remaining-readback", "remaining-redacted", "choice-loading", "choice-empty", "choice-stale",
+  "void-request", "void-approval", "editable-draft"] as const;
 let fixtureDirectory = "";
 let css = "";
 
@@ -36,6 +37,9 @@ test.beforeAll(async () => {
 });
 
 const COPY = {
+  "void-request": { en: "Reason for void", ar: "سبب الإلغاء" },
+  "void-approval": { en: "Synthetic documented reason", ar: "Synthetic documented reason" },
+  "editable-draft": { en: "Edit draft", ar: "تعديل المسودة" },
   "choice-loading": { en: "Party unavailable", ar: "الطرف غير متاح" },
   "choice-empty": { en: "Party unavailable", ar: "الطرف غير متاح" },
   "choice-stale": { en: "Party unavailable", ar: "الطرف غير متاح" },
@@ -82,6 +86,12 @@ test("opening allocation, review and posted readback paint in EN/AR at phone and
             await expect(page.locator('input[value="Prior receivable"]')).toBeVisible();
           }
           if (state === "stock-entry") await expect(page.getByRole("combobox", { name: COPY[state][locale] })).toHaveValue("vehicle-a");
+          if (state === "void-request") {
+            await expect(page.getByLabel(COPY[state][locale])).toHaveValue("Synthetic opening correction");
+            await expect(page.getByRole("button", { name: locale === "ar" ? "طلب الإلغاء" : "Request void", exact: true })).toBeEnabled();
+          }
+          if (state === "void-approval") await expect(page.getByRole("button", { name: locale === "ar" ? "اعتماد الإلغاء" : "Approve void", exact: true })).toBeEnabled();
+          if (state === "editable-draft") await expect(page.getByRole("button", { name: COPY[state][locale], exact: true })).toBeEnabled();
           if (state === "remaining-readback" || state === "remaining-redacted") {
             await expect(page.getByText("Unassigned deposits", { exact: true })).toBeVisible();
             await expect(page.getByText("Unidentified receipts", { exact: true })).toBeVisible();

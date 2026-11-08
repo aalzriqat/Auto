@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { FunctionReturnType } from "convex/server";
+import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
@@ -32,6 +34,9 @@ vi.mock("convex/react", async () => {
 });
 
 const orgId = "org-a" as Id<"organizations">;
+const unavailableMaintenance = {
+  editable: null, postedDraftId: null, canRequestVoid: false, canApproveVoid: false, voidReason: null,
+} satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>;
 const groups: OpeningAllocationGroup[] = [
   { accountId: "ar" as Id<"chartOfAccounts">, kind: "CUSTOMER_RECEIVABLE", journalMinor: 100_000, label: "1200 · Accounts Receivable" },
   { accountId: "advance" as Id<"chartOfAccounts">, kind: "EMPLOYEE_ADVANCE", journalMinor: 40_000, label: "1250 · Employee Advances" },
@@ -81,6 +86,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); fixture.values.clear(); });
 test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (locale) => {
   fixture.locale = locale;
   vi.stubGlobal("localStorage", { getItem: () => locale, setItem: () => {} });
+  fixture.values.set("openingBalanceMaintenance:status", unavailableMaintenance);
   fixture.values.set("memberships:list", [{ userId: "employee-a", userName: "Synthetic Employee", userEmail: "employee@example.test" }]);
   fixture.values.set("partnerEquity:list", [{ _id: "partner-a", partnerName: "Synthetic Partner" }]);
   const entryGroups = groups.map((group, index) => ({ ...group,
@@ -318,4 +324,39 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
   mount(<div className="mx-auto max-w-5xl p-4"><OpeningBalanceCard /></div>);
   expect(screen.queryByText("Synthetic Employee")).toBeNull();
   capture("remaining-redacted");
+
+  fixture.values.set("accountingCutover:postedOpeningAllocationReadback", {
+    journalStatus: "POSTED", currency: "JOD", rows: [],
+  });
+  const postedDraftId = "posted-opening-a" as Id<"openingBalanceDrafts">;
+  fixture.values.set("openingBalanceMaintenance:status", {
+    ...unavailableMaintenance, postedDraftId, canRequestVoid: true,
+  } satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>);
+  mount(<div className="mx-auto max-w-5xl p-4"><OpeningBalanceCard /></div>);
+  const reason = screen.getByLabelText(locale === "ar" ? "سبب الإلغاء" : "Reason for void");
+  const request = screen.getByRole("button", { name: locale === "ar" ? "طلب الإلغاء" : "Request void" });
+  expect(request.hasAttribute("disabled")).toBe(true);
+  fireEvent.change(reason, { target: { value: "Synthetic opening correction" } });
+  expect(request.hasAttribute("disabled")).toBe(false);
+  capture("void-request");
+
+  fixture.values.set("openingBalanceMaintenance:status", {
+    ...unavailableMaintenance, postedDraftId, canApproveVoid: true, voidReason: "Synthetic documented reason",
+  } satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>);
+  mount(<div className="mx-auto max-w-5xl p-4"><OpeningBalanceCard /></div>);
+  expect(screen.getByText("Synthetic documented reason")).toBeTruthy();
+  expect(screen.getByRole("button", { name: locale === "ar" ? "اعتماد الإلغاء" : "Approve void" }).hasAttribute("disabled")).toBe(false);
+  capture("void-approval");
+
+  fixture.values.set("accountingCutover:openingBalanceStatus", { posted: false, pendingExists: true,
+    canManageFinance: true, currency: "JOD", canPostDirectly: true, canReadOpeningStockCost: true });
+  fixture.values.set("openingBalanceMaintenance:status", {
+    ...unavailableMaintenance,
+    editable: { _id: "pending-opening-a" as Id<"openingBalanceDrafts">, asOfDate: Date.UTC(2026, 0, 1),
+      currency: "JOD", memo: "Synthetic pending opening", allocations: [],
+      lines: [{ accountId: "cash-a" as Id<"chartOfAccounts">, debitMinor: 100_000, creditMinor: 0 }] },
+  } satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>);
+  mount(<div className="mx-auto max-w-5xl p-4"><OpeningBalanceCard /></div>);
+  expect(screen.getByRole("button", { name: locale === "ar" ? "تعديل المسودة" : "Edit draft" })).toBeTruthy();
+  capture("editable-draft");
 });
