@@ -1,6 +1,7 @@
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
-import { fromMinorUnits, scaleForCurrency } from "@/convex/utils/money";
+import { scaleForCurrency } from "@/convex/utils/money";
+import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
 
 export type OpeningAllocationKind = "CUSTOMER_RECEIVABLE" | "EMPLOYEE_ADVANCE" | "PARTNER_CAPITAL" | "PREPAID_EXPENSE" | "VEHICLE_INVENTORY" |
   "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "EMPLOYEE_COMMISSION" | "UNALLOCATED_LIABILITY" |
@@ -59,10 +60,10 @@ export type OpeningAllocationDraft = OpeningAllocationFields & (
   | { kind: "PREPAID_EXPENSE" | "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "UNALLOCATED_LIABILITY"; partyId: "" }
 );
 
-/** Rehydrate the server-validated draft without rounding or discarding hidden
- * family fields. Party labels are display-only and resolved by the picker. */
+/** Rehydrate minor units through decimal string slicing, preserving the exact
+ * integer and hidden family fields. Party labels are resolved by the picker. */
 export function restoreOpeningAllocation(row: NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number], currency: string): OpeningAllocationDraft {
-  const base = { rowKey: row.rowKey, accountId: row.accountId, partyLabel: "", amount: fromMinorUnits(row.amountMinor, currency).toFixed(scaleForCurrency(currency)),
+  const base = { rowKey: row.rowKey, accountId: row.accountId, partyLabel: "", amount: formatMinorAsMajor(row.amountMinor, scaleForCurrency(currency)),
     title: "title" in row ? row.title : "", dueDate: "", note: "note" in row ? row.note ?? "" : "" };
   if (row.kind === "CUSTOMER_RECEIVABLE") {
     const due = new Date(row.dueDate);

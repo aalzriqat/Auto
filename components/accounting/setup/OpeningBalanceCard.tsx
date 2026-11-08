@@ -1,5 +1,7 @@
 "use client";
 
+import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
+
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
@@ -341,8 +343,8 @@ export function OpeningBalanceCard() {
         const draftCurrency = draft.currency ?? status?.currency ?? "JOD";
         setLines(draft.lines.map(line => ({ ...emptyLine(), accountId: line.accountId,
           bankAccountId: line.bankAccountId ?? "", description: line.description,
-          debit: line.debitMinor ? fromMinorUnits(line.debitMinor, draftCurrency).toFixed(scaleForCurrency(draftCurrency)) : "",
-          credit: line.creditMinor ? fromMinorUnits(line.creditMinor, draftCurrency).toFixed(scaleForCurrency(draftCurrency)) : "" })));
+          debit: line.debitMinor ? formatMinorAsMajor(line.debitMinor, scaleForCurrency(draftCurrency)) : "",
+          credit: line.creditMinor ? formatMinorAsMajor(line.creditMinor, scaleForCurrency(draftCurrency)) : "" })));
         setAllocations((draft.allocations ?? []).map(row => restoreOpeningAllocation(row, draftCurrency)));
       }
     }
