@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -82,8 +82,10 @@ function AccountsList({
 }: Readonly<{ orgId: Id<"organizations">; canManage: boolean }>) {
   const { t, locale } = useLanguage();
   const accounts = useQuery(api.chartOfAccounts.list, { orgId });
+  const createButtonRef = useRef<HTMLButtonElement>(null);
   const [editor, setEditor] = useState<{
     accountId: Id<"chartOfAccounts"> | null;
+    invoker: HTMLButtonElement;
   } | null>(null);
   if (accounts === undefined) return <AccountsLoading />;
   const selected = editor?.accountId
@@ -92,7 +94,12 @@ function AccountsList({
   return (
     <div className="min-w-0 space-y-4">
       {canManage ? (
-        <Button onClick={() => setEditor({ accountId: null })}>
+        <Button
+          ref={createButtonRef}
+          onClick={(event) =>
+            setEditor({ accountId: null, invoker: event.currentTarget })
+          }
+        >
           {t("CoaCreate")}
         </Button>
       ) : (
@@ -172,7 +179,12 @@ function AccountsList({
                         variant="outline"
                         size="sm"
                         aria-label={`${t("CoaEdit")} ${account.code}`}
-                        onClick={() => setEditor({ accountId: account._id })}
+                        onClick={(event) =>
+                          setEditor({
+                            accountId: account._id,
+                            invoker: event.currentTarget,
+                          })
+                        }
                       >
                         {t("CoaEdit")}
                       </Button>
@@ -191,6 +203,15 @@ function AccountsList({
             orgId={orgId}
             account={selected}
             onClose={() => setEditor(null)}
+            onCloseAutoFocus={(event) => {
+              const target = editor.invoker.isConnected
+                ? editor.invoker
+                : createButtonRef.current;
+              if (target) {
+                event.preventDefault();
+                target.focus();
+              }
+            }}
           />
         )}
     </div>

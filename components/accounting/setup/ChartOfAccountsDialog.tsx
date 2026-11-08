@@ -45,10 +45,12 @@ export function ChartOfAccountsDialog({
   orgId,
   account,
   onClose,
+  onCloseAutoFocus,
 }: Readonly<{
   orgId: Id<"organizations">;
   account?: Account;
   onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }>) {
   const { t, isRtl } = useLanguage();
   const createAccount = useMutation(api.chartOfAccounts.create);
@@ -89,7 +91,10 @@ export function ChartOfAccountsDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent
+        className="max-h-[90vh] overflow-y-auto sm:max-w-xl"
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         <DialogHeader className="text-start">
           <DialogTitle>{t(account ? "CoaEdit" : "CoaCreate")}</DialogTitle>
           <DialogDescription>
