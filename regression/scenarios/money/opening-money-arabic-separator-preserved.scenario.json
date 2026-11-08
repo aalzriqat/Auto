@@ -11,9 +11,9 @@
   },
   "subject": "parseMajorToMinor",
   "inputs": {
-    "arabic": "١٢٫٥٠٠",
-    "persian": "۱۲٫۵",
-    "grouped": "١٬٠٠٠",
+    "arabicFixture": "arabic-indic-12point500",
+    "persianFixture": "persian-12point5",
+    "groupingFixture": "arabic-grouped-1000",
     "scale": 3
   },
   "expected": [
@@ -41,5 +41,5 @@
     "testName": "accepts Arabic-Indic and Persian digits without accepting grouping ambiguity"
   },
   "matrixRow": "SCRUM-850-opening-snapshot-exactness",
-  "fingerprint": "0cd739876adc601d6a7431cc64dedb4309e9a5966c85f47ec84b6eda30c61401"
+  "fingerprint": "e0ebe17b32c7b9f24b1bf14a3825f8bde36b54d0d6566aba4509c79c43cfe6bf"
 }

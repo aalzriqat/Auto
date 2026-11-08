@@ -11,6 +11,16 @@
   "steps": [
     {
       "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "crypto.pinSnapshotShard",
+      "input": {
+        "shard": 0
+      }
+    },
+    {
+      "actor": {
         "role": "owner",
         "org": "A"
       },
@@ -46,6 +56,16 @@
       },
       "action": "openingBalanceMaintenance.approveVoid",
       "input": {}
+    },
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "crypto.pinSnapshotShard",
+      "input": {
+        "shard": 1
+      }
     },
     {
       "actor": {
@@ -109,5 +129,5 @@
     "key": "SCRUM-850",
     "failingFirst": "adc6ec810ed7c8747dab3519b07034657b77ec50"
   },
-  "fingerprint": "cb9e24b91c788d0251a8082c0260ed45b0671ac2e7d8103d8fa44c653da9ee99"
+  "fingerprint": "11029bc9763c76c3ba0ee4dc814f71e49c18c6b82182d4e498244a4ec639e417"
 }
