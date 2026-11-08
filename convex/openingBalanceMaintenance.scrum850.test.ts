@@ -291,7 +291,7 @@ test("SCRUM-850 approved void unwinds all eleven allocation kinds and bank attri
   const original = await s.t.run((ctx) => ctx.db.get(draftId));
   expect(original?.allocationResults).toHaveLength(11);
   expect(await s.owner.query(api.bankAccounts.getBookBalance, { orgId: s.orgId })).toMatchObject({ status: "OK", balanceMinor: 300_003 });
-  await request(s, draftId);
+  expect(await request(s, draftId)).toBeNull();
   const beforeSameActor = await entireDatabase(s);
   await expect(s.owner.mutation(approveVoid, { orgId: s.orgId, draftId })).rejects.toThrow(/OPENING_CHANGE_SECOND_PERSON/);
   expect(await entireDatabase(s)).toEqual(beforeSameActor);

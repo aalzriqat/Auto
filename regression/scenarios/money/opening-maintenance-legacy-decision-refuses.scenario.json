@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-legacy-decision-refuses",
-  "fingerprint": "4c138eaa0a485b66fb07d91807873183c8aa6d5a808fad23682988560b6b32d0",
+  "fingerprint": "9aa59f797e8bef466c2cb6c1c6c57222ec02e251797d47058928f6f60910c12e",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,7 +27,7 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Unseen replacement"
+        "memo": "Unseen-replacement"
       }
     },
     {

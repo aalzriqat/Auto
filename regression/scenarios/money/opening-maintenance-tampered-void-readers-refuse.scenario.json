@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-tampered-void-readers-refuse",
-  "fingerprint": "e9567de6de4ec8efa2501880dfaf2befc5da50b959a69519b35ff020f8757e8b",
+  "fingerprint": "6b09bd7813c4f359a6273dcc415fc155e7135c99f60d7b49624237d714b9c89d",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,7 +27,7 @@
       },
       "action": "openingBalanceMaintenance.requestVoid",
       "input": {
-        "reason": "Documented opening error"
+        "reason": "Documented-opening-error"
       }
     },
     {

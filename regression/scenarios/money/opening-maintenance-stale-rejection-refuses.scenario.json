@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-stale-rejection-refuses",
-  "fingerprint": "c02a5c278973181fa48762cfb54a728ebbdf6d5a9d4c1ee0dfe1ea0bd36a60ef",
+  "fingerprint": "9eea0b2d7fbfbb251bcfbaba3f1492402a3153044346d863f952a6fbd90ae0c1",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,7 +27,7 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Changed after review"
+        "memo": "Changed-after-review"
       }
     },
     {
@@ -38,7 +38,7 @@
       "action": "accountingCutover.rejectOpeningBalanceDraft",
       "input": {
         "expectedVersion": 0,
-        "rejectionReason": "Old decision"
+        "rejectionReason": "Old-decision"
       }
     },
     {
@@ -49,7 +49,7 @@
       "action": "accountingCutover.rejectOpeningBalanceDraft",
       "input": {
         "expectedVersion": 1,
-        "rejectionReason": "Current decision"
+        "rejectionReason": "Current-decision"
       }
     }
   ],

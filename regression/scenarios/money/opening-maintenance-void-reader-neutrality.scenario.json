@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-void-reader-neutrality",
-  "fingerprint": "67ce594b7e1765f2f283f6a86ae3d8d71e419198c38021a744532fd7f93863b3",
+  "fingerprint": "f39c623d4246236433e79be83c409b24c27e8b7584d8dff82c2596e6dc526f44",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -28,7 +28,7 @@
       },
       "action": "openingBalanceMaintenance.requestVoid",
       "input": {
-        "reason": "Documented opening error"
+        "reason": "Documented-opening-error"
       }
     },
     {

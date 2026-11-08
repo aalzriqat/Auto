@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-stale-approval-refuses",
-  "fingerprint": "9ca8b8abba792bdfbd915845786255d5d50abca16b3b1f8de7c40cc7f8c37a02",
+  "fingerprint": "140b43b0c250314d985556cea1cd01ee95f4a07dad826b4d210d4fb5be934410",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -27,7 +27,7 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Changed after review"
+        "memo": "Changed-after-review"
       }
     },
     {
