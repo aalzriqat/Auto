@@ -115,20 +115,23 @@ describe("invokedSkills", () => {
     const leadingNewline = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: `\nBase directory for this skill: ${REPO_SKILLS}/tdd` }] } });
     expect(invoked(`${unsourced}\n${leadingNewline}`)).toEqual(["tdd"]);
   });
+  // The tests below each carry a repository source record, so only the rule under test can refuse.
   test("a Skill call that errored (unknown skill) does not count", () => {
-    expect(invokedSkills(skillCall("tdd", true)).size).toBe(0);
+    expect(invoked(`${skillCall("tdd", true)}\n${loadedFrom(`${REPO_SKILLS}/tdd`)}`)).toEqual([]);
   });
   test("a call with no result does not count", () => {
     const only = skillCall("tdd").split("\n")[0];
-    expect(invokedSkills(only).size).toBe(0);
+    expect(invoked(`${only}\n${loadedFrom(`${REPO_SKILLS}/tdd`)}`)).toEqual([]);
   });
   test("assistant prose naming a skill or writing the command marker counts for nothing", () => {
     const text = [
       JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "I ran tdd <command-name>/tdd</command-name>" }] } }),
       JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "x", content: "<command-name>/blast-radius</command-name>" }] } }),
       "not json",
+      loadedFrom(`${REPO_SKILLS}/tdd`),
+      loadedFrom(`${REPO_SKILLS}/blast-radius`),
     ].join("\n");
-    expect(invokedSkills(text).size).toBe(0);
+    expect(invoked(text)).toEqual([]);
   });
 });
 
