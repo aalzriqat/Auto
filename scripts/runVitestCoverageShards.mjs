@@ -246,7 +246,9 @@ function unitTestCensus() {
 }
 
 // `vitest run convex scripts quality` keeps every test file whose lower-cased path
-// relative to the root contains "convex", "scripts" or "quality" (Vitest filterFiles).\r\n// "quality" is the guardrail checker (SCRUM-426): its suites must run here, or its\r\n// measured .mjs files reach the LCOV with no tests and the validator refuses them.
+// relative to the root contains "convex", "scripts" or "quality" (Vitest filterFiles).
+// "quality" is the guardrail checker (SCRUM-426): its suites must run here, or its
+// measured .mjs files reach the LCOV with no tests and the validator refuses them.
 // The runner test pins this against the real `vitest list` so the two cannot
 // drift apart.
 const sonarFilters = ["convex", "scripts", "quality"];

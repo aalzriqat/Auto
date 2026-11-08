@@ -352,7 +352,10 @@ describe("runVitestCoverageShards", () => {
       .map((entry) => path.relative(process.cwd(), entry.file).split(path.sep).join("/"))
       .sort();
     const expected = expectedVitestCensus().filter((file) => /convex|scripts|quality/.test(file.toLowerCase()));
-    // SCRUM-426: the guardrail suites are measured, so Sonar must run all of them, not only the one whose name contains "convex".\r\n    expect(listed).toContain("quality/guardrails/guardrails.test.ts");\r\n    expect(listed).toContain("quality/guardrails/crossDomain.test.ts");\r\n    expect(listed.length).toBeGreaterThan(100);
+    // SCRUM-426: the guardrail suites are measured, so Sonar must run all of them, not only the one whose name contains "convex".
+    expect(listed).toContain("quality/guardrails/guardrails.test.ts");
+    expect(listed).toContain("quality/guardrails/crossDomain.test.ts");
+    expect(listed.length).toBeGreaterThan(100);
     expect(listed).toEqual(expected);
   }, 180_000);
 
