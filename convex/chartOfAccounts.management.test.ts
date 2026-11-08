@@ -28,61 +28,135 @@ async function fixture() {
   return { t, ...finance };
 }
 
-// SCRUM-932 F1: account identity must be enforced at the public write doors.
-test.each(["", "   "])("empty account code %j is refused", async (code) => {
+async function expectInvalidAccountCode(code: string) {
   const { orgId, identity } = await fixture();
+  await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  const before = await identity.query(api.chartOfAccounts.list, { orgId });
   await expect(
     identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
   ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_INVALID" } });
-  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual(before);
+}
+
+test("account codes containing a right-to-left mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u200F");
 });
 
-test.each(["2500 ", "٢٥٠٠", "۲۵۰۰"])(
-  "canonical duplicate account code %j is refused",
-  async (code) => {
-    const { orgId, identity } = await fixture();
-    await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
-    await expect(
-      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
-    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_EXISTS" } });
-    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toMatchObject([
-      { code: "2500", name: "Partner Payables" },
-    ]);
-  },
-);
+test("account codes containing a zero-width space are refused", async () => {
+  await expectInvalidAccountCode("\u200B2500");
+});
 
-test.each([" 2600 ", "٢٦٠٠", "۲۶۰۰"])(
-  "account code %j is stored as canonical ASCII",
-  async (code) => {
-    const { t, orgId, identity } = await fixture();
+test("account codes containing internal spaces are refused", async () => {
+  await expectInvalidAccountCode("25 00");
+});
+
+test("account codes containing an Arabic letter mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u061C");
+});
+
+test("account codes containing a left-to-right mark are refused", async () => {
+  await expectInvalidAccountCode("2500\u200E");
+});
+
+test("account codes outside ASCII letters digits dot and hyphen are refused", async () => {
+  for (const code of ["25\u200C00", "25\u200D00", "25\t00", "25\n00", "25_00", "25/00", "حساب", "２５００"]) {
+    await expectInvalidAccountCode(code);
+  }
+});
+
+test("numeric dotted and hyphenated ASCII account codes can be created", async () => {
+  const { t, orgId, identity } = await fixture();
+  for (const code of ["2500", "2500.10", "AR-01", "ar-02"]) {
     const accountId = await identity.mutation(api.chartOfAccounts.create, {
       orgId, ...account, code,
     });
-    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code: "2600" });
-  },
-);
-
-test.each(["", "   "])("blank account name %j is refused on create", async (name) => {
-  const { orgId, identity } = await fixture();
-  await expect(
-    identity.mutation(api.chartOfAccounts.create, { orgId, ...account, name }),
-  ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
-  expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code });
+  }
 });
 
-test.each([
-  [false, ""], [false, "   "], [true, ""], [true, "   "],
-] as const)("system=%s account refuses blank name %j on update", async (system, name) => {
+test("Arabic account names are trimmed on create", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, nameAr: "  ذمم الشركاء  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم الشركاء" });
+});
+
+test("blank Arabic account names are omitted on create", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, nameAr: "   ",
+  });
+  expect((await t.run((ctx) => ctx.db.get(accountId)))?.nameAr).toBeUndefined();
+});
+
+test("Arabic account names are trimmed on update and preserved when omitted", async () => {
   const { t, orgId, identity } = await fixture();
   const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
-  if (system) {
-    await t.run((ctx) => ctx.db.patch(accountId, { systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" }));
+  await identity.mutation(api.chartOfAccounts.update, {
+    orgId, accountId, nameAr: "  ذمم مقدمي الخدمات  ",
+  });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم مقدمي الخدمات" });
+  await identity.mutation(api.chartOfAccounts.update, { orgId, accountId, active: false });
+  expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ nameAr: "ذمم مقدمي الخدمات" });
+});
+
+test("blank Arabic account names clear the stored name on update", async () => {
+  const { t, orgId, identity } = await fixture();
+  const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  await identity.mutation(api.chartOfAccounts.update, { orgId, accountId, nameAr: "   " });
+  expect((await t.run((ctx) => ctx.db.get(accountId)))?.nameAr).toBeUndefined();
+});
+
+// SCRUM-932 F1: account identity must be enforced at the public write doors.
+// One registration per scenario lets the regression runner select every case.
+test("empty account codes are refused without creating accounts", async () => {
+  for (const code of ["", "   "]) {
+    const { orgId, identity } = await fixture();
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_INVALID" } });
+    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
   }
-  const before = await t.run((ctx) => ctx.db.get(accountId));
-  await expect(
-    identity.mutation(api.chartOfAccounts.update, { orgId, accountId, name }),
-  ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
-  expect(await t.run((ctx) => ctx.db.get(accountId))).toEqual(before);
+});
+
+test("account codes are stored as canonical ASCII", async () => {
+  for (const code of [" 2600 ", "٢٦٠٠", "۲۶۰۰"]) {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId,
+      ...account,
+      code,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({ code: "2600" });
+  }
+});
+
+test("blank account names are refused on create without creating accounts", async () => {
+  for (const name of ["", "   "]) {
+    const { orgId, identity } = await fixture();
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, name }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+    expect(await identity.query(api.chartOfAccounts.list, { orgId })).toEqual([]);
+  }
+});
+
+test("custom and system accounts refuse blank names on update without changing the row", async () => {
+  for (const [system, name] of [
+    [false, ""], [false, "   "], [true, ""], [true, "   "],
+  ] as const) {
+    const { t, orgId, identity } = await fixture();
+    const accountId = await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+    if (system) {
+      await t.run((ctx) => ctx.db.patch(accountId, { systemKey: "ACCOUNTS_PAYABLE_SUPPLIERS" }));
+    }
+    const before = await t.run((ctx) => ctx.db.get(accountId));
+    await expect(
+      identity.mutation(api.chartOfAccounts.update, { orgId, accountId, name }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_NAME_REQUIRED" } });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toEqual(before);
+  }
 });
 
 test("valid account names are stored trimmed on create and update", async () => {
@@ -108,11 +182,11 @@ test("duplicate account codes are refused with a localized code, including inact
     accountId,
     active: false,
   });
-  await expect(
-    identity.mutation(api.chartOfAccounts.create, { orgId, ...account }),
-  ).rejects.toMatchObject({
-    data: { code: "ACCOUNT_CODE_EXISTS" },
-  });
+  for (const code of ["2500", "2500 ", "٢٥٠٠", "۲۵۰۰"]) {
+    await expect(
+      identity.mutation(api.chartOfAccounts.create, { orgId, ...account, code }),
+    ).rejects.toMatchObject({ data: { code: "ACCOUNT_CODE_EXISTS" } });
+  }
   expect(
     await identity.query(api.chartOfAccounts.list, { orgId }),
   ).toHaveLength(1);
