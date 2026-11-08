@@ -536,7 +536,7 @@ jobs:
       env:
         # On push, the allowance is the target as it was BEFORE this push.
         GUARDRAILS_PUSH_BEFORE: ${{ github.event.before }}
-      run: pnpm guardrails
+      run: node quality/guardrails/check.mjs
 
   dependency-audit:
     runs-on: ubuntu-latest
