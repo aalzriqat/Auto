@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { analyzeSource } from "./ratchets.mjs";
+import { analyzeSource, analyzeTree } from "./ratchets.mjs";
 import {
   TIMEOUT,
   baseConfig,
@@ -319,6 +319,103 @@ describe("validators per public function (guardrail 11)", () => {
   test("positive control: a new internal function needs no validators", async () => {
     const root = fixtureRepo(VALIDATOR_TARGET);
     write(root, "convex/more.ts", 'import { internalMutation } from "./_generated/server";\nexport const quiet = internalMutation({ handler: async () => null });\n');
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+});
+const HELPERS = 'import { customQuery, customMutation, customAction } from "convex-helpers/server/customFunctions";\n';
+
+describe("public functions built with convex-helpers custom builders (guardrails 9 and 11)", () => {
+  const authed = `${SERVER}${HELPERS}const authedQuery = customQuery(query, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\n`;
+
+  test("a function built by a custom builder bound to a public builder is a public function", () => {
+    const src = `${authed}export const a = authedQuery({ handler: async () => null });\nexport const b = authedQuery({ args: {}, returns: v.null(), handler: async () => null });\n`;
+    expect([count("public-functions", src), count("no-args-validator", src), count("no-returns-validator", src)]).toEqual([2, 1, 1]);
+    expect(count("non-tenant-builder", src)).toBe(2);
+  });
+
+  test("the custom builder definition itself is not a public function, exported or not", () => {
+    const src = `${SERVER}${HELPERS}export const authedMutation = customMutation(mutation, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\n`;
+    expect(count("public-functions", src)).toBe(0);
+  });
+
+  test("a custom builder over an internal builder is not public", () => {
+    const src = `${SERVER}${HELPERS}const q = customQuery(internalQuery, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\nexport const a = q({ handler: async () => null });\n`;
+    expect(count("public-functions", src)).toBe(0);
+  });
+
+  test("custom builders chain, and the namespace import and a plain alias are followed", () => {
+    const chained = `${authed}const adminQuery = customQuery(authedQuery, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\nexport const a = adminQuery({ handler: async () => null });\n`;
+    expect(count("public-functions", chained)).toBe(1);
+    const namespace = `${SERVER}import * as helpers from "convex-helpers/server/customFunctions";\nconst m = helpers.customMutation(mutation, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\nexport const a = m({ handler: async () => null });\n`;
+    expect(count("public-functions", namespace)).toBe(1);
+    const alias = `${SERVER}const q = query;\nexport const a = q({ handler: async () => null });\n`;
+    expect(count("public-functions", alias)).toBe(1);
+  });
+
+  test("a custom action is public but is not a tenant-builder candidate", () => {
+    const src = `${SERVER}${HELPERS}const a = customAction(action, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\nexport const run = a({ handler: async () => null });\n`;
+    expect([count("public-functions", src), count("non-tenant-builder", src)]).toEqual([1, 0]);
+  });
+
+  test("a customQuery that does not come from convex-helpers is not a builder", () => {
+    const src = `${SERVER}const customQuery = (b: unknown) => b;\nconst q = customQuery(query);\nexport const a = q({ handler: async () => null });\n`;
+    expect(count("public-functions", src)).toBe(0);
+  });
+
+  test("builders are followed across modules: import, re-export, export list and star export", () => {
+    const tree = analyzeTree(
+      new Map([
+        ["convex/builders.ts", `${authed}export { authedQuery };\n`],
+        ["convex/reexport.ts", 'export { authedQuery as guardedQuery } from "./builders";\n'],
+        ["convex/star.ts", 'export * from "./reexport";\n'],
+        ["convex/direct.ts", 'import { authedQuery } from "./builders";\nexport const d = authedQuery({ handler: async () => null });\n'],
+        ["convex/viaRename.ts", 'import { guardedQuery } from "./reexport";\nexport const r = guardedQuery({ handler: async () => null });\n'],
+        ["convex/viaStar.ts", 'import { guardedQuery } from "./star";\nexport const s = guardedQuery({ handler: async () => null });\n'],
+        ["convex/viaNamespace.ts", 'import * as b from "./builders";\nexport const n = b.authedQuery({ args: {}, returns: null, handler: async () => null });\n'],
+      ]),
+    );
+    const publicFunctions = (file: string) => tree.get(file)["public-functions"];
+    expect(["builders", "reexport", "star"].map((f) => publicFunctions(`convex/${f}.ts`))).toEqual([0, 0, 0]);
+    expect(["direct", "viaRename", "viaStar", "viaNamespace"].map((f) => publicFunctions(`convex/${f}.ts`))).toEqual([1, 1, 1, 1]);
+    expect(tree.get("convex/viaStar.ts").functions.map((f: { key: string }) => f.key)).toEqual(["convex/viaStar:s"]);
+    expect(tree.get("convex/viaNamespace.ts")["no-args-validator"]).toBe(0);
+  });
+
+  test("a builder module outside the counted scope still resolves for the files that use it", () => {
+    const tree = analyzeTree(
+      new Map([["convex/uses.ts", 'import { authedQuery } from "./builders";\nexport const d = authedQuery({ handler: async () => null });\n']]),
+      new Map([["convex/builders.ts", `${authed}export { authedQuery };\n`]]),
+    );
+    expect(tree.get("convex/uses.ts")["public-functions"]).toBe(1);
+    expect(tree.has("convex/builders.ts")).toBe(false);
+  });
+
+  test("cyclic re-exports terminate", () => {
+    const tree = analyzeTree(
+      new Map([
+        ["convex/a.ts", 'export { x } from "./b";\nimport { x as y } from "./b";\nexport const f = y({ handler: 1 });\n'],
+        ["convex/b.ts", 'export { x } from "./a";\n'],
+      ]),
+    );
+    expect(tree.get("convex/a.ts")["public-functions"]).toBe(0);
+  });
+});
+
+describe("custom builder functions through the whole checker", () => {
+  const BUILDERS = `${FN_SERVER}import { customQuery } from "convex-helpers/server/customFunctions";\nexport const authedQuery = customQuery(query, { args: {}, input: async () => ({ ctx: {}, args: {} }) });\n`;
+
+  test("negative control: a new unvalidated function built by a custom builder fails the per-function rule", async () => {
+    const root = fixtureRepo({ ...VALIDATOR_TARGET, "convex/builders.ts": BUILDERS });
+    write(root, "convex/more.ts", 'import { authedQuery } from "./builders";\nexport const fresh = authedQuery({ handler: async () => null });\n');
+    const result = await check(root);
+    expectFailure(result.errors, /^VALIDATOR-GAP-NEW-FUNCTION[^\n]*\n {2}convex\/more:fresh: missing args, returns$/);
+    expectFailure(result.errors, /^VALIDATOR-GAP-GROWN no-args-validator: 2 > target 1 \(\+1\)/);
+  }, TIMEOUT);
+
+  test("positive control: a fully validated function built by a custom builder passes", async () => {
+    const root = fixtureRepo({ ...VALIDATOR_TARGET, "convex/builders.ts": BUILDERS });
+    write(root, "convex/more.ts", 'import { v } from "convex/values";\nimport { authedQuery } from "./builders";\nexport const fresh = authedQuery({ args: {}, returns: v.null(), handler: async () => null });\n');
     const result = await check(root);
     expect(result.errors).toEqual([]);
   }, TIMEOUT);

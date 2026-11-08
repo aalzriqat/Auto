@@ -191,6 +191,12 @@ export function isTestLike(repoPath) {
   return TEST_LIKE.some((pattern) => pattern.test(repoPath));
 }
 
+/** A hand-written convex/ source module: not a test, not under convex/_generated/. */
+export function isConvexModule(repoPath) {
+  return repoPath.startsWith("convex/") && !repoPath.startsWith(GENERATED_DIR) &&
+    SOURCE_SUFFIX.test(repoPath) && !isTestLike(repoPath);
+}
+
 /** Independent discovery: what the lists MUST contain, found from the tree. */
 export function discoverGenerated(inventory) {
   return inventory.filter((p) => p.startsWith(GENERATED_DIR));

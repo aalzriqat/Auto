@@ -5,7 +5,9 @@
 // are measured live by the same code over the same file scope, so nothing is
 // stored in the PR that a PR could raise, and moving code between files changes
 // no total. Guardrail 9 reports and never blocks (see ADVISORIES).
-import { countPublicFunctions, listPublicFunctions } from "./convexFunctions.mjs";
+import { createHash } from "node:crypto";
+
+import { countFunctions, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
 import { countQueryReads, countTypeEscapes, parseSource } from "./astCounts.mjs";
 
 /**
@@ -29,16 +31,46 @@ export const KINDS = Object.freeze([
 
 const MAX_DELTA_LINES = 30;
 
-/** Per-kind counts for one production file; every kind is present, zero when absent. */
-export function analyzeSource(filePath, text) {
+/** The counts that depend on one file alone: type escapes, and bounded reads in convex/. */
+export function analyzeFile(filePath, text) {
   const counts = Object.fromEntries(KINDS.map((kind) => [kind.id, 0]));
   const sourceFile = parseSource(filePath, text);
   Object.assign(counts, countTypeEscapes(sourceFile));
-  if (filePath.startsWith("convex/")) {
-    Object.assign(counts, countQueryReads(sourceFile), countPublicFunctions(sourceFile, filePath));
-    counts.functions = listPublicFunctions(sourceFile, filePath);
-  }
+  if (filePath.startsWith("convex/")) Object.assign(counts, countQueryReads(sourceFile));
   return counts;
+}
+
+/**
+ * Per-kind counts for a set of production files, `path -> counts`; every kind is
+ * present, zero when absent. Public functions are resolved across the whole set
+ * (a custom builder defined in one module and used in another), so `scoped` is
+ * the files to count and `context` is extra convex modules, outside the counted
+ * scope, that are only consulted to resolve builders. `fileCache` keeps the
+ * single-file counts of a file that two trees share.
+ * @param {Map<string, string>} scoped path -> source text
+ * @param {Map<string, string>} [context]
+ * @param {Map<string, Record<string, number>>} [fileCache] keyed by path + text hash
+ */
+export function analyzeTree(scoped, context = new Map(), fileCache = new Map()) {
+  const factsByPath = new Map();
+  for (const [filePath, text] of [...context, ...scoped]) {
+    if (filePath.startsWith("convex/")) factsByPath.set(filePath, extractFacts(filePath, text));
+  }
+  const functionsByPath = resolvePublicFunctions(factsByPath);
+  const result = new Map();
+  for (const [filePath, text] of scoped) {
+    const key = `${filePath}\0${createHash("sha256").update(text).digest("hex")}`;
+    let counts = fileCache.get(key);
+    if (!counts) fileCache.set(key, (counts = analyzeFile(filePath, text)));
+    const functions = functionsByPath.get(filePath) ?? [];
+    result.set(filePath, { ...counts, ...countFunctions(functions), functions });
+  }
+  return result;
+}
+
+/** Per-kind counts for one file read alone (no other module is consulted for builders). */
+export function analyzeSource(filePath, text) {
+  return analyzeTree(new Map([[filePath, text]])).get(filePath);
 }
 
 /** Repository total per kind from a Map(path -> counts). */

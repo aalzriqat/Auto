@@ -22,7 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { analyzeSource, compareRatchets } from "./ratchets.mjs";
+import { analyzeTree, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
   CONFIG_PATH,
@@ -31,6 +31,7 @@ import {
   canonicalJson,
   classify,
   compareCodeUnits,
+  isConvexModule,
   enforcementScope,
   evaluate,
   importKey,
@@ -284,18 +285,26 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
  * file unchanged by the PR is parsed once.
  */
 function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
-  const cache = new Map();
-  const analyze = (filePath, text) => {
-    const key = createHash("sha256").update(filePath).update("\0").update(text).digest("hex");
-    let counts = cache.get(key);
-    if (!counts) cache.set(key, (counts = analyzeSource(filePath, text)));
-    return counts;
-  };
+  const fileCache = new Map();
   const inScope = (p) => classify(p, scope) === "production";
-  const pr = new Map(inventory.filter(inScope).map((p) => [p, analyze(p, readDisk(p))]));
+  // Convex modules outside the counted scope (migrations, exemptions) are still
+  // read, so a custom builder defined in one resolves for the files that use it.
+  const contextOf = (paths) => paths.filter((p) => !inScope(p) && isConvexModule(p));
+  const prPaths = inventory.filter(inScope);
+  const pr = analyzeTree(
+    new Map(prPaths.map((p) => [p, readDisk(p)])),
+    new Map(contextOf(inventory).map((p) => [p, readDisk(p)])),
+    fileCache,
+  );
   const targetPaths = [...targetBlobs.keys()].filter(inScope);
-  const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
-  const target = new Map(targetPaths.map((p) => [p, analyze(p, texts.get(targetBlobs.get(p)))]));
+  const targetContext = contextOf([...targetBlobs.keys()]);
+  const texts = readBlobs(cwd, [...targetPaths, ...targetContext].map((p) => targetBlobs.get(p)));
+  const textOf = (p) => texts.get(targetBlobs.get(p));
+  const target = analyzeTree(
+    new Map(targetPaths.map((p) => [p, textOf(p)])),
+    new Map(targetContext.map((p) => [p, textOf(p)])),
+    fileCache,
+  );
   return compareRatchets({ pr, target });
 }
 
