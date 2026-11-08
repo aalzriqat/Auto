@@ -10,6 +10,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey, SYSTEM_KEYS } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
+import { NORMAL_BALANCE_BY_ACCOUNT_TYPE } from "../lib/accounting/accountNormalBalance";
 
 const accountTypeValidator = v.union(
   v.literal("ASSET"),
@@ -825,6 +826,13 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
+
+    if (args.normalBalance !== NORMAL_BALANCE_BY_ACCOUNT_TYPE[args.type]) {
+      throw new ConvexError({
+        code: "NORMAL_BALANCE_MISMATCH",
+        message: "The normal balance must match the account type.",
+      });
+    }
 
     const code = normalizeAccountCode(args.code);
     // Codes allow only ASCII letters, digits, dot and hyphen after normalization.
