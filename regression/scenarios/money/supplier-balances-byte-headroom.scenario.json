@@ -1,0 +1,50 @@
+{
+  "id": "supplier-balances-byte-headroom",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierBalances.list",
+      "input": {
+        "payableRows": 20,
+        "paymentNotesBytes": 900000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "complete",
+      "value": false
+    },
+    {
+      "observable": "currencies",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "large linked rows exhaust shared byte headroom truthfully"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "db0dec582b7af7939f815f832ff9d71c4fa2ccd6"
+  },
+  "fingerprint": "67211377e0bd29c80d6153c4d9f5e1a3018385cfa6d7e97cb4f06c94d44640a9"
+}

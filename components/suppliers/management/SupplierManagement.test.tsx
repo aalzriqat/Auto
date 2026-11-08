@@ -5,7 +5,8 @@
  * Every string is checked in English and Arabic through the real dictionaries.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderContent, screen, waitFor, within } from "@testing-library/react";
+import { NavigationGuardProvider } from "nextjs-nav-guard";
 import { ConvexError } from "convex/values";
 
 type Row = {
@@ -106,6 +107,7 @@ import { mainNavigation, navItemPermitted } from "@/lib/navigation";
 import { DEFAULT_ROLE_TEMPLATES } from "@/convex/utils/permissions";
 
 const en = dictionaries.en as Record<string, string>;
+const render = (ui: React.ReactNode) => renderContent(<NavigationGuardProvider>{ui}</NavigationGuardProvider>);
 const ar = dictionaries.ar as Record<string, string>;
 const ORG = "org_1" as never;
 const SUP = "sup_gulf" as never;
@@ -227,7 +229,7 @@ describe("list", () => {
       const notice = await screen.findByText(words.SuppliersSearchTruncatedNoMatch);
       expect(notice.getAttribute("role")).toBe("status");
       expect(screen.queryByText(words.SuppliersNoMatch)).toBeNull();
-      expect(screen.queryByRole("link")).toBeNull();
+      expect(screen.queryAllByRole("link").filter(link => !link.getAttribute("href")?.endsWith("/suppliers/balances"))).toEqual([]);
       cleanup();
     }
     // The Arabic text is a real translation, not the English fallback or the key.
@@ -453,6 +455,52 @@ describe("inline picker keeps working on the shared create flow", () => {
 
 describe("detail and edit", () => {
   const renderDetail = () => render(<SupplierDetailScreen orgId={ORG} supplierId={SUP} />);
+  const openEdit = () => fireEvent.click(screen.getByRole("button", { name: label("SuppliersEdit") }));
+
+  test.each(["en", "ar"] as const)("%s detail opens read-only; dirty Cancel can keep or discard changes", locale => {
+    world.locale = locale;
+    const d = dictionaries[locale] as Record<string, string>;
+    renderDetail();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: d.SuppliersEdit }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(d.SuppliersFieldPhone), { target: { value: "0792222222" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: d.SuppliersCancel }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: d.SuppliersKeepEditing }));
+    expect((screen.getByLabelText(d.SuppliersFieldPhone) as HTMLInputElement).value).toBe("0792222222");
+    fireEvent.click(screen.getByRole("button", { name: d.SuppliersCancel }));
+    fireEvent.click(screen.getByRole("button", { name: d.SuppliersDiscard }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(world.mutationCalls).toHaveLength(0);
+  });
+
+  test("saving returns to read-only; alias drafts also require discard confirmation", async () => {
+    world.mutationImpl["suppliers:update"] = async () => ({ version: 3, revision: 6 });
+    renderDetail(); openEdit();
+    fireEvent.change(screen.getByLabelText(label("SuppliersFieldPhone")), { target: { value: "0792222222" } });
+    fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    openEdit();
+    fireEvent.change(screen.getByLabelText(label("SuppliersAliasLabel")), { target: { value: "Draft alias" } });
+    fireEvent.click(screen.getByRole("button", { name: label("SuppliersCancel") }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(world.mutationCalls).toHaveLength(1);
+  });
+
+  test("create and edit share a dialog pattern; dirty creation can keep or discard its fields", () => {
+    render(<SupplierListScreen orgId={ORG} />);
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersAdd }));
+    fireEvent.change(screen.getByLabelText(en.SuppliersFieldDisplayName), { target: { value: "Draft supplier" } });
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersCancel }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersKeepEditing }));
+    expect((screen.getByLabelText(en.SuppliersFieldDisplayName) as HTMLInputElement).value).toBe("Draft supplier");
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersCancel }));
+    fireEvent.click(screen.getByRole("button", { name: en.SuppliersDiscard }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(world.mutationCalls).toHaveLength(0);
+  });
 
   test("buildUpdate sends only what changed; null clears; a name change carries the reason", () => {
     const base = fullRecord() as unknown as Parameters<typeof buildUpdate>[0];
@@ -470,6 +518,7 @@ describe("detail and edit", () => {
   test("edit saves with the loaded edit token as expectedVersion and only the changed field", async () => {
     world.mutationImpl["suppliers:update"] = async () => ({ version: 3, revision: 6 });
     renderDetail();
+    openEdit();
     expect((screen.getByRole("button", { name: label("SuppliersEditSubmit") }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldLegalName")), { target: { value: "Gulf Motors Ltd" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
@@ -479,14 +528,21 @@ describe("detail and edit", () => {
 
   test("a contact-only edit sends the edit token, and the next save sends the token the server returned", async () => {
     const answers = [{ version: 3, revision: 6 }, { version: 3, revision: 7 }];
-    world.mutationImpl["suppliers:update"] = async () => answers.shift();
+    world.mutationImpl["suppliers:update"] = async args => {
+      const answer = answers.shift();
+      world.record = fullRecord({ ...world.record, contact: args.contact as Full["contact"], revision: answer!.revision });
+      return answer;
+    };
     renderDetail();
+    openEdit();
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldPhone")), { target: { value: "0791111111" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     await waitFor(() => expect(world.mutationCalls).toHaveLength(1));
     expect(world.mutationCalls[0].args).toEqual({ orgId: ORG, supplierId: "sup_gulf", expectedVersion: 5, contact: { phone: "0791111111" } });
 
-    await waitFor(() => expect((screen.getByRole("button", { name: label("SuppliersEditSubmit") }) as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    openEdit();
+    expect((screen.getByRole("button", { name: label("SuppliersEditSubmit") }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldEmail")), { target: { value: "a@gulf.example" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     await waitFor(() => expect(world.mutationCalls).toHaveLength(2));
@@ -496,6 +552,7 @@ describe("detail and edit", () => {
   test("a display-name change asks for a reason and does not call the server without one", async () => {
     world.mutationImpl["suppliers:update"] = async () => ({ version: 4, revision: 6 });
     renderDetail();
+    openEdit();
     expect(screen.queryByLabelText(label("SuppliersNameReason"))).toBeNull();
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldDisplayName")), { target: { value: "Gulf Motors Group" } });
     const reason = screen.getByLabelText(label("SuppliersNameReason"));
@@ -513,6 +570,7 @@ describe("detail and edit", () => {
       throw codedError({ code: "SUPPLIER_VERSION_CONFLICT", currentVersion: 4 });
     };
     renderDetail();
+    openEdit();
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldLegalName")), { target: { value: "Mine" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     const alert = await screen.findByText(label("SuppliersVersionConflictTitle"));
@@ -535,6 +593,7 @@ describe("detail and edit", () => {
       return { version: 4 };
     };
     renderDetail();
+    openEdit();
     fireEvent.change(screen.getByLabelText(label("SuppliersFieldLegalName")), { target: { value: "Dormant Co Ltd" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersEditSubmit") }));
     const group = await screen.findByRole("group", { name: label("SuppliersDupTitle") });
@@ -547,6 +606,7 @@ describe("detail and edit", () => {
     world.mutationImpl["suppliers:addAlias"] = async () => ({ aliasId: "al_3" });
     world.mutationImpl["suppliers:retireAlias"] = async () => null;
     renderDetail();
+    openEdit();
     const section = screen.getByRole("region", { name: label("SuppliersAliasesTitle") });
     expect(within(section).getByText("GM Trading")).toBeTruthy();
     expect(within(section).getByText(label("SuppliersAliasRetired"))).toBeTruthy();
@@ -568,6 +628,7 @@ describe("detail and edit", () => {
       throw codedError({ code: "SUPPLIER_ALIAS_EXISTS" });
     };
     renderDetail();
+    openEdit();
     fireEvent.change(screen.getByLabelText(label("SuppliersAliasLabel")), { target: { value: "GM Trading" } });
     fireEvent.click(screen.getByRole("button", { name: label("SuppliersAliasAdd") }));
     expect((await screen.findByRole("alert")).textContent).toBe(en.ServerError_SUPPLIER_ALIAS_EXISTS);

@@ -21,6 +21,11 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 
 export type SupplierStatementData = FunctionReturnType<typeof api.supplierStatement.outstanding>;
 type StatementSectionData = SupplierStatementData["payable"];
@@ -37,7 +42,7 @@ const KIND_KEY: Record<StatementRow["kind"], string> = {
 function Money({ minor, currency }: Readonly<{ minor: number; currency: string }>) {
   const { locale } = useLanguage();
   return (
-    <bdi>
+    <bdi className="tabular-nums">
       {formatExactMinorAmount(minor, currency)} {moneyDisplayLabel(currency, locale === "ar" ? "ar" : "en")}
     </bdi>
   );
@@ -46,27 +51,27 @@ function Money({ minor, currency }: Readonly<{ minor: number; currency: string }
 function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Translate }>) {
   const due = row.dueDate ?? translate("SuppliersStmtNoDueDate");
   return (
-    <li className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-sm">
-      <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
-      <span className="text-muted-foreground">
+    <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
+      <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}</TableCell>
+      <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
         {translate("SuppliersStmtDue")}: <bdi>{due}</bdi>
         {row.daysOverdue !== null && row.daysOverdue > 0 && (
           <>
             {" "}
             ·{" "}
-            {interpolate(translate("SuppliersStmtDaysOverdue"), {
+            <Badge variant="outline" className="border-money-out/30 text-money-out">{interpolate(translate("SuppliersStmtDaysOverdue"), {
               days: String(row.daysOverdue),
-            })}
+            })}</Badge>
           </>
         )}
-      </span>
-      <span className="text-end">
+      </TableCell>
+      <TableCell className={`block p-1 text-end font-semibold sm:table-cell sm:p-3 ${row.kind === "PAYABLE" ? "text-money-out" : "text-profit-positive"}`}>
         <Money minor={row.outstandingMinor} currency={row.currency} />
         {row.disputedMinor > 0 && (
-          <span className="ms-2 text-xs text-amber-700 dark:text-amber-300">{translate("SuppliersStmtDisputed")}</span>
+          <Badge variant="outline" className="ms-2 border-money-out/30 text-money-out">{translate("SuppliersStmtDisputed")}</Badge>
         )}
-      </span>
-    </li>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -112,7 +117,7 @@ function StatementRegion({
 }>) {
   const translate = useTranslate();
   return (
-    <section aria-labelledby={id} className="space-y-2 rounded-lg border p-4">
+    <section aria-labelledby={id} className="min-w-0 space-y-3 rounded-xl border bg-card p-4 shadow-sm">
       <h3 id={id} className="text-base font-semibold">
         {title}
       </h3>
@@ -120,14 +125,18 @@ function StatementRegion({
         // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
         data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
-        <ul className="divide-y">
+        <Table><TableHeader className="hidden bg-muted/60 sm:table-header-group"><TableRow>
+          <TableHead scope="col">{translate("SuppliersStmtType")}</TableHead>
+          <TableHead scope="col">{translate("SuppliersStmtDue")}</TableHead>
+          <TableHead scope="col" className="text-end">{translate("SuppliersStmtAmount")}</TableHead>
+        </TableRow></TableHeader><TableBody className="block sm:table-row-group">
           {data.rows.map((row) => (
             <RowItem key={`${row.kind}:${row.id}`} row={row} translate={translate} />
           ))}
-        </ul>
+        </TableBody></Table>
       )}
       {!data.complete && (
-        <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+        <p role="note" className="text-xs text-money-out">
           {translate(incompleteKey(data.incompleteReason))}
         </p>
       )}
@@ -147,6 +156,7 @@ export function SupplierStatementView({ statement }: Readonly<{ statement: Suppl
     return (
       <output className="block py-4 text-center text-sm text-muted-foreground">
         {translate("SuppliersStmtLoading")}
+        <Skeleton className="mt-3 h-32 w-full rounded-xl" />
       </output>
     );
   }
@@ -187,13 +197,15 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
   const inFull = row.settlement === "COMPLETE";
   const cashBelowClaim = row.settledMinor < row.dueMinor;
   return (
-    <li className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-sm">
+    <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
+      <TableCell className="block p-1 sm:table-cell sm:p-3">
       <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
-      <span className="text-muted-foreground">
-        <span>{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</span> ·{" "}
+      <Badge variant="secondary" className="ms-2">{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</Badge>
+      </TableCell>
+      <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
         {translate("SuppliersStmtHistoryLastChange")}: <bdi>{ammanDateString(row.lastChangedAt)}</bdi>
-      </span>
-      <span className="text-end">
+      </TableCell>
+      <TableCell className="block p-1 text-end font-semibold sm:table-cell sm:p-3">
         <Money minor={row.settledMinor} currency={row.currency} />
         {!inFull && (
           <span className="ms-2 text-xs text-muted-foreground">
@@ -205,11 +217,9 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
             {translate("SuppliersStmtHistoryClaimTotal")}: <Money minor={row.dueMinor} currency={row.currency} />
           </span>
         )}
-      </span>
-      {row.basis === "INFERRED_FROM_PAID_STATUS" && (
-        <span className="basis-full text-xs text-muted-foreground">{translate("SuppliersStmtHistoryInferred")}</span>
-      )}
-    </li>
+      {row.basis === "INFERRED_FROM_PAID_STATUS" && <p className="mt-1 text-xs font-normal text-muted-foreground">{translate("SuppliersStmtHistoryInferred")}</p>}
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -223,7 +233,7 @@ function SettledRegion({
 }: Readonly<{ id: string; title: string; emptyKey: string; totalKey: string; scopeKey?: string; data: SettledSectionData }>) {
   const translate = useTranslate();
   return (
-    <section aria-labelledby={id} className="space-y-2 rounded-lg border p-4">
+    <section aria-labelledby={id} className="min-w-0 space-y-3 rounded-xl border bg-card p-4 shadow-sm">
       <h4 id={id} className="text-base font-semibold">
         {title}
       </h4>
@@ -231,20 +241,24 @@ function SettledRegion({
         // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
         data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
-        <ul className="divide-y">
+        <Table><TableHeader className="hidden bg-muted/60 sm:table-header-group"><TableRow>
+          <TableHead scope="col">{translate("SuppliersStmtType")}</TableHead>
+          <TableHead scope="col">{translate("SuppliersStmtHistoryLastChange")}</TableHead>
+          <TableHead scope="col" className="text-end">{translate("SuppliersStmtAmount")}</TableHead>
+        </TableRow></TableHeader><TableBody className="block sm:table-row-group">
           {data.rows.map((row) => (
             <SettledItem key={`${row.kind}:${row.id}`} row={row} translate={translate} />
           ))}
-        </ul>
+        </TableBody></Table>
       )}
       {scopeKey !== undefined && <p className="text-xs text-muted-foreground">{translate(scopeKey)}</p>}
       {data.unverifiedCount > 0 && (
-        <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+        <p role="note" className="text-xs text-money-out">
           {interpolate(translate("SuppliersStmtHistoryUnverified"), { count: String(data.unverifiedCount) })}
         </p>
       )}
       {!data.complete && (data.unverifiedCount === 0 || data.incompleteReason === "READ_BUDGET") && (
-        <p role="note" className="text-xs text-amber-700 dark:text-amber-300">
+        <p role="note" className="text-xs text-money-out">
           {translate(incompleteKey(data.incompleteReason))}
         </p>
       )}
@@ -358,6 +372,7 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
 }
 
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
+  const translate = useTranslate();
   const { hasPermission, isLoading } = usePermissions();
   // The server requires the same pair (STATEMENT_PERMISSIONS): the amounts are a SOURCED car's cost (SCRUM-886 / ACC-10).
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
@@ -379,11 +394,18 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   if (!allowed) return null;
   if (subscription !== undefined && !accountingIncluded) return <SupplierStatementPlanGate />;
   return (
-    <div className="space-y-6">
-      <SupplierStatementView statement={statement} />
-      {statement !== undefined && <SupplierSettledView settled={settled} />}
-      {statement !== undefined && <SupplierReconView recon={recon} />}
-    </div>
+    <Card className="min-w-0 shadow-sm"><CardHeader className="pb-3"><h2 className="text-lg font-semibold">{translate("SuppliersAccountActivity")}</h2></CardHeader><CardContent>
+      <Tabs defaultValue="outstanding">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="outstanding">{translate("SuppliersTabOutstanding")}</TabsTrigger>
+          <TabsTrigger value="settled">{translate("SuppliersTabSettled")}</TabsTrigger>
+          <TabsTrigger value="payments">{translate("SuppliersTabPayments")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="outstanding"><SupplierStatementView statement={statement} /></TabsContent>
+        <TabsContent value="settled"><SupplierSettledView settled={settled} /></TabsContent>
+        <TabsContent value="payments">{recon === undefined ? <output className="block py-4">{translate("SuppliersStmtLoading")}<Skeleton className="mt-3 h-24" /></output> : <SupplierReconView recon={recon} />}</TabsContent>
+      </Tabs>
+    </CardContent></Card>
   );
 }
 
@@ -407,7 +429,7 @@ export function SupplierStatementError() {
 
 export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   return (
-    <QueryErrorBoundary render={() => <SupplierStatementError />}>
+    <QueryErrorBoundary key={`${props.orgId}:${props.supplierId}`} render={() => <SupplierStatementError />}>
       <StatementBody {...props} />
     </QueryErrorBoundary>
   );
