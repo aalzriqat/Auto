@@ -112,6 +112,23 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test.each([
+  ["LIABILITY", "CREDIT"],
+  ["EXPENSE", "DEBIT"],
+] as const)("choosing %s sends normal balance %s on create", async (type, normalBalance) => {
+  show();
+  const copy = dictionaries.en;
+  fireEvent.click(screen.getByRole("button", { name: copy.CoaCreate }));
+  fireEvent.change(screen.getByLabelText(copy.CoaCode), { target: { value: "2599" } });
+  fireEvent.change(screen.getByLabelText(copy.CoaNameEn), { target: { value: "Custom account" } });
+  fireEvent.keyDown(screen.getByRole("combobox", { name: copy.CoaType }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: copy[`CoaType_${type}`] }));
+  fireEvent.click(screen.getByRole("button", { name: copy.CoaSave }));
+  await waitFor(() => expect(fixture.create).toHaveBeenCalledWith({
+    orgId, code: "2599", name: "Custom account", nameAr: "", type, normalBalance,
+  }));
+});
+
 test.each(["en", "ar"] as const)(
   "%s labels and isolated account codes render with the locale direction",
   (locale) => {
