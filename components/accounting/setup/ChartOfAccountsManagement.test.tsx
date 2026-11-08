@@ -336,3 +336,69 @@ test("an unexpected save failure stays visible and uses a generic localized mess
   );
   expect(screen.queryByText(/database field/)).toBeNull();
 });
+
+// SCRUM-932 round 2: the conditionally mounted dialog has no Radix trigger.
+test.each([
+  ["Create", "Cancel"],
+  ["Create", "Escape"],
+  ["Create", "Save"],
+  ["Create", "Close"],
+  ["Edit", "Cancel"],
+  ["Edit", "Escape"],
+  ["Edit", "Save"],
+  ["Edit", "Close"],
+] as const)(
+  "%s returns focus to its invoking button after %s",
+  async (mode, closeAction) => {
+    show();
+    const invoker = screen.getByRole("button", {
+      name: mode === "Create" ? "Create account" : "Edit account 2500",
+    });
+    invoker.focus();
+    fireEvent.click(invoker);
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    if (closeAction === "Save") {
+      if (mode === "Create") {
+        fireEvent.change(within(dialog).getByLabelText("Account code"), {
+          target: { value: "2510" },
+        });
+        fireEvent.change(within(dialog).getByLabelText("Name (English)"), {
+          target: { value: "Service Provider Payables" },
+        });
+      }
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save account" }));
+    } else if (closeAction === "Escape") {
+      fireEvent.keyDown(document.activeElement ?? dialog, { key: "Escape" });
+    } else {
+      fireEvent.click(within(dialog).getByRole("button", { name: closeAction }));
+    }
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(invoker));
+  },
+);
+
+test("closing after the edited row disappears returns focus to Create account", async () => {
+  const view = show();
+  const invoker = screen.getByRole("button", { name: "Edit account 2500" });
+  invoker.focus();
+  fireEvent.click(invoker);
+  expect(screen.getByRole("dialog")).toBeTruthy();
+
+  fixture.accounts = [];
+  view.rerender(
+    <LanguageProvider>
+      <ChartOfAccountsManagement orgId={orgId} />
+    </LanguageProvider>,
+  );
+
+  expect(invoker.isConnected).toBe(false);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Create account" }),
+    ),
+  );
+});
