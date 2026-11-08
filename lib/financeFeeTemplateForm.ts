@@ -18,7 +18,7 @@ import {
   feePartyValidator,
   financeFeeTemplateValidator,
   financeFeeTypeValidator,
-} from "@/convex/utils/financingEconomics";
+} from "../convex/utils/financingEconomics";
 
 export type FinanceFeeTemplate = Infer<typeof financeFeeTemplateValidator>;
 export type FinanceFeeType = Infer<typeof financeFeeTypeValidator>;

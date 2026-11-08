@@ -1,7 +1,7 @@
-import type { Doc, Id } from "@/convex/_generated/dataModel";
+import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
-import { scaleForCurrency } from "@/convex/utils/money";
-import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
+import { scaleForCurrency } from "../../../convex/utils/money";
+import { formatMinorAsMajor } from "../../../lib/financeFeeTemplateForm";
 
 export type OpeningAllocationKind = "CUSTOMER_RECEIVABLE" | "EMPLOYEE_ADVANCE" | "PARTNER_CAPITAL" | "PREPAID_EXPENSE" | "VEHICLE_INVENTORY" |
   "SUPPLIER_RECOVERABLE" | "SUPPLIER_PAYABLE" | "OTHER_PAYABLE" | "EMPLOYEE_COMMISSION" | "UNALLOCATED_LIABILITY" |
