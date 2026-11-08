@@ -71,6 +71,44 @@ The pre-implementation advisory design review inspected the sources and identifi
 
 ## Sources and verification boundary
 
+### Review round 2 decisions
+
+Loading and saving a pending opening without changing money must preserve every
+admitted minor integer. Reuse `formatMinorAsMajor` for input text; do not divide
+through a major-unit Number or change the numeric `fromMinorUnits` API. The
+display formatter with grouping separators is unsuitable for the exact input
+parser. Existing editable conversion sites outside this PR are recorded in
+`docs/architecture/scrum850-round2-evidence.md` for follow-up.
+
+Approve and reject bind to the draft version the reviewer rendered. An absent
+stored version is zero; each successful edit increments it atomically. Both
+decisions require `expectedVersion`; stale decisions throw the localized coded
+`OPENING_DRAFT_CHANGED` refusal before writes. A content hash was considered but
+would require canonicalization of every optional content field. The single
+content-edit boundary makes a version simpler and sufficient. This complements
+Convex OCC, which cannot bind an earlier client review by itself. Old clients
+without the required argument refuse.
+
+A verified governed void pair is neutral to reconciliation source enumeration
+as well as fresh-opening admission. One bounded shared inventory derives exact
+journal identities from `verifiedOpeningVoidPair`. Both provenance strategies
+and supplier cutover discovery use it; categories alone grant no exception.
+Malformed pairs and incomplete inventories refuse. Proof reads remain charged
+to guarded opening-reader budgets or supplier discovery's existing allowance.
+The balance consumers retain both sides and still use closed-period snapshots.
+
+The round 2 expected-version choice follows
+[RFC 9110 If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1).
+Required arguments and safe coded failures follow
+[Convex validation](https://docs.convex.dev/functions/validation) and
+[application errors](https://docs.convex.dev/functions/error-handling/application-errors).
+[Convex OCC](https://docs.convex.dev/database/advanced/occ) distinguishes the
+transaction from the earlier review interval.
+[ECMAScript toFixed](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-number.prototype.tofixed)
+formats an already-rounded Number; string slicing preserves the input integer.
+These sources were checked on 2026-11-08. Registered tests prove serial
+application behavior, not cloud OCC or limits.
+
 Checked 2026-11-08:
 
 - [Convex mutations and transactions](https://docs.convex.dev/functions/mutation-functions): a mutation runs transactionally. This supports combining source checks and the entire unwind in one mutation; a multi-action workflow would not supply that atomicity.

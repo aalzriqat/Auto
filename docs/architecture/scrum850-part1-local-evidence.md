@@ -1,5 +1,19 @@
 # SCRUM-850 part 1 — local implementation evidence
 
+## Review round 2
+
+Round 2 starts at `09f74e3a4fb1b66644b614e5df91ac7e8c865d67` on the same branch.
+See [round 2 evidence](scrum850-round2-evidence.md) for the independent
+reproductions, R1 editable-input census, F1 reader census, alternatives, red and
+green runs, mutation checks, checks and remaining runtime gaps. The new red
+commit precedes the individual R1, F1 and F2 repair commits. The scenario records
+and SCRUM-486 rows bind to literal test names in that red commit.
+
+The earlier results below describe part 1's original implementation, not round
+2 certification. No Jira/GitHub action, independent review seat, push or deploy
+is performed by this implementer. No generated API declaration is regenerated
+or staged.
+
 Date: 2026-11-08. Base: `a01d5fe5c7d6a665a51c6dd55b2165e554191258`.
 Branch: `claude/scrum850-opening-correction`. No push or deployment.
 

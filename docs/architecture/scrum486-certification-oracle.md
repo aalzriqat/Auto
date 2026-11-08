@@ -1694,3 +1694,16 @@ file from its saved bytes produced SHA256
 `8a9934b478e1fd7ad67496c6a4228666463bf2eeb266cd39aa021d527144e7a4`
 and an empty diff against backend fix commit
 `4fe8a46c03a979ff253629963ccf587c1b07bd89`.
+
+### SCRUM-850 round 2 regression rows
+
+Each row remains local harness evidence, not release certification. The failing-first commit is `72f92b1d9b908ad7290843fd31632aafda340372`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-exact-rehydration` | `SCRUM-850 R1 unchanged large allocation survives registered edit approval and posting` |
+| `opening-maintenance-void-reader-neutrality` | `SCRUM-850 F1 verified void and reentry preserve all three reconciliations and checklist warnings` |
+| `opening-maintenance-tampered-void-readers-refuse` | `SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations` |
+| `opening-maintenance-stale-approval-refuses` | `SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts` |
+| `opening-maintenance-stale-rejection-refuses` | `SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects` |
+| `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing` |

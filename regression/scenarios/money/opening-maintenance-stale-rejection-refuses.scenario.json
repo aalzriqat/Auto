@@ -1,0 +1,89 @@
+{
+  "id": "opening-maintenance-stale-rejection-refuses",
+  "fingerprint": "c02a5c278973181fa48762cfb54a728ebbdf6d5a9d4c1ee0dfe1ea0bd36a60ef",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round2-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "version": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Changed after review"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.rejectOpeningBalanceDraft",
+      "input": {
+        "expectedVersion": 0,
+        "rejectionReason": "Old decision"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.rejectOpeningBalanceDraft",
+      "input": {
+        "expectedVersion": 1,
+        "rejectionReason": "Current decision"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "stale.error",
+      "value": "OPENING_DRAFT_CHANGED"
+    },
+    {
+      "observable": "stale.databaseUnchanged",
+      "value": true
+    },
+    {
+      "observable": "current.status",
+      "value": "REJECTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "72f92b1d9b908ad7290843fd31632aafda340372"
+  }
+}
