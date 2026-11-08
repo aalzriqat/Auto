@@ -1565,3 +1565,82 @@ of business logic, and no changes to the prior canonical/duplicate assertions.
 This is local serial convex-test evidence. A fresh Sonar analysis proving zero
 new issues, CI, independent seats and cloud/platform behavior remain unverified.
 No Playwright, deploy, production-data operation, Jira/GitHub post or push was performed.
+
+### SCRUM-932 round 6: custom account normal balances
+
+Owner ruling 2026-11-08, SCRUM-932 c24767/c24768: a custom account created
+through public `chartOfAccounts.create` has its type's normal balance. The
+eight-type mapping is shared with the dialog and keyed by the schema-derived
+`Doc<"chartOfAccounts">["type"]`, so adding a schema type requires a mapping.
+The backend checks it after tenant authorization and the accounting feature
+check, before writes. Create derives the displayed balance; edit displays the
+stored balance. Existing rows, update, initialization, repair and system
+definitions retain their behavior, including the two contra defaults among
+57 definitions: 1510 Accumulated Depreciation (ASSET/CREDIT) and 3300 Partner
+Drawings (EQUITY/DEBIT).
+
+| Matrix row | Scenario | Expected | Executable check |
+| --- | --- | --- | --- |
+| `SCRUM932-coa-normal-balance` | `coa-normal-balance-mismatch-refused`: create LIABILITY/DEBIT after a valid 2500 Partner Payables LIABILITY/CREDIT | `NORMAL_BALANCE_MISMATCH`; row count remains 1 and all rows are unchanged. The sibling ASSET/CREDIT case also refuses; the literal table of all eight correct pairs succeeds. | `convex/chartOfAccounts.management.test.ts`: `create LIABILITY with DEBIT is refused without writing accounts`; sibling `create ASSET with CREDIT is refused without writing accounts`; positive control `every account type creates with its normal balance` |
+
+Initial backend red commit `dc9795d09953f9619f01ba0a6e23d414adf27e29`
+ran against unchanged `e5b311c9822eb16a1abbde846d1798c5f23aef4b` backend
+source: 2 failed, 21 passed; both mismatches resolved instead of rejecting.
+The scenario runner requires concrete registrations. Test-only commit
+`badb0817ee409c7a4de87b85b3688e7668f3db9b` retains the same assertions
+under literal test names; the same baseline-source replay produced 2 failed,
+21 passed, exit 1. The record binds its exact LIABILITY test name and that
+red-replayed commit. Backend source was restored afterward.
+
+Component red commit `b7957f8a7aa0a3fda60188eee645d8126011b959` ran
+against the unchanged baseline dialog: 1 failed, 29 passed. Choosing LIABILITY
+sent DEBIT instead of CREDIT; the EXPENSE/DEBIT control passed. The UI fix
+also removes the old duplicate-code test's manual balance-selection steps;
+every existing assertion is retained.
+
+The type/balance decision follows the normal-balance table in
+[OpenStax Principles of Accounting, section 3.1](https://openstax.org/books/principles-financial-accounting/pages/3-1-describe-principles-assumptions-and-concepts-of-accounting-and-their-relationship-to-financial-statements).
+COGS and other expenses follow expense balances; other income follows revenue.
+Contra creation is excluded by the owner ruling. Structured refusal follows
+[Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors),
+using an uncaught `ConvexError` with a code and safe English message.
+Deriving the create balance during render follows
+[React's guidance on avoiding redundant state](https://react.dev/learn/choosing-the-state-structure#avoid-redundant-state).
+
+The safety boundary is the public custom-create door. No journal amounts,
+posting rules, cancellation/reversal paths, historical rows or audit conventions
+change. The five predicted failures checked locally are reversed debit/credit
+mapping, an omitted type, stale UI balance after a type change, reclassification
+of a stored contra balance on edit, and a refusal that writes an account.
+The all-types control, schema-derived exhaustive mapping, component interaction
+checks, stored-contra edit check and before/after document comparison address
+those respectively. Harness results do not establish cloud runtime behavior,
+OCC, browser layout or production-data parity. Independent review and release
+evidence remain the coordinator's responsibility.
+
+Local round-6 checks: all 13 backend caller files plus the component file
+passed (581 tests across completed runs, one Vitest worker). An earlier combined
+run was interrupted without a verdict; the smaller completed groups cover the
+same requested files. The six executable scenario-validator files passed all
+374 tests across the initial run and the corrected-record rerun, including the
+70-test live-library validator. The new record uses the existing
+`unicodeCodePoints` name format; its initial prose name was rejected and fixed.
+`refreshRulings.test.ts` remains unavailable: Vite/Rolldown rejects the imported
+script's shebang before collecting tests. Its script blob matches the baseline
+(`16f58b33880c3743fd6f244b6bbe05f328b41e9e`); native `node --check` passes.
+No runner or gate was changed to hide that failure.
+
+ESLint passed on all six touched TS/TSX files. `pnpm typecheck:convex` passed
+with `convex/tsconfig.json` (includes convex and test-utils, excludes generated
+files as roots); `pnpm typecheck` passed with the root config (excludes convex,
+test-utils, apps, packages, dealer-worker and node_modules as roots; imported
+types may still be followed). Both checks are needed. All 43 baseline backend
+and 45 baseline component assertion calls were preserved, comparing source
+with line endings normalized.
+
+Mutation proof removed only the public-create refusal. Both negative cases
+failed with a resolved account id instead of a refusal, exit 1. Restoring the
+file from its saved bytes produced SHA256
+`8a9934b478e1fd7ad67496c6a4228666463bf2eeb266cd39aa021d527144e7a4`
+and an empty diff against backend fix commit
+`4fe8a46c03a979ff253629963ccf587c1b07bd89`.
