@@ -1,0 +1,60 @@
+{
+  "id": "supplier-alert-stored-id-statement-link",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kinds": [
+          "PAYABLE",
+          "RECEIVABLE",
+          "RECOVERY"
+        ],
+        "supplierId": "SUPPLIER_ID",
+        "renamed": true,
+        "retries": 2
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "notification.link",
+      "value": "SUPPLIER_STATEMENT"
+    },
+    {
+      "observable": "notification.data.supplier",
+      "value": "CURRENT_NAME"
+    },
+    {
+      "observable": "perFamilyNotifications",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "stored supplier identity targets its statement for every obligation family, once per step"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "170c8c9d847d400c8cb6cba28f0e9f183504deda"
+  },
+  "fingerprint": "2d5ea486d79b61e45c6bdeb80b30aa88b62a5d551150b748588958a2fc9e02db"
+}

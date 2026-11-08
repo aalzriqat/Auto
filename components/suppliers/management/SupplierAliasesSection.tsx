@@ -4,7 +4,7 @@
  * Aliases of one supplier: list (active and retired), add, retire. An alias helps find a supplier
  * and spot duplicates; it never replaces the display name and is never matched into money paths.
  */
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -28,13 +28,17 @@ export function SupplierAliasesSection({
   supplierId,
   aliases,
   canManage,
-}: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers">; aliases: AliasRow[]; canManage: boolean }>) {
+  onEditStateChange,
+}: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers">; aliases: AliasRow[]; canManage: boolean; onEditStateChange?: (state: { dirty: boolean; busy: boolean }) => void }>) {
   const translate = useTranslate();
   const addAlias = useMutation(api.suppliers.addAlias);
   const retireAlias = useMutation(api.suppliers.retireAlias);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  const fieldId = useId();
+  useEffect(() => { onEditStateChange?.({ dirty: text !== "", busy }); }, [text, busy, onEditStateChange]);
 
   async function run(action: () => Promise<unknown>, success: string): Promise<boolean> {
     if (busy) return false;
@@ -53,9 +57,9 @@ export function SupplierAliasesSection({
   }
 
   return (
-    <section aria-labelledby="supplier-aliases-title" className="space-y-3 rounded-lg border p-4">
+    <section aria-labelledby={titleId} className="space-y-3 rounded-lg border p-4">
       <div className="space-y-1">
-        <h2 id="supplier-aliases-title" className="text-lg font-semibold">
+        <h2 id={titleId} className="text-lg font-semibold">
           {translate("SuppliersAliasesTitle")}
         </h2>
         <p className="text-sm text-muted-foreground">{translate("SuppliersAliasesHint")}</p>
@@ -101,8 +105,8 @@ export function SupplierAliasesSection({
           }}
         >
           <div className="flex-1 space-y-1.5">
-            <Label htmlFor="supplier-alias-new">{translate("SuppliersAliasLabel")}</Label>
-            <Input id="supplier-alias-new" value={text} onChange={(e) => setText(e.target.value)} maxLength={200} disabled={busy} />
+            <Label htmlFor={fieldId}>{translate("SuppliersAliasLabel")}</Label>
+            <Input id={fieldId} value={text} onChange={(e) => setText(e.target.value)} maxLength={200} disabled={busy} />
           </div>
           <Button type="submit" disabled={busy || text.trim() === ""}>
             {translate("SuppliersAliasAdd")}

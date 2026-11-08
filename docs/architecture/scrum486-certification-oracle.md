@@ -1,5 +1,21 @@
 # SCRUM-486 deal accounting certification oracle — partial evidence
 
+## SCRUM-929-SUPPLIER-BALANCES
+
+Read-only report and alert projection. `convex/supplierBalances.scrum929.test.ts` exercises registered queries and the alert worker with real documents. The initial red contract commit is `db0dec582`; the full SHA is recorded in each scenario. Harness evidence is not cloud, concurrency, browser or release certification.
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Statement parity, dispute, recovery | JOD payable 5,500,001 minor; receivable 3,200,000; net -2,300,001; disputed payable 5,500,001 | `each supplier/currency equals the statement to the minor unit, including dispute and recovery` |
+| Two currencies, closed rows | JOD 9,500,000 payable and USD 1,234 receivable stay in separate rows; CANCELLED and RECOVERED excluded | `two currencies remain separate; cancelled claims and same-day settled recoveries disappear` |
+| Stored identity | Renamed supplier retains linked 9,500,000 minor payable; unlinked 500 JOD excluded as in statement | `renamed suppliers retain id attribution; unlinked legacy rows are outside statement scope` |
+| Completeness | 101 payable rows, six suppliers in a five-supplier page, or exhausted byte headroom report partial; incomplete supplier figures absent | The three family-bound, registry-pagination and byte-headroom scenario records |
+| Amman day boundary | Overdue payable changes from 0 to 9,500,000 at 21:00 UTC; gross unchanged | `Amman midnight changes only overdue aging from the explicit clock argument` |
+| Permissions, tenant, plan | Unauthenticated, foreign-org, foreign-supplier and non-accounting requests refuse; cost permission required | `requires accounting plan and authentication, refuses foreign tenant and supplier`, permission variants in the same file |
+| Notification confidentiality | No amount or supplier name for a finance-only recipient; text still says who owes whom | `non-cost recipient receives neither amount nor supplier name; direction remains useful` |
+
+The records under `regression/scenarios/{money,permission}/supplier-*` with `source.runId` `scrum929-supplier-balances` bind these cells. No money is posted or implicitly offset.
+
 ## SCRUM565-narrow-reset
 
 Owner ruling SCRUM-565 c24729, 2026-11-07, supersedes the blanket D-19 refusal and the broad wipe brief in c24724. Outside the pilot train.

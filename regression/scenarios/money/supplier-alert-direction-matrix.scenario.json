@@ -1,0 +1,58 @@
+{
+  "id": "supplier-alert-direction-matrix",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "expected": [
+    {
+      "observable": "payableDirection",
+      "value": "YOU_OWE_SUPPLIER"
+    },
+    {
+      "observable": "receivableAndRecoveryDirection",
+      "value": "SUPPLIER_OWES_YOU"
+    },
+    {
+      "observable": "withheldPlaceholders",
+      "value": "ABSENT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "lib/notifications/supplierDirection.scrum929.test.ts",
+    "testName": "all obligation families have directional EN and AR due and overdue copy"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "170c8c9d847d400c8cb6cba28f0e9f183504deda"
+  },
+  "kind": "rule",
+  "subject": "renderNotification",
+  "inputs": {
+    "kinds": [
+      "PAYABLE",
+      "RECEIVABLE",
+      "RECOVERY"
+    ],
+    "locales": [
+      "en",
+      "ar"
+    ],
+    "steps": [
+      "DUE",
+      "OVERDUE"
+    ]
+  },
+  "fingerprint": "024e487a3ea33fbfb3f98b0ebab317e6a5c78e57eb0cc56db491a1831a56e0ca"
+}

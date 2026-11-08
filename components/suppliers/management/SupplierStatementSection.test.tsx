@@ -4,7 +4,7 @@
  * in English and Arabic through the real dictionaries.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 type Section = {
   rows: Array<Record<string, unknown>>;
@@ -138,7 +138,17 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-const renderIt = () => render(<SupplierStatementSection orgId={ORG} supplierId={SUP} />);
+const renderIt = () => {
+  const result = render(<SupplierStatementSection orgId={ORG} supplierId={SUP} />);
+  // The same assertions now select the section through its tab.
+  const dict = world.locale === "ar" ? ar : en;
+  const key = world.recon !== undefined ? "SuppliersTabPayments" : "SuppliersTabSettled";
+  if (world.recon !== undefined || world.settled !== undefined) {
+    const tab = screen.queryByRole("tab", { name: dict[key] });
+    if (tab) fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  }
+  return result;
+};
 
 describe("supplier statement section", () => {
   test("shows A/P and A/R in two separate regions with their own totals and no net figure", () => {
@@ -528,6 +538,7 @@ describe("supplier statement section", () => {
     first.unmount();
     world.settled = undefined;
     renderIt();
+    fireEvent.mouseDown(screen.getByRole("tab", { name: en.SuppliersTabSettled }), { button: 0, ctrlKey: false });
     expect(screen.getAllByRole("status").length).toBeGreaterThan(0);
   });
 

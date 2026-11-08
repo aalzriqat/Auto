@@ -50,6 +50,7 @@ export function renderNotification(
   const key = toPascalCase(type as NotificationType);
   const titleTemplate = (strings as Record<string, string>)[`Notif_${key}_Title`];
   const dictionary = strings as Record<string, string>;
+  const directional = supplierDirectionTemplate(type, values, dictionary);
   // A notification may omit a value it must not disclose (SCRUM-901: the supplier alert's `amount` for a recipient without
   // the statement permissions). Where the dictionary has a `_MessageNoAmount` sentence, that sentence is used when the
   // key is absent, so no raw {amount} placeholder is ever shown.
@@ -58,6 +59,19 @@ export function renderNotification(
 
   return {
     title: titleTemplate ? fill(titleTemplate, values) : type,
-    message: messageTemplate ? fill(messageTemplate, values) : "",
+    message: directional ?? (messageTemplate ? fill(messageTemplate, values) : ""),
   };
+}
+
+/** Existing generic keys still render old/unknown-kind rows. Recognized obligations state both parties' direction. */
+function supplierDirectionTemplate(type: string, values: Record<string, string | number>, dictionary: Record<string, string>): string | undefined {
+  if (type !== "accounting.supplierObligationDue" && type !== "accounting.supplierObligationOverdue") return undefined;
+  if (values.kind !== "PAYABLE" && values.kind !== "RECEIVABLE" && values.kind !== "RECOVERY") return undefined;
+  const direction = values.kind === "PAYABLE" ? "YouOwe" : "OwesYou";
+  const identity = typeof values.supplier === "string" && values.supplier.trim() ? "Named" : "Unnamed";
+  const phraseKey = `Notif_Supplier${direction}${identity}`;
+  const phrase = fill(("amount" in values ? undefined : dictionary[`${phraseKey}NoAmount`]) ?? dictionary[phraseKey], values);
+  const key = toPascalCase(type);
+  const suffix = "amount" in values ? "Directional" : "DirectionalNoAmount";
+  return fill(dictionary[`Notif_${key}_${suffix}`], { ...values, direction: phrase });
 }
