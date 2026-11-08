@@ -26,7 +26,7 @@ User-invoked `to-spec`, `to-tickets`, `wayfinder` and `implement-spec` use this 
 
 ### Domain docs
 
-Use one shared AutoFlow glossary and root ADR directory (single-context). Only `domain-modeling`, usually through `/grill-with-docs`, writes `GLOSSARY.md` and ADRs, in a normal reviewed PR. See `docs/agents/domain.md`.
+Use one shared AutoFlow glossary and root ADR directory (single-context). An ADR is still required before every money or permission PR (owner ruling 2026-11-02, SCRUM-760 c24361). Among skills, only `domain-modeling` writes `GLOSSARY.md` and ADRs. See "Who writes the glossary and ADRs" in `docs/agents/domain.md`.
 
 ## Pilot release gate (owner standard, 2026-10-07)
 
