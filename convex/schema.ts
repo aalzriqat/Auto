@@ -1300,6 +1300,8 @@ export default defineSchema({
     .index("by_org_opening_status", ["orgId", "openingDraftId", "status"]),
   openingBalanceDrafts: defineTable({
     orgId: v.id("organizations"),
+    // Absent on legacy drafts means version zero; edits advance this atomically.
+    version: v.optional(v.number()),
     status: v.union(
       v.literal("PENDING_APPROVAL"),
       v.literal("POSTED"),

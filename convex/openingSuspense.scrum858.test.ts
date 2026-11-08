@@ -169,7 +169,7 @@ test("approving a stored draft that is a minor unit out is refused before any wr
     await ctx.db.patch(draft._id, { lines, createdBy: preparer });
     return { draftId: draft._id, lines };
   });
-  await expect(seed.owner.mutation(api.accountingCutover.approveOpeningBalance, {
+  await expect(seed.owner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: seed.orgId, draftId: stored.draftId,
   })).rejects.toThrow(/OPENING_TOTAL_TOO_LARGE/);
   const after = await seed.t.run(async (ctx) => ({

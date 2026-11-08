@@ -213,7 +213,7 @@ test.each(["DIRECT", "PREPARE", "APPROVE"] as const)("opening rechecks account c
     ? seed.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, seed.payload)
     : route === "PREPARE"
       ? seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload)
-      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draftId! });
+      : seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draftId! });
   await expect(result).rejects.toThrow("An opening account uses a different currency.");
   expect(await financialState(seed)).toEqual(before);
 });
@@ -227,7 +227,7 @@ test.each(["DIRECT", "TWO_PERSON"] as const)("%s opening creates explicitly allo
       await seed.owner.mutation(api.accountingCutover.draftOpeningBalance, seed.payload);
       const pending = await seed.t.run((ctx) => ctx.db.query("openingBalanceDrafts").unique());
       if (!pending) throw new Error("Missing prepared allocation draft");
-      await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: pending._id });
+      await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: pending._id });
     }
   } finally { clock.mockRestore(); }
   const state = await financialState(seed);
@@ -300,7 +300,7 @@ test("approval revalidates a customer deleted after preparation and preserves th
   if (!draft) throw new Error("Missing prepared allocation draft");
   await seed.owner.mutation(api.customers.softDelete, { orgId: seed.orgId, customerId: seed.customerA });
   const before = await financialState(seed);
-  await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId: draft._id })).rejects.toThrow("Opening customer is unavailable.");
+  await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId: draft._id })).rejects.toThrow("Opening customer is unavailable.");
   expect(await financialState(seed)).toEqual(before);
 });
 
@@ -348,7 +348,7 @@ test.each(["PREPARE", "LEGACY_APPROVE"] as const)("unallocated partner capital r
       expectedCurrency: "JOD", asOfDate: seed.asOfDate, lines })).rejects.toThrow("Partner opening allocations must match each capital account's credit balance.");
   } else {
     if (!draftId) throw new Error("Missing synthetic legacy pending draft");
-    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { orgId: seed.orgId, draftId }))
+    await expect(seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: seed.orgId, draftId }))
       .rejects.toThrow("Partner opening allocations must match each capital account's credit balance.");
   }
   expect(await financialState(seed)).toEqual(before);

@@ -21,7 +21,7 @@ import { OpeningDepositActionsDisabled, OpeningDepositBadge, isOpeningOriginDepo
 const SCALE = 1_000;
 function draftWith(allocation: Record<string, unknown>): PendingOpeningBalanceDraft {
   return {
-    _id: "obd_1", asOfDate: Date.UTC(2026, 6, 1), memo: "Cutover", createdBy: "user_accountant",
+    _id: "obd_1", version: 0, asOfDate: Date.UTC(2026, 6, 1), memo: "Cutover", createdBy: "user_accountant",
     preparedByName: "Layla Haddad", currency: "JOD", denominationKnown: true,
     lines: [
       { accountId: "acc_bank", accountCode: "1010", accountName: "Bank", debitMinor: 1_000 * SCALE, creditMinor: 0 },

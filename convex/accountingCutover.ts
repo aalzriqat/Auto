@@ -457,7 +457,9 @@ export const editOpeningBalanceDraft = mutation({
       if (error instanceof OpeningPreflightError) throw error.original;
       throw error;
     }
-    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency });
+    const version = (draft.version ?? 0) + 1;
+    if (!Number.isSafeInteger(version) || version <= 0) refuseOpeningChange("OPENING_DRAFT_CHANGED");
+    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency, version });
     await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
       resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
       before: { lines: draft.lines, allocations: draft.allocations ?? [], asOfDate: draft.asOfDate, memo: draft.memo ?? null, currency: draft.currency ?? null },
@@ -466,10 +468,18 @@ export const editOpeningBalanceDraft = mutation({
   }),
 });
 
+/** OCC protects the transaction; this token also binds the earlier client review. */
+function assertReviewedOpeningVersion(draft: Doc<"openingBalanceDrafts">, expectedVersion: number): void {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion !== (draft.version ?? 0)) {
+    refuseOpeningChange("OPENING_DRAFT_CHANGED");
+  }
+}
+
 export const approveOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
     draftId: v.id("openingBalanceDrafts"),
+    expectedVersion: v.number(),
   },
   handler: async (ctx, args): Promise<{ journalId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -478,6 +488,7 @@ export const approveOpeningBalance = mutation({
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
     }
+    assertReviewedOpeningVersion(draft, args.expectedVersion);
     // Segregation of duties, same as approveManualJournal: seeding an org's
     // entire starting GL position is at least as high-risk as an ordinary
     // manual journal, so the two-person check holds on *this* path.
@@ -815,6 +826,7 @@ export const rejectOpeningBalanceDraft = mutation({
   args: {
     orgId: v.id("organizations"),
     draftId: v.id("openingBalanceDrafts"),
+    expectedVersion: v.number(),
     rejectionReason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -829,6 +841,7 @@ export const rejectOpeningBalanceDraft = mutation({
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
     }
+    assertReviewedOpeningVersion(draft, args.expectedVersion);
     if (await containsEmployeeAdvanceControl(ctx, args.orgId, draft)) {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
     }
@@ -1109,6 +1122,7 @@ export const listPendingOpeningBalanceDrafts = query({
         }));
         return {
           _id: draft._id,
+          version: draft.version ?? 0,
           asOfDate: draft.asOfDate,
           memo: draft.memo,
           createdBy: draft.createdBy,

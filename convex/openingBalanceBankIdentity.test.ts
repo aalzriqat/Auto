@@ -194,7 +194,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
     expect(shownBank).toMatchObject({ bankAccountId: bankId, bankAccountName: "Housing Bank", requiresBankAccount: true });
     expect(shownSyntheticOffset).toMatchObject({ bankAccountName: null, requiresBankAccount: false });
 
-    const { journalId } = await fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+    const { journalId } = await fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: fx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
     });
@@ -210,7 +210,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       bankOpening(fx, bankId)
     );
     await expect(
-      fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
         orgId: fx.orgId,
         draftId: draftId as Id<"openingBalanceDrafts">,
       })
@@ -370,7 +370,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       await fx.asOwner.mutation(api.bankAccounts.deactivate, { orgId: fx.orgId, bankAccountId: bankId });
 
       await expect(
-        fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+        fx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
           orgId: fx.orgId,
           draftId: draftId as Id<"openingBalanceDrafts">,
         })
@@ -400,7 +400,7 @@ describe("SCRUM-54 opening balance names the physical bank", () => {
       );
 
       await expect(
-        fx.asAccountant.mutation(api.accountingCutover.approveOpeningBalance, { orgId: fx.orgId, draftId })
+        fx.asAccountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: fx.orgId, draftId })
       ).rejects.toThrow(/select a bank account/i);
 
       expect(await sideEffects(fx)).toEqual({ ...NO_SIDE_EFFECTS, drafts: 1 });

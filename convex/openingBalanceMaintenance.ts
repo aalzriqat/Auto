@@ -133,7 +133,7 @@ type OpeningVisibility = { userId: Id<"users">; canViewCosts: boolean; canManage
 async function editableOpening(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
   if (!draft || draft.createdBy !== visibility.userId || !visibility.canViewCosts) return null;
   if (!visibility.canManagePayroll && await openingNeedsPayroll(ctx, draft)) return null;
-  return { _id: draft._id, lines: draft.lines, asOfDate: draft.asOfDate, memo: draft.memo, allocations: draft.allocations, currency: draft.currency };
+  return { _id: draft._id, version: draft.version ?? 0, lines: draft.lines, asOfDate: draft.asOfDate, memo: draft.memo, allocations: draft.allocations, currency: draft.currency };
 }
 
 async function openingVoidCapability(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
@@ -154,7 +154,7 @@ async function openingVoidCapability(ctx: QueryCtx, draft: Opening | null, visib
 export const status = query({
   args: { orgId: v.id("organizations") },
   returns: v.object({
-    editable: v.union(v.null(), v.object({ _id: v.id("openingBalanceDrafts"), asOfDate: v.number(), memo: v.optional(v.string()),
+    editable: v.union(v.null(), v.object({ _id: v.id("openingBalanceDrafts"), version: v.number(), asOfDate: v.number(), memo: v.optional(v.string()),
       currency: v.optional(v.string()), allocations: v.optional(v.array(openingAllocationValidator)),
       lines: v.array(v.object({ accountId: v.id("chartOfAccounts"), debitMinor: v.number(), creditMinor: v.number(),
         description: v.optional(v.string()), bankAccountId: v.optional(v.id("bankAccounts")) })) })),

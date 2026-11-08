@@ -83,7 +83,7 @@ test("independent review posts the same native prepaid asset and exposes its ver
     amountMinor: 100_001, termMonths: 3, attestedUnexpiredBenefit: true,
   })]));
   if (!pending) throw new Error("Missing pending synthetic prepaid opening");
-  await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, {
+  await seed.approver.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: seed.orgId, draftId: pending._id,
   });
   const readback = await seed.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: seed.orgId });

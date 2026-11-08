@@ -2,6 +2,7 @@ import { ConvexError } from "convex/values";
 import { AppErrorCode, throwAppError } from "./errors";
 
 export const OPENING_MAINTENANCE_MESSAGES = {
+  OPENING_DRAFT_CHANGED: "This opening draft changed after your review. Review the updated draft before deciding.",
   OPENING_CHANGE_STATE: "This opening is no longer in the required state. Refresh and try again.",
   OPENING_CHANGE_PREPARER: "Only the preparer can edit this pending opening balance.",
   OPENING_CHANGE_SECOND_PERSON: "The opening void approver must be different from the requester.",

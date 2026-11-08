@@ -109,7 +109,7 @@ test("SCRUM-850 R1 unchanged large allocation survives registered edit approval 
   const allocations = buildOpeningAllocationPayload(draft.allocations.map(row => restoreOpeningAllocation(row, "JOD")), "JOD");
   expect(allocations?.[0].amountMinor).toBe(9_007_199_254_740_812);
   await s.owner.mutation(edit, { ...input, draftId: draft._id, allocations: allocations ?? undefined });
-  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 1, orgId: s.orgId, draftId: draft._id });
   const lines = await s.t.run(ctx => ctx.db.query("journalLines").collect());
   expect(lines.map(row => [row.debitMinor, row.creditMinor])).toEqual([[9_007_199_254_740_812, 0], [0, 9_007_199_254_740_812]]);
 }));
@@ -215,7 +215,7 @@ async function posted(s: Seed) {
     return id ? ctx.db.get(id) : null;
   });
   if (!draft || draft._id !== draftId) throw new Error("Missing opening draft");
-  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: s.orgId, draftId: draft._id });
   return draft._id;
 }
 async function request(s: Seed, draftId: Id<"openingBalanceDrafts">) {
@@ -251,9 +251,9 @@ test("SCRUM-850 preparer edits pending in place and a different actor approves t
   const edited = await s.t.run((ctx) => ctx.db.get(draft._id));
   expect(edited).toMatchObject({ status: "PENDING_APPROVAL", createdBy: s.ownerId, memo: "Corrected draft", lines: input.lines });
   const before = await entireDatabase(s);
-  await expect(s.owner.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id })).rejects.toThrow(/same as the preparer/);
+  await expect(s.owner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 1, orgId: s.orgId, draftId: draft._id })).rejects.toThrow(/same as the preparer/);
   expect(await entireDatabase(s)).toEqual(before);
-  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 1, orgId: s.orgId, draftId: draft._id });
   const trial = await s.owner.query(api.accountingReports.trialBalance, { orgId: s.orgId });
   expect(trial).toMatchObject({ isBalanced: true, totalDebits: 321_007, totalCredits: 321_007 });
 }));
@@ -386,7 +386,7 @@ test("SCRUM-850 edit and void enforce preparer finance payroll and tenant author
   await expect(s.owner.mutation(requestVoid, { orgId: foreignOrg, draftId: draft._id, reason: "Foreign" })).rejects.toThrow(/not found|organization/i);
   await expect(s.owner.mutation(approveVoid, { orgId: foreignOrg, draftId: draft._id })).rejects.toThrow(/not found|organization/i);
   expect(await entireDatabase(s)).toEqual(before);
-  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: s.orgId, draftId: draft._id });
   const postedBefore = await entireDatabase(s);
   await expect(s.owner.mutation(edit, { ...s.payload, draftId: draft._id })).rejects.toThrow(/OPENING_CHANGE_STATE/);
   await expect(s.employee.mutation(requestVoid, { orgId: s.orgId, draftId: draft._id, reason: "Denied" })).rejects.toThrow(/permission|authorized/i);
@@ -480,7 +480,7 @@ test("SCRUM-850 payroll authority is required for editing and voiding payroll-be
   const beforeEdit = await entireDatabase(s);
   await expect(s.reviewer.mutation(edit, { ...s.payload, draftId: draft._id })).rejects.toThrow(/permission|authorized/i);
   expect(await entireDatabase(s)).toEqual(beforeEdit);
-  await s.owner.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id });
+  await s.owner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0, orgId: s.orgId, draftId: draft._id });
   const beforeRequest = await entireDatabase(s);
   await expect(s.reviewer.mutation(requestVoid, { orgId: s.orgId, draftId: draft._id, reason: "Payroll denied" })).rejects.toThrow(/permission|authorized/i);
   expect(await entireDatabase(s)).toEqual(beforeRequest);

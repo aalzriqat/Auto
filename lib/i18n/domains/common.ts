@@ -1,6 +1,10 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
+  ServerError_OPENING_DRAFT_CHANGED: [
+    "This opening draft changed after your review. Review the updated draft before deciding.",
+    "تغيّرت المسودة الافتتاحية بعد مراجعتك. راجع المسودة المحدّثة قبل اتخاذ القرار.",
+  ],
   ServerError_OPENING_CHANGE_STATE: ["This opening is no longer in the required state. Refresh and try again.", "لم يعد الرصيد الافتتاحي في الحالة المطلوبة. حدّث الصفحة وحاول مجدداً."],
   ServerError_OPENING_CHANGE_PREPARER: ["Only the preparer can edit this pending opening balance.", "يمكن لمُعدّ الرصيد الافتتاحي فقط تعديل المسودة المعلّقة."],
   ServerError_OPENING_CHANGE_SECOND_PERSON: ["The opening void approver must be different from the requester.", "يجب أن يكون معتمد إلغاء الرصيد الافتتاحي شخصاً غير مقدّم الطلب."],

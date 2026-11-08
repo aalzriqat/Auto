@@ -48,7 +48,7 @@ const rows: OpeningAllocationDraft[] = [
   { rowKey: "capital-row", accountId: "capital" as Id<"chartOfAccounts">, kind: "PARTNER_CAPITAL", partyId: "partner-a" as Id<"partnerEquity">, partyLabel: "Synthetic Partner · tner-a", amount: "140.000", title: "", dueDate: "", note: "" },
 ];
 const review: PendingOpeningBalanceDraft = {
-  _id: "draft-a", asOfDate: Date.UTC(2026, 0, 1), createdBy: "preparer-a",
+  _id: "draft-a", version: 0, asOfDate: Date.UTC(2026, 0, 1), createdBy: "preparer-a",
   preparedByName: "Synthetic Preparer", currency: "JOD", denominationKnown: true,
   lines: [
     { accountId: "ar", accountCode: "1200", accountName: "Accounts Receivable", accountNameAr: "ذمم مدينة", debitMinor: 100_000, creditMinor: 0 },
@@ -352,7 +352,7 @@ test.each(["en", "ar"] as const)("opening allocation visual fixtures %s", (local
     canManageFinance: true, currency: "JOD", canPostDirectly: true, canReadOpeningStockCost: true });
   fixture.values.set("openingBalanceMaintenance:status", {
     ...unavailableMaintenance,
-    editable: { _id: "pending-opening-a" as Id<"openingBalanceDrafts">, asOfDate: Date.UTC(2026, 0, 1),
+    editable: { _id: "pending-opening-a" as Id<"openingBalanceDrafts">, version: 0, asOfDate: Date.UTC(2026, 0, 1),
       currency: "JOD", memo: "Synthetic pending opening", allocations: [],
       lines: [{ accountId: "cash-a" as Id<"chartOfAccounts">, debitMinor: 100_000, creditMinor: 0 }] },
   } satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>);
