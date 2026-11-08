@@ -1,0 +1,45 @@
+{
+  "id": "opening-money-arabic-separator-preserved",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "kind": "rule",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "subject": "parseMajorToMinor",
+  "inputs": {
+    "arabic": "١٢٫٥٠٠",
+    "persian": "۱۲٫۵",
+    "grouped": "١٬٠٠٠",
+    "scale": 3
+  },
+  "expected": [
+    {
+      "observable": "arabicAndPersian.minor",
+      "value": 12500
+    },
+    {
+      "observable": "grouping.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "lib/financeFeeTemplateForm.test.ts",
+    "testName": "accepts Arabic-Indic and Persian digits without accepting grouping ambiguity"
+  },
+  "matrixRow": "SCRUM-850-opening-snapshot-exactness",
+  "fingerprint": "0cd739876adc601d6a7431cc64dedb4309e9a5966c85f47ec84b6eda30c61401"
+}

@@ -1,6 +1,6 @@
 {
   "id": "opening-maintenance-legacy-decision-refuses",
-  "fingerprint": "9aa59f797e8bef466c2cb6c1c6c57222ec02e251797d47058928f6f60910c12e",
+  "fingerprint": "24a7d5c5cb23b2944cca2bd3099f230cfe330b83f33bb11ae8e04c6fa68680f3",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -39,26 +39,15 @@
       "input": {
         "omitExpectedVersion": true
       }
-    },
-    {
-      "actor": {
-        "role": "accountant",
-        "org": "A"
-      },
-      "action": "accountingCutover.rejectOpeningBalanceDraft",
-      "input": {
-        "omitExpectedVersion": true,
-        "rejectionReason": "Legacy"
-      }
     }
   ],
   "expected": [
     {
-      "observable": "eachDecision.refused",
+      "observable": "approve.refused",
       "value": true
     },
     {
-      "observable": "eachDecision.databaseUnchanged",
+      "observable": "approve.databaseUnchanged",
       "value": true
     }
   ],

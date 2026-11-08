@@ -1443,10 +1443,18 @@ Named backend registrations are in `convex/openingBalanceMaintenance.scrum850.te
 | `opening-snapshot-cross-account-containment` | `SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure` |
 | `opening-snapshot-reader-unavailable` | `SCRUM-850 R3 snapshot overflow preserves existing reconciliation unavailable contracts` |
 | `opening-vehicle-prefill-exactness` | `SCRUM-850 R3 opening vehicle selection prefills exact boundary minor units` in `components/accounting/setup/OpeningAllocationVisualFixture.test.tsx` |
+| `opening-money-arabic-separator-preserved` | `accepts Arabic-Indic and Persian digits without accepting grouping ambiguity` in `lib/financeFeeTemplateForm.test.ts` |
 
-The first three backend defects and the vehicle prefill have red evidence at
-`adc6ec810ed7c8747dab3519b07034657b77ec50`; ordinary/cross-account/reconciliation
-records are preventive controls and claim no failing-first commit.
+All six new defect tests have red evidence at
+`adc6ec810ed7c8747dab3519b07034657b77ec50`. Only the ordinary replacement and
+unchanged Arabic-parser controls claim no failing-first commit.
+
+N1 correction: `opening-maintenance-legacy-decision-refuses` covers the literal
+approve expansion registered at `72f92b1d9`; the companion
+`opening-maintenance-legacy-rejection-refuses` covers
+`SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing`
+at that same red commit. Each record contains only its own decision's step and
+expected refusal/database comparison. The tamper control claims no red commit.
 
 ## SCRUM-850-opening-maintenance-permission
 
@@ -1717,7 +1725,10 @@ and an empty diff against backend fix commit
 
 ### SCRUM-850 round 2 regression rows
 
-Each row remains local harness evidence, not release certification. The failing-first commit is `72f92b1d9b908ad7290843fd31632aafda340372`.
+Each row remains local harness evidence, not release certification. Bug
+reproductions cite `72f92b1d9b908ad7290843fd31632aafda340372`; the tampered-void
+row is a preventive control that passed there and claims no failing-first commit.
+The legacy decision rows bind the actual approve/reject expansions from that SHA.
 
 | Scenario | Bound named test |
 | --- | --- |
@@ -1727,3 +1738,4 @@ Each row remains local harness evidence, not release certification. The failing-
 | `opening-maintenance-stale-approval-refuses` | `SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts` |
 | `opening-maintenance-stale-rejection-refuses` | `SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects` |
 | `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing` |
+| `opening-maintenance-legacy-rejection-refuses` | `SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing` |

@@ -62,5 +62,9 @@
     "testName": "SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure"
   },
   "matrixRow": "SCRUM-850-opening-snapshot-exactness",
-  "fingerprint": "93fbb38be5c64c6fc147999b2b64259d4eba5ddd1240b740d5614b2f0686ceb4"
+  "fingerprint": "93fbb38be5c64c6fc147999b2b64259d4eba5ddd1240b740d5614b2f0686ceb4",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "adc6ec810ed7c8747dab3519b07034657b77ec50"
+  }
 }
