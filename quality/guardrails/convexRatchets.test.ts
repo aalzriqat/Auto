@@ -228,10 +228,20 @@ describe("validator ratchet against the trusted target tree", () => {
     expect(result.errors).toEqual([]);
   }, TIMEOUT);
 
-  test("positive control: moving the unvalidated function to another file passes", async () => {
+  test("negative control: moving an unvalidated function to another file makes it a new function and fails", async () => {
     const root = fixtureRepo(VALIDATOR_TARGET);
     write(root, "convex/fns.ts", `${FN_SERVER}export const list = query({ args: {}, returns: v.null(), handler: async () => null });\n`);
     write(root, "convex/moved.ts", `${FN_SERVER}export const old = mutation({ handler: async () => null });\n`);
+    const result = await check(root);
+    expect(result.errors).toEqual([
+      "VALIDATOR-GAP-NEW-FUNCTION: 1 public function(s) new on the target must declare both args and returns\n  convex/moved:old: missing args, returns",
+    ]);
+  }, TIMEOUT);
+
+  test("positive control: moving a fully validated function to another file passes", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/fns.ts", `${FN_SERVER}export const old = mutation({ handler: async () => null });\n`);
+    write(root, "convex/moved.ts", `${FN_SERVER}export const list = query({ args: {}, returns: v.null(), handler: async () => null });\n`);
     const result = await check(root);
     expect(result.errors).toEqual([]);
   }, TIMEOUT);
@@ -252,6 +262,67 @@ describe("validator ratchet against the trusted target tree", () => {
   }, TIMEOUT);
 });
 
+describe("validators per public function (guardrail 11)", () => {
+  const FIXED_OLD = `${FN_SERVER}export const list = query({ args: {}, returns: v.null(), handler: async () => null });\nexport const old = mutation({ args: {}, returns: v.null(), handler: async () => null });\n`;
+
+  test("negative control: fixing an old function while adding a new unvalidated one keeps the totals equal and still fails", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/fns.ts", FIXED_OLD);
+    write(root, "convex/more.ts", `${FN_SERVER}export const fresh = query({ handler: async () => null });\n`);
+    const result = await check(root);
+    expect(result.ratchets?.pr["no-args-validator"]).toBe(result.ratchets?.target["no-args-validator"]);
+    expect(result.ratchets?.pr["no-returns-validator"]).toBe(result.ratchets?.target["no-returns-validator"]);
+    expect(result.errors).toEqual([
+      "VALIDATOR-GAP-NEW-FUNCTION: 1 public function(s) new on the target must declare both args and returns\n  convex/more:fresh: missing args, returns",
+    ]);
+  }, TIMEOUT);
+
+  test("negative control: a new function missing only args, or only returns, fails", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/fns.ts", FIXED_OLD);
+    write(root, "convex/a.ts", `${FN_SERVER}export const noArgs = query({ returns: v.null(), handler: async () => null });\nexport const noReturns = query({ args: {}, handler: async () => null });\n`);
+    const result = await check(root);
+    expect(result.errors).toEqual([
+      "VALIDATOR-GAP-NEW-FUNCTION: 2 public function(s) new on the target must declare both args and returns\n  convex/a:noArgs: missing args\n  convex/a:noReturns: missing returns",
+    ]);
+  }, TIMEOUT);
+
+  test("negative control: a new default export is keyed as module:default", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/fns.ts", FIXED_OLD);
+    write(root, "convex/d.ts", `${FN_SERVER}export default query({ handler: async () => null });\n`);
+    const result = await check(root);
+    expectFailure(result.errors, /^VALIDATOR-GAP-NEW-FUNCTION[^\n]*\n {2}convex\/d:default: missing args, returns$/);
+  }, TIMEOUT);
+
+  test("negative control: removing a validator from an existing function fails even when another gains one", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(
+      root,
+      "convex/fns.ts",
+      `${FN_SERVER}export const list = query({ handler: async () => null });\nexport const old = mutation({ args: {}, returns: v.null(), handler: async () => null });\n`,
+    );
+    const result = await check(root);
+    expect(result.ratchets?.pr["no-args-validator"]).toBe(result.ratchets?.target["no-args-validator"]);
+    expect(result.errors).toEqual([
+      "VALIDATOR-REMOVED: 1 existing public function(s) lost a validator they had on the target\n  convex/fns:list: lost args, returns",
+    ]);
+  }, TIMEOUT);
+
+  test("positive control: an existing unvalidated function that stays as it is passes, and a new validated one passes", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/more.ts", `${FN_SERVER}export const fresh = query({ args: {}, returns: v.null(), handler: async () => null });\n`);
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("positive control: a new internal function needs no validators", async () => {
+    const root = fixtureRepo(VALIDATOR_TARGET);
+    write(root, "convex/more.ts", 'import { internalMutation } from "./_generated/server";\nexport const quiet = internalMutation({ handler: async () => null });\n');
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+});
 describe("the Convex ratchet allowances cannot be raised from the PR tree", () => {
   test("negative control: a PR-side exemption cannot hide a new .collect() or an unvalidated function", async () => {
     const root = fixtureRepo({ ...READ_TARGET, ...VALIDATOR_TARGET });

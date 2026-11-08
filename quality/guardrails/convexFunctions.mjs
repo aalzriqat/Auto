@@ -14,6 +14,8 @@ import ts from "typescript";
 import { skipWrappers } from "./astCounts.mjs";
 import { resolveSpecifier } from "./rules.mjs";
 
+const SOURCE_EXTENSION = /\.[cm]?[jt]sx?$/u;
+
 const GENERATED_SERVER = {
   query: { kind: "query", tenant: false },
   mutation: { kind: "mutation", tenant: false },
@@ -53,13 +55,16 @@ function importedBuilders(sourceFile, filePath) {
   return { named, namespaces };
 }
 
-/** `export { a, b as c }` without a module specifier: local names that are exported. */
+/** `export { a, b as c }` without a module specifier: local name -> the names it is exported as. */
 function locallyExportedNames(sourceFile) {
-  const names = new Set();
+  const names = new Map();
   for (const statement of sourceFile.statements) {
     if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier && statement.exportClause &&
       ts.isNamedExports(statement.exportClause)) {
-      for (const element of statement.exportClause.elements) names.add((element.propertyName ?? element.name).text);
+      for (const element of statement.exportClause.elements) {
+        const local = (element.propertyName ?? element.name).text;
+        names.set(local, [...(names.get(local) ?? []), element.name.text]);
+      }
     }
   }
   return names;
@@ -100,35 +105,55 @@ function declares(call, property) {
 }
 
 /**
- * @returns {{ "public-functions": number, "no-args-validator": number,
- *   "no-returns-validator": number, "non-tenant-builder": number }}
+ * Every public function a file registers, keyed like Convex addresses it:
+ * module path (no extension) + ":" + export name.
+ * @returns {Array<{ key: string, kind: string, tenant: boolean, hasArgs: boolean, hasReturns: boolean }>}
  */
-export function countPublicFunctions(sourceFile, filePath) {
-  const counts = { "public-functions": 0, "no-args-validator": 0, "no-returns-validator": 0, "non-tenant-builder": 0 };
+export function listPublicFunctions(sourceFile, filePath) {
+  const functions = [];
   const imports = importedBuilders(sourceFile, filePath);
-  if (imports.named.size === 0 && imports.namespaces.size === 0) return counts;
-  const exported = locallyExportedNames(sourceFile);
-  const record = (call) => {
+  if (imports.named.size === 0 && imports.namespaces.size === 0) return functions;
+  const exportedAs = locallyExportedNames(sourceFile);
+  const modulePath = filePath.replace(SOURCE_EXTENSION, "");
+  const record = (call, exportName) => {
     const builder = builderOf(call, imports);
     if (!builder) return;
-    counts["public-functions"] += 1;
-    if (!declares(call, "args")) counts["no-args-validator"] += 1;
-    if (!declares(call, "returns")) counts["no-returns-validator"] += 1;
-    if (builder.kind !== "action" && !builder.tenant) counts["non-tenant-builder"] += 1;
+    functions.push({
+      key: `${modulePath}:${exportName}`,
+      kind: builder.kind,
+      tenant: builder.tenant,
+      hasArgs: declares(call, "args"),
+      hasReturns: declares(call, "returns"),
+    });
   };
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)) {
       const isExported = hasModifier(statement, ts.SyntaxKind.ExportKeyword);
       for (const declaration of statement.declarationList.declarations) {
         if (!declaration.initializer || !ts.isIdentifier(declaration.name)) continue;
-        if (!isExported && !exported.has(declaration.name.text)) continue;
+        const names = [...(isExported ? [declaration.name.text] : []), ...(exportedAs.get(declaration.name.text) ?? [])];
         const value = unwrapExpression(declaration.initializer);
-        if (ts.isCallExpression(value)) record(value);
+        if (ts.isCallExpression(value)) for (const name of new Set(names)) record(value, name);
       }
     } else if (ts.isExportAssignment(statement)) {
       const value = unwrapExpression(statement.expression);
-      if (ts.isCallExpression(value)) record(value);
+      if (ts.isCallExpression(value)) record(value, "default");
     }
+  }
+  return functions;
+}
+
+/**
+ * @returns {{ "public-functions": number, "no-args-validator": number,
+ *   "no-returns-validator": number, "non-tenant-builder": number }}
+ */
+export function countPublicFunctions(sourceFile, filePath) {
+  const counts = { "public-functions": 0, "no-args-validator": 0, "no-returns-validator": 0, "non-tenant-builder": 0 };
+  for (const fn of listPublicFunctions(sourceFile, filePath)) {
+    counts["public-functions"] += 1;
+    if (!fn.hasArgs) counts["no-args-validator"] += 1;
+    if (!fn.hasReturns) counts["no-returns-validator"] += 1;
+    if (fn.kind !== "action" && !fn.tenant) counts["non-tenant-builder"] += 1;
   }
   return counts;
 }

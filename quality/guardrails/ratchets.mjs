@@ -5,7 +5,7 @@
 // are measured live by the same code over the same file scope, so nothing is
 // stored in the PR that a PR could raise, and moving code between files changes
 // no total. Guardrail 9 reports and never blocks (see ADVISORIES).
-import { countPublicFunctions } from "./convexFunctions.mjs";
+import { countPublicFunctions, listPublicFunctions } from "./convexFunctions.mjs";
 import { countQueryReads, countTypeEscapes, parseSource } from "./astCounts.mjs";
 
 /**
@@ -36,6 +36,7 @@ export function analyzeSource(filePath, text) {
   Object.assign(counts, countTypeEscapes(sourceFile));
   if (filePath.startsWith("convex/")) {
     Object.assign(counts, countQueryReads(sourceFile), countPublicFunctions(sourceFile, filePath));
+    counts.functions = listPublicFunctions(sourceFile, filePath);
   }
   return counts;
 }
@@ -58,6 +59,46 @@ function deltaLines(kindId, pr, target) {
   const lines = rows.slice(0, MAX_DELTA_LINES).map((r) => `  ${r.filePath}: ${r.before} -> ${r.after}`);
   if (rows.length > MAX_DELTA_LINES) lines.push(`  ... and ${rows.length - MAX_DELTA_LINES} more files`);
   return lines;
+}
+
+/** Public functions by key across a tree: key -> {hasArgs, hasReturns}. */
+function functionsByKey(perFile) {
+  const byKey = new Map();
+  for (const counts of perFile.values()) for (const fn of counts.functions ?? []) byKey.set(fn.key, fn);
+  return byKey;
+}
+
+const missing = (fn) => [fn.hasArgs ? "" : "args", fn.hasReturns ? "" : "returns"].filter(Boolean).join(", ");
+
+/**
+ * Guardrail 11 per function. The repository totals stay the limit for old debt;
+ * on top of them, a public function whose key does not exist on the target must
+ * declare both `args` and `returns`, and an existing function may not lose a
+ * validator it had. Without this, a PR can add one unvalidated function while
+ * fixing another and leave every total unchanged.
+ */
+function functionValidatorErrors(pr, target) {
+  const before = functionsByKey(target);
+  const added = [];
+  const lost = [];
+  for (const fn of [...functionsByKey(pr).values()].sort((a, b) => (a.key < b.key ? -1 : 1))) {
+    const was = before.get(fn.key);
+    if (!was) {
+      if (!fn.hasArgs || !fn.hasReturns) added.push(`  ${fn.key}: missing ${missing(fn)}`);
+    } else {
+      const dropped = missing({ hasArgs: !was.hasArgs || fn.hasArgs, hasReturns: !was.hasReturns || fn.hasReturns });
+      if (dropped) lost.push(`  ${fn.key}: lost ${dropped}`);
+    }
+  }
+  const errors = [];
+  const cap = (rows) => (rows.length > MAX_DELTA_LINES ? [...rows.slice(0, MAX_DELTA_LINES), `  ... and ${rows.length - MAX_DELTA_LINES} more`] : rows);
+  if (added.length > 0) {
+    errors.push([`VALIDATOR-GAP-NEW-FUNCTION: ${added.length} public function(s) new on the target must declare both args and returns`, ...cap(added)].join("\n"));
+  }
+  if (lost.length > 0) {
+    errors.push([`VALIDATOR-REMOVED: ${lost.length} existing public function(s) lost a validator they had on the target`, ...cap(lost)].join("\n"));
+  }
+  return errors;
 }
 
 /**
@@ -87,5 +128,6 @@ export function compareRatchets({ pr, target }) {
       notices.push(`ratchet can tighten: ${kind.id} ${was} -> ${now}`);
     }
   }
+  errors.push(...functionValidatorErrors(pr, target));
   return { errors, notices, advisories, totals };
 }
