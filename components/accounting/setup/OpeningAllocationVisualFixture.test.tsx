@@ -34,6 +34,19 @@ vi.mock("convex/react", async () => {
 });
 
 const orgId = "org-a" as Id<"organizations">;
+test("SCRUM-850 R3 opening vehicle selection prefills exact boundary minor units", () => {
+  fixture.locale = "en";
+  vi.stubGlobal("localStorage", { getItem: () => "en", setItem: () => {} });
+  fixture.values.set("accountingCutover:listOpeningStockChoices", [{ vehicleId: "vehicle-boundary", available: true,
+    amountMinor: 9_007_199_254_740_991, vin: "BOUNDARY", label: "Synthetic stock" }]);
+  const onChange = vi.fn();
+  const row: OpeningAllocationDraft = { ...rows[0], kind: "VEHICLE_INVENTORY", partyId: "", partyLabel: "", amount: "" };
+  mount(<OpeningAllocationEditor orgId={orgId} currency="JOD" groups={[{ accountId: row.accountId,
+    kind: "VEHICLE_INVENTORY", journalMinor: 9_007_199_254_740_991, label: "Inventory" }]} rows={[row]}
+    onChange={onChange} canSelectCustomers={false} canSelectEmployees={false} canSelectPartners={false} />);
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "vehicle-boundary" } });
+  expect(onChange.mock.calls[0]?.[0]?.[0]).toMatchObject({ amount: "9007199254740.991", partyId: "vehicle-boundary" });
+});
 const unavailableMaintenance = {
   editable: null, postedDraftId: null, canRequestVoid: false, canApproveVoid: false, voidReason: null,
 } satisfies FunctionReturnType<typeof api.openingBalanceMaintenance.status>;

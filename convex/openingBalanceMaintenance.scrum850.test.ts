@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { makeFunctionReference, type FunctionArgs } from "convex/server";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { withFrozenScheduler } from "../test-utils/outboxWork";
@@ -96,6 +96,119 @@ async function fixture(allFamilies = false) {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
+function openingAmount(s: Seed, minor: number) {
+  s.payload.lines = [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: minor, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: minor },
+  ];
+}
+
+test("SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.t.run(async ctx => {
+    for (const key of ["CASH_ON_HAND", "BANK_ACCOUNT"]) {
+      await ctx.db.insert("accountBalanceSnapshots", { orgId: s.orgId, accountId: s.account(key), currency: "JOD", periodId: s.period._id,
+        shard: 0, runningDebitMinor: 4_503_599_627_370_497, runningCreditMinor: 0, updatedAt: Date.now() });
+    }
+  });
+  await expect(s.owner.query(api.accountingReports.balanceSheet, { orgId: s.orgId, asOfDate: s.period.endDate })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+  await expect(s.owner.query(api.accountingReports.trialBalance, { orgId: s.orgId, toDate: s.period.endDate })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+  await s.t.run(async ctx => {
+    const snapshots = await ctx.db.query("accountBalanceSnapshots").collect();
+    for (const row of snapshots) await ctx.db.delete(row._id);
+    await ctx.db.insert("accountBalanceSnapshots", { orgId: s.orgId, accountId: s.account("CASH_ON_HAND"), currency: "JOD", periodId: s.period._id,
+      shard: 0, runningDebitMinor: 9_007_199_254_740_992, runningCreditMinor: 1, updatedAt: Date.now() });
+  });
+  await expect(s.owner.query(api.accountingReports.balanceSheet, { orgId: s.orgId, asOfDate: s.period.endDate })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+}), 20_000);
+
+test("SCRUM-850 R3 snapshot overflow preserves existing reconciliation unavailable contracts", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.t.run(async ctx => {
+    for (const key of ["CASH_ON_HAND", "RECEIVABLE_FROM_SUPPLIERS"]) {
+      for (const shard of [0, 1]) {
+        await ctx.db.insert("accountBalanceSnapshots", { orgId: s.orgId, accountId: s.account(key), currency: "JOD", periodId: s.period._id,
+          shard, runningDebitMinor: 4_503_599_627_370_497, runningCreditMinor: 0, updatedAt: Date.now() });
+      }
+    }
+  });
+  const cutoff = s.period.endDate;
+  expect(await s.owner.query(api.accountingReports.supplierPayablesReconciliation, { orgId: s.orgId, toDate: cutoff })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
+  expect(await s.owner.query(api.accountingReports.employeeAdvancesReconciliation, { orgId: s.orgId, toDate: cutoff })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", isReconciled: false, currencies: [] });
+  expect(await s.owner.query(api.accountingReports.supplierReceivablesReconciliation, { orgId: s.orgId, toDate: cutoff })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OVER_LIMIT", complete: false });
+  expect(await s.owner.query(api.accountingReports.customerDepositsReconciliation, { orgId: s.orgId, toDate: cutoff })).toMatchObject({ status: "UNAVAILABLE", unavailableReason: "OPENING_SOURCE_UNAVAILABLE", isReconciled: false });
+  await expect(s.owner.query(api.vatReport.generateVatSummary, { orgId: s.orgId, toDate: cutoff })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+}), 20_000);
+
+test("SCRUM-850 R3 replacement gross snapshots refuse rounded trial and balance sheet figures", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  let shard = 0;
+  const rng = vi.spyOn(crypto, "getRandomValues").mockImplementation(array => {
+    if (array) new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(shard);
+    return array;
+  });
+  try {
+    openingAmount(s, 9_007_199_254_740_991);
+    const draftId = await posted(s);
+    await request(s, draftId);
+    await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
+    shard = 1; // Both shards remain safe; their gross sum does not.
+    openingAmount(s, 9_007_199_254_740_990);
+    await posted(s);
+    await expect(s.owner.query(api.accountingReports.trialBalance, { orgId: s.orgId })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+    for (const asOfDate of [s.asOfDate, s.period.endDate]) {
+      await expect(s.owner.query(api.accountingReports.balanceSheet, { orgId: s.orgId, asOfDate })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+    }
+  } finally { rng.mockRestore(); }
+}), 20_000);
+
+test("SCRUM-850 R3 unsafe snapshot write refuses replacement atomically including scheduled work", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const rng = vi.spyOn(crypto, "getRandomValues").mockImplementation(array => {
+    if (array) new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(0);
+    return array;
+  });
+  try {
+    openingAmount(s, 9_007_199_254_740_991);
+    const draftId = await posted(s);
+    await request(s, draftId);
+    await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
+    openingAmount(s, 9_007_199_254_740_990);
+    const pending = await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+    const id = await s.t.run(async ctx => ctx.db.normalizeId("openingBalanceDrafts", pending.draftId));
+    if (!id) throw new Error("Missing replacement");
+    const before = await entireDatabase(s);
+    await expect(s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: id, expectedVersion: 0 })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+    expect(await entireDatabase(s)).toEqual(before);
+  } finally { rng.mockRestore(); }
+}), 20_000);
+
+test("SCRUM-850 R3 elapsed periods with unsafe gross totals refuse public snapshot reports", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.t.run(async ctx => {
+    const prior = await ctx.db.insert("accountingPeriods", { orgId: s.orgId, startDate: s.asOfDate - 1000,
+      endDate: s.asOfDate - 1, fiscalYear: 2025, periodNumber: 12, status: "CLOSED", createdAt: Date.now(), createdBy: s.ownerId });
+    for (const [periodId, minor] of [[prior, 9_007_199_254_740_991], [s.period._id, 2]] as const) {
+      await ctx.db.insert("accountBalanceSnapshots", { orgId: s.orgId, accountId: s.account("CASH_ON_HAND"), currency: "JOD", periodId,
+        shard: 0, runningDebitMinor: minor, runningCreditMinor: 0, updatedAt: Date.now() });
+    }
+  });
+  await expect(s.owner.query(api.accountingReports.balanceSheet, { orgId: s.orgId, asOfDate: s.period.endDate })).rejects.toThrow(/ACCOUNT_SNAPSHOT_UNSAFE_TOTAL/);
+}), 20_000);
+
+test("SCRUM-850 R3 ordinary replacement preserves exact trial balance and balance sheet", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  openingAmount(s, 200_003);
+  const draftId = await posted(s);
+  await request(s, draftId);
+  await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
+  openingAmount(s, 200_002);
+  await posted(s);
+  expect(await s.owner.query(api.accountingReports.balanceSheet, { orgId: s.orgId, asOfDate: s.period.endDate })).toMatchObject({ totalAssets: 200_002, isBalanced: true });
+  const trial = await s.owner.query(api.accountingReports.trialBalance, { orgId: s.orgId });
+  expect(trial.rows.find(row => row.accountId === s.account("CASH_ON_HAND"))).toMatchObject({ netMinor: 200_002 });
+}), 20_000);
+
 test("SCRUM-850 R1 unchanged large allocation survives registered edit approval and posting", async () => withFrozenScheduler(async () => {
   const s = await fixture();
   const amountMinor = 9_007_199_254_740_812;
@@ -132,7 +245,7 @@ test("SCRUM-850 F1 verified void and reentry preserve all three reconciliations 
   await s.reviewer.mutation(approveVoid, { orgId: s.orgId, draftId });
   await posted(s);
   expect(await reconciliationReaders(s)).toEqual(control);
-}));
+}), 20_000);
 
 test("SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations", async () => withFrozenScheduler(async () => {
   const s = await fixture(true);
@@ -199,10 +312,11 @@ function legacyDecisionRefuses(decision: "approve" | "reject") {
   expect(await entireDatabase(s)).toEqual(before);
   });
 }
-// Keep the literal title from the red commit. The scenario library requires one
-// non-parameterized registration; both legacy decision shapes remain checked.
-test("SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing", async () => {
+// These are the actual test.each names registered at the failing-first commit.
+test("SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing", async () => {
   await legacyDecisionRefuses("approve");
+});
+test("SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing", async () => {
   await legacyDecisionRefuses("reject");
 });
 
