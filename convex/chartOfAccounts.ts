@@ -801,6 +801,13 @@ export const repairMissingSystemAccounts = mutation({
   },
 });
 
+function normalizeAccountCode(code: string): string {
+  // Normalize Arabic keyboard digits rather than refuse them, so stored codes have one canonical form.
+  return code.trim()
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+}
+
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -819,9 +826,24 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
+    const code = normalizeAccountCode(args.code);
+    if (!code) {
+      throw new ConvexError({
+        code: "ACCOUNT_CODE_INVALID",
+        message: "Enter a non-empty account code.",
+      });
+    }
+    const name = args.name.trim();
+    if (!name) {
+      throw new ConvexError({
+        code: "ACCOUNT_NAME_REQUIRED",
+        message: "Enter an English account name.",
+      });
+    }
+
     const existing = await ctx.db
       .query("chartOfAccounts")
-      .withIndex("by_org_code", (q) => q.eq("orgId", args.orgId).eq("code", args.code))
+      .withIndex("by_org_code", (q) => q.eq("orgId", args.orgId).eq("code", code))
       .unique();
     if (existing) {
       throw new ConvexError({
@@ -840,8 +862,8 @@ export const create = mutation({
     const now = Date.now();
     return await ctx.db.insert("chartOfAccounts", {
       orgId: args.orgId,
-      code: args.code,
-      name: args.name,
+      code,
+      name,
       nameAr: args.nameAr,
       type: args.type,
       subtype: args.subtype,
@@ -884,10 +906,18 @@ export const update = mutation({
       throw new ConvexError("The bank control account cannot allow manual posting because manual journals cannot identify a physical bank.");
     }
 
+    const name = args.name?.trim();
+    if (name !== undefined && !name) {
+      throw new ConvexError({
+        code: "ACCOUNT_NAME_REQUIRED",
+        message: "Enter an English account name.",
+      });
+    }
+
     await ctx.db.patch(args.accountId, {
       updatedAt: Date.now(),
       updatedBy: user._id,
-      ...(args.name !== undefined ? { name: args.name } : {}),
+      ...(name !== undefined ? { name } : {}),
       ...(args.nameAr !== undefined ? { nameAr: args.nameAr } : {}),
       ...(args.allowManualPosting !== undefined ? { allowManualPosting: args.allowManualPosting } : {}),
       ...(args.active !== undefined ? { active: args.active } : {}),
