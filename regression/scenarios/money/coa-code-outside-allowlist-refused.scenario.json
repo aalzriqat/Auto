@@ -1,0 +1,581 @@
+{
+  "id": "coa-code-outside-allowlist-refused",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            8204,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            8205,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "C"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "C"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            9,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "D"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "D"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            10,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "E"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "E"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            95,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "F"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "F"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            50,
+            53,
+            47,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "G"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "G"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            1581,
+            1587,
+            1575,
+            1576
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "H"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "H"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            65298,
+            65301,
+            65296,
+            65296
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.codePerCase",
+      "value": "ACCOUNT_CODE_INVALID"
+    },
+    {
+      "observable": "storedAccounts.unchangedPerCase",
+      "value": true
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "c08c8f39959b92446313fa5bfcfe9e865bf2ef33"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-round4-account-identity",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "account codes outside ASCII letters digits dot and hyphen are refused"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "fdd90bd77af937efd174676465f15795c563637d25134085dfea8666809e3945"
+}

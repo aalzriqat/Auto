@@ -804,8 +804,8 @@ export const repairMissingSystemAccounts = mutation({
 function normalizeAccountCode(code: string): string {
   // Normalize Arabic keyboard digits rather than refuse them, so stored codes have one canonical form.
   return code.trim()
-    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
-    .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+    .replace(/[\u0660-\u0669]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
 }
 
 export const create = mutation({
@@ -827,7 +827,9 @@ export const create = mutation({
     await requireFeature(ctx, args.orgId, "accounting");
 
     const code = normalizeAccountCode(args.code);
-    if (!code) {
+    // Codes allow only ASCII letters, digits, dot and hyphen after normalization.
+    // Reject every other character rather than enumerate invisible Unicode lookalikes.
+    if (!/^[A-Za-z0-9.-]+$/.test(code)) {
       throw new ConvexError({
         code: "ACCOUNT_CODE_INVALID",
         message: "Enter a non-empty account code.",
@@ -864,7 +866,7 @@ export const create = mutation({
       orgId: args.orgId,
       code,
       name,
-      nameAr: args.nameAr,
+      nameAr: args.nameAr?.trim() || undefined,
       type: args.type,
       subtype: args.subtype,
       normalBalance: args.normalBalance,
@@ -918,7 +920,7 @@ export const update = mutation({
       updatedAt: Date.now(),
       updatedBy: user._id,
       ...(name !== undefined ? { name } : {}),
-      ...(args.nameAr !== undefined ? { nameAr: args.nameAr } : {}),
+      ...(args.nameAr !== undefined ? { nameAr: args.nameAr.trim() || undefined } : {}),
       ...(args.allowManualPosting !== undefined ? { allowManualPosting: args.allowManualPosting } : {}),
       ...(args.active !== undefined ? { active: args.active } : {}),
       ...(args.currencyRestriction !== undefined ? { currencyRestriction: args.currencyRestriction } : {}),

@@ -1447,3 +1447,121 @@ with labelled dialogs and native table semantics, following
 [WAI-ARIA dialogs](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/),
 [WAI-ARIA tables](https://www.w3.org/WAI/ARIA/apg/patterns/table/), and
 [shadcn Dialog](https://ui.shadcn.com/docs/components/radix/dialog).
+
+### SCRUM-932 round 4: account code alphabet and optional Arabic names
+
+Red commit: `c08c8f39959b92446313fa5bfcfe9e865bf2ef33`. It contains only
+the management test additions. All ten new bug records below bind unchanged
+test names registered in that commit. The four existing empty/canonical-code
+and blank-English-name records are untouched in this round.
+
+The repeated mistake class is validating a few spellings rather than defining
+the identifier alphabet. Round 3 (`bebc7cb61`, followed by `b49071337`)
+canonicalized Arabic digits and boundary spaces; round 4's red run reproduced
+the same near-duplicate class through format controls and internal whitespace.
+The structural correction is one admission rule in public `create`, immediately
+after normalization: `^[A-Za-z0-9.-]+$`. Empty strings and every other character
+refuse with the existing `ACCOUNT_CODE_INVALID` payload and existing EN/AR keys.
+No new length cap is imposed: the compatibility inventory does not establish a
+business limit. Convex's existing value/document limits still apply. Case remains
+significant. Stored rows and other `by_org_code` readers are unchanged.
+
+The decision follows [OWASP's allowlist validation guidance](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html).
+[Unicode's character database](https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt)
+classifies U+200B through U+200F and U+061C as Cf, format controls.
+Rejecting outside a defined alphabet covers this class without a character blacklist.
+[Sonar's rule mapping](https://github.com/SonarSource/SonarJS/blob/master/packages/analysis/src/jsts/rules/README.md)
+maps S7758 to [prefer-code-point](https://github.com/sindresorhus/eslint-plugin-unicorn/blob/main/docs/rules/prefer-code-point.md).
+The digit replacement now uses indexOf on the two ten-digit strings, requiring
+neither charCodeAt nor a non-null assertion. Expected refusals retain structured
+[ConvexError application errors](https://docs.convex.dev/functions/error-handling/application-errors);
+an uncaught error rolls back the mutation. Arabic names are trimmed at both
+public write doors; blank input removes the optional field. Omitting nameAr
+on update preserves the stored name.
+
+#### Compatibility inventory
+
+Scope: tracked TS/TSX/JS/MJS source at the supplied round-3 baseline, including
+code properties in files referencing chartOfAccounts/defaultChart, every public
+create call and direct chart insert, and manually resolved shorthand, spread,
+rehearsal-helper and generated-code inputs. The literal inventory is a conservative
+superset of account codes; error-code properties and keyboard/currency codes
+were excluded. This is a repository compatibility check, not a production-data census.
+
+The default chart is imported from `convex/utils/defaultChart.ts`; that file
+has no imports and defines all 57 default rows plus the system-key identifiers.
+System-key strings such as CASH_ON_HAND identify mappings, not stored account codes.
+initialize, ensureSystemAccount, general-expense/supplier-payable creation and
+e2eBootstrap seed from those definitions. Copy-based bank/cheque fixtures inherit
+their existing default row codes.
+
+All 57 default codes pass:
+
+`1100`, `1110`, `1120`, `1130`, `1200`, `1210`, `1240`, `1230`, `1250`, `1300`, `1310`, `1400`, `1450`, `1500`, `1510`, `1900`, `2100`, `2110`, `2200`, `2210`, `2220`, `2300`, `2310`, `2320`, `2400`, `2410`, `2420`, `3100`, `3200`, `3300`, `4100`, `4150`, `4160`, `4170`, `4180`, `4200`, `4300`, `4400`, `5100`, `6100`, `6200`, `6300`, `6400`, `6500`, `6600`, `6700`, `6800`, `6810`, `6820`, `6830`, `6840`, `6850`, `6860`, `6870`, `6880`, `6890`, `6900`.
+
+All 92 distinct candidate account literals checked pass, including legacy and
+synthetic fixtures:
+
+`0000`, `1`, `100`, `1000`, `1010`, `1100`, `1110`, `1120`, `1130`, `1200`, `1210`, `1220`, `1230`, `1240`, `1250`, `1300`, `1310`, `1360`, `1400`, `1450`, `1500`, `1510`, `1891`, `1892`, `1893`, `1895`, `1900`, `1998`, `1999`, `2`, `2100`, `2110`, `2110-DUP`, `2200`, `2210`, `2220`, `2300`, `2310`, `2320`, `2391`, `2392`, `2393`, `2394`, `2400`, `2410`, `2420`, `2500`, `2510`, `2600`, `2998`, `2999`, `3000`, `3100`, `3200`, `3300`, `3998`, `3999`, `4000`, `4100`, `4150`, `4160`, `4170`, `4180`, `4200`, `4300`, `4400`, `4410`, `5000`, `5100`, `6000`, `6100`, `6200`, `6300`, `6400`, `6500`, `6600`, `6700`, `6800`, `6810`, `6820`, `6830`, `6840`, `6850`, `6860`, `6870`, `6880`, `6890`, `6900`, `6999`, `QA-CAPITAL-EXPLICIT`, `QA-DUPLICATE-ADVANCE`, `QA-DUPLICATE-AR`.
+
+Additional resolved callers:
+
+- `scripts/accountingOpeningRehearsal.mjs`: 1891, 1892, 1893, 2391, 2392, 2393.
+- `scripts/accountingCleanupRehearsal.mjs`: 1998 and 2998.
+- `convex/openingCommissionReadBudget.test.ts`: `29` + index padded to three digits, indices 0 through 99; all 100 outputs 29000 through 29099 pass.
+- `convex/supplierReceivablesReconciliation.scrum869.test.ts`: `19` + index padded to two digits, indices 0 through 60; all 61 outputs 1900 through 1960 pass.
+- `convex/orgFinancialResetRequiredRefs.test.ts`: shorthand 1000 and 1100.
+- `convex/supplierStatement.scrum869.test.ts`: shorthand 1110 and 1240.
+- Existing public canonical/duplicate fixtures normalize padded 2500/2600 and both Arabic digit sets to ASCII.
+- New positive control creates 2500, 2500.10, AR-01 and ar-02 through the public mutation.
+
+#### New bug records
+
+| Record | Exact executable test name in the red commit |
+| --- | --- |
+| `coa-arabic-name-trimmed-create` | `Arabic account names are trimmed on create` |
+| `coa-arabic-name-trimmed-update` | `Arabic account names are trimmed on update and preserved when omitted` |
+| `coa-blank-arabic-name-create` | `blank Arabic account names are omitted on create` |
+| `coa-blank-arabic-name-update` | `blank Arabic account names clear the stored name on update` |
+| `coa-code-arabic-letter-mark-refused` | `account codes containing an Arabic letter mark are refused` |
+| `coa-code-internal-space-refused` | `account codes containing internal spaces are refused` |
+| `coa-code-ltr-mark-refused` | `account codes containing a left-to-right mark are refused` |
+| `coa-code-outside-allowlist-refused` | `account codes outside ASCII letters digits dot and hyphen are refused` |
+| `coa-code-rtl-mark-refused` | `account codes containing a right-to-left mark are refused` |
+| `coa-code-zero-width-space-refused` | `account codes containing a zero-width space are refused` |
+
+Each refusal scenario first creates ordinary 2500, then attempts the invalid code,
+asserts ACCOUNT_CODE_INVALID and compares the complete account list. The broader
+alphabet test covers U+200C/U+200D, internal tab/newline, underscore, slash, Arabic
+letters and fullwidth digits. The Arabic-name tests read the stored rows; update
+also checks that an omitted nameAr preserves the trimmed value.
+
+#### Local evidence
+
+Red run, against round-3 production source:
+
+```text
+pnpm exec vitest run --maxWorkers=1 convex/chartOfAccounts.management.test.ts
+FAIL: six invalid-code checks: promise resolved instead of rejecting
+FAIL: Arabic name create/update: expected trimmed value, received padded value
+FAIL: blank Arabic name create/update: expected '   ' to be undefined
+Test Files  1 failed (1)
+Tests       10 failed | 10 passed (20)
+Exit        1
+```
+
+- Requested management, component and pilotDoorInventory command: 3 files, 61 tests passed.
+- `scripts/regression/scenarioRecord.test.ts`: 70 tests passed, including ruling-snapshot and live-library validation after adding the records.
+- `scripts/regression/refreshRulings.test.ts`: FAIL before collection, zero executed tests. Vite/Rolldown inserts imports before the script's shebang and reports Invalid Character !. Reproduced under Node 26.4.0 and 24.22.1, plus Node test environment. The script's blob is unchanged from the baseline (16f58b33880c3743fd6f244b6bbe05f328b41e9e); native node --check passes. No test or infrastructure was changed to bypass it.
+- ESLint on both touched TypeScript files: exit 0.
+- `pnpm typecheck`: exit 0; root tsc excludes convex/, test-utils/, apps/, packages/ and dealer-worker/.
+- `pnpm typecheck:convex`: exit 0; separate backend tsc with convex/tsconfig.json.
+- Allowlist mutation: replace only the alphabet predicate with round 3's `!code`; 6 failed, 14 passed, exit 1. Restored byte-for-byte, SHA256 before/after `3bc4b912c02b35a86bb9ab6fddac9284355b814d18f67ee6b24978691a3c2720`. Restored management suite: 20 passed.
+- Provenance check: all 10 new records bind exact names among the red commit's 20 registered tests and cite that full red SHA.
+
+Source and test self-review applied clean-code-guard and test-guard: one backend
+predicate, existing error handling, no parallel validation mechanism, no mocks
+of business logic, and no changes to the prior canonical/duplicate assertions.
+This is local serial convex-test evidence. A fresh Sonar analysis proving zero
+new issues, CI, independent seats and cloud/platform behavior remain unverified.
+No Playwright, deploy, production-data operation, Jira/GitHub post or push was performed.
