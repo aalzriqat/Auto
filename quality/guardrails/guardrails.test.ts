@@ -672,7 +672,7 @@ describe("import boundaries", () => {
     ]);
   }, TIMEOUT);
 
-  test("negative control: policy -> React and domain -> door fail; domain -> utils and schema pass", async () => {
+  test("negative control: a domain importing React and a domain importing a door fail; domain -> utils and schema pass", async () => {
     const root = fixtureRepo();
     write(root, "convex/domains/deals/policy/view.ts", 'import { useMemo } from "react";\nexport const u = useMemo;\n');
     write(
@@ -683,7 +683,7 @@ describe("import boundaries", () => {
     const result = await check(root);
     expect(result.errors).toEqual([
       "IMPORT-NEW [domains-no-door] convex/domains/deals/commands/close.ts -> convex/applications",
-      "IMPORT-NEW [policy-no-react] convex/domains/deals/policy/view.ts -> react",
+      "IMPORT-NEW [domains-no-react] convex/domains/deals/policy/view.ts -> react",
     ]);
   }, TIMEOUT);
 
@@ -710,7 +710,7 @@ describe("import specifier aliases", () => {
     expect(to("components/A.tsx", "@/convex/x/../utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
     expect(to("convex/domains/d/commands/c.ts", "@/convex/./applications")).toEqual(["domains-no-door convex/applications"]);
     expect(to("convex/domains/d/policy/p.ts", "@/convex/_generated/./server")).toEqual(["policy-no-generated-server convex/_generated/server"]);
-    expect(to("convex/domains/d/policy/p.ts", "../../../../node_modules/react")).toEqual(["policy-no-react react"]);
+    expect(to("convex/domains/d/policy/p.ts", "../../../../node_modules/react")).toEqual(["domains-no-react react"]);
     // Controls: the canonical form is unchanged, and an alias escaping the repo is not a repo module.
     expect(to("components/A.tsx", "@/convex/utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
     expect(to("components/A.tsx", "@/../outside/convex/utils/money")).toEqual([]);

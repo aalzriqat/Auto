@@ -35,8 +35,8 @@ export const RULES = Object.freeze({
   domainsCrossDomainIndexOnly: "domains-cross-domain-index-only",
   domainsIndexOnly: "domains-index-only",
   domainsNoDoor: "domains-no-door",
+  domainsNoReact: "domains-no-react",
   policyNoGeneratedServer: "policy-no-generated-server",
-  policyNoReact: "policy-no-react",
 });
 
 /** Code-unit order — never localeCompare, whose result depends on ICU/locale. */
@@ -341,7 +341,9 @@ const DOMAIN_SCOPE = /^convex\/domains\//u;
 // no extension and no trailing /index, so a domain's index is exactly
 // `convex/domains/<name>` (no match here) and anything deeper is an internal module.
 const DOMAIN_MODULE = /^convex\/domains\/([^/]+)\/./u;
-const POLICY_SCOPE = /^convex\/domains\/(?:[^/]+\/)*policy\//u;
+// A pure-policy module: any path with a `policy` directory, or a file named
+// policy.ts, *policy.ts (dealPolicy.ts) or *.policy.ts, in any production root.
+const POLICY_MODULE = /(?:^|\/)policy\/|(?:^|\/)[^/]*policy\.[cm]?[jt]sx?$/iu;
 const REACT_PACKAGE = /^react(?:-dom)?(?:\/|$)/u;
 
 /** Every production file is an importer; tests and fixtures are not judged. */
@@ -377,11 +379,11 @@ export function importViolations(fromPath, sourceText, config) {
         else if (other && own[1] !== other[1]) add(RULES.domainsCrossDomainIndexOnly, repoId);
       }
     }
-    if (POLICY_SCOPE.test(fromPath)) {
-      if (repoId === "convex/_generated/server") add(RULES.policyNoGeneratedServer, repoId);
-      if (target.kind === "package" && REACT_PACKAGE.test(target.id)) {
-        add(RULES.policyNoReact, target.id);
-      }
+    if (POLICY_MODULE.test(fromPath) && repoId === "convex/_generated/server") {
+      add(RULES.policyNoGeneratedServer, repoId);
+    }
+    if (DOMAIN_SCOPE.test(fromPath) && target.kind === "package" && REACT_PACKAGE.test(target.id)) {
+      add(RULES.domainsNoReact, target.id);
     }
   }
   return [...found.values()];
