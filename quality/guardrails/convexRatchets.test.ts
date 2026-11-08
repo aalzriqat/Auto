@@ -442,7 +442,10 @@ describe("tenant builders report without blocking", () => {
     expect(result.ratchets?.pr["non-tenant-builder"]).toBe(3);
     expect(result.ratchets?.target["non-tenant-builder"]).toBe(2);
     const line = (result.advisories ?? []).find((a: string) => a.includes("non-tenant-builder")) ?? "";
-    expect(line).toMatch(/^ADVISORY guardrail-9 non-tenant-builder: 3 public queries\/mutations/);
+    expect(result.ratchets?.pr["public-functions"]).toBe(3);
+    expect(line).toMatch(/^ADVISORY guardrail-9 non-tenant-builder: 3 of 3 public functions are queries\/mutations/);
+    expect(line).toMatch(/\(target 2 of 2\)/);
+    expect(line).toMatch(/actions are exempt/);
     expect(line).toMatch(/orgQuery\/orgMutation/);
     expect(line).toMatch(/becomes blocking when the tenant builders land/);
   }, TIMEOUT);

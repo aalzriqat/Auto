@@ -26,6 +26,7 @@ export const KINDS = Object.freeze([
   // Advisory until the tenant builders exist: a blocking rule with no compliant
   // path would freeze every new public function.
   { id: "non-tenant-builder", guardrail: 9, prefix: "TENANT-BUILDER", blocking: false, convexOnly: true },
+  // The guardrail-9 denominator, reported with it; never a failure on its own.
   { id: "public-functions", guardrail: 11, prefix: "INFO", blocking: false, convexOnly: true },
 ]);
 
@@ -147,9 +148,14 @@ export function compareRatchets({ pr, target }) {
     const was = totals.target[kind.id];
     if (!kind.blocking) {
       if (kind.guardrail === 9) {
+        // `public-functions` is the denominator: every public function, actions included
+        // (they are exempt, so they are in the denominator and never in the numerator).
+        const publicNow = totals.pr["public-functions"];
+        const publicWas = totals.target["public-functions"];
         advisories.push(
-          `ADVISORY guardrail-9 ${kind.id}: ${now} public queries/mutations are not built with orgQuery/orgMutation ` +
-            `(target ${was}); not blocking: it becomes blocking when the tenant builders land (SCRUM-418 section 4)`,
+          `ADVISORY guardrail-9 ${kind.id}: ${now} of ${publicNow} public functions are queries/mutations not built with ` +
+            `orgQuery/orgMutation (target ${was} of ${publicWas}); actions are exempt; not blocking: it becomes blocking ` +
+            "when the tenant builders land (SCRUM-418 section 4)",
         );
       }
       continue;
