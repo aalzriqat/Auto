@@ -26,6 +26,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/sonner";
 import { getCodedErrorMessage } from "@/lib/errors";
+import { NORMAL_BALANCE_BY_ACCOUNT_TYPE } from "@/lib/accounting/accountNormalBalance";
 
 type Account = Doc<"chartOfAccounts">;
 const ACCOUNT_TYPES = [
@@ -59,9 +60,7 @@ export function ChartOfAccountsDialog({
   const [name, setName] = useState(account?.name ?? "");
   const [nameAr, setNameAr] = useState(account?.nameAr ?? "");
   const [type, setType] = useState<Account["type"]>(account?.type ?? "ASSET");
-  const [normalBalance, setNormalBalance] = useState<Account["normalBalance"]>(
-    account?.normalBalance ?? "DEBIT",
-  );
+  const normalBalance = account?.normalBalance ?? NORMAL_BALANCE_BY_ACCOUNT_TYPE[type];
   const [active, setActive] = useState(account?.active ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,11 +168,7 @@ export function ChartOfAccountsDialog({
               <Select
                 dir={isRtl ? "rtl" : "ltr"}
                 value={normalBalance}
-                disabled={busy || !!account}
-                onValueChange={(next) => {
-                  const choice = BALANCES.find((entry) => entry === next);
-                  if (choice) setNormalBalance(choice);
-                }}
+                disabled
               >
                 <SelectTrigger id="coa-balance">
                   <SelectValue />
@@ -186,6 +181,11 @@ export function ChartOfAccountsDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {!account && (
+                <p className="text-sm text-muted-foreground">
+                  {t("CoaNormalBalanceNote")}
+                </p>
+              )}
             </div>
           </div>
           {account && (

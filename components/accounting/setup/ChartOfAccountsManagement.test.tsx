@@ -129,6 +129,31 @@ test.each([
   }));
 });
 
+test.each(["en", "ar"] as const)("%s create balance is read-only and explains its account type", async (locale) => {
+  show(locale);
+  const copy = dictionaries[locale];
+  fireEvent.click(screen.getByRole("button", { name: copy.CoaCreate }));
+  const balance = screen.getByRole("combobox", { name: copy.CoaNormalBalance });
+  expect((balance as HTMLButtonElement).disabled).toBe(true);
+  expect(balance.textContent).toBe(copy.CoaBalance_DEBIT);
+  expect(screen.getByText(copy.CoaNormalBalanceNote)).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("combobox", { name: copy.CoaType }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: copy.CoaType_LIABILITY }));
+  expect(balance.textContent).toBe(copy.CoaBalance_CREDIT);
+  fireEvent.keyDown(screen.getByRole("combobox", { name: copy.CoaType }), { key: "Enter" });
+  fireEvent.click(await screen.findByRole("option", { name: copy.CoaType_EXPENSE }));
+  expect(balance.textContent).toBe(copy.CoaBalance_DEBIT);
+});
+
+test("editing a stored contra account preserves its read-only normal balance", () => {
+  fixture.accounts = [{ ...account(), type: "ASSET", normalBalance: "CREDIT" }];
+  show();
+  fireEvent.click(screen.getByRole("button", { name: "Edit account 2500" }));
+  const balance = screen.getByRole("combobox", { name: dictionaries.en.CoaNormalBalance });
+  expect((balance as HTMLButtonElement).disabled).toBe(true);
+  expect(balance.textContent).toBe(dictionaries.en.CoaBalance_CREDIT);
+});
+
 test.each(["en", "ar"] as const)(
   "%s labels and isolated account codes render with the locale direction",
   (locale) => {
@@ -313,13 +338,6 @@ test.each(["en", "ar"] as const)(
     fireEvent.click(
       await screen.findByRole("option", { name: copy.CoaType_LIABILITY }),
     );
-    fireEvent.keyDown(
-      screen.getByRole("combobox", { name: copy.CoaNormalBalance }),
-      { key: "Enter" },
-    );
-    fireEvent.click(
-      await screen.findByRole("option", { name: copy.CoaBalance_CREDIT }),
-    );
     fireEvent.click(screen.getByRole("button", { name: copy.CoaSave }));
     expect((await screen.findByRole("alert")).textContent).toBe(
       copy.ServerError_ACCOUNT_CODE_EXISTS,
@@ -344,6 +362,8 @@ test.each([
   ["ar", "create", "ACCOUNT_CODE_INVALID", "أدخل رمز حساب يتكوّن من حروف إنجليزية وأرقام ونقاط وشرطات فقط."],
   ["en", "create", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],
   ["ar", "create", "ACCOUNT_NAME_REQUIRED", "أدخل اسم الحساب بالإنجليزية."],
+  ["en", "create", "NORMAL_BALANCE_MISMATCH", "The normal balance must match the account type."],
+  ["ar", "create", "NORMAL_BALANCE_MISMATCH", "يجب أن يتوافق الرصيد الطبيعي مع نوع الحساب، مديناً أو دائناً."],
   ["en", "update", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],
   ["ar", "update", "ACCOUNT_NAME_REQUIRED", "أدخل اسم الحساب بالإنجليزية."],
 ] as const)("%s %s dialog localizes %s", async (locale, mode, code, expected) => {

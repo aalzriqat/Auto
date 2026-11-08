@@ -14,6 +14,10 @@ const messages = defineBilingualMessages({
   CoaName: ["Account name", "اسم الحساب"],
   CoaType: ["Account type", "نوع الحساب"],
   CoaNormalBalance: ["Normal balance", "الرصيد الطبيعي"],
+  CoaNormalBalanceNote: [
+    "The account type determines whether the normal balance is debit or credit.",
+    "يحدّد نوع الحساب ما إذا كان رصيده الطبيعي مديناً أم دائناً.",
+  ],
   CoaState: ["State", "الحالة"],
   CoaActions: ["Actions", "الإجراءات"],
   CoaActive: ["Active", "نشط"],
@@ -64,6 +68,10 @@ const messages = defineBilingualMessages({
   ServerError_ACCOUNT_CODE_EXISTS: [
     "This account code already exists in this organization.",
     "رمز الحساب مستخدم بالفعل في هذه المؤسسة.",
+  ],
+  ServerError_NORMAL_BALANCE_MISMATCH: [
+    "The normal balance must match the account type.",
+    "يجب أن يتوافق الرصيد الطبيعي مع نوع الحساب، مديناً أو دائناً.",
   ],
   ServerError_ACCOUNT_CODE_INVALID: [
     "Enter an account code using only English letters, digits, dots and hyphens.",
