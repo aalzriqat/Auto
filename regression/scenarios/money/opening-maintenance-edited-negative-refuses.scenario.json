@@ -1,0 +1,62 @@
+{
+  "id": "opening-maintenance-edited-negative-refuses",
+  "fingerprint": "39806041daa10a4697b1377cb363f39d687ed098f4f50d0ede1043b7667cd34c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-part1-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "debitMinor": 200003,
+        "creditMinor": 200003
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "draft": "pending",
+        "invalidInput": "negative"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "edit.refused",
+      "value": true
+    },
+    {
+      "observable": "applicationTablesAndScheduler.changedCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 edited lines receive the same draft validation: negative"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "c2a275b2572b56ac39a24516b853ab5b0c131faf"
+  }
+}

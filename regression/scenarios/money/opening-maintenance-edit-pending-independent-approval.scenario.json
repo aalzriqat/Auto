@@ -1,0 +1,95 @@
+{
+  "id": "opening-maintenance-edit-pending-independent-approval",
+  "fingerprint": "07f7be3973d18a18eb46ad6bbcd57f6dc1c43e718ab63f1f520b0f2058b77b25",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-part1-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "debitMinor": 200003,
+        "creditMinor": 200003
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "draft": "pending",
+        "debitMinor": 321007,
+        "creditMinor": 321007
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draft": "edited"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draft": "edited"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "draft.sameId",
+      "value": true
+    },
+    {
+      "observable": "draft.preparerChanged",
+      "value": false
+    },
+    {
+      "observable": "preparerApproval.refused",
+      "value": true
+    },
+    {
+      "observable": "trialBalance.debitMinor",
+      "value": 321007
+    },
+    {
+      "observable": "trialBalance.creditMinor",
+      "value": 321007
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 preparer edits pending in place and a different actor approves the edited exact minor units"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "c2a275b2572b56ac39a24516b853ab5b0c131faf"
+  }
+}

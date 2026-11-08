@@ -1,0 +1,116 @@
+{
+  "id": "opening-maintenance-damaged-pair-blocks-reentry",
+  "fingerprint": "f95ff9d8b767cf20a2bc0cb8e3d8123b878b0f4b8c56dded4036ed30054e5379",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-part1-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "debitMinor": 200003,
+        "creditMinor": 200003
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draft": "pending"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "draft": "posted",
+        "reason": "synthetic-opening-error"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {
+        "draft": "posted"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "database.changeVoidJournalLine",
+      "input": {
+        "creditDeltaMinor": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "opening": "replacement"
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "opening": "replacement"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "freshDraft.refusalCode",
+      "value": "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY"
+    },
+    {
+      "observable": "ownerDirect.refusalCode",
+      "value": "OPENING_BALANCE_AFTER_LEDGER_ACTIVITY"
+    },
+    {
+      "observable": "applicationTablesAndScheduler.changedCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 a damaged governed reversal never authorizes a fresh opening"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "c2a275b2572b56ac39a24516b853ab5b0c131faf"
+  }
+}

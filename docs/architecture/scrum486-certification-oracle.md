@@ -1374,3 +1374,53 @@ The scenario records retain the stable SCRUM-928 c24715 brief digest. This is lo
 serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
 independent review seats. No posting, journal or lifecycle definition changed.
+
+## SCRUM-850-opening-maintenance-money
+
+Owner feature rules: SCRUM-850 c24748/c24749, supplied by the coordinator on 2026-11-08. The ADR is `docs/adr/2026-11-08-opening-balance-edit-void-correct.md`. These rows record local serial harness evidence, not activation or release certification. All tests below are explicit named registrations in `convex/openingBalanceMaintenance.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-edit-pending-independent-approval` | `SCRUM-850 preparer edits pending in place and a different actor approves the edited exact minor units` |
+| `opening-maintenance-edited-negative-refuses` | `SCRUM-850 edited lines receive the same draft validation: negative` |
+| `opening-maintenance-edited-nan-refuses` | `SCRUM-850 edited lines receive the same draft validation: nan` |
+| `opening-maintenance-edited-currency-refuses` | `SCRUM-850 edited lines receive the same draft validation: currency` |
+| `opening-maintenance-edited-bank-refuses` | `SCRUM-850 edited lines receive the same draft validation: bank` |
+| `opening-maintenance-edited-inactive-refuses` | `SCRUM-850 edited lines receive the same draft validation: inactive` |
+| `opening-maintenance-edited-allocation-refuses` | `SCRUM-850 edited lines receive the same draft validation: allocation` |
+| `opening-maintenance-all-families-void-replay-reentry` | `SCRUM-850 approved void unwinds all eleven allocation kinds and bank attribution then reposts the same masters` |
+| `opening-maintenance-void-refuses-activity-same-period` | `SCRUM-850 void refuses non-opening activity across the whole ledger otherPeriod=false` |
+| `opening-maintenance-void-refuses-activity-other-period` | `SCRUM-850 void refuses non-opening activity across the whole ledger otherPeriod=true` |
+| `opening-maintenance-void-rechecks-intervening-activity` | `SCRUM-850 approval rechecks intervening activity and owner direct path cannot bypass it` |
+| `opening-maintenance-later-activity-blocks-reentry` | `SCRUM-850 a later posting after a governed void still blocks every fresh opening door` |
+| `opening-maintenance-consumed-payable-refuses` | `SCRUM-850 consumed or damaged opening payable refuses without changing any table` |
+| `opening-maintenance-consumed-advance-refuses` | `SCRUM-850 consumed or damaged opening advance refuses without changing any table` |
+| `opening-maintenance-consumed-prepaid-refuses` | `SCRUM-850 consumed or damaged opening prepaid refuses without changing any table` |
+| `opening-maintenance-consumed-commission-refuses` | `SCRUM-850 consumed or damaged opening commission refuses without changing any table` |
+| `opening-maintenance-consumed-deposit-refuses` | `SCRUM-850 consumed or damaged opening deposit refuses without changing any table` |
+| `opening-maintenance-consumed-vehicle-refuses` | `SCRUM-850 consumed or damaged opening vehicle refuses without changing any table` |
+| `opening-maintenance-consumed-receivable-refuses` | `SCRUM-850 consumed or damaged opening receivable refuses without changing any table` |
+| `opening-maintenance-consumed-partner-refuses` | `SCRUM-850 consumed or damaged opening partner refuses without changing any table` |
+| `opening-maintenance-consumed-missing-refuses` | `SCRUM-850 consumed or damaged opening missing refuses without changing any table` |
+| `opening-maintenance-management-plan-and-closed-period-refuse` | `SCRUM-850 unposted management dependencies and closed periods refuse an opening void` |
+| `opening-maintenance-unposted-payroll-refuses` | `SCRUM-850 unposted payroll source references survive and prevent void` |
+| `opening-maintenance-unposted-payment-intent-refuses` | `SCRUM-850 unposted payment-intent source references survive and prevent void` |
+| `opening-maintenance-unlisted-native-source-refuses` | `SCRUM-850 an unlisted materialized opening advance prevents void without writes` |
+| `opening-maintenance-generic-reversal-of-void-refuses` | `SCRUM-850 generic reversal cannot undo the governed opening void journal` |
+| `opening-maintenance-damaged-pair-blocks-reentry` | `SCRUM-850 a damaged governed reversal never authorizes a fresh opening` |
+| `opening-maintenance-ambiguous-headers-refuse` | `SCRUM-850 ambiguous posted opening headers refuse a void without writes` |
+
+The composite fixture posts 1,960,018 JOD minor units per side across eleven allocation kinds. The void leaves 3,920,036 gross minor units per side and zero net on every account, with bank balance zero. A fresh opening using the same stock/partner masters restores bank balance 300,003. Original and reversal journals and immutable allocation results survive; replay changes no application table or scheduler row. Eight native source tables are empty after void. These checks do not compare component tables byte-for-byte.
+
+## SCRUM-850-opening-maintenance-permission
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-preparer-finance-tenant-refusals` | `SCRUM-850 edit and void enforce preparer finance payroll and tenant authority without writes` |
+| `opening-maintenance-payroll-authority-for-edit-and-void` | `SCRUM-850 payroll authority is required for editing and voiding payroll-bearing openings` |
+
+Pending drafts retain the preparer and second-actor approval. Void approval must differ from its requester, including for owners. Finance, payroll and tenant ownership refusals preserve every application schema table and the scheduler. The two-person void check is also asserted in the money composite.
+
+All thirty scenario records name failing-first commit `c2a275b2572b56ac39a24516b853ab5b0c131faf`, which contains these exact test registrations. Initial commands were absent; additional source-inventory, reversal-of-void and ambiguous-header controls each failed against the first implementation before repair. Existing opening-family and permission ruling digests are used from `regression/rulings.json`. The coordinator supplied the SCRUM-850 decisions but not the verbatim comment bodies/digests; no SCRUM-850 Jira digest is invented or claimed current. That specific digest attribution remains a coordinator follow-up.
+
+Independent seats, a signed-in roles-by-language-by-viewport audit, the unscripted explorer, real-backend execution/OCC and production parity remain unverified. Part 2 corrections are design only.

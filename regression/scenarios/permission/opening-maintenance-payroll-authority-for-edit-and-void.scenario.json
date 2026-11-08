@@ -1,0 +1,116 @@
+{
+  "id": "opening-maintenance-payroll-authority-for-edit-and-void",
+  "fingerprint": "d88750806a269ef41548dc3105b7dd24e56fe032c80cd783c90b72c39c95f9f2",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-part1-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "payrollOpening": true
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "database.removePayrollAuthority",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "payrollOpening": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "payrollOpening": true
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "payrollOpening": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "draft": "posted",
+        "reason": "synthetic-opening-error"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {
+        "draft": "posted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "editWithoutPayroll.refused",
+      "value": true
+    },
+    {
+      "observable": "requestWithoutPayroll.refused",
+      "value": true
+    },
+    {
+      "observable": "approveWithoutPayroll.refused",
+      "value": true
+    },
+    {
+      "observable": "applicationTablesAndScheduler.changedCount",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 payroll authority is required for editing and voiding payroll-bearing openings"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-permission",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "c2a275b2572b56ac39a24516b853ab5b0c131faf"
+  }
+}
