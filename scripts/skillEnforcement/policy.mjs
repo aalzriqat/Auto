@@ -92,7 +92,11 @@ const normSkill = (s) => {
 };
 const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
 const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
-const toForwardSlashes = (p) => p.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+const toForwardSlashes = (p) => {
+  let out = p.trim().replaceAll("\\", "/");
+  while (out.endsWith("/")) out = out.slice(0, -1);
+  return out;
+};
 
 /**
  * The repository skill that a source record proves loaded, or null. Claude Code
@@ -125,6 +129,35 @@ function userTexts(msg) {
   return blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text);
 }
 
+const isSkillCall = (b) => b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id;
+const isAnsweredResult = (b) => b?.type === "tool_result" && b.tool_use_id && !b.is_error;
+
+function loadedSkill(text, personalDirs) {
+  const source = text.trimStart().match(SOURCE_RECORD);
+  return source ? repositorySkillAt(source[1], personalDirs) : null;
+}
+
+/** Adds one user-role message's results, typed commands and source records to `found`. */
+function collectUser(msg, blocks, found, personalDirs) {
+  for (const b of blocks) if (isAnsweredResult(b)) found.answered.add(b.tool_use_id);
+  for (const t of userTexts(msg)) {
+    for (const m of t.matchAll(COMMAND_MARKER)) found.seen.add(normSkill(m[1]));
+    const skill = loadedSkill(t, personalDirs);
+    if (skill) found.loaded.add(skill);
+  }
+}
+
+function collectRecord(rec, found, personalDirs) {
+  const msg = rec?.message;
+  const role = msg?.role ?? rec?.type;
+  const blocks = Array.isArray(msg?.content) ? msg.content : [];
+  if (role === "assistant") {
+    for (const b of blocks) if (isSkillCall(b)) found.calls.set(b.id, normSkill(b.input.skill));
+  } else if (role === "user") {
+    collectUser(msg, blocks, found, personalDirs);
+  }
+}
+
 /**
  * Skills invoked in a Claude Code JSONL transcript. Two sources count, and only
  * these two:
@@ -138,32 +171,9 @@ function userTexts(msg) {
  */
 export function invokedSkills(transcriptText, { home = homedir(), configDir = process.env.CLAUDE_CONFIG_DIR } = {}) {
   const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map((p) => toForwardSlashes(p).toLowerCase());
-  const calls = new Map(); // tool_use id -> skill
-  const answered = new Set();
-  const seen = new Set();
-  const loaded = new Set();
-  for (const rec of transcriptText.split("\n").map(parseLine)) {
-    const msg = rec?.message;
-    const role = msg?.role ?? rec?.type;
-    const blocks = Array.isArray(msg?.content) ? msg.content : [];
-    if (role === "assistant") {
-      for (const b of blocks) {
-        if (b?.type === "tool_use" && b.name === "Skill" && b.input?.skill && b.id) {
-          calls.set(b.id, normSkill(b.input.skill));
-        }
-      }
-    } else if (role === "user") {
-      for (const b of blocks) {
-        if (b?.type === "tool_result" && b.tool_use_id && !b.is_error) answered.add(b.tool_use_id);
-      }
-      for (const t of userTexts(msg)) {
-        for (const m of t.matchAll(COMMAND_MARKER)) seen.add(normSkill(m[1]));
-        const source = t.trimStart().match(SOURCE_RECORD);
-        const skill = source && repositorySkillAt(source[1], personalDirs);
-        if (skill) loaded.add(skill);
-      }
-    }
-  }
-  for (const [id, skill] of calls) if (answered.has(id)) seen.add(skill);
-  return new Set([...seen].filter((skill) => loaded.has(skill)));
+  // calls: tool_use id -> skill; answered: tool_use ids with a successful result.
+  const found = { calls: new Map(), answered: new Set(), seen: new Set(), loaded: new Set() };
+  for (const rec of transcriptText.split("\n").map(parseLine)) collectRecord(rec, found, personalDirs);
+  for (const [id, skill] of found.calls) if (found.answered.has(id)) found.seen.add(skill);
+  return new Set([...found.seen].filter((skill) => found.loaded.has(skill)));
 }
