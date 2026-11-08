@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { analyzeSource, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
   CONFIG_PATH,
@@ -276,6 +277,29 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
 }
 
 /**
+ * Guardrails 8-11: count the same constructs in the PR tree (disk) and in the
+ * trusted target tree (git objects) over ONE file scope, the trusted lists
+ * unioned with the PR's roots so a PR-side exemption cannot hide a file, and
+ * compare the repository totals. `cache` (path + text hash -> counts) means a
+ * file unchanged by the PR is parsed once.
+ */
+function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
+  const cache = new Map();
+  const analyze = (filePath, text) => {
+    const key = createHash("sha256").update(filePath).update("\0").update(text).digest("hex");
+    let counts = cache.get(key);
+    if (!counts) cache.set(key, (counts = analyzeSource(filePath, text)));
+    return counts;
+  };
+  const inScope = (p) => classify(p, scope) === "production";
+  const pr = new Map(inventory.filter(inScope).map((p) => [p, analyze(p, readDisk(p))]));
+  const targetPaths = [...targetBlobs.keys()].filter(inScope);
+  const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
+  const target = new Map(targetPaths.map((p) => [p, analyze(p, texts.get(targetBlobs.get(p)))]));
+  return compareRatchets({ pr, target });
+}
+
+/**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
  *   log?: (message: string) => void,
  *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[],
@@ -324,11 +348,14 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     : [];
   measured.unchangedFromTarget = unchangedFromTarget(cwd, [...newlyScoped, ...excluded], targetBlobs, readDisk);
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
+  const ratchets = measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope: enforcementScope(trusted.config, proposed.config) });
+  errors.push(...ratchets.errors);
+  notices.push(...ratchets.notices);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");
     await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors);
   }
-  return { baseRef, baseCommit, bootstrap, errors, notices, measured };
+  return { baseRef, baseCommit, bootstrap, errors, notices, advisories: ratchets.advisories, ratchets: ratchets.totals, measured };
 }
 
 export async function writeBaseline(cwd, sourceRef, baseRef) {
@@ -365,6 +392,7 @@ async function main() {
   const result = await runGuardrails({ cwd, base, log: (m) => console.log(m) });
   for (const notice of result.notices) console.log(`note: ${notice}`);
   for (const error of result.errors) console.error(`FAIL: ${error}`);
+  for (const advisory of result.advisories ?? []) console.log(advisory);
   if (result.measured) {
     console.log(`guardrails: ${result.measured.counts.size} production files measured, ` +
       `${result.measured.violations.length} import-boundary violations (all must be grandfathered)`);

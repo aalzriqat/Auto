@@ -133,7 +133,7 @@ export function expectFailure(errors: string[], pattern: RegExp): void {
 }
 
 /** Register the per-file cleanup of fixture repositories. */
-export function useFixtureCleanup(): void {
+export function registerFixtureCleanup(): void {
   afterEach(() => {
     while (repos.length) rmSync(repos.pop() as string, { recursive: true, force: true });
   });

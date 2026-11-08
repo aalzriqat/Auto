@@ -16,12 +16,12 @@ import {
   expectFailure,
   fixtureRepo,
   json,
-  useFixtureCleanup,
+  registerFixtureCleanup,
   write,
   writeBaselineDoc,
 } from "./testkit";
 
-useFixtureCleanup();
+registerFixtureCleanup();
 
 const CROSS = "domains-cross-domain-index-only";
 const NO_DOMAINS = "components-no-domains";

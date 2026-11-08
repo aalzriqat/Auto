@@ -18,12 +18,12 @@ import {
   expectFailure,
   fixtureRepo,
   remove,
-  useFixtureCleanup,
+  registerFixtureCleanup,
   write,
   writeConfig,
 } from "./testkit";
 
-useFixtureCleanup();
+registerFixtureCleanup();
 
 type Kind =
   | "query-collect"
@@ -107,7 +107,7 @@ describe("validators on public functions (guardrail 11)", () => {
     expect(count("no-args-validator", aliased)).toBe(1);
     const wrapped = 'import { mutation, socialBulkMutation } from "./functions";\nexport const a = mutation({ handler: async () => null });\nexport const b = socialBulkMutation({ args: {}, handler: async () => null });\n';
     expect([count("public-functions", wrapped), count("no-args-validator", wrapped), count("no-returns-validator", wrapped)]).toEqual([2, 1, 2]);
-    const nested = 'import { mutation } from "../functions";\nexport const a = mutation({ handler: async () => null });\n';
+    const nested = 'import { mutation } from "../../../functions";\nexport const a = mutation({ handler: async () => null });\n';
     expect(count("public-functions", nested, "convex/domains/deals/commands/close.ts")).toBe(1);
     const ns = 'import * as server from "./_generated/server";\nexport const a = server.query({ handler: async () => null });\n';
     expect(count("no-args-validator", ns)).toBe(1);

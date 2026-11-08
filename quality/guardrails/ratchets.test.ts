@@ -19,13 +19,13 @@ import {
   fixtureRepo,
   git,
   remove,
-  useFixtureCleanup,
+  registerFixtureCleanup,
   write,
   writeBaselineDoc,
   writeConfig,
 } from "./testkit";
 
-useFixtureCleanup();
+registerFixtureCleanup();
 
 type Kind = "any" | "as-unknown-as" | "ts-ignore" | "ts-expect-error";
 const count = (kind: Kind, source: string, file = "lib/x.ts"): number => analyzeSource(file, source)[kind];
@@ -62,8 +62,8 @@ describe("type-escape counting is AST-based", () => {
       "/* @ts-ignore */",
       "const b = 2;",
       "/**",
-      " * @ts-ignore",
-      " */",
+      " * the compiler honours a block comment only on its last line:",
+      " * @ts-ignore */",
       "const c = 3;",
       "const d = [",
       "  1,",
