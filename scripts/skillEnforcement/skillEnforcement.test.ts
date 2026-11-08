@@ -17,11 +17,23 @@ import { refresh } from "./refreshPrSkillEvidence.mjs";
 import { evaluate, isPlaceholder, TEMPLATE } from "./prSkillEvidence.mjs";
 
 let n = 0;
-const skillCall = (skill: string, isError = false) => {
+// After a skill loads, Claude Code records where it came from in a user-role
+// text block. These are the shapes seen in real transcripts (SCRUM-934).
+const HOME = "/home/u";
+const REPO_SKILLS = "/repo/.claude/skills";
+const PLUGIN_SKILLS = `${HOME}/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.3.1/skills/engineering`;
+const defaultSource = (skill: string) => {
+  const name = skill.split(":").pop();
+  return skill.startsWith("mattpocock-skills:") ? `${PLUGIN_SKILLS}/${name}` : `${REPO_SKILLS}/${name}`;
+};
+const loadedFrom = (dir: string) =>
+  JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: `Base directory for this skill: ${dir}\n\n# Skill` }] } });
+const skillCall = (skill: string, isError = false, source = defaultSource(skill)) => {
   const id = `toolu_${++n}`;
   return [
     JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name: "Skill", input: { skill } }] } }),
     JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: "ok" }] } }),
+    ...(isError ? [] : [loadedFrom(source)]),
   ].join("\n");
 };
 const transcript = (...skills: string[]) => skills.map((s) => skillCall(s)).join("\n");
@@ -57,12 +69,39 @@ describe("classifyPaths", () => {
 });
 
 describe("invokedSkills", () => {
-  test("counts successful Skill calls, strips namespaces, and typed commands", () => {
-    const text =
-      transcript("tdd", "plugin:blast-radius") +
-      "\n" +
-      JSON.stringify({ type: "user", message: { role: "user", content: "<command-name>/unslop</command-name>" } });
-    expect([...invokedSkills(text)].sort()).toEqual(["blast-radius", "tdd", "unslop"]);
+  const typed = (command: string, source = defaultSource(command.replace(/^\//, ""))) =>
+    [
+      JSON.stringify({ type: "user", message: { role: "user", content: `<command-name>${command}</command-name>` } }),
+      loadedFrom(source),
+    ].join("\n");
+  test("counts successful Skill calls, path-scoped repository skills, and typed commands", () => {
+    const text = [
+      transcript("tdd", "tmp/auto-934:blast-radius"),
+      skillCall("apps\\web:engineering-principles", false, "C:\\tmp\\auto-934\\apps\\web\\.claude\\skills\\engineering-principles"),
+      typed("/unslop"),
+    ].join("\n");
+    expect([...invokedSkills(text, { home: HOME })].sort()).toEqual(["blast-radius", "engineering-principles", "tdd", "unslop"]);
+  });
+  test("a plugin copy never satisfies the repository skill of the same name (SCRUM-934)", () => {
+    const text = [
+      transcript("mattpocock-skills:tdd", "mattpocock-skills:diagnosing-bugs"),
+      typed("/mattpocock-skills:tdd"),
+    ].join("\n");
+    const seen = invokedSkills(text, { home: HOME });
+    expect(seen.has("tdd")).toBe(false);
+    expect(seen.has("diagnosing-bugs")).toBe(false);
+  });
+  test("a bare name counts only when the repository copy is what loaded (SCRUM-934)", () => {
+    // A session whose project skills are not loaded resolves a bare `tdd` to the plugin copy.
+    const plugin = [skillCall("tdd", false, `${PLUGIN_SKILLS}/tdd`), typed("/unslop", `${PLUGIN_SKILLS}/unslop`)].join("\n");
+    expect(invokedSkills(plugin, { home: HOME }).size).toBe(0);
+    // Personal skills outrank project skills, so a personal copy can shadow the repository one.
+    const personal = skillCall("tdd", false, "C:\\Users\\U\\.claude\\skills\\tdd");
+    expect(invokedSkills(personal, { home: "C:\\Users\\u" }).size).toBe(0);
+    expect([...invokedSkills(personal, { home: HOME })]).toEqual(["tdd"]);
+    // No source record means no proof of which copy ran.
+    const unsourced = skillCall("tdd").split("\n").slice(0, 2).join("\n");
+    expect(invokedSkills(unsourced, { home: HOME }).size).toBe(0);
   });
   test("a Skill call that errored (unknown skill) does not count", () => {
     expect(invokedSkills(skillCall("tdd", true)).size).toBe(0);
@@ -418,6 +457,11 @@ describe("decide (hook)", () => {
     expect(
       decide(push("convex/sales.ts"), transcript("tdd", "blast-radius")),
     ).toBeNull();
+  });
+  test("the plugin tdd does not unblock a money push (SCRUM-934)", () => {
+    const msg = decide(push("convex/sales.ts"), transcript("mattpocock-skills:tdd", "blast-radius"));
+    expect(msg).toContain("tdd (money/permission code changed");
+    expect(msg).not.toContain("blast-radius (");
   });
   test("a gate-only change needs blast-radius but not tdd", () => {
     expect(decide(push(".github/workflows/x.yml"), transcript())).toContain("blast-radius");
