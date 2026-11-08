@@ -28,6 +28,45 @@ async function fixture() {
   return { t, ...finance };
 }
 
+test.each([
+  ["LIABILITY", "DEBIT"],
+  ["ASSET", "CREDIT"],
+] as const)("create %s with %s is refused without writing accounts", async (type, normalBalance) => {
+  const { t, orgId, identity } = await fixture();
+  await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
+  const before = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
+  const refusal = identity.mutation(api.chartOfAccounts.create, {
+    orgId, ...account, code: "2599", type, normalBalance,
+  });
+  await expect(refusal).rejects.toMatchObject({ data: { code: "NORMAL_BALANCE_MISMATCH" } });
+  const after = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
+  expect(after).toHaveLength(before.length);
+  expect(after).toEqual(before);
+});
+
+test("every account type creates with its normal balance", async () => {
+  const { t, orgId, identity } = await fixture();
+  const pairs = [
+    ["ASSET", "DEBIT"],
+    ["LIABILITY", "CREDIT"],
+    ["EQUITY", "CREDIT"],
+    ["REVENUE", "CREDIT"],
+    ["COGS", "DEBIT"],
+    ["EXPENSE", "DEBIT"],
+    ["OTHER_INCOME", "CREDIT"],
+    ["OTHER_EXPENSE", "DEBIT"],
+  ] as const;
+  for (const [type, normalBalance] of pairs) {
+    const code = type === "LIABILITY" ? "2500" : `CUSTOM-${type.replaceAll("_", "-")}`;
+    const accountId = await identity.mutation(api.chartOfAccounts.create, {
+      orgId, ...account, code, type, normalBalance,
+    });
+    expect(await t.run((ctx) => ctx.db.get(accountId))).toMatchObject({
+      orgId, code, type, normalBalance, name: "Partner Payables",
+    });
+  }
+});
+
 async function expectInvalidAccountCode(code: string) {
   const { orgId, identity } = await fixture();
   await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
