@@ -182,7 +182,8 @@ test("SCRUM-850 F2 stale rejection refuses without writes and current reviewed v
   expect(await s.t.run(ctx => ctx.db.get(draft._id))).toMatchObject({ status: "REJECTED", rejectionReason: "Current decision" });
 }));
 
-test.each(["approve", "reject"] as const)("SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing", async decision => withFrozenScheduler(async () => {
+function legacyDecisionRefuses(decision: "approve" | "reject") {
+  return withFrozenScheduler(async () => {
   const s = await fixture();
   await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
   const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
@@ -196,7 +197,14 @@ test.each(["approve", "reject"] as const)("SCRUM-850 F2 legacy %s client without
     : s.reviewer.mutation(legacyReject, { orgId: s.orgId, draftId: draft._id, rejectionReason: "Legacy" });
   await expect(result).rejects.toThrow();
   expect(await entireDatabase(s)).toEqual(before);
-}));
+  });
+}
+// Keep the literal title from the red commit. The scenario library requires one
+// non-parameterized registration; both legacy decision shapes remain checked.
+test("SCRUM-850 F2 legacy %s client without reviewed version refuses after edit before writing", async () => {
+  await legacyDecisionRefuses("approve");
+  await legacyDecisionRefuses("reject");
+});
 
 async function entireDatabase(s: Seed) {
   return s.t.run(async (ctx) => {

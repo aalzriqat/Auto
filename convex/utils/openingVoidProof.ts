@@ -61,8 +61,8 @@ export async function verifiedOpeningVoidPair(ctx: OpeningReadCtx, draft: Openin
   const original = await proofJournal(ctx, draft.journalEntryId, budget);
   const reversal = await proofJournal(ctx, request.reversalJournalEntryId, budget);
   if (!validOriginal(draft, original) || original.status !== "REVERSED" ||
-      original.reversedByJournalEntryId !== reversal?._id || !reversal ||
-      reversal.orgId !== draft.orgId || reversal.status !== "POSTED" || reversal.category !== "REVERSAL" ||
+      original.reversedByJournalEntryId !== reversal?._id ||
+      reversal?.orgId !== draft.orgId || reversal.status !== "POSTED" || reversal.category !== "REVERSAL" ||
       reversal.sourceType !== "openingBalanceVoid" || reversal.sourceId !== String(draft._id) ||
       reversal.reversalOfJournalEntryId !== original._id || reversal.periodId !== original.periodId ||
       reversal.currency !== draft.currency || reversal.accountingDate !== draft.asOfDate ||

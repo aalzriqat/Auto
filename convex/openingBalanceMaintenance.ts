@@ -132,7 +132,7 @@ export const approveVoid = mutation({
 type OpeningVisibility = { userId: Id<"users">; canViewCosts: boolean; canManagePayroll: boolean };
 
 async function editableOpening(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
-  if (!draft || draft.createdBy !== visibility.userId || !visibility.canViewCosts) return null;
+  if (draft?.createdBy !== visibility.userId || !visibility.canViewCosts) return null;
   if (!visibility.canManagePayroll && await openingNeedsPayroll(ctx, draft)) return null;
   return { _id: draft._id, version: draft.version ?? 0, lines: draft.lines, asOfDate: draft.asOfDate, memo: draft.memo, allocations: draft.allocations, currency: draft.currency };
 }
