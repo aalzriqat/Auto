@@ -65,6 +65,14 @@ const messages = defineBilingualMessages({
     "This account code already exists in this organization.",
     "رمز الحساب مستخدم بالفعل في هذه المؤسسة.",
   ],
+  ServerError_ACCOUNT_CODE_INVALID: [
+    "Enter a non-empty account code.",
+    "أدخل رمز حساب غير فارغ.",
+  ],
+  ServerError_ACCOUNT_NAME_REQUIRED: [
+    "Enter an English account name.",
+    "أدخل اسم الحساب بالإنجليزية.",
+  ],
 });
 
 export const chartOfAccountsEn = messages.en;

@@ -31,6 +31,42 @@
       "input": {
         "code": "2500"
       }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [50, 53, 48, 48, 32]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [1634, 1637, 1632, 1632]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [1778, 1781, 1776, 1776]
+        }
+      }
     }
   ],
   "expected": [
@@ -65,5 +101,5 @@
     "testName": "duplicate account codes are refused with a localized code, including inactive accounts"
   },
   "matrixRow": "SCRUM932-coa-management",
-  "fingerprint": "aea9136d02d92bf438d0902e9be4b9e71dbeac7bf333ec64bcfba9345762b753"
+  "fingerprint": "26c8d4ec6f5ba15c56dc6b77fb622f8af3f4dcf9dc0e2e0ddc6fb78e5c55d1eb"
 }

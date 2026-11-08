@@ -1,0 +1,65 @@
+{
+  "id": "coa-blank-create-name-refused",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": []
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [32, 32, 32]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "create.refusalCode",
+      "value": "ACCOUNT_NAME_REQUIRED"
+    },
+    {
+      "observable": "chart.rowCountPerCase",
+      "value": 0
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "cee22464d79e20714166638b1b1810c855623583"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "blank account names are refused on create without creating accounts"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "788ebb9eda229fde0c48d344d57ec45825ad4c65176c9849d83a73ab30cedc65"
+}

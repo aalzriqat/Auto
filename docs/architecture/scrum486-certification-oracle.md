@@ -1398,7 +1398,12 @@ checks in `convex/chartOfAccounts.management.test.ts`. Opening policy is unchang
 
 | Scenario | Expected | Executable check |
 | --- | --- | --- |
-| Duplicate code, including an inactive account | `ACCOUNT_CODE_EXISTS`; one account remains; another org can use the same code | `duplicate account codes are refused with a localized code, including inactive accounts` |
+| Duplicate code, including an inactive account and canonical variants `2500 `, `٢٥٠٠`, `۲۵۰۰` | `ACCOUNT_CODE_EXISTS`; one account remains; another org can use the same code | `duplicate account codes are refused with a localized code, including inactive accounts` |
+| Empty or whitespace code | `ACCOUNT_CODE_INVALID`; no account is created | `empty account codes are refused without creating accounts` |
+| Padded ASCII, Arabic-Indic and Eastern Arabic-Indic codes | Each of ` 2600 `, `٢٦٠٠`, `۲۶۰۰` is stored as `2600` in an independent organization | `account codes are stored as canonical ASCII` |
+| Empty or whitespace English name on create | `ACCOUNT_NAME_REQUIRED`; no account is created | `blank account names are refused on create without creating accounts` |
+| Empty or whitespace English name on custom or system account update | `ACCOUNT_NAME_REQUIRED`; the entire account row stays unchanged | `custom and system accounts refuse blank names on update without changing the row` |
+| Valid padded English name | Create stores `Partner Payables`; update stores `Service Provider Payables`, without surrounding spaces | `valid account names are stored trimmed on create and update` |
 | Separate read and write grants | Missing `view:finance` refuses list; missing `manage:finance` refuses create and update | `chart roles respect separate read and write grants` |
 | Foreign organization and document | Foreign org create, list and update refuse; own org plus a foreign account id refuses; foreign row stays active | `foreign organizations are refused for chart create update and list` |
 | Custom 2500 and 2510 | Initialization creates neither account. User-created LIABILITY/CREDIT accounts advertise OTHER_PAYABLE. Inactive draft refuses. A different preparer and approver post obligations of JOD 100 and 50 | `custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts` |
@@ -1411,6 +1416,28 @@ The role table later becomes one concrete test registration so the regression
 runner can select its exact name; each of the same three role cases still runs.
 This is serial convex-test evidence, not cloud runtime or concurrency evidence.
 The coordinator verifies rendered screens and obtains the independent review seats.
+
+Round 3 reproduces invalid account identity at `cee22464d`: 15 failing cases and
+four passing existing checks before the fix. The same cases are grouped under
+concrete test titles for scenario-runner selection. The duplicate scenario now
+includes canonical variants; the five identity scenarios cite that red commit.
+Scenario inputs and expected names use `unicodeCodePoints` arrays for literal
+strings that the library's space-free token rules cannot represent directly.
+Removing only the normalization call caused six failures before restoration.
+Repeating that mutation after grouping caused both selected tests to fail
+(canonical storage and duplicate refusal); the source was restored byte-for-byte.
+The component suite checks both coded refusals in English and Arabic, including
+name refusal on update, without displaying technical error text.
+
+Codes normalize rather than reject Arabic keyboard digits so identifiers have
+one stored form. The mapping uses Unicode's [Arabic-Indic U+0660–U+0669 and
+Eastern Arabic-Indic U+06F0–U+06F9 ranges](https://www.unicode.org/charts/PDF/U0600.pdf).
+Expected refusals use [Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors)
+with structured `data.code`. Early returns replace nested conditional rendering,
+as recommended by [Sonar's nested-ternary guidance](https://www.sonarsource.com/blog/stop-nesting-ternaries-javascript/).
+Status messages use native [HTML output](https://html.spec.whatwg.org/multipage/form-elements.html#the-output-element)
+and retain advisory [WAI-ARIA status semantics](https://www.w3.org/TR/wai-aria-1.2/#status),
+following [Sonar S6819's preference for native elements](https://github.com/SonarSource/SonarJS/blob/master/packages/analysis/src/jsts/rules/README.md).
 
 The implementation keeps authorization and validators at the existing backend
 entry points, following [Convex authorization](https://docs.convex.dev/auth/overview)

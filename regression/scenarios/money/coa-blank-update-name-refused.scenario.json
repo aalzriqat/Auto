@@ -1,0 +1,159 @@
+{
+  "id": "coa-blank-update-name-refused",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "name": {
+          "unicodeCodePoints": []
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "name": {
+          "unicodeCodePoints": [32, 32, 32]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "C"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "test-fixture",
+        "org": "C"
+      },
+      "action": "fixture.markSystemAccount",
+      "input": {
+        "systemKey": "ACCOUNTS_PAYABLE_SUPPLIERS"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "C"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "name": {
+          "unicodeCodePoints": []
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "D"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "test-fixture",
+        "org": "D"
+      },
+      "action": "fixture.markSystemAccount",
+      "input": {
+        "systemKey": "ACCOUNTS_PAYABLE_SUPPLIERS"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "D"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "name": {
+          "unicodeCodePoints": [32, 32, 32]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "update.refusalCode",
+      "value": "ACCOUNT_NAME_REQUIRED"
+    },
+    {
+      "observable": "storedAccount.unchangedPerCase",
+      "value": true
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "cee22464d79e20714166638b1b1810c855623583"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "custom and system accounts refuse blank names on update without changing the row"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "87741b521a48b8e154057085495984ecb3ce374d7b586a9caa1b268c7f212444"
+}

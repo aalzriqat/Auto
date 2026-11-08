@@ -26,7 +26,13 @@ test that calls the public door and asserts a coded refusal with nothing written
 
 ## Inventory: 405 public mutations
 
-EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 35 · UNCLASSIFIED 170 · NON_FINANCIAL 170.
+EXCLUDED_GUARDED 30 · ENABLED_CERTIFIED 37 · UNCLASSIFIED 168 · NON_FINANCIAL 170.
+
+SCRUM-932 classifies `chartOfAccounts.create` and `chartOfAccounts.update` as ENABLED_CERTIFIED:
+the owner's request explicitly includes these doors, and the named public-API test in
+`convex/chartOfAccounts.management.test.ts` covers custom-account creation, deactivation and
+reactivation through opening approval. Identity refusals are recorded in the SCRUM-932 oracle
+section. This classification cites serial convex-test evidence, not a live deployment or pilot launch verdict.
 
 | Class | Meaning | Evidence per door |
 | --- | --- | --- |

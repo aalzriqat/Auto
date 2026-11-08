@@ -322,6 +322,39 @@ test.each(["en", "ar"] as const)(
   },
 );
 
+test.each([
+  ["en", "create", "ACCOUNT_CODE_INVALID", "Enter a non-empty account code."],
+  ["ar", "create", "ACCOUNT_CODE_INVALID", "أدخل رمز حساب غير فارغ."],
+  ["en", "create", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],
+  ["ar", "create", "ACCOUNT_NAME_REQUIRED", "أدخل اسم الحساب بالإنجليزية."],
+  ["en", "update", "ACCOUNT_NAME_REQUIRED", "Enter an English account name."],
+  ["ar", "update", "ACCOUNT_NAME_REQUIRED", "أدخل اسم الحساب بالإنجليزية."],
+] as const)("%s %s dialog localizes %s", async (locale, mode, code, expected) => {
+  fixture[mode].mockRejectedValue(new ConvexError({
+    code,
+    message: "Private technical refusal text",
+  }));
+  show(locale);
+  const copy = dictionaries[locale];
+  fireEvent.click(screen.getByRole("button", {
+    name: mode === "create" ? copy.CoaCreate : `${copy.CoaEdit} 2500`,
+  }));
+  const dialog = screen.getByRole("dialog");
+  if (mode === "create") {
+    fireEvent.change(within(dialog).getByLabelText(copy.CoaCode), {
+      target: { value: "2510" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(copy.CoaNameEn), {
+      target: { value: "Service Provider Payables" },
+    });
+  }
+  fireEvent.click(within(dialog).getByRole("button", { name: copy.CoaSave }));
+  expect((await within(dialog).findByRole("alert")).textContent).toBe(expected);
+  expect(fixture[mode]).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText(/Private technical/)).toBeNull();
+  expect(screen.getByRole("dialog")).toBe(dialog);
+});
+
 test("an unexpected save failure stays visible and uses a generic localized message", async () => {
   fixture.update.mockRejectedValue(new Error("database field secret.ts:123"));
   show("ar");

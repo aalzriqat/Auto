@@ -112,6 +112,7 @@ export function ChartOfAccountsDialog({
             <Label htmlFor="coa-code">{t("CoaCode")}</Label>
             <Input
               id="coa-code"
+              required={!account}
               dir="ltr"
               value={code}
               disabled={busy || !!account}
@@ -122,6 +123,7 @@ export function ChartOfAccountsDialog({
             <Label htmlFor="coa-name">{t("CoaNameEn")}</Label>
             <Input
               id="coa-name"
+              required
               dir="ltr"
               value={name}
               disabled={busy}

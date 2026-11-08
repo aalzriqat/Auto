@@ -33,35 +33,40 @@ export function ChartOfAccountsManagement({
 }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t } = useLanguage();
   const { hasPermission, isLoading } = usePermissions();
+
+  function content() {
+    if (isLoading) return <AccountsLoading />;
+    if (!hasPermission(PERMISSIONS.VIEW_FINANCE)) {
+      return (
+        <output className="text-sm text-muted-foreground">
+          {t("CoaReadDenied")}
+        </output>
+      );
+    }
+    return (
+      <MoneySurfaceErrorBoundary
+        key={orgId}
+        fallback={
+          <p role="alert" className="text-sm text-destructive">
+            {t("CoaLoadError")}
+          </p>
+        }
+      >
+        <AccountsList
+          orgId={orgId}
+          canManage={hasPermission(PERMISSIONS.MANAGE_FINANCE)}
+        />
+      </MoneySurfaceErrorBoundary>
+    );
+  }
+
   return (
     <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{t("CoaTitle")}</CardTitle>
         <CardDescription>{t("CoaDescription")}</CardDescription>
       </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <AccountsLoading />
-        ) : !hasPermission(PERMISSIONS.VIEW_FINANCE) ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("CoaReadDenied")}
-          </p>
-        ) : (
-          <MoneySurfaceErrorBoundary
-            key={orgId}
-            fallback={
-              <p role="alert" className="text-sm text-destructive">
-                {t("CoaLoadError")}
-              </p>
-            }
-          >
-            <AccountsList
-              orgId={orgId}
-              canManage={hasPermission(PERMISSIONS.MANAGE_FINANCE)}
-            />
-          </MoneySurfaceErrorBoundary>
-        )}
-      </CardContent>
+      <CardContent>{content()}</CardContent>
     </Card>
   );
 }
@@ -69,10 +74,10 @@ export function ChartOfAccountsManagement({
 function AccountsLoading() {
   const { t } = useLanguage();
   return (
-    <div role="status" aria-label={t("Loading")} className="space-y-3">
+    <output aria-label={t("Loading")} className="block space-y-3">
       <Skeleton className="h-10 w-full" />
       <Skeleton className="h-24 w-full" />
-    </div>
+    </output>
   );
 }
 
@@ -106,9 +111,9 @@ function AccountsList({
         <p className="text-sm text-muted-foreground">{t("CoaReadOnly")}</p>
       )}
       {accounts.length === 0 ? (
-        <p role="status" className="py-6 text-sm text-muted-foreground">
+        <output className="block py-6 text-sm text-muted-foreground">
           {t("CoaEmpty")}
-        </p>
+        </output>
       ) : (
         <Table aria-label={t("CoaTitle")}>
           <TableHeader>
