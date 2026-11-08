@@ -28,10 +28,7 @@ async function fixture() {
   return { t, ...finance };
 }
 
-test.each([
-  ["LIABILITY", "DEBIT"],
-  ["ASSET", "CREDIT"],
-] as const)("create %s with %s is refused without writing accounts", async (type, normalBalance) => {
+async function expectNormalBalanceMismatch(type: "LIABILITY" | "ASSET", normalBalance: "DEBIT" | "CREDIT") {
   const { t, orgId, identity } = await fixture();
   await identity.mutation(api.chartOfAccounts.create, { orgId, ...account });
   const before = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
@@ -42,6 +39,14 @@ test.each([
   const after = await t.run((ctx) => ctx.db.query("chartOfAccounts").collect());
   expect(after).toHaveLength(before.length);
   expect(after).toEqual(before);
+}
+
+test("create LIABILITY with DEBIT is refused without writing accounts", async () => {
+  await expectNormalBalanceMismatch("LIABILITY", "DEBIT");
+});
+
+test("create ASSET with CREDIT is refused without writing accounts", async () => {
+  await expectNormalBalanceMismatch("ASSET", "CREDIT");
 });
 
 test("every account type creates with its normal balance", async () => {
