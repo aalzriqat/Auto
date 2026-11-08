@@ -49,13 +49,13 @@ A skill never lowers a gate. In particular:
 The upstream skill builds every ticket on one integration branch, with many implementer subagents running in the background. In this repository:
 
 - The integration branch is a normal branch off fresh `origin/main` in its own worktree. The run opens a pull request from it and **never merges it into `main`**. Merging stays with the repository gates.
-- The merger subagent merges ticket branches into the integration branch only. Those merges are unreviewed until the integration PR is reviewed. The session hook is not proven to see a subagent's own skill calls, so the integration PR's `skill-evidence` and the two seats are the gate for subagent work.
+- The merger subagent merges ticket branches into the integration branch only. Those merges are unreviewed until the integration PR is reviewed. The session hook is not proven to see a subagent's own skill calls, so the integration PR's `skill-evidence` check and its review seats are the gate for subagent work.
 - If the whole spec would be too large to review as one PR, ship each ticket as its own PR against `main` instead, in the order its `Blocks` links allow. Prefer small PRs to one large integration PR.
 - At most **2** subagents of any kind run at once: implementer, research, exploration, merger, fix or review. At most 2 test or typecheck jobs run at once on the workstation, counting the parent session. Vitest runs with `maxWorkers=1`. These limits are the workstation's thermal cap.
 - Implementer subagents use model `sonnet` at effort `high`. Money tickets follow `invariant-closure-workflow` and `tdd` with a failing-first test.
 - Upstream step 7 (`code-review`) is `two-axis-review` here. It is advisory and is not a seat.
-- The gates under "Precedence" above apply to the integration PR, or to each ticket PR, exactly as to any other PR.
-- Inside the run, a ticket's dependents may start once its branch is merged into the integration branch and verified there. Close each Jira ticket only after its PR has merged into `main`.
+- The gates under "Precedence" above, the required CI checks and the `skill-evidence` check apply to the integration PR, or to each ticket PR, exactly as to any other PR.
+- Inside the run, a ticket's dependents may start once its branch is merged into the integration branch and the ticket's tests and typecheck pass there, within the 2-job limit above. Close each Jira ticket only after its PR has merged into `main`.
 
 ## Enforcement (owner request, 2026-10-20)
 
