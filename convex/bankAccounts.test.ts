@@ -249,6 +249,72 @@ describe("bankAccounts.getBookBalance", () => {
     });
   });
 
+  test("deactivating and reactivating a custom account keeps the bank book balance available", async () => {
+    const fx = await seedDealer();
+    const accountId = await fx.asOwner.mutation(api.chartOfAccounts.create, {
+      orgId: fx.orgId, code: "2500", name: "Partner Payables", type: "LIABILITY", normalBalance: "CREDIT",
+    });
+    const bankId = await createBank(fx, "Operating", true);
+    await seedBankLine(fx, { debitMinor: 125_000, bankAccountId: bankId });
+
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+    await fx.asOwner.mutation(api.chartOfAccounts.update, { orgId: fx.orgId, accountId, active: false });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+    await fx.asOwner.mutation(api.chartOfAccounts.update, { orgId: fx.orgId, accountId, active: true });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+  });
+
+  test("changing a bank-control currency restriction withholds the balance until backfill", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    await seedBankLine(fx, { debitMinor: 125_000, bankAccountId: bankId });
+    const { bank } = await refs(fx);
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+
+    await fx.t.run((ctx) => ctx.db.patch(bank._id, { currencyRestriction: "USD" }));
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null,
+    });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+  });
+
+  test("removing a duplicate bank-control system key withholds the balance until backfill", async () => {
+    const fx = await seedDealer();
+    const bankId = await createBank(fx, "Operating", true);
+    const { bank } = await refs(fx);
+    const duplicateId = await fx.t.run((ctx) => {
+      const { _id, _creationTime, ...copy } = bank;
+      void _id;
+      void _creationTime;
+      return ctx.db.insert("chartOfAccounts", { ...copy, name: "Duplicate bank control" });
+    });
+    await seedBankLine(fx, { debitMinor: 125_000, bankAccountId: bankId });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+
+    // The original remains the selected mapping, so readiness must detect the removed bank key.
+    await fx.t.run((ctx) => ctx.db.patch(duplicateId, { systemKey: undefined }));
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "BALANCE_HISTORY_INCOMPLETE", balanceMinor: null,
+    });
+    expect(await fx.t.mutation(internal.bankBalanceBackfill.runPage, { orgId: fx.orgId })).toMatchObject({ status: "READY" });
+    expect(await fx.asOwner.query(api.bankAccounts.getBookBalance, { orgId: fx.orgId })).toMatchObject({
+      status: "OK", balanceMinor: 125_000,
+    });
+  });
+
   test("an opening balance already posted to the GL is not double counted", async () => {
     const fx = await seedDealer();
     const bankId = await createBank(fx, "Operating", true); // reference metadata 1,000,000
