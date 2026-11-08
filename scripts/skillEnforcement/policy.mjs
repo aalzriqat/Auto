@@ -92,19 +92,23 @@ const normSkill = (s) => {
 };
 const COMMAND_MARKER = /<command-name>\/?([^<\s]+)<\/command-name>/g;
 const SOURCE_RECORD = /^Base directory for this skill: ([^\n]+)/;
-const slashes = (p) => p.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+const toForwardSlashes = (p) => p.trim().replace(/\\/g, "/").replace(/\/+$/, "");
 
 /**
  * The repository skill that a source record proves loaded, or null. Claude Code
  * starts a user-role text block with "Base directory for this skill: <dir>"
  * after every skill it loads. A bare name falls back to a plugin copy when the
- * project's skills are not loaded, and a personal skill outranks a project one,
- * so only a `.claude/skills/<name>` directory outside the user's home counts.
+ * project's skills are not loaded, and a personal skill outranks a project one.
+ * So only a `.claude/skills/<name>` directory counts, and never one inside the
+ * user's own Claude directories (`~/.claude`, `CLAUDE_CONFIG_DIR`), which hold
+ * the personal skills and the plugin cache.
  */
-function repositorySkillAt(dir, home) {
-  const m = slashes(dir).match(/^(.*)\/\.claude\/skills\/([^/]+)$/);
-  if (!m || m[1].toLowerCase() === slashes(home).toLowerCase()) return null;
-  return m[2];
+function repositorySkillAt(dir, personalDirs) {
+  const m = toForwardSlashes(dir).match(/^(.*\/\.claude)\/skills\/([^/]+)$/);
+  if (!m) return null;
+  const claudeDir = m[1].toLowerCase();
+  const personal = personalDirs.some((p) => claudeDir === p || claudeDir.startsWith(`${p}/`));
+  return personal ? null : m[2];
 }
 
 function parseLine(line) {
@@ -132,7 +136,8 @@ function userTexts(msg) {
  * Either source counts only when a source record shows the repository copy of
  * that skill loaded (SCRUM-934); no record means no proof of which copy ran.
  */
-export function invokedSkills(transcriptText, { home = homedir() } = {}) {
+export function invokedSkills(transcriptText, { home = homedir(), configDir = process.env.CLAUDE_CONFIG_DIR } = {}) {
+  const personalDirs = [`${home}/.claude`, configDir].filter(Boolean).map((p) => toForwardSlashes(p).toLowerCase());
   const calls = new Map(); // tool_use id -> skill
   const answered = new Set();
   const seen = new Set();
@@ -153,8 +158,8 @@ export function invokedSkills(transcriptText, { home = homedir() } = {}) {
       }
       for (const t of userTexts(msg)) {
         for (const m of t.matchAll(COMMAND_MARKER)) seen.add(normSkill(m[1]));
-        const source = t.match(SOURCE_RECORD);
-        const skill = source && repositorySkillAt(source[1], home);
+        const source = t.trimStart().match(SOURCE_RECORD);
+        const skill = source && repositorySkillAt(source[1], personalDirs);
         if (skill) loaded.add(skill);
       }
     }

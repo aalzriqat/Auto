@@ -74,36 +74,46 @@ describe("invokedSkills", () => {
       JSON.stringify({ type: "user", message: { role: "user", content: `<command-name>${command}</command-name>` } }),
       loadedFrom(source),
     ].join("\n");
+  // configDir "" stands for an unset CLAUDE_CONFIG_DIR, so the machine's environment never leaks in.
+  const invoked = (text: string, opts: { home?: string; configDir?: string } = {}) =>
+    [...invokedSkills(text, { home: HOME, configDir: "", ...opts })].sort();
   test("counts successful Skill calls, path-scoped repository skills, and typed commands", () => {
     const text = [
-      transcript("tdd", "tmp/auto-934:blast-radius"),
-      skillCall("apps\\web:engineering-principles", false, "C:\\tmp\\auto-934\\apps\\web\\.claude\\skills\\engineering-principles"),
+      transcript("tdd", "tmp/x:blast-radius"),
+      skillCall("apps\\web:engineering-principles", false, "C:\\tmp\\x\\apps\\web\\.claude\\skills\\engineering-principles"),
       typed("/unslop"),
     ].join("\n");
-    expect([...invokedSkills(text, { home: HOME })].sort()).toEqual(["blast-radius", "engineering-principles", "tdd", "unslop"]);
+    expect(invoked(text)).toEqual(["blast-radius", "engineering-principles", "tdd", "unslop"]);
   });
   test("a plugin copy never satisfies the repository skill of the same name (SCRUM-934)", () => {
     const text = [
       transcript("mattpocock-skills:tdd", "mattpocock-skills:diagnosing-bugs"),
       typed("/mattpocock-skills:tdd"),
     ].join("\n");
-    const seen = invokedSkills(text, { home: HOME });
-    expect(seen.has("tdd")).toBe(false);
-    expect(seen.has("diagnosing-bugs")).toBe(false);
+    expect(invoked(text)).toEqual([]);
     // The namespace alone decides, even beside a record of the repository copy.
-    expect(invokedSkills(skillCall("mattpocock-skills:tdd", false, `${REPO_SKILLS}/tdd`), { home: HOME }).size).toBe(0);
+    expect(invoked(skillCall("mattpocock-skills:tdd", false, `${REPO_SKILLS}/tdd`))).toEqual([]);
   });
-  test("a bare name counts only when the repository copy is what loaded (SCRUM-934)", () => {
+  test("a bare name that loaded the plugin copy does not count (SCRUM-934)", () => {
     // A session whose project skills are not loaded resolves a bare `tdd` to the plugin copy.
-    const plugin = [skillCall("tdd", false, `${PLUGIN_SKILLS}/tdd`), typed("/unslop", `${PLUGIN_SKILLS}/unslop`)].join("\n");
-    expect(invokedSkills(plugin, { home: HOME }).size).toBe(0);
+    const text = [skillCall("tdd", false, `${PLUGIN_SKILLS}/tdd`), typed("/unslop", `${PLUGIN_SKILLS}/unslop`)].join("\n");
+    expect(invoked(text)).toEqual([]);
+  });
+  test("a copy in the user's own Claude directories does not count (SCRUM-934)", () => {
     // Personal skills outrank project skills, so a personal copy can shadow the repository one.
     const personal = skillCall("tdd", false, "C:\\Users\\U\\.claude\\skills\\tdd");
-    expect(invokedSkills(personal, { home: "C:\\Users\\u" }).size).toBe(0);
-    expect([...invokedSkills(personal, { home: HOME })]).toEqual(["tdd"]);
-    // No source record means no proof of which copy ran.
+    expect(invoked(personal, { home: "C:\\Users\\u" })).toEqual([]);
+    expect(invoked(personal)).toEqual(["tdd"]);
+    expect(invoked(skillCall("tdd", false, `${HOME}/.claude/plugins/cache/p/1.0/.claude/skills/tdd`))).toEqual([]);
+    const relocated = skillCall("tdd", false, "/srv/claude-config/.claude/skills/tdd");
+    expect(invoked(relocated, { configDir: "/srv/claude-config/.claude" })).toEqual([]);
+  });
+  test("an invocation with no source record does not count (SCRUM-934)", () => {
     const unsourced = skillCall("tdd").split("\n").slice(0, 2).join("\n");
-    expect(invokedSkills(unsourced, { home: HOME }).size).toBe(0);
+    expect(invoked(unsourced)).toEqual([]);
+    // A record that starts after leading whitespace still counts.
+    const leadingNewline = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: `\nBase directory for this skill: ${REPO_SKILLS}/tdd` }] } });
+    expect(invoked(`${unsourced}\n${leadingNewline}`)).toEqual(["tdd"]);
   });
   test("a Skill call that errored (unknown skill) does not count", () => {
     expect(invokedSkills(skillCall("tdd", true)).size).toBe(0);
