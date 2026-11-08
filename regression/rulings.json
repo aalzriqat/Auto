@@ -5,6 +5,11 @@
     "date": "2026-10-07"
   },
   {
+    "id": "SCRUM-565#c24729",
+    "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d",
+    "date": "2026-11-07"
+  },
+  {
     "id": "SCRUM-760#c22465",
     "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519",
     "date": "2026-10-08"
@@ -63,6 +68,11 @@
     "id": "SCRUM-831#c23014",
     "digest": "b4423b4fff822cd31bb4880ded9b80746e11ab24781bca59b35bd1498a8b2163",
     "date": "2026-10-13"
+  },
+  {
+    "id": "SCRUM-850#c24749",
+    "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61",
+    "date": "2026-11-08"
   },
   {
     "id": "SCRUM-858#c23884",
@@ -128,11 +138,6 @@
     "id": "SCRUM-908#description",
     "digest": "6b3a93db0ab9e19f453ae8382a7e253a2740593791ca46e983416914a30be5cd",
     "date": "2026-11-04"
-  },
-  {
-    "id": "SCRUM-565#c24729",
-    "digest": "43dceb0cf62f200f7384759c5643cc65f38afdfb6f0577992181b33c08e9d43d",
-    "date": "2026-11-07"
   },
   {
     "id": "SCRUM-928#c24715",
