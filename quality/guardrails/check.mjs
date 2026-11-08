@@ -22,6 +22,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { doorModules, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
 import { analyzeTree, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
@@ -179,8 +180,10 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
   const prettier = (await import("prettier")).default;
   const counts = new Map();
   const violations = [];
-  const primary = configs[0];
   const wanted = files.filter((p) => configs.some((c) => classify(p, c) === "production"));
+  // Doors are found in every convex module of the tree, counted or not.
+  const factsByPath = new Map(files.filter(isConvexModule).map((p) => [p, extractFacts(p, readText(p))]));
+  const doors = doorModules(resolvePublicFunctions(factsByPath), factsByPath);
   const BATCH = 16;
   for (let i = 0; i < wanted.length; i += BATCH) {
     const chunk = wanted.slice(i, i + BATCH);
@@ -198,7 +201,7 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
     );
     for (const { filePath, text, measured } of results) {
       counts.set(filePath, measured.lines);
-      violations.push(...importViolations(filePath, text, primary));
+      violations.push(...importViolations(filePath, text, doors));
     }
   }
   return { inventory: files, counts, violations: sortViolations(violations) };
@@ -207,7 +210,7 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
 async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
   const blobs = treeBlobs(cwd, commit);
   const files = [...blobs.keys()].sort(compareCodeUnits);
-  const needed = files.filter((p) => classify(p, config) === "production");
+  const needed = files.filter((p) => classify(p, config) === "production" || isConvexModule(p));
   const texts = readBlobs(cwd, needed.map((p) => blobs.get(p)));
   return measure({
     files,

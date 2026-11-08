@@ -34,7 +34,7 @@ export const RULES = Object.freeze({
   componentsNoDomains: "components-no-domains",
   domainsCrossDomainIndexOnly: "domains-cross-domain-index-only",
   domainsIndexOnly: "domains-index-only",
-  domainsNoDoor: "domains-no-door",
+  noDoorImport: "no-door-import",
   domainsNoReact: "domains-no-react",
   policyNoGeneratedServer: "policy-no-generated-server",
 });
@@ -326,15 +326,6 @@ export function importSpecifiers(sourceText) {
   return info.importedFiles.map((file) => file.fileName);
 }
 
-function stripExt(repoPath) {
-  return repoPath.replace(SOURCE_SUFFIX, "");
-}
-
-/** A door is a top-level Convex module (convex/<name>.ts) not listed in nonDoors. */
-function isDoor(moduleId, config) {
-  if (!/^convex\/[^/]+$/u.test(moduleId)) return false;
-  return !config.nonDoors.some((entry) => stripExt(entry.path) === moduleId);
-}
 
 const DOMAIN_SCOPE = /^convex\/domains\//u;
 // A module inside one domain's directory (capture 1 = the domain). A module id has
@@ -351,8 +342,15 @@ export function inImportScope(repoPath) {
   return !isTestLike(repoPath);
 }
 
-/** Import-boundary violations for one production file. */
-export function importViolations(fromPath, sourceText, config) {
+/**
+ * Import-boundary violations for one production file. `doors` is the set of
+ * door module ids of the tree the file belongs to (convexFunctions.mjs
+ * doorModules): top-level convex modules that register a public function.
+ * @param {string} fromPath
+ * @param {string} sourceText
+ * @param {Set<string>} [doors]
+ */
+export function importViolations(fromPath, sourceText, doors = new Set()) {
   if (!inImportScope(fromPath)) return [];
   const found = new Map();
   const add = (rule, to) => {
@@ -366,9 +364,7 @@ export function importViolations(fromPath, sourceText, config) {
       (repoId === "convex/utils" || repoId.startsWith("convex/utils/"))) {
       add(RULES.componentsNoConvexUtils, repoId);
     }
-    if (DOMAIN_SCOPE.test(fromPath) && repoId && isDoor(repoId, config)) {
-      add(RULES.domainsNoDoor, repoId);
-    }
+    if (repoId && doors.has(repoId)) add(RULES.noDoorImport, repoId);
     // SCRUM-418 A1: a domain is reached from outside only through its index.
     if (repoId && DOMAIN_SCOPE.test(repoId)) {
       if (fromPath.startsWith("components/")) add(RULES.componentsNoDomains, repoId);

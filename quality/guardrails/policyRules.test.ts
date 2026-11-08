@@ -8,15 +8,13 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { importViolations, parseConfig } from "./rules.mjs";
-import { TIMEOUT, baseConfig, check, fixtureRepo, json, registerFixtureCleanup, write } from "./testkit";
+import { importViolations } from "./rules.mjs";
+import { TIMEOUT, check, fixtureRepo, registerFixtureCleanup, write } from "./testkit";
 
 registerFixtureCleanup();
 
-const config = parseConfig(json(baseConfig()), "fixture");
-
 function found(from: string, spec: string): string[] {
-  return importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map(
+  return importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`).map(
     (v: { rule: string; to: string }) => `${v.rule} ${v.to}`,
   );
 }

@@ -12,7 +12,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 
 import { resolveBaseRef, runGuardrails, writeBaseline } from "./check.mjs";
-import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, countNonBlank, importViolations, measureLines, parseConfig } from "./rules.mjs";
+import { BOOTSTRAP_POLICY, LEGACY_MIGRATIONS, countNonBlank, importViolations, measureLines } from "./rules.mjs";
 import {
   TIMEOUT,
   ZERO_SHA,
@@ -57,7 +57,11 @@ function fixtureRepo({ withGuardrails = true } = {}): string {
   git(root, "init", "-q", "-b", "main");
   write(root, "convex/_generated/server.ts", "export const query = 1;\n");
   write(root, "convex/schema.ts", "export default {};\n");
-  write(root, "convex/applications.ts", "export const door = 1;\n");
+  write(
+    root,
+    "convex/applications.ts",
+    'import { query } from "./_generated/server";\nexport const door = query({ args: {}, returns: null, handler: async () => null });\n',
+  );
   write(root, "convex/utils/money.ts", "export const toMinor = (n: number) => n * 100;\n");
   write(root, "convex/big.ts", lines(700));
   write(root, "convex/data.ts", lines(900, "d"));
@@ -682,13 +686,12 @@ describe("import boundaries", () => {
     );
     const result = await check(root);
     expect(result.errors).toEqual([
-      "IMPORT-NEW [domains-no-door] convex/domains/deals/commands/close.ts -> convex/applications",
       "IMPORT-NEW [domains-no-react] convex/domains/deals/policy/view.ts -> react",
+      "IMPORT-NEW [no-door-import] convex/domains/deals/commands/close.ts -> convex/applications",
     ]);
   }, TIMEOUT);
 
   test("import detection covers re-exports, dynamic import and require, but not comments or strings", () => {
-    const config = parseConfig(json(baseConfig()), "fixture");
     const source = [
       '// import { a } from "@/convex/utils/commented";',
       'const s = "import x from \'@/convex/utils/inString\'";',
@@ -696,19 +699,20 @@ describe("import boundaries", () => {
       'const lazy = () => import("@/convex/utils/dynamic");',
       'const c = require("@/convex/utils/required");',
     ].join("\n");
-    const found = importViolations("components/A.tsx", source, config).map((v: Grandfather) => v.to).sort();
+    const found = importViolations("components/A.tsx", source).map((v: Grandfather) => v.to).sort();
     expect(found).toEqual(["convex/utils/dynamic", "convex/utils/reexport", "convex/utils/required"]);
   });
 });
 
 describe("import specifier aliases", () => {
+  const DOORS = new Set(["convex/applications"]);
+
   test("negative control: an equivalent alias spelling is judged as the file it resolves to", () => {
-    const config = parseConfig(json(baseConfig()), "fixture");
     const to = (from: string, spec: string) =>
-      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
+      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, DOORS).map((v: Grandfather) => `${v.rule} ${v.to}`);
     expect(to("components/A.tsx", "@/convex/./utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
     expect(to("components/A.tsx", "@/convex/x/../utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
-    expect(to("convex/domains/d/commands/c.ts", "@/convex/./applications")).toEqual(["domains-no-door convex/applications"]);
+    expect(to("convex/domains/d/commands/c.ts", "@/convex/./applications")).toEqual(["no-door-import convex/applications"]);
     expect(to("convex/domains/d/policy/p.ts", "@/convex/_generated/./server")).toEqual(["policy-no-generated-server convex/_generated/server"]);
     expect(to("convex/domains/d/policy/p.ts", "../../../../node_modules/react")).toEqual(["domains-no-react react"]);
     // Controls: the canonical form is unchanged, and an alias escaping the repo is not a repo module.
@@ -717,11 +721,10 @@ describe("import specifier aliases", () => {
   });
 
   test("negative control: a doubled alias slash resolves to the same module and is judged as it", () => {
-    const config = parseConfig(json(baseConfig()), "fixture");
     const to = (from: string, spec: string) =>
-      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map((v: Grandfather) => `${v.rule} ${v.to}`);
+      importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, DOORS).map((v: Grandfather) => `${v.rule} ${v.to}`);
     expect(to("components/A.tsx", "@//convex/utils/money")).toEqual(["components-no-convex-utils convex/utils/money"]);
-    expect(to("convex/domains/d/commands/c.ts", "@///convex/applications")).toEqual(["domains-no-door convex/applications"]);
+    expect(to("convex/domains/d/commands/c.ts", "@///convex/applications")).toEqual(["no-door-import convex/applications"]);
     // Control: stripping the slashes must not let an escape pass as a repo path.
     expect(to("components/A.tsx", "@//../outside/convex/utils/money")).toEqual([]);
   });

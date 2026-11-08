@@ -8,15 +8,13 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { importViolations, parseConfig } from "./rules.mjs";
+import { importViolations } from "./rules.mjs";
 import {
   TIMEOUT,
   baseBaseline,
-  baseConfig,
   check,
   expectFailure,
   fixtureRepo,
-  json,
   registerFixtureCleanup,
   write,
   writeBaselineDoc,
@@ -26,10 +24,9 @@ registerFixtureCleanup();
 
 const CROSS = "domains-cross-domain-index-only";
 const NO_DOMAINS = "components-no-domains";
-const config = parseConfig(json(baseConfig()), "fixture");
 
 function found(from: string, spec: string): string[] {
-  return importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`, config).map(
+  return importViolations(from, `import { x } from "${spec}";\nexport const y = x;\n`).map(
     (v: { rule: string; to: string }) => `${v.rule} ${v.to}`,
   );
 }
@@ -60,7 +57,7 @@ describe("cross-domain imports go through the domain index (A1)", () => {
       'const c = require("@/convex/domains/inventory/internal/c");',
       'import type { D } from "@/convex/domains/inventory/internal/d";',
     ].join("\n");
-    const rules = importViolations(FROM, source, config).map((v: { rule: string; to: string }) => v.to).sort();
+    const rules = importViolations(FROM, source).map((v: { rule: string; to: string }) => v.to).sort();
     expect(rules).toEqual([
       "convex/domains/inventory/internal/a",
       "convex/domains/inventory/internal/b",
