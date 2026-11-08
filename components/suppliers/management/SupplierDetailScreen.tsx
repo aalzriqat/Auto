@@ -15,14 +15,18 @@
  */
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Building2, Pencil, Phone, Mail } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/sonner";
 import { usePermissions } from "@/hooks/use-permissions";
 import { interpolate } from "@/lib/i18n/interpolate";
@@ -40,6 +44,8 @@ import {
 import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
 import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
+import { SupplierDiscardDialog, useSupplierNavigationGuard, closeSupplierEditorBeforeNavigation } from "./SupplierDiscardDialog";
+import { SupplierSummaryTiles } from "./SupplierSummaryTiles";
 import {
   DuplicateCandidatesPanel,
   LegalIdentityPanel,
@@ -139,8 +145,6 @@ function SupplierSummary({ supplier }: Readonly<{ supplier: FullSupplier }>) {
   const translate = useTranslate();
   const rows: Array<[string, string | undefined]> = [
     ["SuppliersFieldLegalName", supplier.legalName],
-    ["SuppliersFieldPhone", supplier.contact?.phone],
-    ["SuppliersFieldEmail", supplier.contact?.email],
     ["SuppliersFieldAddress", supplier.contact?.address],
     ["SuppliersFieldTaxId", supplier.taxId],
     ["SuppliersFieldTaxJurisdiction", supplier.taxJurisdiction],
@@ -162,9 +166,11 @@ function SupplierSummary({ supplier }: Readonly<{ supplier: FullSupplier }>) {
 function SupplierEditForm({
   orgId,
   supplier,
-}: Readonly<{ orgId: Id<"organizations">; supplier: FullSupplier }>) {
+  onClose,
+}: Readonly<{ orgId: Id<"organizations">; supplier: FullSupplier; onClose: () => void }>) {
   const translate = useTranslate();
   const update = useMutation(api.suppliers.update);
+  const router = useRouter();
   // The record the form was loaded from. The live record may move on; this is what edits are
   // measured against and what expectedVersion refers to.
   const [base, setBase] = useState(supplier);
@@ -177,10 +183,20 @@ function SupplierEditForm({
   const [versionConflict, setVersionConflict] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [reasonError, setReasonError] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [aliasState, setAliasState] = useState({ dirty: false, busy: false });
 
   const args = buildUpdate(base, values, reason);
   const changed = Object.keys(args).filter((key) => key !== "reason").length > 0;
   const nameChanged = args.displayName !== undefined;
+  const dirty = changed || reason !== "" || aliasState.dirty;
+  useSupplierNavigationGuard({ dirty, busy: busy || aliasState.busy });
+  function requestClose() {
+    if (busy || aliasState.busy) return;
+    if (dirty) setConfirmDiscard(true);
+    else onClose();
+  }
 
   // The user's explicit answers for the current name and identity fields (see mergeConfirmations).
   const memory = useRef<ConfirmationMemory | null>(null);
@@ -230,17 +246,9 @@ function SupplierEditForm({
       memory.current = null;
       setReason("");
       // The live record reflects the save; measure the next edit against what was just written.
-      setBase({
-        ...base,
-        displayName: args.displayName ?? base.displayName,
-        legalName: args.legalName === undefined ? base.legalName : (args.legalName ?? undefined),
-        contact: args.contact === undefined ? base.contact : (args.contact ?? undefined),
-        taxId: args.taxId === undefined ? base.taxId : (args.taxId ?? undefined),
-        taxJurisdiction: args.taxJurisdiction === undefined ? base.taxJurisdiction : (args.taxJurisdiction ?? undefined),
-        // The server returns the snapshot version and the edit revision it wrote.
-        version: result.version,
-        revision: result.revision,
-      });
+      setBase(supplierAfterUpdate(base, args, result));
+      if (aliasState.dirty) setConfirmDiscard(true);
+      else onClose();
     } catch (caught) {
       const found = duplicateCandidates(caught);
       const conflict = legalIdentityConflict(caught);
@@ -254,6 +262,17 @@ function SupplierEditForm({
   }
 
   return (
+    <>
+    <Dialog open onOpenChange={next => !next && requestClose()}>
+    <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" onCloseAutoFocus={event => { event.preventDefault(); document.getElementById("supplier-edit-trigger")?.focus(); }}
+      onClickCapture={event => {
+        const anchor = event.target instanceof Element ? event.target.closest("a") : null;
+        if (anchor && (dirty || busy || aliasState.busy)) {
+          event.preventDefault();
+          if (!busy && !aliasState.busy) { setPendingHref(anchor.getAttribute("href")); setConfirmDiscard(true); }
+        }
+      }}>
+    <DialogHeader className="text-start"><DialogTitle>{translate("SuppliersEdit")}</DialogTitle><DialogDescription>{translate("SuppliersDetailsTitle")}</DialogDescription></DialogHeader>
     <form
       className="space-y-4"
       noValidate
@@ -327,10 +346,18 @@ function SupplierEditForm({
           {describeSupplierError(error, translate)}
         </p>
       )}
-      <Button type="submit" disabled={busy || !changed}>
+      <div className="flex flex-wrap justify-end gap-2">
+      <Button type="button" variant="outline" disabled={busy} onClick={requestClose}>{translate("SuppliersCancel")}</Button>
+      <Button type="submit" disabled={busy || aliasState.busy || !changed}>
         {busy ? translate("SuppliersSaving") : translate("SuppliersEditSubmit")}
       </Button>
+      </div>
     </form>
+    <SupplierAliasesSection orgId={orgId} supplierId={supplier._id} aliases={supplier.aliases ?? []} canManage onEditStateChange={setAliasState} />
+    </DialogContent>
+    </Dialog>
+    <SupplierDiscardDialog open={confirmDiscard} onKeep={() => { setConfirmDiscard(false); setPendingHref(null); }} onDiscard={() => closeSupplierEditorBeforeNavigation(onClose, () => { if (pendingHref) router.push(pendingHref); })} />
+    </>
   );
 }
 
@@ -340,12 +367,15 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
   const canManage = !isLoading && hasPermission(PERMISSIONS.MANAGE_FINANCE);
   const record = useQuery(api.suppliers.get, { orgId, supplierId });
   const [statusMode, setStatusMode] = useState<"deactivate" | "reactivate" | null>(null);
+  const [editing, setEditing] = useState(false);
 
   if (record === undefined) {
     return (
-      <p role="status" className="py-8 text-center text-sm text-muted-foreground">
+      <output className="block space-y-3 py-8 text-center text-sm text-muted-foreground">
         {translate("SuppliersLoading")}
-      </p>
+        <Skeleton className="h-32 w-full rounded-xl" />
+        <Skeleton className="h-52 w-full rounded-xl" />
+      </output>
     );
   }
   if (!isFullSupplier(record)) {
@@ -358,14 +388,24 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
   const inactive = record.status === "INACTIVE";
   return (
     <div className="space-y-5">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
+      <Card className="overflow-hidden border-t-4 border-t-primary shadow-sm">
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+        <span className="rounded-xl bg-primary/10 p-3 text-primary"><Building2 aria-hidden="true" /></span>
+        <div className="min-w-0 space-y-2">
           <h1 className="text-2xl font-semibold tracking-tight">
             <bdi>{record.displayName}</bdi>
           </h1>
           <SupplierStatusBadge status={record.status} />
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            {record.contact?.phone && <span className="inline-flex items-center gap-1"><Phone size={14} aria-hidden="true" /><bdi>{record.contact.phone}</bdi></span>}
+            {record.contact?.email && <span className="inline-flex items-center gap-1 break-all"><Mail size={14} aria-hidden="true" /><bdi>{record.contact.email}</bdi></span>}
+          </div>
+        </div>
         </div>
         {canManage && (
+          <div className="flex flex-wrap gap-2">
+          <Button id="supplier-edit-trigger" type="button" onClick={() => setEditing(true)}><Pencil size={16} aria-hidden="true" />{translate("SuppliersEdit")}</Button>
           <Button
             type="button"
             variant={inactive ? "default" : "outline"}
@@ -373,22 +413,25 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
           >
             {translate(inactive ? "SuppliersReactivate" : "SuppliersDeactivate")}
           </Button>
+          </div>
         )}
-      </header>
+      </CardHeader>
+      <CardContent><SupplierSummary supplier={record} /></CardContent>
+      </Card>
       {!isLoading && !canManage && (
         <p role="note" className="rounded-md border bg-muted/50 p-3 text-sm text-muted-foreground">
           {translate("SuppliersReadOnlyNote")}
         </p>
       )}
       {inactive && (
-        <div role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+        <output aria-live="polite" aria-atomic="true" className="block rounded-md border border-money-out/30 bg-money-out/5 p-3 text-sm text-money-out">
           <p className="font-medium">{translate("SuppliersDeactivatedBanner")}</p>
           {record.deactivatedReason && (
             <p className="text-xs">
               {interpolate(translate("SuppliersDeactivatedReason"), { reason: record.deactivatedReason })}
             </p>
           )}
-        </div>
+        </output>
       )}
       {record.sharedLegalIdentityOf && (
         <p className="text-sm text-muted-foreground">
@@ -398,14 +441,10 @@ function SupplierDetailBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiz
           </Link>
         </p>
       )}
-      <section aria-labelledby="supplier-details-title" className="space-y-3 rounded-lg border p-4">
-        <h2 id="supplier-details-title" className="text-lg font-semibold">
-          {translate("SuppliersDetailsTitle")}
-        </h2>
-        {canManage ? <SupplierEditForm orgId={orgId} supplier={record} /> : <SupplierSummary supplier={record} />}
-      </section>
+      <SupplierSummaryTiles orgId={orgId} supplierId={supplierId} />
       <SupplierStatementSection orgId={orgId} supplierId={supplierId} />
-      <SupplierAliasesSection orgId={orgId} supplierId={supplierId} aliases={record.aliases ?? []} canManage={canManage} />
+      <Card className="p-4 shadow-sm"><SupplierAliasesSection orgId={orgId} supplierId={supplierId} aliases={record.aliases ?? []} canManage={false} /></Card>
+      {canManage && editing && <SupplierEditForm orgId={orgId} supplier={record} onClose={() => setEditing(false)} />}
       {canManage && statusMode && (
         <SupplierStatusDialog
           orgId={orgId}
@@ -433,6 +472,7 @@ export function SupplierDetailScreen({
         </Link>
       </Button>
       <QueryErrorBoundary
+        key={`${orgId}:${supplierId}`}
         render={(error) => (
           <p role="alert" className="py-8 text-center text-sm text-destructive">
             {loadErrorMessage(error, translate)}
@@ -443,4 +483,18 @@ export function SupplierDetailScreen({
       </QueryErrorBoundary>
     </div>
   );
+}
+
+/** The new edit baseline is the patch the server accepted, including explicit field clears. */
+function supplierAfterUpdate(base: FullSupplier, args: UpdateArgs, result: Pick<FullSupplier, "version" | "revision">): FullSupplier {
+  return {
+    ...base,
+    displayName: args.displayName ?? base.displayName,
+    legalName: args.legalName === undefined ? base.legalName : (args.legalName ?? undefined),
+    contact: args.contact === undefined ? base.contact : (args.contact ?? undefined),
+    taxId: args.taxId === undefined ? base.taxId : (args.taxId ?? undefined),
+    taxJurisdiction: args.taxJurisdiction === undefined ? base.taxJurisdiction : (args.taxJurisdiction ?? undefined),
+    version: result.version,
+    revision: result.revision,
+  };
 }

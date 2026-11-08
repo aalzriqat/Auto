@@ -1,0 +1,68 @@
+{
+  "id": "coa-trimmed-name-storage",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [32, 32, 80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115, 32, 32]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.update",
+      "input": {
+        "name": {
+          "unicodeCodePoints": [32, 32, 83, 101, 114, 118, 105, 99, 101, 32, 80, 114, 111, 118, 105, 100, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115, 32, 32]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "createdAccount.name",
+      "value": {
+        "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+      }
+    },
+    {
+      "observable": "updatedAccount.name",
+      "value": {
+        "unicodeCodePoints": [83, 101, 114, 118, 105, 99, 101, 32, 80, 114, 111, 118, 105, 100, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+      }
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "cee22464d79e20714166638b1b1810c855623583"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "valid account names are stored trimmed on create and update"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "a5350d99470ebbd6de65ae51eb4fec85ca20a8b8a0a2efa8d441bd27e1e26ba8"
+}

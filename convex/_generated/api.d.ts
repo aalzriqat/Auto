@@ -166,6 +166,7 @@ import type * as sourcedAgentImpact from "../sourcedAgentImpact.js";
 import type * as sourcingPayables from "../sourcingPayables.js";
 import type * as subledger from "../subledger.js";
 import type * as subscriptions from "../subscriptions.js";
+import type * as supplierBalances from "../supplierBalances.js";
 import type * as supplierCostRecoveries from "../supplierCostRecoveries.js";
 import type * as supplierDueAging from "../supplierDueAging.js";
 import type * as supplierDueAlerts from "../supplierDueAlerts.js";
@@ -540,6 +541,7 @@ declare const fullApi: ApiFromModules<{
   sourcingPayables: typeof sourcingPayables;
   subledger: typeof subledger;
   subscriptions: typeof subscriptions;
+  supplierBalances: typeof supplierBalances;
   supplierCostRecoveries: typeof supplierCostRecoveries;
   supplierDueAging: typeof supplierDueAging;
   supplierDueAlerts: typeof supplierDueAlerts;

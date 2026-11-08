@@ -1,0 +1,122 @@
+{
+  "id": "coa-code-zero-width-space-refused",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": "2500",
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        },
+        "nameAr": {
+          "unicodeCodePoints": [
+            1584,
+            1605,
+            1605,
+            32,
+            1575,
+            1604,
+            1588,
+            1585,
+            1603,
+            1575,
+            1569
+          ]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [
+            8203,
+            50,
+            53,
+            48,
+            48
+          ]
+        },
+        "name": {
+          "unicodeCodePoints": [
+            80,
+            97,
+            114,
+            116,
+            110,
+            101,
+            114,
+            32,
+            80,
+            97,
+            121,
+            97,
+            98,
+            108,
+            101,
+            115
+          ]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "ACCOUNT_CODE_INVALID"
+    },
+    {
+      "observable": "storedAccounts.unchanged",
+      "value": true
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "c08c8f39959b92446313fa5bfcfe9e865bf2ef33"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-round4-account-identity",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "account codes containing a zero-width space are refused"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "a51b409547fc7e66ecaa5f4d5c79f61c2a9f109966117ddb89b3b9a8c05f19ba"
+}

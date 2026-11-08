@@ -1,0 +1,55 @@
+{
+  "id": "supplier-balances-amman-midnight",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum929-supplier-balances",
+    "firstSeen": "2026-11-07"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierBalances.list",
+      "input": {
+        "dueAt": 1794081600000,
+        "before": 1794085199000,
+        "after": 1794085200000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "before.overduePayableMinor",
+      "value": 0
+    },
+    {
+      "observable": "after.overduePayableMinor",
+      "value": 9500000
+    },
+    {
+      "observable": "after.payableMinor",
+      "value": 9500000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-929#c24714",
+      "digest": "57d50ee36018f53a841c08065a38ef38390cd44f0fd7ba57dd2c3a92de99ed1b"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierBalances.scrum929.test.ts",
+    "testName": "Amman midnight changes only overdue aging from the explicit clock argument"
+  },
+  "matrixRow": "SCRUM-929-SUPPLIER-BALANCES",
+  "bugRef": {
+    "key": "SCRUM-929",
+    "failingFirst": "db0dec582b7af7939f815f832ff9d71c4fa2ccd6"
+  },
+  "fingerprint": "a34f1b126580d105493cd8d23053d8a2a8c0e45ae58c911e4819a9ec88cf5599"
+}

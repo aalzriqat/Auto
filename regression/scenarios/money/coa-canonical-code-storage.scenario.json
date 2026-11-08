@@ -1,0 +1,80 @@
+{
+  "id": "coa-canonical-code-storage",
+  "domain": "money",
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [32, 50, 54, 48, 48, 32]
+        },
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "B"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [1634, 1638, 1632, 1632]
+        },
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "C"
+      },
+      "action": "chartOfAccounts.create",
+      "input": {
+        "code": {
+          "unicodeCodePoints": [1778, 1782, 1776, 1776]
+        },
+        "name": {
+          "unicodeCodePoints": [80, 97, 114, 116, 110, 101, 114, 32, 80, 97, 121, 97, 98, 108, 101, 115]
+        }
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "storedAccount.codePerCase",
+      "value": "2600"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-932",
+    "failingFirst": "8bb596108f3d13d3265dd339f15a432d96cfc2a6"
+  },
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum932-coa-management",
+    "firstSeen": "2026-11-08"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-932#description",
+      "digest": "d6cb3c3f2e82dd475061765f7a4c51e8e179b85679242b228d3833628d363cbc"
+    }
+  ],
+  "impl": {
+    "file": "convex/chartOfAccounts.management.test.ts",
+    "testName": "account codes are stored as canonical ASCII"
+  },
+  "matrixRow": "SCRUM932-coa-management",
+  "fingerprint": "3328e77f1e3e2ac8669e76ecb296a10522e20b44e5155f95285b7f3e6efcccb4"
+}

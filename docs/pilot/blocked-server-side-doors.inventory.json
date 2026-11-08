@@ -534,9 +534,14 @@
  },
  {
   "door": "chartOfAccounts.create",
-  "class": "UNCLASSIFIED",
+  "class": "ENABLED_CERTIFIED",
   "effect": "adds a ledger account",
-  "ruling": "owner ruling needed"
+  "ruling": "SCRUM-932#description: owner requests chart management using create/list/update",
+  "certification": {
+   "test": "convex/chartOfAccounts.management.test.ts",
+   "row": "custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts",
+   "oracleSection": "SCRUM-932 chart management regressions"
+  }
  },
  {
   "door": "chartOfAccounts.initialize",
@@ -552,9 +557,14 @@
  },
  {
   "door": "chartOfAccounts.update",
-  "class": "UNCLASSIFIED",
+  "class": "ENABLED_CERTIFIED",
   "effect": "edits a ledger account",
-  "ruling": "owner ruling needed"
+  "ruling": "SCRUM-932#description: owner requests chart management using create/list/update",
+  "certification": {
+   "test": "convex/chartOfAccounts.management.test.ts",
+   "row": "custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without automatic accounts",
+   "oracleSection": "SCRUM-932 chart management regressions"
+  }
  },
  {
   "door": "claims.add",
