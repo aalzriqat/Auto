@@ -33,6 +33,7 @@ export const RULES = Object.freeze({
   componentsNoConvexUtils: "components-no-convex-utils",
   componentsNoDomains: "components-no-domains",
   domainsCrossDomainIndexOnly: "domains-cross-domain-index-only",
+  domainsIndexOnly: "domains-index-only",
   domainsNoDoor: "domains-no-door",
   policyNoGeneratedServer: "policy-no-generated-server",
   policyNoReact: "policy-no-react",
@@ -343,9 +344,9 @@ const DOMAIN_MODULE = /^convex\/domains\/([^/]+)\/./u;
 const POLICY_SCOPE = /^convex\/domains\/(?:[^/]+\/)*policy\//u;
 const REACT_PACKAGE = /^react(?:-dom)?(?:\/|$)/u;
 
+/** Every production file is an importer; tests and fixtures are not judged. */
 export function inImportScope(repoPath) {
-  return (repoPath.startsWith("components/") || DOMAIN_SCOPE.test(repoPath)) &&
-    !isTestLike(repoPath);
+  return !isTestLike(repoPath);
 }
 
 /** Import-boundary violations for one production file. */
@@ -366,12 +367,15 @@ export function importViolations(fromPath, sourceText, config) {
     if (DOMAIN_SCOPE.test(fromPath) && repoId && isDoor(repoId, config)) {
       add(RULES.domainsNoDoor, repoId);
     }
-    // SCRUM-418 A1: another domain is reached only through its index.
-    if (repoId && /^convex\/domains\//u.test(repoId)) {
+    // SCRUM-418 A1: a domain is reached from outside only through its index.
+    if (repoId && DOMAIN_SCOPE.test(repoId)) {
       if (fromPath.startsWith("components/")) add(RULES.componentsNoDomains, repoId);
-      const own = DOMAIN_MODULE.exec(fromPath);
-      const other = DOMAIN_MODULE.exec(repoId);
-      if (own && other && own[1] !== other[1]) add(RULES.domainsCrossDomainIndexOnly, repoId);
+      else {
+        const own = DOMAIN_MODULE.exec(fromPath);
+        const other = DOMAIN_MODULE.exec(repoId);
+        if (other && !own) add(RULES.domainsIndexOnly, repoId);
+        else if (other && own[1] !== other[1]) add(RULES.domainsCrossDomainIndexOnly, repoId);
+      }
     }
     if (POLICY_SCOPE.test(fromPath)) {
       if (repoId === "convex/_generated/server") add(RULES.policyNoGeneratedServer, repoId);

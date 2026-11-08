@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
- * SCRUM-418 section 3, guardrail 2 (A1): a file under convex/domains/<a>/ may
- * import convex/domains/<b>/ (b != a) only through convex/domains/<b>/index.ts,
+ * SCRUM-418 section 3, guardrail 2 (A1): nothing outside convex/domains/<x>/
+ * imports convex/domains/<x>/** except its index.ts, whoever the importer is
+ * (another domain, a door, convex/accounting, lib, app, any production root),
  * and components/** may not import convex/domains/** at all. convex/domains/
  * does not exist yet, so nothing is grandfathered.
  */
@@ -101,6 +102,65 @@ describe("components do not import convex/domains directly", () => {
   });
 });
 
+describe("every importer outside a domain goes through the domain index", () => {
+  const RULE = "domains-index-only";
+
+  test("negative control: any production root importing a domain's internals fails", () => {
+    const deep = "@/convex/domains/deals/commands/close";
+    const target = `${RULE} convex/domains/deals/commands/close`;
+    expect(found("convex/applications.ts", deep)).toEqual([target]);
+    expect(found("convex/accounting/refunds.ts", deep)).toEqual([target]);
+    expect(found("convex/utils/money.ts", "./../domains/deals/commands/close")).toEqual([target]);
+    expect(found("lib/deals/close.ts", deep)).toEqual([target]);
+    expect(found("app/page.tsx", deep)).toEqual([target]);
+    expect(found("hooks/useDeal.ts", deep)).toEqual([target]);
+    expect(found("packages/shared/src/deal.ts", deep)).toEqual([target]);
+    expect(found("convex/applications.ts", "@/convex/domains/deals/policy")).toEqual([`${RULE} convex/domains/deals/policy`]);
+  });
+
+  test("negative control: a sub-directory index is not the domain index, from outside as well", () => {
+    expect(found("convex/accounting/refunds.ts", "@/convex/domains/deals/commands/index")).toEqual([
+      `${RULE} convex/domains/deals/commands`,
+    ]);
+  });
+
+  test("positive control: the domain index passes from any importer, spelled with or without /index", () => {
+    expect(found("convex/accounting/refunds.ts", "@/convex/domains/deals")).toEqual([]);
+    expect(found("convex/applications.ts", "@/convex/domains/deals/index")).toEqual([]);
+    expect(found("lib/deals/close.ts", "../../convex/domains/deals/index.ts")).toEqual([]);
+  });
+
+  test("positive control: a domain still imports its own internals, and a test file is out of scope", () => {
+    expect(found("convex/domains/deals/commands/close.ts", "../policy/canClose")).toEqual([]);
+    expect(found("convex/accounting/refunds.test.ts", "@/convex/domains/deals/commands/close")).toEqual([]);
+  });
+
+  test("the component rule is unchanged: components may not import a domain at all", () => {
+    expect(found("components/Deal.tsx", "@/convex/domains/deals/commands/close")).toEqual([
+      `${NO_DOMAINS} convex/domains/deals/commands/close`,
+    ]);
+  });
+
+  test("negative control through the checker: convex/accounting importing a domain's internals fails and is not grandfathered", async () => {
+    const root = fixtureRepo({
+      "convex/domains/deals/index.ts": "export const close = 1;\n",
+      "convex/domains/deals/commands/close.ts": "export const c = 1;\n",
+    });
+    write(root, "convex/accounting/refunds.ts", 'import { c } from "@/convex/domains/deals/commands/close";\nexport const r = c;\n');
+    const result = await check(root);
+    expect(result.errors).toEqual([`IMPORT-NEW [${RULE}] convex/accounting/refunds.ts -> convex/domains/deals/commands/close`]);
+  }, TIMEOUT);
+
+  test("positive control through the checker: convex/accounting importing the domain index passes", async () => {
+    const root = fixtureRepo({
+      "convex/domains/deals/index.ts": "export const close = 1;\n",
+      "convex/domains/deals/commands/close.ts": "export const c = 1;\n",
+    });
+    write(root, "convex/accounting/refunds.ts", 'import { close } from "@/convex/domains/deals";\nexport const r = close;\n');
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+});
 describe("cross-domain rules through the whole checker", () => {
   test("negative control: a new cross-domain deep import fails the check and nothing grandfathers it", async () => {
     const root = fixtureRepo({
