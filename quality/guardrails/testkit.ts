@@ -35,6 +35,7 @@ export interface FixtureConfig {
   exemptions: Entry[];
   generated: Entry[];
   migrations: Entry[];
+  countPinSkips?: Entry[];
 }
 export interface Grandfather {
   rule: string;
@@ -100,7 +101,10 @@ export function writeBaselineDoc(root: string, baseline: FixtureBaseline): void 
  * A repo whose `main` commit is the trusted target, with guardrail files and the
  * given extra files already committed (so they are part of the TARGET tree).
  */
-export function fixtureRepo(files: Record<string, string> = {}, { withGuardrails = true } = {}): string {
+export function fixtureRepo(
+  files: Record<string, string> = {},
+  { withGuardrails = true, config = baseConfig() }: { withGuardrails?: boolean; config?: FixtureConfig } = {},
+): string {
   const root = trackRepo(mkdtempSync(path.join(tmpdir(), "guardrails-rt-")));
   git(root, "init", "-q", "-b", "main");
   write(root, "convex/_generated/server.ts", "export const query = 1;\n");
@@ -109,7 +113,7 @@ export function fixtureRepo(files: Record<string, string> = {}, { withGuardrails
   write(root, "convex/migrateOld.ts", "export const m = 1;\n");
   for (const [file, text] of Object.entries(files)) write(root, file, text);
   if (withGuardrails) {
-    writeConfig(root, baseConfig());
+    writeConfig(root, config);
     writeBaselineDoc(root, baseBaseline());
   }
   git(root, "add", ".");

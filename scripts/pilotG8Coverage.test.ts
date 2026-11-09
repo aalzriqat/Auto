@@ -105,15 +105,19 @@ test("G8 role journeys run in their own project: before the matrix isolates the 
 
 test("G8 explorer runs one test per start, restores the Dashboard random walk and seeds each start apart", () => {
   const titles = testCalls("playwright/scenarios/jev-explorer.spec.ts").map(call => call.title);
-  const planned = pilotExplorerStarts().map(pilotExplorerTitle);
-  expect(new Set(planned).size).toBe(12);
+  const starts = pilotExplorerStarts();
+  const planned = starts.map(pilotExplorerTitle);
+  // SCRUM-426 guardrail 4: uniqueness against the start list, not a literal 12; the title set
+  // is diffed with the spec's titles in both directions just below.
+  expect(new Set(planned).size).toBe(starts.length);
+  expect(starts.length, "an empty start list must not pass").toBeGreaterThan(0);
   expect(titles.filter(title => title.startsWith("pilot explorer ")).sort()).toEqual([...planned].sort());
   expect(titles).toContain("random walk");
   const source = readFileSync("playwright/scenarios/jev-explorer.spec.ts", "utf8");
   expect(source).toMatch(/test\("random walk"[^]*?route: "dashboard", seed: SEED/);
   for (const base of [1, 4242, 99_999]) {
     const seeds = pilotExplorerStarts().map(start => pilotExplorerSeed(base, start));
-    expect(new Set(seeds).size).toBe(12);
+    expect(new Set(seeds).size).toBe(seeds.length);
     expect(seeds.every(seed => Number.isInteger(seed) && seed > 0 && seed < 2 ** 32)).toBe(true);
     expect(seeds).toEqual(pilotExplorerStarts().map(start => pilotExplorerSeed(base, start)));
   }

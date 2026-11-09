@@ -73,8 +73,11 @@ const CONFIG_KEYS = [
   "exemptions",
   "generated",
   "migrations",
+  "countPinSkips",
 ];
-export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations"];
+// countPinSkips (guardrail 4) is the only key a config written before it may
+// omit: the target branch's config is parsed too, and an absent list means no skips.
+export const JUSTIFIED_LISTS = ["exemptions", "generated", "migrations", "countPinSkips"];
 
 function assertKeys(doc, allowed, label) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
@@ -98,6 +101,7 @@ function assertStringList(list, label) {
 /** Parse and strictly validate config.json. Every list entry needs a reason. */
 export function parseConfig(text, label) {
   const doc = JSON.parse(text);
+  if (doc && typeof doc === "object" && !Array.isArray(doc) && !("countPinSkips" in doc)) doc.countPinSkips = [];
   assertKeys(doc, CONFIG_KEYS, label);
   if (doc.schemaVersion !== SCHEMA_VERSION) {
     throw new Error(`${label}: schemaVersion must be ${SCHEMA_VERSION}.`);

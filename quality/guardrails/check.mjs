@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveTrustedGitExecutable } from "./gitExecutable.mjs";
 import { doorModules, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
+import { analyzePins, compareCountPins, inCountPinScope, markerProblems } from "./countPins.mjs";
 import { analyzeTree, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
@@ -320,6 +321,57 @@ function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
 }
 
 /**
+ * Renames between the target and HEAD as `newPath -> oldPath` (git rename
+ * detection), so a renamed test file is compared with the OLD path's target
+ * count and a rename cannot reset it to zero. Only committed renames are seen;
+ * an uncommitted rename counts against zero, which fails closed.
+ */
+function renamedFrom(cwd, baseCommit) {
+  const result = git(cwd, ["diff", "--find-renames", "--name-status", "-z", baseCommit, "HEAD"]);
+  const renames = new Map();
+  if (result.status !== 0) return renames;
+  const fields = result.stdout.toString("utf8").split("\0");
+  for (let i = 0; i < fields.length; i += 1) {
+    if (/^R\d*$/u.test(fields[i])) {
+      renames.set(normalizeRepoPath(fields[i + 2]), normalizeRepoPath(fields[i + 1]));
+      i += 2;
+    } else if (/^[CADMTUXB]\d*$/u.test(fields[i])) {
+      i += fields[i].startsWith("C") ? 2 : 1;
+    }
+  }
+  return renames;
+}
+/**
+ * Guardrail 4: literal count pins in test files, counted per file in the PR tree
+ * (disk) and the trusted target tree (git objects) by the same code. A file may
+ * keep or lower its count; the skip list comes from the TARGET config only.
+ */
+function measureCountPins({ cwd, baseCommit, inventory, readDisk, targetBlobs, trustedConfig, proposedConfig }) {
+  const extensions = enforcementScope(trustedConfig, proposedConfig).extensions;
+  const inScope = (p) => inCountPinScope(p, extensions);
+  const fileCache = new Map();
+  const prFiles = new Map(inventory.filter(inScope).map((p) => [p, readDisk(p)]));
+  const pr = analyzePins(prFiles, fileCache);
+  const markerErrors = [...prFiles].flatMap(([filePath, text]) =>
+    markerProblems(filePath, text).map(({ code, line }) =>
+      code === "COUNT-PIN-MARKER-NO-REASON"
+        ? `${code} ${filePath}:${line}: the \`// guardrail-4-fixture:\` marker needs a reason after the colon`
+        : `${code} ${filePath}:${line}: the \`// guardrail-4-fixture:\` marker exempts no count assertion on its line or the next; remove it`,
+    ),
+  );
+  const targetPaths = [...targetBlobs.keys()].filter(inScope);
+  const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
+  const target = analyzePins(new Map(targetPaths.map((p) => [p, texts.get(targetBlobs.get(p))])), fileCache);
+  const compared = compareCountPins({
+    pr,
+    target,
+    renames: renamedFrom(cwd, baseCommit),
+    skips: trustedConfig.countPinSkips.map((entry) => entry.path),
+  });
+  return { ...compared, errors: [...compared.errors, ...markerErrors] };
+}
+
+/**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
  *   log?: (message: string) => void,
  *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[] } }} options
@@ -374,11 +426,16 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   const ratchets = measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope: enforcementScope(trusted.config, proposed.config) });
   errors.push(...ratchets.errors);
   notices.push(...ratchets.notices);
+  const countPins = measureCountPins({
+    cwd, baseCommit, inventory, readDisk, targetBlobs, trustedConfig: trusted.config, proposedConfig: proposed.config,
+  });
+  errors.push(...countPins.errors);
+  notices.push(...countPins.notices);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");
     await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors);
   }
-  return { baseRef, baseCommit, bootstrap, errors, notices, advisories: ratchets.advisories, ratchets: ratchets.totals, measured };
+  return { baseRef, baseCommit, bootstrap, errors, notices, advisories: ratchets.advisories, ratchets: ratchets.totals, countPins: countPins.totals, measured };
 }
 
 export async function writeBaseline(cwd, sourceRef, baseRef) {
