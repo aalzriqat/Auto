@@ -25,7 +25,7 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 // Derive from the persisted union: schema additions must be classified here.
 type AuditActionType = Doc<"financialAuditLog">["actionType"];
 type AuditReadPolicy = "FINANCE" | "COST" | "OPENING" | "OPENING_VOID" | "JOURNAL" | "MANUAL_DRAFT" |
-  "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "UNWIND";
+  "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "APPLICATION_FINANCE" | "UNWIND";
 
 /** Source-reader policies, not mutation authority. See the SCRUM-936 census/ADR. */
 export const AUDIT_READ_POLICY = {
@@ -61,11 +61,11 @@ export const AUDIT_READ_POLICY = {
   RESOLVE_DEPOSIT_ALLOCATION: "SALES",
   SET_SUPPLIER_SETTLEMENT_ROUTE: "SALES",
   CORRECT_EXPECTED_PAYMENT: "SALES",
-  ATTEST_CHEQUE_FACE: "FINANCE",
-  CONFIRM_SUPPLIER_DISBURSEMENT: "FINANCE",
-  AMEND_SUPPLIER_DISBURSEMENT_ADVICE: "FINANCE",
+  ATTEST_CHEQUE_FACE: "APPLICATION_FINANCE",
+  CONFIRM_SUPPLIER_DISBURSEMENT: "APPLICATION_FINANCE",
+  AMEND_SUPPLIER_DISBURSEMENT_ADVICE: "APPLICATION_FINANCE",
   SETTLE_COMMITMENT_AUTHORITY: "SALES",
-  RETURN_FINANCE_DISBURSEMENT_CHEQUE: "FINANCE",
+  RETURN_FINANCE_DISBURSEMENT_CHEQUE: "APPLICATION_FINANCE",
   ADD_DEAL_COMMISSION_LINE: "COMMISSION",
   REMOVE_DEAL_COMMISSION_LINE: "COMMISSION",
   DEAL_UNWIND_STARTED: "UNWIND",
@@ -127,8 +127,12 @@ async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: Audit
       // dealCommissions.forSale exposes it under VIEW_COMMISSIONS.
       return role.permissions.includes(PERMISSIONS.VIEW_SALES) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
     case "SALES": return role.permissions.includes(PERMISSIONS.VIEW_SALES);
-    case "FINANCE":
-    case "UNWIND": return mayReadFinanceEconomics(role);
+    case "APPLICATION_FINANCE":
+    case "UNWIND":
+      // applications.get and unwindStatus authenticate VIEW_SALES before
+      // projecting the finance tier; the audit copy must retain both gates.
+      return role.permissions.includes(PERMISSIONS.VIEW_SALES) && mayReadFinanceEconomics(role);
+    case "FINANCE": return mayReadFinanceEconomics(role);
     default: return false;
   }
 }

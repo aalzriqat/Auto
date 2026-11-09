@@ -73,3 +73,13 @@ retain their counts.
 The new indexed journal-to-opening lookup follows [Convex's native index
 pattern](https://docs.convex.dev/database/reading-data/indexes/). Exhaustive
 classification uses TypeScript's [`satisfies` operator](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html#the-satisfies-operator).
+
+
+The final public-reader cross-check also retains the application reader's base
+`view:sales` requirement before its finance-field projection. Application finance
+audit actions and the full unwind tier require both view:sales and view:finance,
+as their dedicated readers do. Sales-only access still withholds finance fields;
+finance-only access cannot bypass the application's base gate. The existing
+unwind-actor remittance exception remains a partial projection, with its shared
+predicate. The new literal public-function regression failed first at
+`c941eba60f4c1125e78775b329702a50d5cd57ef`.

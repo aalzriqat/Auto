@@ -1,0 +1,103 @@
+{
+  "id": "scrum936-application-reader-gates",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-no-sales",
+        "org": "A"
+      },
+      "action": "applications.get",
+      "input": {
+        "disbursedAmountMinor": 12500000
+      }
+    },
+    {
+      "actor": {
+        "role": "sales-no-finance",
+        "org": "A"
+      },
+      "action": "applications.get",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-no-sales",
+        "org": "A"
+      },
+      "action": "dealUnwind.unwindStatus",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "restricted-auditor",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ],
+        "actions": [
+          "ATTEST_CHEQUE_FACE",
+          "CONFIRM_SUPPLIER_DISBURSEMENT",
+          "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
+          "RETURN_FINANCE_DISBURSEMENT_CHEQUE",
+          "DEAL_UNWIND_STARTED"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-and-sales",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "financeOnly.applicationReaderRefuses",
+      "value": true
+    },
+    {
+      "observable": "salesOnly.disbursedAmountVisible",
+      "value": false
+    },
+    {
+      "observable": "restrictedAudit.protectedAmountAndSourceIdVisible",
+      "value": false
+    },
+    {
+      "observable": "fullAudit.originalStoredRowVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 application audit details inherit both sales and finance read gates"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "c941eba60f4c1125e78775b329702a50d5cd57ef"
+  },
+  "fingerprint": "084597ad0452551a8ec87d43963da79653e19cccba171a9a8f83efe0be236067"
+}
