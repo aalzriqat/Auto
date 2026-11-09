@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { verifySupplierLaunchEvidence } from "./supplierLaunchGate.ts";
 import {
   assertDeploymentIdentity,
   captureRunBaseline,
@@ -178,6 +179,22 @@ function convex(args) {
   return parseConvexRunJson(result.stdout ?? "");
 }
 
+/** Read-only P7 census. Both successful exits require complete evidence. */
+function requireSupplierLaunchEvidence() {
+  const evidence = verifySupplierLaunchEvidence({
+    runPage: (args) => convex(["run", "supplierLaunchEvidence:scanPage", JSON.stringify(args)]),
+    now: Date.now, startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, maxPages: 100_000,
+  });
+  if ("counts" in evidence) {
+    supplierIdentitySummary = `${supplierIdentitySummary ?? ""}\nP7 launch census: ${JSON.stringify(evidence.counts)}`;
+    console.log(`  P7 launch census: ${JSON.stringify(evidence.counts)}`);
+  }
+  if (!evidence.ok) {
+    lastOutcome = "failed";
+    fail(`Production is DEPLOYED, but INCOMPLETE: supplier launch evidence ${evidence.code}.`);
+  }
+}
+
 /**
  * Walks every page of the report.
  *
@@ -302,6 +319,7 @@ if (before.verdict.orgCount === 0) {
   if (!empty.ok) fail(empty.reason);
   lastVerdict = confirmation.verdict;
   lastOutcome = empty.outcome;
+  requireSupplierLaunchEvidence();
   writeSummary(null);
   console.log(
     `\n✔ ${EXPECTED_DEPLOYMENT} holds no organizations: nothing to materialise. ` +
@@ -484,6 +502,7 @@ if (!sourcedCostMirror.ok) {
 }
 
 if (lastOutcome === "verified") {
+  requireSupplierLaunchEvidence();
   writeSummary(null);
   console.log(`\n✔ Every organization is reading the materialised path on ${EXPECTED_DEPLOYMENT}.\n`);
   process.exit(0);

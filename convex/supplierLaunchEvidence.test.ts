@@ -106,6 +106,12 @@ describe("supplier launch evidence", () => {
     await w.t.run(ctx => ctx.db.delete(w.vehicleId));
     expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual(unavailable);
   });
+  test("pending supplier text without an ownership decision still needs identity", async () => {
+    const w = await fixture(true);
+    await w.t.run(ctx => ctx.db.patch(w.editId, { payload: { sourcedFromName: "PRIVATE SUPPLIER" } }));
+    expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual({ status: "READY", cursor: null,
+      examined: 1, counts: { ...ZERO, MISSING_SUPPLIER_ID: 1 } });
+  });
 
   test.each(["missing", "foreign"])("receipt with %s parent never yields a false zero", async mode => {
     const w = await fixture(true);
@@ -118,6 +124,40 @@ describe("supplier launch evidence", () => {
     });
     expect(await w.t.query(scan, { table: "supplierCostRecoveryReceipts", cursor: null })).toEqual({ status: "READY", cursor: null,
       examined: 1, counts: { ...ZERO, MISSING_SOURCE: 1 } });
+  });
+
+  test("expense payee and bearer are counted independently", async () => {
+    const w = await fixture(true);
+    for (const field of ["vendorSupplierId", "costBearerSupplierId"] as const) {
+      await w.t.run(ctx => ctx.db.patch(w.expenseId, { vendorSupplierId: w.supplierId,
+        costBearerSupplierId: w.supplierId, [field]: undefined }));
+      expect(await w.t.query(scan, { table: "expenses", cursor: null })).toEqual({ status: "READY", cursor: null,
+        examined: 1, counts: { ...ZERO, MISSING_PAYEE_ID: field === "vendorSupplierId" ? 1 : 0,
+          MISSING_BEARER_ID: field === "costBearerSupplierId" ? 1 : 0 } });
+    }
+  });
+
+  test("non-supplier history and resolved requests do not create false positives", async () => {
+    const w = await fixture(false);
+    await w.t.run(async ctx => {
+      await ctx.db.patch(w.vehicleId, { sourceType: "STOCK", sourcedFromName: undefined });
+      const conversion = await ctx.db.query("vehicleOwnershipConversions").first();
+      const app = await ctx.db.query("financeApplications").first();
+      if (!conversion || !app) throw new Error("Fixture missing");
+      await ctx.db.patch(conversion._id, { fromSourceType: "STOCK", toSourceType: "SOURCED", supplierName: undefined });
+      await ctx.db.patch(app._id, { supplierGapBasis: undefined });
+      await ctx.db.patch(w.editId, { status: "REJECTED" });
+    });
+    for (const table of ["vehicles", "vehicleOwnershipConversions", "financeApplications", "vehicleEdits"] as const) {
+      expect(await w.t.query(scan, { table, cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1, counts: ZERO });
+    }
+  });
+
+  test("opening payment with an absent payable counts its missing source", async () => {
+    const w = await fixture(true);
+    await w.t.run(ctx => ctx.db.delete(w.payableId));
+    expect(await w.t.query(scan, { table: "openingPayablePayments", cursor: null })).toEqual({ status: "READY",
+      cursor: null, examined: 1, counts: { ...ZERO, MISSING_SOURCE: 1 } });
   });
 
   test("walks beyond the first bounded page instead of declaring a truncated zero", async () => {
@@ -139,5 +179,15 @@ describe("supplier launch evidence", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try { expect(await w.t.query(scan, { table: "vehicles", cursor: "invalid" })).toEqual(unavailable); }
     finally { log.mockRestore(); }
+  });
+  test("a native byte-budget split is unavailable rather than an incomplete count", async () => {
+    const w = await fixture(true);
+    await w.t.run(async ctx => {
+      for (let n = 0; n < 8; n += 1) await ctx.db.insert("vehicleOwnershipConversions", {
+        orgId: w.orgId, vehicleId: w.vehicleId, fromSourceType: "SOURCED", toSourceType: "STOCK",
+        convertedBy: w.userId, convertedAt: n, notes: "x".repeat(700_000),
+      });
+    });
+    expect(await w.t.query(scan, { table: "vehicleOwnershipConversions", cursor: null })).toEqual(unavailable);
   });
 });

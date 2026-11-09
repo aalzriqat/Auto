@@ -57,10 +57,13 @@ bound trusted-accounting-release-verdict remain separate required evidence.
 Scan each table globally in its native by_creation_time index, including rows
 whose organization no longer exists. One query performs one paginate call,
 at most eight source documents and eight same-table parent/source gets, with
-maximumRowsRead eight and maximumBytesRead two MiB. With Convex's one MiB
-document limit, the page budget plus eight maximum-size joined documents is
-at most ten MiB, below the sixteen MiB transaction limit. There are at most
-nine index ranges and sixteen documents per call. No collect or post-filtered
+maximumRowsRead 64 and maximumBytesRead four MiB. The scan has no filter and
+returns at most eight documents. The byte budget plus one maximum-size document
+of stopping headroom and eight maximum-size joined documents is thirteen MiB,
+below the sixteen MiB transaction limit. There are at most nine index ranges.
+The row budget is deliberately above numItems: reaching maximumRowsRead itself
+can return SplitRequired, even on small documents. SplitRequired refuses with
+UNAVAILABLE because its page may be incomplete. No collect or post-filtered
 bounded sample can stand in for a full walk.
 
 The caller walks each continuation to READY within the shared rollout deadline

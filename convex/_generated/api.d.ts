@@ -172,6 +172,7 @@ import type * as supplierCostRecoveries from "../supplierCostRecoveries.js";
 import type * as supplierDueAging from "../supplierDueAging.js";
 import type * as supplierDueAlerts from "../supplierDueAlerts.js";
 import type * as supplierIdentityRepair from "../supplierIdentityRepair.js";
+import type * as supplierLaunchEvidence from "../supplierLaunchEvidence.js";
 import type * as supplierReceivables from "../supplierReceivables.js";
 import type * as supplierStatement from "../supplierStatement.js";
 import type * as suppliers from "../suppliers.js";
@@ -551,6 +552,7 @@ declare const fullApi: ApiFromModules<{
   supplierDueAging: typeof supplierDueAging;
   supplierDueAlerts: typeof supplierDueAlerts;
   supplierIdentityRepair: typeof supplierIdentityRepair;
+  supplierLaunchEvidence: typeof supplierLaunchEvidence;
   supplierReceivables: typeof supplierReceivables;
   supplierStatement: typeof supplierStatement;
   suppliers: typeof suppliers;
