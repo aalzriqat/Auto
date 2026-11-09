@@ -4,7 +4,8 @@
  * not raise the REPOSITORY TOTAL of `any` keywords, `as unknown as` chains,
  * @ts-ignore or @ts-expect-error comments above what the trusted target tree
  * holds, both measured by the same code. Moving code between files changes no
- * total. Tests and exempt files are out of scope, as for the size rule.
+ * total. Tests are out of scope. Migration and exempt files are excused from
+ * the size rule only, so their escapes count.
  */
 import { describe, expect, test } from "vitest";
 
@@ -147,12 +148,20 @@ describe("type-escape ratchet against the trusted target tree", () => {
     expect(result.notices.some((n) => n.startsWith("ratchet can tighten: any 2 -> 1"))).toBe(true);
   }, TIMEOUT);
 
-  test("tests and exempt files are not measured", async () => {
+  test("tests are not measured", async () => {
     const root = fixtureRepo(TARGET);
     write(root, "convex/a.test.ts", "export const t: any = 1;\n");
-    write(root, "convex/data.ts", "export const d: any = 1;\n");
     const result = await check(root);
     expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("negative control: an exempt or migration file is excused from the size limit only, so its new escape fails", async () => {
+    for (const listed of ["convex/data.ts", "convex/migrateOld.ts"]) {
+      const root = fixtureRepo(TARGET);
+      write(root, listed, "export const d: any = 1;\n");
+      const result = await check(root);
+      expectFailure(result.errors, /^TYPE-ESCAPE-GROWN any: 3 > target 2 \(\+1\)/);
+    }
   }, TIMEOUT);
 
   test("a deleted file's escapes count against nothing and an added file's against the total", async () => {

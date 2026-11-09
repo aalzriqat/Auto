@@ -32,6 +32,7 @@ import {
   buildBaseline,
   canonicalJson,
   classify,
+  inRuleScope,
   compareCodeUnits,
   isConvexModule,
   enforcementScope,
@@ -164,6 +165,7 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
   const counts = new Map();
   const violations = [];
   const wanted = files.filter((p) => configs.some((c) => classify(p, c) === "production"));
+  const ruleFiles = files.filter((p) => configs.some((c) => inRuleScope(p, c)));
   // Doors are found in every convex module of the tree, counted or not.
   const factsByPath = new Map(files.filter(isConvexModule).map((p) => [p, extractFacts(p, readText(p))]));
   const doors = doorModules(resolvePublicFunctions(factsByPath), factsByPath);
@@ -179,21 +181,21 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
           measured = await measureLines(filePath, text, prettierOptions, prettier);
           lineCache.set(key, measured);
         }
-        return { filePath, text, measured };
+        return { filePath, measured };
       }),
     );
-    for (const { filePath, text, measured } of results) {
+    for (const { filePath, measured } of results) {
       counts.set(filePath, measured.lines);
-      violations.push(...importViolations(filePath, text, doors));
     }
   }
+  for (const filePath of ruleFiles) violations.push(...importViolations(filePath, readText(filePath), doors));
   return { inventory: files, counts, violations: sortViolations(violations) };
 }
 
 async function measureCommit(cwd, commit, config, prettierOptions, lineCache) {
   const blobs = treeBlobs(cwd, commit);
   const files = [...blobs.keys()].sort(compareCodeUnits);
-  const needed = files.filter((p) => classify(p, config) === "production" || isConvexModule(p));
+  const needed = files.filter((p) => inRuleScope(p, config) || isConvexModule(p));
   const texts = readBlobs(cwd, needed.map((p) => blobs.get(p)));
   return measure({
     files,
@@ -272,8 +274,8 @@ async function verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineC
  */
 function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
   const fileCache = new Map();
-  const inScope = (p) => classify(p, scope) === "production";
-  // Convex modules outside the counted scope (migrations, exemptions) are still
+  const inScope = (p) => inRuleScope(p, scope);
+  // Convex modules outside the counted scope (tests, generated code) are still
   // read, so a custom builder defined in one resolves for the files that use it.
   const contextOf = (paths) => paths.filter((p) => !inScope(p) && isConvexModule(p));
   const prPaths = inventory.filter(inScope);

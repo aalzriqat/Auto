@@ -29,10 +29,38 @@ describe("no React anywhere under convex/domains", () => {
     expect(found("convex/domains/deals/queries/list.ts", "../../../../node_modules/react")).toEqual(["domains-no-react react"]);
   });
 
+  test("negative control: Convex and TanStack React packages fail in a domain, anchored so look-alikes pass", () => {
+    expect(found("convex/domains/deals/commands/close.ts", "convex/react")).toEqual(["domains-no-react convex/react"]);
+    expect(found("convex/domains/deals/index.ts", "@tanstack/react-query")).toEqual(["domains-no-react @tanstack/react-query"]);
+    expect(found("convex/domains/deals/index.ts", "@tanstack/react-table/build")).toEqual(["domains-no-react @tanstack/react-table/build"]);
+    expect(found("convex/domains/deals/index.ts", "convex/reactive")).toEqual([]);
+    expect(found("convex/domains/deals/index.ts", "@tanstack/query-core")).toEqual([]);
+  });
+
   test("positive control: React outside convex/domains is not this rule, and a look-alike package passes", () => {
     expect(found("components/Deal.tsx", "react")).toEqual([]);
     expect(found("convex/accounting/refunds.ts", "react")).toEqual([]);
     expect(found("convex/domains/deals/commands/close.ts", "reactive-streams")).toEqual([]);
+  });
+});
+
+describe("pure policy modules cannot import React", () => {
+  test("negative control: React fails from every policy naming class, in any production root", () => {
+    for (const file of ["policy/x.ts", "policy.ts", "refundPolicy.ts", "refund.policy.ts"]) {
+      expect(found(file, "react"), file).toEqual(["domains-no-react react"]);
+    }
+  });
+
+  test("negative control: convex/react and @tanstack/react-query fail from a policy module", () => {
+    expect(found("convex/accounting/refund.policy.ts", "convex/react")).toEqual(["domains-no-react convex/react"]);
+    expect(found("lib/policy/view.ts", "@tanstack/react-query")).toEqual(["domains-no-react @tanstack/react-query"]);
+  });
+
+  test("positive control: a look-alike package, a non-policy file and a policy test pass", () => {
+    expect(found("lib/policy/view.ts", "reactive-x")).toEqual([]);
+    expect(found("lib/policy/view.ts", "react-hook-form-lite")).toEqual([]);
+    expect(found("lib/policyHelpers.ts", "react")).toEqual([]);
+    expect(found("lib/policy/view.test.ts", "react")).toEqual([]);
   });
 });
 

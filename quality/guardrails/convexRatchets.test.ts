@@ -221,6 +221,19 @@ describe("validator ratchet against the trusted target tree", () => {
     expectFailure(result.errors, /^VALIDATOR-GAP-GROWN no-returns-validator: 2 > target 1/);
   }, TIMEOUT);
 
+  test.each(["convex/migrateOld.ts", "convex/data.ts"])(
+    "negative control: a new public function without `returns` in %s (excused from the size limit only) fails",
+    async (listed) => {
+      const root = fixtureRepo(VALIDATOR_TARGET);
+      const moduleId = listed.replace(/\.ts$/u, "");
+      write(root, listed, `${FN_SERVER}export const run = mutation({ args: {}, handler: async () => null });\n`);
+      const result = await check(root);
+      expectFailure(result.errors, /^VALIDATOR-GAP-GROWN no-returns-validator: 2 > target 1 \(\+1\)/);
+      expectFailure(result.errors, new RegExp(`^VALIDATOR-GAP-NEW-FUNCTION[^\\n]*\\n {2}${moduleId}:run: missing returns$`));
+    },
+    TIMEOUT,
+  );
+
   test("positive control: a new fully validated public function passes", async () => {
     const root = fixtureRepo(VALIDATOR_TARGET);
     write(root, "convex/more.ts", `${FN_SERVER}export const fresh = query({ args: { id: v.string() }, returns: v.null(), handler: async () => null });\n`);

@@ -139,4 +139,13 @@ describe("the door rule through the whole checker", () => {
     const result = await check(root);
     expect(result.errors).toEqual([`IMPORT-NEW [${RULE}] components/Deal.ts -> convex/migrateOld`]);
   }, TIMEOUT);
+
+  test("negative control: a listed migration or exempt file is excused from the size limit only, so its new door import fails", async () => {
+    for (const listed of ["convex/migrateOld.ts", "convex/data.ts"]) {
+      const root = fixtureRepo({ "convex/door.ts": `${SERVER}export const run = query({ handler: async () => null });\n` });
+      write(root, listed, `import { run } from "./door";\nexport const d = run;\n`);
+      const result = await check(root);
+      expect(result.errors, listed).toEqual([`IMPORT-NEW [${RULE}] ${listed} -> convex/door`]);
+    }
+  }, TIMEOUT);
 });

@@ -235,6 +235,16 @@ export function classify(repoPath, config) {
 }
 
 /**
+ * The scope of the rule checks (imports, guardrails 8-11): every source file
+ * except tests and generated code. The migration and exemption lists excuse a
+ * file from the size limit only, so those files are still judged by the rules.
+ */
+export function inRuleScope(repoPath, config) {
+  const reason = classify(repoPath, config);
+  return reason === "production" || reason === "migration" || reason === "exempt";
+}
+
+/**
  * The scope a PR is enforced in: the union of trusted and proposed roots and
  * extensions, excluded only by the TRUSTED lists — a list entry the PR adds can
  * never hide scope the same PR adds.
@@ -333,7 +343,7 @@ const DOMAIN_MODULE = /^convex\/domains\/([^/]+)\/./u;
 // A pure-policy module: any path with a `policy` directory, or a file named
 // policy.ts, *policy.ts (dealPolicy.ts) or *.policy.ts, in any production root.
 const POLICY_MODULE = /(?:(?:^|\/)policy\/)|(?:(?:^|\/)[^/]*policy\.[cm]?[jt]sx?$)/iu;
-const REACT_PACKAGE = /^react(?:-dom)?(?:\/|$)/u;
+const REACT_PACKAGE = /^(?:react(?:-dom)?|convex\/react|@tanstack\/react-[^/]+)(?:\/|$)/u;
 
 /** Every production file is an importer; tests and fixtures are not judged. */
 export function inImportScope(repoPath) {
@@ -376,7 +386,8 @@ export function importViolations(fromPath, sourceText, doors = new Set()) {
     if (POLICY_MODULE.test(fromPath) && repoId === "convex/_generated/server") {
       add(RULES.policyNoGeneratedServer, repoId);
     }
-    if (DOMAIN_SCOPE.test(fromPath) && target.kind === "package" && REACT_PACKAGE.test(target.id)) {
+    if ((DOMAIN_SCOPE.test(fromPath) || POLICY_MODULE.test(fromPath)) &&
+      target.kind === "package" && REACT_PACKAGE.test(target.id)) {
       add(RULES.domainsNoReact, target.id);
     }
   }

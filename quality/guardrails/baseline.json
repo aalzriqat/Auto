@@ -660,6 +660,31 @@
     },
     {
       "rule": "no-door-import",
+      "from": "convex/accountingMigration.ts",
+      "to": "convex/accountingPeriods"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/accountingMigration.ts",
+      "to": "convex/chartOfAccounts"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/accountingMigration.ts",
+      "to": "convex/financialAudit"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/accountingMigration.ts",
+      "to": "convex/subscriptions"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/accountingMigration.ts",
+      "to": "convex/vehicles"
+    },
+    {
+      "rule": "no-door-import",
       "from": "convex/accountingOutbox.ts",
       "to": "convex/accountingPeriods"
     },
@@ -1082,6 +1107,21 @@
       "rule": "no-door-import",
       "from": "convex/marketplaceWhatsAppIntake.ts",
       "to": "convex/marketplaceDealers"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/migrateCommissionAccruals.ts",
+      "to": "convex/accountingPeriods"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/migrateCommissionAccruals.ts",
+      "to": "convex/chartOfAccounts"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/migrateConsignedSaleBasis.ts",
+      "to": "convex/financialAudit"
     },
     {
       "rule": "no-door-import",
