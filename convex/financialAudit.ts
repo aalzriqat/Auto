@@ -18,7 +18,7 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { draftPayrollReader, projectAuditRow } from "./utils/financialAuditProjection";
 import type { AuditActionType } from "./utils/financialAuditProjection";
-import { hasPlanFeature } from "./subscriptions";
+import { hasPlanFeature } from "./utils/subscriptionFeatures";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

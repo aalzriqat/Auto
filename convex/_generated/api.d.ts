@@ -333,6 +333,7 @@ import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
+import type * as utils_subscriptionFeatures from "../utils/subscriptionFeatures.js";
 import type * as utils_supplierConcession from "../utils/supplierConcession.js";
 import type * as utils_supplierDueAlertPlan from "../utils/supplierDueAlertPlan.js";
 import type * as utils_supplierDueDates from "../utils/supplierDueDates.js";
@@ -710,6 +711,7 @@ declare const fullApi: ApiFromModules<{
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/storageValidation": typeof utils_storageValidation;
+  "utils/subscriptionFeatures": typeof utils_subscriptionFeatures;
   "utils/supplierConcession": typeof utils_supplierConcession;
   "utils/supplierDueAlertPlan": typeof utils_supplierDueAlertPlan;
   "utils/supplierDueDates": typeof utils_supplierDueDates;
