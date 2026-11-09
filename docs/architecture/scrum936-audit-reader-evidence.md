@@ -975,3 +975,7 @@ pushes, PR writes, merges, deployments and Jira work here; none occurred. The
 pre-existing ignore files, generated working copy, test-results and `.s936-*`
 artifacts remain unstaged. A durable referenced-account classification lesson
 was added to the owner's memory index outside the repository.
+
+The round 3 renewal commit's secret hook again skipped the existing DealCockpit
+shard because it exceeds 1,048,576 bytes. Only its reviewed evidence note changed;
+complete secret-scanner coverage of that shard is unavailable.
