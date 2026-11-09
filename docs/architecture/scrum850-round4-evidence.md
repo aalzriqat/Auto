@@ -1021,6 +1021,33 @@ The tracked test-file census for editOpeningBalanceDraft, listAuditLog and
 EDIT_OPENING_DRAFT found nine files; all nine are in this batch. The extra three
 are the two exactness suites and tenant guard. Logs: %TEMP%/codex850-r7-*.log.
 
+Completed at fix commit `f9eb9453226b289ad9fd9992b36edd91a915ed0d`:
+
+- Before-only mutant: added totalDebits to before in editOpeningBalanceDraft;
+  selected R7 run failed 5/5, exit 1, on disclosed amounts.
+- After-only mutant: added totalDebits to after in editOpeningBalanceDraft;
+  selected R7 run failed 5/5, exit 1, on disclosed amounts.
+- Each mutant's finally block ran `git checkout HEAD -- convex/accountingCutover.ts`,
+  then an empty scoped `git status --porcelain` and `git diff --exit-code HEAD`
+  for that file before printing RESTORED_SOURCE_STATUS_CLEAN=true.
+- pnpm typecheck: exit 0. Root config excludes convex, test-utils, apps,
+  packages, dealer-worker and node_modules as roots; imports can be followed.
+- pnpm typecheck:convex: exit 0. Includes convex and test-utils; excludes
+  generated files as roots and does not cover application roots. Imports can
+  be followed. Neither is a whole-monorepo typecheck.
+- ESLint on both touched TS files: exit 0, no diagnostics.
+- checkBaselineIdentity: exit 0, 945 call identities matched; backend finding
+  identity is explicitly not measured by that command.
+- Post-fix renewBaselineReviewed --reviewed c82890bd --check-evidence --pr-base
+  28cf683f8013f1bba4773d766f05aa6f892a2a18: exit 10, exactly four stale entries
+  (#708–711), each because the accountingCutover.ts blob changed.
+- Reviewed the two unchanged client call sites and the four backend exports
+  and validators against starting 9f5cefac3. The production diff is confined to
+  openingDraftAuditSummary. Appended one renewal note to each stale entry in
+  its existing shard. A parsed-JSON comparison proved every other field unchanged;
+  previous renewal text remains a prefix. No tool write mode, expiry change,
+  fingerprint change, extractor change or UNKNOWN-to-PASS assertion was used.
+
 ### Sources and evidence boundary
 
 Checked official sources on 2026-11-09:
