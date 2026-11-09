@@ -88,13 +88,13 @@ async function mayReadAccountingAudit(ctx: QueryCtx, row: AuditRow, access: Audi
 /** One request owns both caches, including in-flight reads during Promise.all. */
 export function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): DraftPayrollReader {
   const accounts = new Map<Id<"chartOfAccounts">, Promise<Doc<"chartOfAccounts"> | null>>();
-  const readAccount = (id: Id<"chartOfAccounts">) => {
-    let account = accounts.get(id);
-    if (!account) {
-      account = ctx.db.get(id);
-      accounts.set(id, account);
+  const readAccount = async (id: Id<"chartOfAccounts">) => {
+    let read = accounts.get(id);
+    if (!read) {
+      read = ctx.db.get(id);
+      accounts.set(id, read);
     }
-    return account;
+    return [id, await read] as const;
   };
   const decisions = new Map<Id<"openingBalanceDrafts">, Promise<boolean>>();
   return draftId => {
@@ -104,7 +104,9 @@ export function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): D
       const draft = await ctx.db.get(draftId);
       // Missing/foreign evidence never grants access.
       if (!draft || draft.orgId !== orgId) return true;
-      return containsEmployeeAdvanceControl(ctx, orgId, draft, readAccount);
+      const lineAccounts = new Set(draft.lines.map(line => line.accountId));
+      const resolved = new Map(await Promise.all([...lineAccounts].map(readAccount)));
+      return containsEmployeeAdvanceControl(ctx, orgId, draft, resolved);
     })();
     decisions.set(draftId, decision);
     return decision;

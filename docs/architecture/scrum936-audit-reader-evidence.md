@@ -979,3 +979,30 @@ was added to the owner's memory index outside the repository.
 The round 3 renewal commit's secret hook again skipped the existing DealCockpit
 shard because it exceeds 1,048,576 bytes. Only its reviewed evidence note changed;
 complete secret-scanner coverage of that shard is unavailable.
+
+## Round 3 CI repair
+
+CI at a4c0535ca failed two contract-skew tests on four unit slices:
+`scripts/contractSkew/census.test.ts` (every candidate carries one disposition)
+and `scripts/contractSkew/clientPaths.test.ts` (both opening routes measure their
+full allocation arrays). Both reported `allocations` in
+`components/accounting/setup/OpeningBalanceCard.tsx` as opaque provenance for
+`accountingCutover:postOpeningBalanceDirect` and `accountingCutover:draftOpeningBalance`.
+
+A local bisect over the round 3 server files passed at afb4b8c22 and 0f3403189
+and failed at 0ea80c1c0. Restoring only the pre-memo helper body made the focused
+test pass. Two rewrites that kept a callback parameter, or a stored promise
+awaited later, still failed. The opening readers call
+`containsEmployeeAdvanceControl`, and the provenance walk resolves only a direct
+`await ctx.db.get(...)` there.
+
+The repair keeps the direct read in the shared helper and gives it an optional
+read-only map of accounts the caller already resolved. The audit projection keeps
+the request-local promise memo, resolves the draft's distinct line accounts
+through it, and passes the map. The per-line organization and system-key rule is
+unchanged. Local results: the focused opening-route test and the census
+disposition test pass, `convex/financialAudit.scrum936.test.ts` passes 33 of 33,
+and the mixed 200-row page still reads three distinct accounts once each. A
+version that cached resolved accounts inside the helper read one account twice
+under concurrent rows (4 against the expected 3), so the in-flight memo stays in
+the projection.

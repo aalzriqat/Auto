@@ -19,11 +19,13 @@ export async function containsEmployeeAdvanceControl(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   draft: Doc<"openingBalanceDrafts">,
-  readAccount: (id: Id<"chartOfAccounts">) => Promise<Doc<"chartOfAccounts"> | null> = id => ctx.db.get(id),
+  // Accounts the caller already read. Keep the direct db.get: contract-skew provenance resolves it.
+  resolvedAccounts?: ReadonlyMap<Id<"chartOfAccounts">, Doc<"chartOfAccounts"> | null>,
 ): Promise<boolean> {
   if (draft.allocations?.some(row => row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION")) return true;
   for (const line of draft.lines) {
-    const account = await readAccount(line.accountId);
+    const resolved = resolvedAccounts?.get(line.accountId);
+    const account = resolved !== undefined ? resolved : await ctx.db.get(line.accountId);
     if (account?.orgId === orgId && (account.systemKey === SYSTEM_KEYS.EMPLOYEE_ADVANCES || account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE)) return true;
   }
   return false;

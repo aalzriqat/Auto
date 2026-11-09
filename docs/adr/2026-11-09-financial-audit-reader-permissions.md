@@ -159,7 +159,12 @@ ceilings without changing the supplier audit payloads or raising an allowance.
 
 The round 2 system-key lookup assumed uniqueness that legacy accounts do not
 have. Replace it with a request-local promise memo keyed by each referenced
-account id. The shared opening payroll helper still checks employee allocations
+account id. The audit projection owns that memo and passes the helper a
+read-only map of the draft's resolved line accounts. The helper keeps its direct
+`ctx.db.get` for any account not supplied, because the contract-skew provenance
+proof for the opening routes resolves only direct native database calls. A
+callback or stored-promise read in the shared helper made both opening mutation
+allocation arrays opaque. The shared opening payroll helper still checks employee allocations
 first, then the actual line account's organization and system key. Active and
 inactive EMPLOYEE_ADVANCES and COMMISSION_PAYABLE duplicates are controls.
 Selecting a canonical account with `.first()` or the posting resolver would
