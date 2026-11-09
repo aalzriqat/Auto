@@ -239,8 +239,9 @@ test("SCRUM-936 inactive duplicate commission control withholds audit details", 
 test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and request", async () => {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
-  const drafts = await s.t.run(async ctx => {
+  const { drafts, audit } = await s.t.run(async ctx => {
     const ids = [];
+    const audit: { id: string; payroll: boolean }[] = [];
     for (const payroll of [false, true]) {
       const journalEntryId = await ctx.db.insert("journalEntries", { orgId: s.orgId, accountingDate: s.asOfDate, journalNumber: `QA-${payroll}`,
         category: "OPENING_BALANCE", sourceType: "OPENING_BALANCE", sourceId: `synthetic-${payroll}`,
@@ -254,13 +255,14 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
     for (let index = 0; index < 200; index += 1) {
       const draft = ids[index % 2];
       const journal = index % 4 < 2;
-      await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+      const id = await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
         actionType: journal ? "POST_MANUAL_JOURNAL" : "REQUEST_OPENING_VOID",
         resourceType: journal ? "journalEntries" : "openingBalanceDrafts",
         resourceId: journal ? draft.journalEntryId : draft.draftId,
         description: "Synthetic protected evidence", after: { totalDebits: 40 }, occurredAt: Date.now() + index });
+      audit.push({ id, payroll: draft.payroll });
     }
-    return ids;
+    return { drafts: ids, audit };
   });
   const handler: unknown = Reflect.get(financialAudit.listAuditLog, "_handler");
   if (typeof handler !== "function") throw new Error("Registered audit query unavailable");
@@ -289,9 +291,10 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   } }) }, args));
   const rows = await observe();
   expect(rows).toEqual(await s.finance.query(api.financialAudit.listAuditLog, args));
-  expect(rows).toHaveLength(200);
-  expect(rows.filter(row => row.detailsWithheld)).toHaveLength(100);
-  expect(rows.filter(row => !row.detailsWithheld)).toHaveLength(100);
+  // The whole page, and exactly the rows behind the payroll draft are withheld.
+  expect(new Set(rows.map(row => row._id as string))).toEqual(new Set(audit.map(row => row.id)));
+  expect(new Set(rows.filter(row => row.detailsWithheld).map(row => row._id as string)))
+    .toEqual(new Set(audit.filter(row => row.payroll).map(row => row.id)));
   // Three distinct referenced accounts, including forty repetitions per draft.
   expect(totals.accountGets).toBe(3);
   expect([...getsByAccount.values()]).toEqual([1, 1, 1]);
