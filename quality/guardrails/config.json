@@ -124,5 +124,35 @@
       "path": "convex/seedDocuments.ts",
       "reason": "Seed data for document templates; data, not feature code."
     }
+  ],
+  "countPinSkips": [
+    {
+      "path": "convex/accountantCommissionsBackfill.scrum908.test.ts",
+      "reason": "Frozen 19-permission accountant template before the commissions grant; a historical fixture, not a growing collection."
+    },
+    {
+      "path": "convex/scrum413PrepareDealAuthorities.test.ts",
+      "reason": "Frozen list of the 77 pre-SCRUM-413 owner fallback permissions; it records history and never grows."
+    },
+    {
+      "path": "convex/utils/permissions.test.ts",
+      "reason": "Frozen 19-permission accountant template before commissions (ACCOUNTANT_TEMPLATE_BEFORE_COMMISSIONS); never grows."
+    },
+    {
+      "path": "convex/utils/supplierNames.test.ts",
+      "reason": "The 249 ISO 3166-1 alpha-2 codes are a fixed external standard, not a collection this repository grows."
+    },
+    {
+      "path": "scripts/contractSkew/clientPaths.test.ts",
+      "reason": "The 128-arm budget is a deliberate fixed limit under test, not a count of a growing set."
+    },
+    {
+      "path": "scripts/contractSkew/convexInventory.test.ts",
+      "reason": "The 54 keys the Convex SDK 1.42.1 exposes are pinned to that exact version and change only with an SDK upgrade."
+    },
+    {
+      "path": "scripts/reviewActionParity.test.ts",
+      "reason": "REQUIRED_DEAL_COMMANDS is a frozen required list; its length is part of the contract, not a derived count."
+    }
   ]
 }
