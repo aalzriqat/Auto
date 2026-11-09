@@ -9,6 +9,7 @@ type LanguageContextType = {
   // Accept any string key; keyof typeof dictionaries.en gets autocomplete, unknowns return the key itself
   t: (key: keyof typeof dictionaries.en | (string & {})) => string;
   isRtl: boolean;
+  dir: "rtl" | "ltr";
 };
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -34,10 +35,11 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   };
 
   const isRtl = locale === "ar";
+  const dir = isRtl ? "rtl" : "ltr";
 
   useEffect(() => {
     if (mounted) {
-      document.documentElement.dir = isRtl ? "rtl" : "ltr";
+      document.documentElement.dir = dir;
       document.documentElement.lang = locale;
       // Font class lives on <body> (set there in app/layout.tsx), so toggle
       // it there too — switching it on <html> alone has no visual effect
@@ -50,7 +52,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         document.body.classList.remove("font-cairo");
       }
     }
-  }, [locale, mounted, isRtl]);
+  }, [locale, mounted, isRtl, dir]);
 
   const t = (key: keyof typeof dictionaries.en | (string & {})) => {
     const k = key as keyof typeof dictionaries.en;
@@ -58,8 +60,8 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <LanguageContext.Provider value={{ locale, setLocale, t, isRtl }}>
-      <div dir={isRtl ? "rtl" : "ltr"} className="h-full w-full">
+    <LanguageContext.Provider value={{ locale, setLocale, t, isRtl, dir }}>
+      <div dir={dir} className="h-full w-full">
         {children}
       </div>
     </LanguageContext.Provider>

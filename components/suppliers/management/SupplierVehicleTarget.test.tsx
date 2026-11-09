@@ -59,7 +59,7 @@ test("direct vehicle navigation has localized loading and errors in EN and AR", 
     expect(screen.getByRole("status").textContent).toContain(dictionaries[locale].SuppliersRelationshipsLoading);
     view.unmount(); world.loading = false; world.error = true;
     const error = render(<SupplierVehicleTarget orgId={"org1" as never} />);
-    expect(screen.getByRole("alert").textContent).toContain(dictionaries[locale].SuppliersRelationshipsError);
+    expect(screen.getByRole("alert").textContent).toContain(dictionaries[locale].SuppliersLoadError);
     expect(error.container.textContent).not.toContain("private lookup detail");
   }
 });

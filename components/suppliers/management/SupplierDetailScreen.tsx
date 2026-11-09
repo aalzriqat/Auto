@@ -41,12 +41,12 @@ import {
   type SupplierCandidate,
   type SupplierCreateOptions,
 } from "../useSupplierCreateFlow";
-import { SupplierAliasesSection, type AliasRow } from "./SupplierAliasesSection";
+import { SupplierAliasesSection } from "./SupplierAliasesSection";
 import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierRelationshipsSection } from "./SupplierRelationshipsSection";
 import { SupplierStatusDialog } from "./SupplierStatusDialog";
 import { SupplierDiscardDialog, useSupplierNavigationGuard, closeSupplierEditorBeforeNavigation } from "./SupplierDiscardDialog";
-import { SupplierSummary } from "./SupplierProfileSummary";
+import { SupplierSummary, type FullSupplier } from "./SupplierProfileSummary";
 import { SupplierSummaryTiles } from "./SupplierSummaryTiles";
 import {
   DuplicateCandidatesPanel,
@@ -60,21 +60,7 @@ import {
   type SupplierFormValues,
 } from "./shared";
 
-export interface FullSupplier {
-  _id: Id<"suppliers">;
-  displayName: string;
-  legalName?: string;
-  status: "ACTIVE" | "INACTIVE";
-  contact?: { phone?: string; email?: string; address?: string };
-  taxId?: string;
-  taxJurisdiction?: string;
-  sharedLegalIdentityOf?: Id<"suppliers">;
-  version: number;
-  /** The edit token: what `expectedVersion` must carry. Raised by every update. */
-  revision: number;
-  deactivatedReason?: string;
-  aliases: AliasRow[];
-}
+export type { FullSupplier } from "./SupplierProfileSummary";
 
 type UpdateArgs = {
   displayName?: string;
@@ -142,7 +128,6 @@ function isFullSupplier(record: unknown): record is FullSupplier {
     typeof record === "object" && record !== null && "version" in record && "revision" in record && "aliases" in record
   );
 }
-
 
 function SupplierEditForm({
   orgId,

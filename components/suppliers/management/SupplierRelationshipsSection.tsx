@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { translateVehicleStatus } from "@/lib/i18n/statusLabels";
+import { StatusBadge } from "@/components/vehicles/VehicleListStatusBadge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ function VehicleGroup({ title, rows, status, loadMore }: Readonly<PageView & { t
       {row.href ? <Link prefetch={false} href={row.href} className="break-words font-medium text-primary underline underline-offset-4"><bdi>{row.label}</bdi></Link> : <span className="break-words font-medium"><bdi>{row.label}</bdi></span>}
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="secondary">{translate(row.model === "SOURCED" ? "SuppliersRelationshipsSourced" : "SuppliersRelationshipsOwned")}</Badge>
-        <Badge variant="outline">{translateVehicleStatus(row.status, translate)}</Badge>
+        <StatusBadge status={row.status} t={translate} />
       </div>
     </li>)}</ul>}
     {incomplete && <output className="block text-xs text-money-out">{translate("SuppliersRelationshipsIncomplete")}</output>}
@@ -40,8 +40,8 @@ function VehicleGroup({ title, rows, status, loadMore }: Readonly<PageView & { t
 
 export function SupplierRelationshipsView({ sourced, owned }: Readonly<{ sourced: PageView; owned: PageView }>) {
   const translate = useTranslate();
-  const { locale } = useLanguage();
-  return <Card dir={locale === "ar" ? "rtl" : "ltr"} className="min-w-0 shadow-sm">
+  const { dir } = useLanguage();
+  return <Card dir={dir} className="min-w-0 shadow-sm">
     <CardHeader><h2 className="text-lg font-semibold">{translate("SuppliersRelationshipsTitle")}</h2>
       <p className="text-xs text-muted-foreground">{translate("SuppliersRelationshipsScope")}</p>
     </CardHeader>
@@ -58,7 +58,7 @@ function RelationshipsBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organiza
   const sourced = usePaginatedQuery(api.supplierRelationships.vehicles, allowed ? { orgId, supplierId, kind: "SOURCED" } : "skip", { initialNumItems: PAGE_SIZE });
   const owned = usePaginatedQuery(api.supplierRelationships.vehicles, allowed ? { orgId, supplierId, kind: "OWNED" } : "skip", { initialNumItems: PAGE_SIZE });
   if (!allowed) return null;
-  return <SupplierRelationshipsView sourced={{ rows: sourced.results ?? [], status: sourced.status, loadMore: sourced.loadMore }} owned={{ rows: owned.results ?? [], status: owned.status, loadMore: owned.loadMore }} />;
+  return <SupplierRelationshipsView sourced={{ rows: sourced.results, status: sourced.status, loadMore: sourced.loadMore }} owned={{ rows: owned.results, status: owned.status, loadMore: owned.loadMore }} />;
 }
 
 export function SupplierRelationshipsError() {

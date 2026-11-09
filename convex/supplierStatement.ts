@@ -1,4 +1,4 @@
-import { ConvexError, v, type Infer } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -7,6 +7,7 @@ import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierOb
 import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 import { addSupplierRowContext, supplierNavigationFailure, supplierRowContextValidator } from "./utils/supplierNavigation";
+import { createSupplierReadCache } from "./utils/supplierReadCache";
 
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding A/P and A/R (ADR
@@ -87,13 +88,10 @@ export const settled = query({
     const { role } = await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    const result = await readSupplierSettled(ctx, args);
     try {
-      const scope = { ...args, permissions: role.permissions };
-      let projectedPayable: Infer<typeof settledSection> | undefined;
-      const result = await readSupplierSettled(ctx, args, async (section) => {
-        projectedPayable = await addSupplierRowContext(ctx, scope, section);
-      });
-      const payable = projectedPayable ?? await addSupplierRowContext(ctx, scope, result.payable);
+      const scope = { ...args, permissions: role.permissions, cache: createSupplierReadCache() };
+      const payable = await addSupplierRowContext(ctx, scope, result.payable);
       const receivable = await addSupplierRowContext(ctx, scope, result.receivable);
       return { supplierId: args.supplierId, payable, receivable };
     } catch (error) { return supplierNavigationFailure(error); }
@@ -161,9 +159,10 @@ export const outstanding = query({
       throw new ConvexError({ code: "SUPPLIER_STATEMENT_INVALID_TIME", message: "nowMs must be a whole number of milliseconds within one day of the server clock." });
     }
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+    const cache = createSupplierReadCache();
+    const result = await readSupplierOutstanding(ctx, args, cache);
     try {
-      const result = await readSupplierOutstanding(ctx, args);
-      const scope = { ...args, permissions: role.permissions };
+      const scope = { ...args, permissions: role.permissions, cache };
       const payable = await addSupplierRowContext(ctx, scope, result.payable);
       const receivable = await addSupplierRowContext(ctx, scope, result.receivable);
       return { supplierId: args.supplierId, payable, receivable };

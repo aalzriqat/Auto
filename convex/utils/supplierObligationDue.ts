@@ -1,4 +1,3 @@
-import { settledPayableRows, settledRecoveryRows, settledClaimRow, type DatedSettledRow } from "./supplierSettledRows";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -6,7 +5,9 @@ import { supportedCurrencyScale, toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 import { OPEN_RECOVERY_STATUSES } from "./costBearer";
 import { SYSTEM_KEYS } from "./defaultChart";
-import { hasReadHeadroom, inTurn, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
+import { inTurn, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
+import { settledPayableRows, settledRecoveryRows, settledClaimRow, type DatedSettledRow, type SupplierObligation, type WithSupplierDocument } from "./supplierSettledRows";
+import { createSupplierReadCache, readCached, SupplierReadBudgetExhausted, type SupplierReadCache } from "./supplierReadCache";
 import {
   agingFor,
   ammanDateString,
@@ -97,9 +98,9 @@ function renderableDate(field: string, value: number | undefined): number | unde
   return value;
 }
 
-async function ownedSale(ctx: Reader, orgId: Id<"organizations">, saleId: Id<"sales"> | undefined) {
+async function ownedSale(ctx: Reader & HeadroomCtx, orgId: Id<"organizations">, saleId: Id<"sales"> | undefined, cache?: SupplierReadCache) {
   if (!saleId) return null;
-  const sale = await ctx.db.get(saleId);
+  const sale = cache ? await readCached(ctx, cache.sales, saleId) : await ctx.db.get(saleId);
   return sale && sale.orgId === orgId ? sale : null;
 }
 
@@ -107,10 +108,11 @@ async function ownedSale(ctx: Reader, orgId: Id<"organizations">, saleId: Id<"sa
 async function ownedApplication(
   ctx: Reader,
   orgId: Id<"organizations">,
-  sale: Doc<"sales"> | null
+  sale: Doc<"sales"> | null,
+  cache?: SupplierReadCache,
 ): Promise<Doc<"financeApplications"> | null> {
   if (!sale?.applicationId) return null;
-  const application = await ctx.db.get(sale.applicationId);
+  const application = cache ? await readCached(ctx, cache.applications, sale.applicationId) : await ctx.db.get(sale.applicationId);
   return application && application.orgId === orgId ? application : null;
 }
 
@@ -149,14 +151,14 @@ function financierFundingFact(
   return { fundedAt: received ? renderableDate("disbursedAt", application?.disbursedAt) : undefined };
 }
 
-async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">): Promise<Outstanding | null> {
+async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
   const view = settlementView(row);
   // Settled rows drop out through a zero remainder, not through the stored status: a status that
   // disagrees with the amounts must not hide open money.
   if (view.status === "CANCELLED") return null;
   const outstandingMinor = toMinorUnits(view.remainingAmount, row.currency);
   if (outstandingMinor <= 0) return null;
-  const sale = await ownedSale(ctx, orgId, "saleId" in row ? row.saleId : undefined);
+  const sale = await ownedSale(ctx, orgId, "saleId" in row ? row.saleId : undefined, cache);
   const throughDealership = sale?.supplierSettlementRoute === "THROUGH_DEALERSHIP";
   return {
     outstandingMinor,
@@ -164,24 +166,24 @@ async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"v
     agreedDueAt: renderableDate("paymentDueDate", row.paymentDueDate),
     model: throughDealership ? "SOURCED_THROUGH_DEALERSHIP_PAYABLE" : "OWNED_ON_ACCOUNT_PAYABLE",
     // Read only for the model that uses it: one extra bounded `get` per through-dealership row.
-    ...(throughDealership ? { financierFunding: financierFundingFact(sale, await ownedApplication(ctx, orgId, sale)) } : {}),
+    ...(throughDealership ? { financierFunding: financierFundingFact(sale, await ownedApplication(ctx, orgId, sale, cache)) } : {}),
   };
 }
 
-async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierReceivables">): Promise<Outstanding | null> {
+async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierReceivables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
   if (row.status === "CANCELLED") return null;
   const outstandingMinor = Math.max(
     0,
     toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency)
   );
   if (outstandingMinor <= 0) return null;
-  const sale = await ownedSale(ctx, orgId, row.saleId);
+  const sale = await ownedSale(ctx, orgId, row.saleId, cache);
   return {
     outstandingMinor,
     disputed: row.status === "DISPUTED",
     agreedDueAt: renderableDate("agreedDueDate", row.agreedDueDate),
     model: "SOURCED_DIRECT_RECEIVABLE",
-    deliveredAt: recordedDeliveryAt(await ownedApplication(ctx, orgId, sale)),
+    deliveredAt: recordedDeliveryAt(await ownedApplication(ctx, orgId, sale, cache)),
   };
 }
 
@@ -323,7 +325,7 @@ export interface StatementTotal {
 }
 
 export interface StatementSection {
-  rows: ObligationRow[];
+  rows: WithSupplierDocument<ObligationRow>[];
   /** One total per currency; currencies are never added together. */
   totals: StatementTotal[];
   /** False when the family held more rows than the read bound or the transaction ran out of read budget: rows and totals are then partial. */
@@ -335,7 +337,7 @@ export interface StatementSection {
 /** ROW_LIMIT: more rows than the per-family cap. READ_BUDGET: the transaction had no room left to read them (bytes, not rows). */
 export type IncompleteReason = "ROW_LIMIT" | "READ_BUDGET";
 
-function statementSection(rows: ObligationRow[], complete: boolean, reason: IncompleteReason = "ROW_LIMIT"): StatementSection {
+function statementSection(rows: WithSupplierDocument<ObligationRow>[], complete: boolean, reason: IncompleteReason = "ROW_LIMIT"): StatementSection {
   const byCurrency = new Map<string, StatementTotal>();
   for (const row of rows) {
     const total = byCurrency.get(row.currency) ?? { currency: row.currency, grossMinor: 0, disputedMinor: 0, overdueMinor: 0 };
@@ -348,33 +350,18 @@ function statementSection(rows: ObligationRow[], complete: boolean, reason: Inco
   return complete ? { rows, totals: [...byCurrency.values()], complete } : { rows, totals: [], complete, incompleteReason: reason };
 }
 
-/** Thrown by the budgeted reader when the transaction has no room for another document; caught where the section is assembled. */
-class ReadBudgetExhausted extends Error {}
-
-/**
- * A reader whose `get` asks the transaction for headroom first (transactionReadHeadroom.ts), so the per-row enrichment reads
- * (the sale and the finance application behind a row) spend the same budget as the streamed lists instead of bypassing it.
- */
-function budgetedReader(ctx: Reader & HeadroomCtx): Reader {
-  const get = async (id: never) => {
-    if (!(await hasReadHeadroom(ctx))) throw new ReadBudgetExhausted();
-    return await ctx.db.get(id);
-  };
-  return { db: { get } } as unknown as Reader;
-}
-
 /** Rows read one at a time; stops at the first row the budget cannot cover and reports the cut. */
 async function readRowsWithinBudget(
   docs: readonly unknown[],
-  read: (index: number) => Promise<ObligationRow | null>,
-): Promise<{ rows: ObligationRow[]; cut: boolean }> {
-  const rows: ObligationRow[] = [];
+  read: (index: number) => Promise<WithSupplierDocument<ObligationRow> | null>,
+): Promise<{ rows: WithSupplierDocument<ObligationRow>[]; cut: boolean }> {
+  const rows: WithSupplierDocument<ObligationRow>[] = [];
   for (let i = 0; i < docs.length; i += 1) {
     try {
       const row = await read(i);
       if (row) rows.push(row);
     } catch (error) {
-      if (error instanceof ReadBudgetExhausted) return { rows, cut: true };
+      if (error instanceof SupplierReadBudgetExhausted) return { rows, cut: true };
       throw error;
     }
   }
@@ -402,7 +389,8 @@ const OPEN_RECEIVABLE_STATUSES = statusesWhere(RECEIVABLE_STATEMENT_OPEN);
  */
 export async function readSupplierOutstanding(
   ctx: Reader & HeadroomCtx,
-  args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; nowMs: number }
+  args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; nowMs: number },
+  cache = createSupplierReadCache(),
 ): Promise<{ payable: StatementSection; receivable: StatementSection }> {
   const { orgId, supplierId, nowMs } = args;
   // Settled families are left out by index, not read and discarded, so a supplier with a long
@@ -429,21 +417,22 @@ export async function readSupplierOutstanding(
   const payableDocs = payables.docs;
   const receivableDocs = claims.docs;
   const recoveryDocs = recoveries.docs;
-  const budgeted = budgetedReader(ctx);
   const payableDocsShown = payableDocs.slice(0, STATEMENT_FAMILY_LIMIT);
-  const payableRead = await readRowsWithinBudget(payableDocsShown, (i) => {
+  const payableRead = await readRowsWithinBudget(payableDocsShown, async (i) => {
     const row = payableDocsShown[i]!;
-    return readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(budgeted, orgId, row), undefined);
+    const read = await readRow("PAYABLE", row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row, cache), undefined);
+    return read ? { ...read, document: row } : null;
   });
   const receivableDocsShown = receivableDocs.slice(0, STATEMENT_FAMILY_LIMIT);
-  const receivableRead = await readRowsWithinBudget(receivableDocsShown, (i) => {
+  const receivableRead = await readRowsWithinBudget(receivableDocsShown, async (i) => {
     const row = receivableDocsShown[i]!;
-    return readRow("RECEIVABLE", row._id, row.currency, nowMs, () => receivableFacts(budgeted, orgId, row), undefined);
+    const read = await readRow("RECEIVABLE", row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row, cache), undefined);
+    return read ? { ...read, document: row } : null;
   });
-  const receivableRows: ObligationRow[] = [...receivableRead.rows];
+  const receivableRows: WithSupplierDocument<ObligationRow>[] = [...receivableRead.rows];
   for (const row of recoveryDocs.slice(0, STATEMENT_FAMILY_LIMIT)) {
     const read = await readRow("RECOVERY", row._id, row.currency, nowMs, () => recoveryFacts(row), undefined);
-    if (read) receivableRows.push(read);
+    if (read) receivableRows.push({ ...read, document: row });
   }
 
   const payableBudgetCut = payables.cut || payableRead.cut;
@@ -477,6 +466,7 @@ export type SettledBasis = "RECORDED" | "INFERRED_FROM_PAID_STATUS";
 export type SettlementCompletion = "COMPLETE" | "PARTIAL";
 
 export interface SettledRow {
+  document: SupplierObligation;
   kind: ObligationKind;
   id: string;
   currency: string;
@@ -691,7 +681,6 @@ async function readSettledFamily<S extends string, D>(
 export async function readSupplierSettled(
   ctx: Reader & HeadroomCtx,
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
-  onPayableRead?: (section: SettledSection) => Promise<void>,
 ): Promise<{ payable: SettledSection; receivable: SettledSection }> {
   const { orgId, supplierId } = args;
   // Read in turn, not together: each document's headroom check must see what the reads before it spent.
@@ -706,8 +695,6 @@ export async function readSupplierSettled(
   const payableDocs = payables.docs;
   const payableRows = settledPayableRows(newest(payableDocs));
   const payable = settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT, 0, payables.cut);
-  // Finish a complete A/P projection before a later, large A/R family spends the shared read budget.
-  await onPayableRead?.(payable);
   const claimsRead = await readSettledFamily(ctx, SETTLED_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
@@ -745,7 +732,6 @@ export async function readSupplierSettled(
     ),
   };
 }
-
 
 interface ClaimProvenance {
   rows: DatedSettledRow[];

@@ -5,6 +5,9 @@ import { seedSupplier } from "../test-utils/supplierFixture";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { outstanding as outstandingRegistration, settled as settledRegistration } from "./supplierStatement";
+import { vehicles as relationshipRegistration } from "./supplierRelationships";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 const modules = import.meta.glob("./**/*.*s");
 const NOW = Date.parse("2026-11-10T09:00:00Z");
@@ -42,7 +45,106 @@ const outstanding = (s: Seed) => s.asUser.query(api.supplierStatement.outstandin
 const related = (s: Seed, kind = "SOURCED", paginationOpts = { numItems: 25, cursor: null as string | null }) =>
   s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.supplierId, kind, paginationOpts });
 
+async function measureHandler(s: Seed, registered: unknown, args: unknown) {
+  if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
+  const handler = registered._handler;
+  return s.asUser.run(async ctx => {
+    const reads = vi.spyOn(ctx.db, "get"); // Call-through: every recorded get performs actual harness I/O.
+    try {
+      const response: unknown = await handler(ctx, args);
+      return { response, gets: reads.mock.calls.length };
+    } finally { reads.mockRestore(); }
+  });
+}
+
+async function seedReadBound(s: Seed, unique: boolean) {
+  const targets = await s.t.run(async ctx => {
+    const customerId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Synthetic", lastName: "Buyer" });
+    const companyId = await ctx.db.insert("financeCompanies", { orgId: s.orgId, name: "Synthetic", isActive: true, profitRate: 5, maxTermMonths: 72, gracePeriodMonths: 3 });
+    const original = await ctx.db.get(s.vehicleId);
+    if (!original) throw new Error("Missing fixture");
+    const { _id, _creationTime, ...vehicleFields } = original;
+    const vehicleIds = [];
+    const saleIds = [];
+    const expenseIds = [];
+    for (let index = 0; index < (unique ? 300 : 1); index += 1) {
+      const vehicleId = await ctx.db.insert("vehicles", { ...vehicleFields });
+      vehicleIds.push(vehicleId);
+      if (index < 200) {
+        const quoteId = await ctx.db.insert("quotes", { orgId: s.orgId, vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000, totalFinancedAmount: 10000, termMonths: 24, status: "DRAFT", companyId, createdBy: s.userId, createdAt: NOW });
+        const applicationId = await ctx.db.insert("financeApplications", { orgId: s.orgId, vehicleId, customerId, companyId, quoteId, salespersonId: s.userId, status: "CLOSED", createdAt: NOW, updatedAt: NOW });
+        saleIds.push(await ctx.db.insert("sales", { orgId: s.orgId, vehicleId, customerId, salespersonId: s.userId, salePrice: 12000, saleDate: NOW, status: "COMPLETED", supplierSettlementRoute: "THROUGH_DEALERSHIP", applicationId }));
+      }
+      if (index >= 200 || !unique) expenseIds.push(await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId, title: "Synthetic invoice", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
+    }
+    return { vehicleIds, saleIds, expenseIds };
+  });
+  await s.t.run(async ctx => {
+    for (let index = 0; index < 100; index += 1) {
+      const common = { orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic supplier", currency: "JOD", createdBy: s.userId, createdAt: NOW, updatedAt: NOW };
+      const payableVehicle = targets.vehicleIds[unique ? index : 0]!;
+      await ctx.db.insert("vehicleSupplierPayables", { ...common, vehicleId: payableVehicle, saleId: targets.saleIds[unique ? index : 0]!, amountDue: 10, status: "DUE_ON_SALE" });
+      await ctx.db.insert("vehicleSupplierReceivables", { ...common, vehicleId: targets.vehicleIds[unique ? index + 100 : 0]!, saleId: targets.saleIds[unique ? index + 100 : 0]!, amountDue: 10, status: "OPEN" });
+      await ctx.db.insert("supplierCostRecoveries", { ...common, vehicleId: targets.vehicleIds[unique ? index + 200 : 0]!, expenseId: targets.expenseIds[unique ? index : 0]!, sourceEventKey: `read-${index}`, amountDueMinor: 10000, amountRecoveredMinor: 0, receiptSeq: 0, status: "OPEN" });
+    }
+  });
+}
+
+async function settleReadBound(s: Seed) {
+  await s.t.run(async ctx => {
+    const accountId = await ctx.db.insert("chartOfAccounts", { orgId: s.orgId, code: "1240", name: "Synthetic control", type: "ASSET", normalBalance: "DEBIT", isControlAccount: true, allowManualPosting: false, active: true, systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, createdAt: NOW, updatedAt: NOW });
+    const payables = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
+    for (const row of payables) await ctx.db.patch(row._id, { status: "PAID", amountPaid: 10 });
+    const recoveries = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
+    for (const row of recoveries) await ctx.db.patch(row._id, { status: "RECOVERED", amountRecoveredMinor: 10000 });
+    const claims = await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
+    for (const row of claims) {
+      await ctx.db.patch(row._id, { status: "PAID", amountReceived: 10, receiptSeq: 1 });
+      const journalEntryId = await ctx.db.insert("journalEntries", { orgId: s.orgId, journalNumber: `read-${row._id}`, accountingDate: NOW, sourceType: "vehicleSupplierReceivables", sourceId: row._id, category: "SYSTEM", memo: "Synthetic receipt", status: "POSTED", currency: "JOD", postedBy: s.userId, postedAt: NOW, createdAt: NOW });
+      await ctx.db.insert("journalLines", { orgId: s.orgId, journalEntryId, accountId, lineNumber: 1, debitMinor: 0, creditMinor: 10000, currency: "JOD", scale: 3, accountingDate: NOW });
+    }
+  });
+}
+
 describe("supplier navigation by canonical id", () => {
+  test("100 rows per family with distinct targets use at most 803 actual gets per outstanding handler", async () => {
+    const s = await seed();
+    await seedReadBound(s, true);
+    const { response, gets } = await measureHandler(s, outstandingRegistration, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW });
+    expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", grossMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", grossMinor: 2_000_000 }] } });
+    console.info(`SUPPLIER_GETS distinct outstanding: ${gets}`);
+    expect(gets).toBe(803);
+  });
+
+  test("100 rows per family sharing targets read each source once across money and decoration", async () => {
+    const s = await seed();
+    await seedReadBound(s, false);
+    const { response, gets } = await measureHandler(s, outstandingRegistration, { orgId: s.orgId, supplierId: s.supplierId, nowMs: NOW });
+    expect(response).toMatchObject({ payable: { complete: true }, receivable: { complete: true } });
+    console.info(`SUPPLIER_GETS shared outstanding: ${gets}`);
+    expect(gets).toBe(7);
+  });
+
+  test("100 settled rows per family with distinct targets use at most 803 actual gets per handler", async () => {
+    const s = await seed();
+    await seedReadBound(s, true);
+    await settleReadBound(s);
+    const { response, gets } = await measureHandler(s, settledRegistration, { orgId: s.orgId, supplierId: s.supplierId });
+    expect(response).toMatchObject({ payable: { complete: true, totals: [{ currency: "JOD", settledMinor: 1_000_000 }] }, receivable: { complete: true, totals: [{ currency: "JOD", settledMinor: 2_000_000 }] } });
+    console.info(`SUPPLIER_GETS distinct settled: ${gets}`);
+    expect(gets).toBe(803);
+  });
+
+  test("owned relationships sharing a vehicle spend one vehicle get per call", async () => {
+    const s = await seed();
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
+    for (let index = 0; index < 50; index += 1) await payable(s);
+    const { response, gets } = await measureHandler(s, relationshipRegistration, { orgId: s.orgId, supplierId: s.supplierId, kind: "OWNED", paginationOpts: { numItems: 50, cursor: null } });
+    expect(response).toMatchObject({ isDone: false });
+    console.info(`SUPPLIER_GETS shared relationships: ${gets}`);
+    expect(gets).toBe(4);
+  });
+
   test("two purchase obligations for one vehicle retain distinct stable relationship ids across pages", async () => {
     const s = await seed();
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
@@ -205,13 +307,12 @@ describe("supplier navigation by canonical id", () => {
     expect(wide.isDone).toBe(false);
   });
 
-  test("invalid stored money returns a coded generic error without exposing technical detail", async () => {
+  test("invalid stored money keeps the money reader error contract", async () => {
     const s = await seed();
-    await payable(s, { amountDue: Number.NaN });
-    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      await expect(outstanding(s)).rejects.toThrow(/SUPPLIER_NAVIGATION_UNAVAILABLE/);
-      expect(log).toHaveBeenCalled();
-    } finally { log.mockRestore(); }
+    const id = await payable(s, { amountDue: Number.NaN });
+    const expected = "Amount NaN JOD overflows safe integer when converted to minor units.";
+    await expect(outstanding(s)).rejects.toThrow(expected);
+    await s.t.run(ctx => ctx.db.patch(id, { status: "PAID", amountPaid: 1 }));
+    await expect(s.asUser.query(api.supplierStatement.settled, { orgId: s.orgId, supplierId: s.supplierId })).rejects.toThrow(expected);
   });
 });

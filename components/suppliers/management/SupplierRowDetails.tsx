@@ -7,6 +7,10 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useTranslate } from "./shared";
 
 type Context = FunctionReturnType<typeof api.supplierStatement.outstanding>["payable"]["rows"][number]["context"];
+const timestampFormatters = {
+  ar: new Intl.DateTimeFormat("ar-JO", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Amman" }),
+  en: new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Amman" }),
+};
 
 function SourceLabel({ source }: Readonly<{ source: Context["source"] }>) {
   const translate = useTranslate();
@@ -23,10 +27,7 @@ export function SupplierRowDetails({ context }: Readonly<{ context: Context | un
   const { locale } = useLanguage();
   const date = context?.occurredAt;
   const instant = date === null || date === undefined ? null : new Date(date);
-  const localeCode = locale === "ar" ? "ar-JO" : "en-GB";
-  const timestamp = date === null || date === undefined ? null : new Intl.DateTimeFormat(localeCode, {
-    dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Amman",
-  }).format(date);
+  const timestamp = instant ? timestampFormatters[locale === "ar" ? "ar" : "en"].format(instant) : null;
   return (
     <div className="mt-1 min-w-0 space-y-1 text-xs font-normal text-muted-foreground">
       <SourceLabel source={context?.source ?? null} />

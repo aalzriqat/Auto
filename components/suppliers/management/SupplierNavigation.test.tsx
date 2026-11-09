@@ -8,6 +8,7 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { SupplierStatementSection } from "./SupplierStatementSection";
 import { SupplierRelationshipsSection } from "./SupplierRelationshipsSection";
 import { SupplierRowDetails } from "./SupplierRowDetails";
+import { SupplierLoadError } from "./shared";
 
 const world = vi.hoisted(() => ({ locale: "en" as "en" | "ar", permissions: [] as string[],
   loading: false, error: false, incomplete: false, empty: false, loadMore: vi.fn(), permissionLookup: vi.fn(), calls: [] as unknown[] }));
@@ -146,6 +147,9 @@ describe("supplier navigation", () => {
       expect(screen.getByRole("alert").textContent).toContain(text.SuppliersRelationshipsError);
       expect(error.container.textContent).not.toContain("private server detail");
       saveRender("error", error.container);
+      const targetError = render(<SupplierLoadError />);
+      saveRender("target-error", targetError.container);
+      targetError.unmount();
       cleanup();
     }
   });

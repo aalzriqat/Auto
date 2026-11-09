@@ -176,6 +176,8 @@ import type * as supplierReceivables from "../supplierReceivables.js";
 import type * as supplierStatement from "../supplierStatement.js";
 import type * as supplierRelationships from "../supplierRelationships.js";
 import type * as utils_supplierNavigation from "../utils/supplierNavigation.js";
+import type * as utils_supplierReadCache from "../utils/supplierReadCache.js";
+import type * as utils_paginationBounds from "../utils/paginationBounds.js";
 import type * as suppliers from "../suppliers.js";
 import type * as support from "../support.js";
 import type * as supportAgentAuth from "../supportAgentAuth.js";
@@ -558,6 +560,8 @@ declare const fullApi: ApiFromModules<{
   supplierStatement: typeof supplierStatement;
   supplierRelationships: typeof supplierRelationships;
   "utils/supplierNavigation": typeof utils_supplierNavigation;
+  "utils/supplierReadCache": typeof utils_supplierReadCache;
+  "utils/paginationBounds": typeof utils_paginationBounds;
   suppliers: typeof suppliers;
   support: typeof support;
   supportAgentAuth: typeof supportAgentAuth;

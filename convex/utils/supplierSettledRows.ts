@@ -3,6 +3,9 @@ import type { SettledRow } from "./supplierObligationDue";
 import { toMinorUnits } from "./money";
 import { settlementView } from "./supplierSettlement";
 
+export type SupplierObligation = Doc<"vehicleSupplierPayables"> | Doc<"vehicleSupplierReceivables"> | Doc<"supplierCostRecoveries">;
+export type WithSupplierDocument<T> = T & { document: SupplierObligation };
+
 export type DatedSettledRow = { createdAt: number; row: SettledRow };
 
 export function settledPayableRows(docs: Doc<"vehicleSupplierPayables">[]): SettledRow[] {
@@ -15,6 +18,7 @@ export function settledPayableRows(docs: Doc<"vehicleSupplierPayables">[]): Sett
     rows.push({
       kind: "PAYABLE",
       id: row._id,
+      document: row,
       currency: row.currency,
       status: row.status,
       dueMinor,
@@ -37,6 +41,7 @@ export function settledRecoveryRows(docs: Doc<"supplierCostRecoveries">[]): Date
       row: {
         kind: "RECOVERY",
         id: row._id,
+        document: row,
         currency: row.currency,
         status: row.status,
         dueMinor: row.amountDueMinor,
@@ -56,6 +61,7 @@ export function settledClaimRow(claim: Doc<"vehicleSupplierReceivables">, receip
     row: {
       kind: "RECEIVABLE",
       id: claim._id,
+      document: claim,
       currency: claim.currency,
       status: claim.status,
       dueMinor: toMinorUnits(claim.amountDue, claim.currency),
