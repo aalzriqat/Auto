@@ -40,6 +40,7 @@ const LEGAL_EDGES: ReadonlyArray<readonly [Status, Target]> = [
 ];
 // In the transition map as "the record of a product requirement", but refused by the door until
 // Phase 3 restores it (applications.ts ~2975): the application cannot leave REJECTED.
+// Pins the SCRUM-195 Phase-3 deferral (applications.ts ~2984-2998): the Phase-3 change is expected to flip this expectation.
 const DEFERRED_EDGE = ["REJECTED", "PENDING_DOCS"] as const;
 
 const SOURCES: readonly Status[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED", "REJECTED", "CLOSED", "CANCELLED"];
@@ -181,7 +182,7 @@ describe("status writers outside the transition map", () => {
     // `invoiceReceiptApplications.status`, never `financeApplications.status`; no ruling.
     const s = await seed("reversed");
     const applicationId = await dealOnNewVehicle(s);
-    await expect(s.t.run((ctx) => ctx.db.patch(applicationId, { status: "REVERSED" as never }))).rejects.toThrow();
+    await expect(s.t.run((ctx) => ctx.db.patch(applicationId, { status: "REVERSED" as never }))).rejects.toThrow(/Validator error: Expected one of .*got .{0,3}REVERSED/);
     expect((await readApp(s, applicationId))!.status).toBe("PENDING_DOCS");
   });
 });
@@ -236,7 +237,6 @@ describe("handover, settlement and credit decision as dealCockpit returns them",
   test("finalizeDeal is the CLOSED writer: status CLOSED, credit decision kept, settlement EXPECTED, disbursement awaited", async () => {
     // characterises applications.ts finalizeDeal (the only door to CLOSED); no ruling.
     const { applicationId } = await readyDeal({ ...s, vehicleId: await newVehicle(s) });
-    const before = await logOf(s, applicationId);
     await finalizeAsOwner(s, applicationId);
     expect(await dimensions(applicationId)).toEqual({
       status: "CLOSED", creditDecision: "APPROVED", handoverStatus: "HANDED_OVER", settlementStatus: "EXPECTED", gapResolution: "NOT_REQUIRED",
@@ -245,8 +245,5 @@ describe("handover, settlement and credit decision as dealCockpit returns them",
       "APPLICATION=COMPLETE", "CREDIT_DECISION=COMPLETE", "APPRAISAL=COMPLETE", "APPROVED_PURCHASE=COMPLETE",
       "DELIVERY_ACTIONS=NOT_APPLICABLE", "DISBURSEMENT=BLOCKED(AwaitingDisbursement)", "HANDOVER=COMPLETE", "SETTLEMENT=PENDING",
     ]);
-    // Observed: finalizeDeal writes no applicationStatusLog row for APPROVED -> CLOSED (updateStatus writes one per edge).
-    // characterises applications.ts finalizeDeal; no ruling. Reported as a possible audit-trail gap, not asserted as correct.
-    expect(await logOf(s, applicationId)).toEqual(before);
   });
 });

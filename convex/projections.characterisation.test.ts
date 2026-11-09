@@ -53,8 +53,9 @@ const PROBE_FIELDS: Record<VisibilityClass, readonly string[]> = {
     "appliedLtvPercent", "customerFirstPaymentMinor", "dealerContributionMinor", "financeCompanyFundedPortionMinor",
     "expectedDealerRemittanceMinor", "targetSellingAmountMinor", "quotationCalculationSnapshot", "unfinancedPortionMinor",
   ],
-  // Set on the row directly below, because a ready deal does not reach those stages.
-  DISBURSEMENT_WORKFLOW: ["disbursementVersion"],
+  // Set on the row directly below, because a ready deal does not reach those stages. financedSaleNetReceivableMinor and plannedCustody
+  // are ruling #3's narrow already-approved workflow exception (header of financeApplicationProjection.ts).
+  DISBURSEMENT_WORKFLOW: ["disbursementVersion", "financedSaleNetReceivableMinor", "plannedCustody"],
   COST: ["vehiclePurchaseCostMinor"],
 };
 const ALL_CLASSES = Object.keys(PROBE_FIELDS) as VisibilityClass[];
@@ -74,7 +75,12 @@ async function seed() {
     owner: s.owner.as, manager: s.actors.manager.as, sales: s.actors.sales.as, accountant: s.actors.accountant.as, viewonly: s.actors.viewonly.as,
   };
   const { applicationId } = await readyDeal(s);
-  await s.t.run((ctx) => ctx.db.patch(applicationId, { disbursementVersion: 3, vehiclePurchaseCostMinor: 9_000_000 }));
+  await s.t.run((ctx) =>
+    ctx.db.patch(applicationId, {
+      disbursementVersion: 3, vehiclePurchaseCostMinor: 9_000_000, financedSaleNetReceivableMinor: 12_000_000,
+      plannedCustody: { userId: s.owner.userId, amountMinor: 200_000, plannedBy: s.owner.userId, plannedAt: Date.now() },
+    })
+  );
   return { ...s, as, applicationId };
 }
 type Seeded = Awaited<ReturnType<typeof seed>>;
@@ -138,6 +144,46 @@ describe("finance application projection through get, list and dealCockpit", () 
     for (const key of ["company", "deposits", "quote", "salesperson", "handoverEvidence"]) expect(PRESENT(rows[role]!.listRow[key]), `list must not carry ${key}`).toBe(false);
   });
 
+  // ---- key sets per door (a field added to a door fails here loudly) ----
+  // characterises financeApplicationProjection.ts FIELD_VISIBILITY and applications.ts:1544 get / :1439 list; the class of each key
+  // follows the header rulings #1-#5, the base keys are "characterises; no ruling". Written independently of the code's output order.
+  const GET_BASE = [
+    "_creationTime", "_id", "appraisalStatus", "approvedAt", "approvedBy", "approvedPurchaseApprovedAt", "approvedPurchaseApprovedBy",
+    "approvedPurchaseBasis", "canSettleDirectToSupplier", "company", "companyId", "createdAt", "creditDecision", "currentCommitmentClaims",
+    "customer", "customerId", "dealNumber", "deposits", "directRouteRefusal", "economicsCurrency", "economicsRevision", "economicsStamp",
+    "expectedPaymentDate", "expectedPaymentMethod", "expectedPaymentRegisteredAt", "expectedPaymentRegisteredBy", "gapResolution",
+    "handoverEvidence", "handoverStatus", "hasExternalFinancier", "orgId", "quote", "quoteId", "quoteModeAtSubmission", "salesperson",
+    "salespersonId", "settlementStatus", "status", "submittedQuotationAt", "submittedQuotationBy", "submittedQuotationSource", "updatedAt",
+    "vehicle", "vehicleHandoverAt", "vehicleHandoverBy", "vehicleId",
+  ];
+  const GET_ONLY = [
+    "canSettleDirectToSupplier", "company", "customer", "deposits", "directRouteRefusal", "economicsStamp", "handoverEvidence",
+    "hasExternalFinancier", "quote", "salesperson", "vehicle",
+  ];
+  const KEYS_BY_CLASS: Record<Exclude<VisibilityClass, "OPEN">, readonly string[]> = {
+    QUOTATION_WORKFLOW: ["submittedQuotationMinor"],
+    APPROVAL_WORKFLOW: ["approvedDealerPurchaseAmountMinor", "rawAppraisalGapMinor"],
+    DISBURSEMENT_WORKFLOW: ["disbursementVersion", "financedSaleNetReceivableMinor", "plannedCustody"],
+    COST: ["vehiclePurchaseCostMinor"],
+    FINANCE: [
+      "appliedLtvPercent", "approvedPurchaseNotes", "companyRuleSnapshot", "customerFirstPaymentMinor", "customerGapToFinanceCompanyAppliedMinor",
+      "customerGapToFinanceCompanyUnconfirmedMinor", "customerQuotePricingSnapshot", "dealerContributionMinor", "estimatedClosingExpensesMinor",
+      "estimatedDealerBorneExpensesMinor", "expectedDealerRemittanceMinor", "financeCompanyFundedPortionMinor", "financingTermsShortfallMinor",
+      "netShortfallMethod", "netShortfallMinor", "quotationCalculationSnapshot", "targetNetProceedsMinor", "targetSellingAmountMinor",
+      "underwritingSnapshot", "unfinancedPortionMinor", "valuationShortfallMinor",
+    ],
+  };
+  const classKeysFor = (role: RoleName) =>
+    (Object.keys(KEYS_BY_CLASS) as Array<keyof typeof KEYS_BY_CLASS>).filter((cls) => MAY_READ[role].has(cls)).flatMap((cls) => KEYS_BY_CLASS[cls]);
+  const definedKeys = (row: Row) => Object.keys(row).filter((key) => row[key] !== undefined);
+
+  test.each(ROLES)("get as %s: the served key set equals the base plus the classes the role may read", (role) => {
+    expect(new Set(definedKeys(rows[role]!.get))).toEqual(new Set([...GET_BASE, ...classKeysFor(role)]));
+  });
+  test.each(ROLES)("list row as %s: the served key set equals the list base plus the classes the role may read", (role) => {
+    const listBase = [...GET_BASE.filter((key) => !GET_ONLY.includes(key)), ...LIST_ENRICHMENT];
+    expect(new Set(definedKeys(rows[role]!.listRow))).toEqual(new Set([...listBase, ...classKeysFor(role)]));
+  });
   // characterises applications.ts:1779 dealCockpit: the top-level keys every role receives; no ruling.
   const COCKPIT_KEYS = [
     "applicationId", "canonicalSaleId", "chequeFaceAttested", "chequeFaceUnrecorded", "chequeNeedsAccountingReview", "chequeNeedsCorrection",
@@ -173,7 +219,8 @@ describe("finance application projection through get, list and dealCockpit", () 
   test("the stage rail is the same for every role: it names no amount", () => {
     // financeApplicationProjection.ts header: `deriveDealStages` publishes the rail to every caller because it names no amount.
     const railOf = (role: RoleName) => (rows[role]!.cockpit.stages as Array<{ key: string; state: string; blocker?: string }>).map((stage) => `${stage.key}=${stage.state}`);
-    for (const role of ROLES) expect(railOf(role)).toEqual(railOf("owner"));
+    expect(railOf("owner")).not.toEqual([]);
+    for (const role of ROLES.filter((name) => name !== "owner")) expect(railOf(role)).toEqual(railOf("owner"));
   });
 });
 
@@ -226,7 +273,7 @@ describe("projectSaleRow through sales.list", () => {
   });
 
   test("a withheld sale field is absent, never zeroed; a served one keeps its stored value", () => {
-    // saleRowProjection.ts header: "absent, never zeroed: a zero would read as 'no concession', which is a claim".
+    // saleRowProjection.ts doc comment above projectSaleRow (~lines 113-118): a withheld key is dropped rather than zeroed, because a zero would read as "no concession", which is a claim.
     expect(saleRows.sales).not.toHaveProperty("consignedSupplierConcessionMinor");
     expect(saleRows.manager).not.toHaveProperty("consignedSupplierConcessionMinor");
     expect(saleRows.accountant!.consignedSupplierConcessionMinor).toBe(250_000);

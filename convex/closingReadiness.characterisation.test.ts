@@ -8,7 +8,9 @@
  *
  * Sources of the expected values:
  *  - Redaction below the finance tier (WITHHELD_*): SCRUM-414, `lib/closingReadinessReasonCodes.ts` header.
- *  - Closing a financed deal is the accountant's act: owner ruling SCRUM-407, comment in `finalizeDeal`.
+ *  - Closing a financed deal is the accountant's act: owner ruling SCRUM-407, comment in `finalizeDeal`. Only
+ *    "sales is FORBIDDEN from finalizing" follows from it. The manager (and owner) reaching the business refusals is
+ *    "characterises applications.ts finalizeDeal permission gate; no ruling".
  *  - Every other value is "characterises <file>:<line>; no ruling" and is listed in the PR report.
  *
  * Evidence boundary: convex-test only (no OCC, no production data).
@@ -101,6 +103,16 @@ const STAGE_BUILDERS = {
     return id;
   },
   READY_FORWARD_UNPAID: async (s: Seeded) => (await readyDeal({ ...s, vehicleId: await newVehicle(s) })).applicationId,
+  UNDER_REVIEW: async (s: Seeded) => {
+    const id = await freshApplication(s);
+    await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId: id, status: "UNDER_REVIEW" });
+    return id;
+  },
+  CANCELLED: async (s: Seeded) => {
+    const id = await freshApplication(s);
+    await s.owner.as.mutation(api.applications.cancelApplication, { orgId: s.orgId, applicationId: id, idempotencyKey: `cancel-${id}` });
+    return id;
+  },
   REJECTED: async (s: Seeded) => {
     const id = await freshApplication(s);
     await s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId: id, status: "REJECTED" });
@@ -112,6 +124,9 @@ const STAGE_NAMES = Object.keys(STAGE_BUILDERS) as StageName[];
 
 // ---- expected refusals (literal) ----
 type Refusal = { code?: string; message: string };
+// characterises message text at applications.ts:4523 (NOT_APPROVED_FINALIZE), :3761 (NOT_APPROVED_HANDOVER), :4535 (NEEDS_HANDOVER),
+// :4538 (NEEDS_EXPECTED_PAYMENT), :3805 (NEEDS_STAMP), :3762 (ALREADY_HANDED_OVER), utils/financeCompanyForward.ts:610 (FORWARD_UNPAID),
+// utils/financedSaleRecognition.ts:162 (COSTS_NONE); no ruling.
 const NOT_APPROVED_FINALIZE: Refusal = { message: "Application must be APPROVED before finalizing" };
 const NOT_APPROVED_HANDOVER: Refusal = { message: "Application must be APPROVED before registering handover." };
 const NEEDS_HANDOVER: Refusal = { message: "Register the vehicle handover to the customer before finalizing the deal." };
@@ -178,6 +193,17 @@ const EXPECTED: Record<StageName, {
     finalize: { financeTier: FORWARD_UNPAID, manager: FORWARD_UNPAID },
     handover: ALREADY_HANDED_OVER,
   },
+  // UNDER_REVIEW and CANCELLED: characterises applications.ts:4411 (open) and :4523 (status gate); no ruling.
+  UNDER_REVIEW: {
+    readiness: { state: "UNAVAILABLE", open: true, first: REMITTANCE_FIRST },
+    finalize: { financeTier: NOT_APPROVED_FINALIZE, manager: NOT_APPROVED_FINALIZE },
+    handover: NOT_APPROVED_HANDOVER,
+  },
+  CANCELLED: {
+    readiness: { state: "UNAVAILABLE", open: false, first: null },
+    finalize: { financeTier: NOT_APPROVED_FINALIZE, manager: NOT_APPROVED_FINALIZE },
+    handover: NOT_APPROVED_HANDOVER,
+  },
   REJECTED: {
     readiness: { state: "UNAVAILABLE", open: false, first: null },
     finalize: { financeTier: NOT_APPROVED_FINALIZE, manager: NOT_APPROVED_FINALIZE },
@@ -185,6 +211,7 @@ const EXPECTED: Record<StageName, {
   },
 };
 
+// characterises utils/tenancy.ts:219 message text and applications.ts:4476 / :3758 permission gates; no ruling.
 const FORBIDDEN_FINALIZE: Refusal = { code: "FORBIDDEN", message: "Forbidden: Missing required permissions: confirm:finance_disbursement" };
 const FORBIDDEN_HANDOVER: Refusal = { code: "FORBIDDEN", message: "Forbidden: Missing required permissions: register:vehicle_handover" };
 
