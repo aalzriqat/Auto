@@ -306,3 +306,34 @@ test("SCRUM-936 unwind actors retain permitted remittance amounts while finance 
     expect(JSON.stringify(row)).not.toContain("1575000");
   }
 }), 30_000);
+
+test("SCRUM-936 application audit details inherit both sales and finance read gates", async () => withFrozenScheduler(async () => {
+  const s = await seedFinancedDealership("s936-app-gates", { modules: import.meta.glob("./**/*.*s"), ownerPerms: [],
+    actors: { finance: ["manage:finance", "view:finance"], sales: ["manage:finance", "view:sales"],
+      full: ["manage:finance", "view:finance", "view:sales"] }, label: "QA TEST SCRUM-936", vinPrefix: "S936" });
+  registerRateLimiter(s.t);
+  const { applicationId } = await newApplication(s);
+  await s.t.run(ctx => ctx.db.patch(applicationId, { disbursedAmountMinor: 12_500_000 }));
+  await expect(s.actors.finance.as.query(api.applications.get, { orgId: s.orgId, applicationId })).rejects.toThrow(/permission/i);
+  await expect(s.actors.finance.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId })).rejects.toThrow(/permission/i);
+  const salesView = await s.actors.sales.as.query(api.applications.get, { orgId: s.orgId, applicationId });
+  expect(salesView?.disbursedAmountMinor).not.toBe(12_500_000);
+  const fullView = await s.actors.full.as.query(api.applications.get, { orgId: s.orgId, applicationId });
+  expect(fullView?.disbursedAmountMinor).toBe(12_500_000);
+  for (const actionType of ["ATTEST_CHEQUE_FACE", "CONFIRM_SUPPLIER_DISBURSEMENT", "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
+    "RETURN_FINANCE_DISBURSEMENT_CHEQUE", "DEAL_UNWIND_STARTED"] as const) {
+    const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.owner.userId,
+      actionType, resourceType: "financeApplications", resourceId: applicationId,
+      description: "Application finance 12500000", after: { disbursedAmountMinor: 12_500_000 }, occurredAt: Date.now() }));
+    const original = await s.t.run(ctx => ctx.db.get(id));
+    for (const filter of [{}, { actorId: s.owner.userId }, { actionType }, { fromDate: 1 }]) {
+      const args = { orgId: s.orgId, ...filter };
+      for (const viewer of [s.actors.finance.as, s.actors.sales.as]) {
+        const row = (await viewer.query(api.financialAudit.listAuditLog, args)).find(r => r._id === id);
+        expect(row).toMatchObject({ resourceId: "WITHHELD", detailsWithheld: true });
+        expect(JSON.stringify(row)).not.toContain("12500000");
+      }
+      expect(await s.actors.full.as.query(api.financialAudit.listAuditLog, args)).toContainEqual(original);
+    }
+  }
+}), 30_000);
