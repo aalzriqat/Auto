@@ -307,12 +307,24 @@ test("SCRUM-936 unwind actors retain permitted remittance amounts while finance 
   }
 }), 30_000);
 
-test("SCRUM-936 application audit details inherit both sales and finance read gates", async () => withFrozenScheduler(async () => {
-  const s = await seedFinancedDealership("s936-app-gates", { modules: import.meta.glob("./**/*.*s"), ownerPerms: [],
+async function applicationReaders(tag: string) {
+  const s = await seedFinancedDealership(tag, { modules: import.meta.glob("./**/*.*s"), ownerPerms: [],
     actors: { finance: ["manage:finance", "view:finance"], sales: ["manage:finance", "view:sales"],
       full: ["manage:finance", "view:finance", "view:sales"] }, label: "QA TEST SCRUM-936", vinPrefix: "S936" });
   registerRateLimiter(s.t);
   const { applicationId } = await newApplication(s);
+  return { s, applicationId };
+}
+
+async function financeCheque({ s, applicationId }: Awaited<ReturnType<typeof applicationReaders>>) {
+  return s.t.run(ctx => ctx.db.insert("postDatedCheques", { orgId: s.orgId, customerId: s.customerId,
+    vehicleId: s.vehicleId, applicationId, originApplicationId: applicationId, drawerType: "FINANCE_COMPANY",
+    financeCompanyId: s.companyId, bank: "Synthetic", chequeNumber: "S936-CHEQUE", chequeDate: Date.now(),
+    amount: 12500, status: "HELD", createdBy: s.owner.userId, createdAt: Date.now(), updatedAt: Date.now() }));
+}
+
+test("SCRUM-936 application audit details inherit both sales and finance read gates", async () => withFrozenScheduler(async () => {
+  const { s, applicationId } = await applicationReaders("s936-app-gates");
   await s.t.run(ctx => ctx.db.patch(applicationId, { disbursedAmountMinor: 12_500_000 }));
   await expect(s.actors.finance.as.query(api.applications.get, { orgId: s.orgId, applicationId })).rejects.toThrow(/permission/i);
   await expect(s.actors.finance.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId })).rejects.toThrow(/permission/i);
@@ -320,7 +332,7 @@ test("SCRUM-936 application audit details inherit both sales and finance read ga
   expect(salesView?.disbursedAmountMinor).not.toBe(12_500_000);
   const fullView = await s.actors.full.as.query(api.applications.get, { orgId: s.orgId, applicationId });
   expect(fullView?.disbursedAmountMinor).toBe(12_500_000);
-  for (const actionType of ["ATTEST_CHEQUE_FACE", "CONFIRM_SUPPLIER_DISBURSEMENT", "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
+  for (const actionType of ["CONFIRM_SUPPLIER_DISBURSEMENT", "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
     "RETURN_FINANCE_DISBURSEMENT_CHEQUE", "DEAL_UNWIND_STARTED"] as const) {
     const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.owner.userId,
       actionType, resourceType: "financeApplications", resourceId: applicationId,
@@ -335,5 +347,57 @@ test("SCRUM-936 application audit details inherit both sales and finance read ga
       }
       expect(await s.actors.full.as.query(api.financialAudit.listAuditLog, args)).toContainEqual(original);
     }
+  }
+}), 30_000);
+
+test("SCRUM-936 cheque face audit remains visible to its dedicated finance-only reader", async () => withFrozenScheduler(async () => {
+  const seed = await applicationReaders("s936-cheque-face");
+  const { s } = seed;
+  const chequeId = await financeCheque(seed);
+  await s.owner.as.mutation(api.applications.attestChequeFace, { orgId: s.orgId, chequeId,
+    faceAmount: "12500.000", note: "private-face-12500000" });
+  const args = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+  expect((await s.actors.finance.as.query(api.collections.listCheques, args)).page).toContainEqual(
+    expect.objectContaining({ _id: chequeId, amountMinor: 12_500_000, faceAttestationNote: "private-face-12500000" }));
+  await expect(s.actors.sales.as.query(api.collections.listCheques, args)).rejects.toThrow(/permission/i);
+  const original = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action", q =>
+    q.eq("orgId", s.orgId).eq("actionType", "ATTEST_CHEQUE_FACE")).unique());
+  if (!original) throw new Error("Missing attestation audit");
+  for (const filter of [{}, { actorId: s.owner.userId }, { actionType: "ATTEST_CHEQUE_FACE" }, { fromDate: 1 }]) {
+    const query = { orgId: s.orgId, ...filter };
+    expect(await s.actors.finance.as.query(api.financialAudit.listAuditLog, query)).toContainEqual(original);
+    const hidden = (await s.actors.sales.as.query(api.financialAudit.listAuditLog, query)).find(r => r._id === original._id);
+    expect(JSON.stringify(hidden)).not.toContain("12500000");
+  }
+}), 30_000);
+
+test("SCRUM-936 expected payment audit separates open method metadata from finance cheque evidence", async () => withFrozenScheduler(async () => {
+  const seed = await applicationReaders("s936-correction");
+  const { s, applicationId } = seed;
+  const chequeId = await financeCheque(seed);
+  const expectedDate = Date.UTC(s.fiscalYear, 5, 15);
+  await s.t.run(ctx => ctx.db.patch(applicationId, { expectedPaymentMethod: "CHEQUE", expectedPaymentDate: expectedDate }));
+  expect(await s.actors.sales.as.query(api.applications.get, { orgId: s.orgId, applicationId })).toMatchObject({
+    expectedPaymentMethod: "CHEQUE", expectedPaymentDate: expectedDate });
+  const cheques = { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } };
+  await expect(s.actors.sales.as.query(api.collections.listCheques, cheques)).rejects.toThrow(/permission/i);
+  await s.owner.as.mutation(api.applications.correctExpectedPayment, { orgId: s.orgId, applicationId,
+    reason: "private-correction-12500000" });
+  expect((await s.actors.finance.as.query(api.collections.listCheques, cheques)).page).toContainEqual(
+    expect.objectContaining({ _id: chequeId, cancellationReason: "private-correction-12500000" }));
+  const original = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action", q =>
+    q.eq("orgId", s.orgId).eq("actionType", "CORRECT_EXPECTED_PAYMENT")).unique());
+  if (!original) throw new Error("Missing payment correction audit");
+  for (const filter of [{}, { actorId: s.owner.userId }, { actionType: "CORRECT_EXPECTED_PAYMENT" }, { fromDate: 1 }]) {
+    const args = { orgId: s.orgId, ...filter };
+    const sales = (await s.actors.sales.as.query(api.financialAudit.listAuditLog, args)).find(r => r._id === original._id);
+    expect(sales?.before).toEqual({ expectedPaymentMethod: "CHEQUE", expectedPaymentDate: expectedDate });
+    expect(sales?.after).toEqual({ expectedPaymentMethod: null, expectedPaymentDate: null });
+    expect(JSON.stringify(sales)).not.toContain(String(chequeId));
+    expect(JSON.stringify(sales)).not.toContain("private-correction");
+    const finance = (await s.actors.finance.as.query(api.financialAudit.listAuditLog, args)).find(r => r._id === original._id);
+    expect(finance?.before).toEqual({ chequeIds: [chequeId] });
+    expect(finance?.description).toBe(original.description);
+    expect(await s.actors.full.as.query(api.financialAudit.listAuditLog, args)).toContainEqual(original);
   }
 }), 30_000);
