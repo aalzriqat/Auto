@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveTrustedGitExecutable } from "./gitExecutable.mjs";
 import { doorModules, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
+import { analyzePins, compareCountPins, inCountPinScope } from "./countPins.mjs";
 import { analyzeTree, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
@@ -320,6 +321,22 @@ function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
 }
 
 /**
+ * Guardrail 4: literal count pins in test files, counted per file in the PR tree
+ * (disk) and the trusted target tree (git objects) by the same code. A file may
+ * keep or lower its count; the skip list comes from the TARGET config only.
+ */
+function measureCountPins({ cwd, inventory, readDisk, targetBlobs, trustedConfig, proposedConfig }) {
+  const extensions = enforcementScope(trustedConfig, proposedConfig).extensions;
+  const inScope = (p) => inCountPinScope(p, extensions);
+  const fileCache = new Map();
+  const pr = analyzePins(new Map(inventory.filter(inScope).map((p) => [p, readDisk(p)])), fileCache);
+  const targetPaths = [...targetBlobs.keys()].filter(inScope);
+  const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
+  const target = analyzePins(new Map(targetPaths.map((p) => [p, texts.get(targetBlobs.get(p))])), fileCache);
+  return compareCountPins({ pr, target, skips: trustedConfig.countPinSkips.map((entry) => entry.path) });
+}
+
+/**
  * @param {{ cwd: string, env?: Record<string, string | undefined>, base?: string,
  *   log?: (message: string) => void,
  *   bootstrapPolicy?: { maxLines: number, productionRoots: string[], extensions: string[] } }} options
@@ -374,11 +391,16 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   const ratchets = measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope: enforcementScope(trusted.config, proposed.config) });
   errors.push(...ratchets.errors);
   notices.push(...ratchets.notices);
+  const countPins = measureCountPins({
+    cwd, inventory, readDisk, targetBlobs, trustedConfig: trusted.config, proposedConfig: proposed.config,
+  });
+  errors.push(...countPins.errors);
+  notices.push(...countPins.notices);
   if (bootstrap) {
     notices.push("BOOTSTRAP: target has no guardrail files; PR-tree baseline verified by recomputation");
     await verifyBootstrap(cwd, baseCommit, proposed, prettierOptions, lineCache, errors);
   }
-  return { baseRef, baseCommit, bootstrap, errors, notices, advisories: ratchets.advisories, ratchets: ratchets.totals, measured };
+  return { baseRef, baseCommit, bootstrap, errors, notices, advisories: ratchets.advisories, ratchets: ratchets.totals, countPins: countPins.totals, measured };
 }
 
 export async function writeBaseline(cwd, sourceRef, baseRef) {
