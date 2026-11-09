@@ -652,49 +652,20 @@ describe("SCRUM-313 economic command classification ratchet", () => {
       .map(([id]) => id)
       .sort((a, b) => a.localeCompare(b));
     const population = [...forward].sort((a, b) => a.localeCompare(b));
-    // Both directions, so a NEW public financial writer fails here rather than
-    // entering the codebase unclassified, and a classification for a command
-    // that no longer exists fails too rather than rotting.
-    expect(population.filter((p) => !CLASSIFICATION[p])).toEqual([]);
-    expect(liveClassified.filter((c) => !forward.has(c))).toEqual([]);
-    expect(retired.filter((c) => forward.has(c))).toEqual([]);
-    // 116 → 117: `applications.repairQuoteEconomicsLineage` (TASK-DEAL-01).
-    // 117 → 119: `financeDealCosts.planCustodyHandler` and `financeDealCosts.setFeeCustody` (AF-80).
-    // Fee-template adoption is classified RETIRED and therefore excluded from
-    // the live population by construction; the live census remained 119 until:
-    // 119 → 120: `financingEconomics.applyQuoteFirstPayment` (SCRUM-373 D2).
-    // 120 → 122: `supplierCostRecoveries.recordReceipt` and
-    // `supplierCostRecoveries.reverseReceipt` (SCRUM-389 supplier cost bearer).
-    // 122 → 121: `financeDealCosts.classifyDealAccounting` RETIRED (SCRUM-407),
-    // then deleted outright with its classification entry.
-    // 121 → 122: `depositRequests.confirm` (SCRUM-444); `request` writes only a pending row and is not in the population.
-    // 122 → 123: `financeDealCosts.recordDirectFeePayment` (SCRUM-443).
-    // 123 → 125: `applications.correctExpectedPayment` and
-    // `applications.attestChequeFace` (SCRUM-447).
-    // 123 -> 126: `financeCompanyForward.recordFinanceCompanyForward`, `.reverseFinanceCompanyForward` and `.reportFinanceCompanyForwardReturned` (SCRUM-435).
-    // 126 -> 128: the two SCRUM-447 mutations above, on top of the SCRUM-435 three (merge of origin/main into SCRUM-447).
-    // 128 -> 129: `financingEconomics.recordManualFinanceApproval` (SCRUM-27), on top of main's 128.
-    // 129 -> 130: `applications.returnFinanceDisbursementCheque` (SCRUM-239).
-    // 130 -> 136: the three SCRUM-693 unwind steps (`dealUnwind.*`; `startDealUnwind` writes only the unwind row) + `financeDealCosts.recordExecutionFeeActual`, `.bindExecutionFeeLine` and `.unbindExecutionFeeLine` (SCRUM-690).
-    // 136 -> 143 (SCRUM-743): function-reference edges and public actions as entrypoints add
-    // accountingPeriods.open/.reopen, chartOfAccounts.initialize/.repairMissingSystemAccounts,
-    // accountingOutbox.redrive, accountingMigration.backfillVehicleInventoryOpeningBalances and
-    // the action prepaidExpenses.runAmortizationNow. accountingPeriods.lock is NOT among them:
-    // its only edge was `reopen()` written in a comment.
-    // 143 -> 147 (SCRUM-724): `collections.registerSaleInvoiceCheque`, `.reserveSaleInvoiceReceipt`,
-    // `.activateSaleInvoiceReceipt` and `retainedCreditRefunds.executeRetainedCreditRefund`.
-    // 147 -> 149: `customerFinanceCompanyPayments.confirmPayment` and `.voidPayment` (SCRUM-766 PR-B confirmed payment evidence).
-    // 149 -> 150: `accountingPeriods.create` (SCRUM-807): a period created with openImmediately now
-    // schedules `accountingOutbox.wakePeriodHeldRows`, which schedules `claimOutboxRow` and so reaches posting
-    // by function reference. It is the same wake `open` performs; `accountingPeriods.lock` is still excluded.
-    // 150 -> 152: `dealCommissions.addLine` and `.removeLine` (extra deal commission lines), both classified above.
-    // 152 -> 153: `orgSettings.setCommissionMode` (SCRUM-853) reads sales to guard
-    // the policy change; its settings patch is over-included and posts nothing.
-    // 153 -> 156 (SCRUM-858): two state-guarded destructive admin commands and
-    // chart adoption metadata become visible through opening-source cleanup/read guards.
-    // 156 -> 159 (SCRUM-850): draft edit, void request and atomic void approval.
-    // Their per-command classifications above explain the exact retry boundary.
-    expect(population).toHaveLength(159);
+    // Set equality in both directions against the source scan (`forward`), never a
+    // count: a NEW public financial writer fails here rather than entering the
+    // codebase unclassified, and a classification for a command that no longer
+    // exists fails too rather than rotting. SCRUM-426 guardrail 4: the previous
+    // `toHaveLength(N)` pin was bumped by hand with every command (about 20 times)
+    // and added nothing these two diffs do not already prove.
+    const unclassified = population.filter((p) => !CLASSIFICATION[p]);
+    const staleClassifications = liveClassified.filter((c) => !forward.has(c));
+    expect(unclassified, "discovered in source but not classified").toEqual([]);
+    expect(staleClassifications, "classified live but no longer discovered in source").toEqual([]);
+    expect(retired.filter((c) => forward.has(c)), "classified RETIRED but still discovered").toEqual([]);
+    // Non-vacuity: an empty scan must not pass as an empty classification.
+    expect(population.length).toBeGreaterThan(0);
+    expect(liveClassified.length).toBeGreaterThan(0);
   });
 
   test("every entry carries exactly one bucket and a stated mechanism", () => {

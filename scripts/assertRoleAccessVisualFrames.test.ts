@@ -1,15 +1,43 @@
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { expect, test } from "vitest";
 import { EXPECTED_ROLE_FRAMES, roleArtifactErrors, roleFrameErrors, runRoleFrameCheck } from "./assertRoleAccessVisualFrames.mjs";
 
+/**
+ * SCRUM-426 guardrail 4. The expected frame names are discovered from the
+ * Playwright spec that writes them (its STATES, locales and widths), not from the
+ * checker's own list, so adding a state to one side without the other fails here
+ * in the named direction instead of at a hand-bumped count.
+ */
+function specFrames(): string[] {
+  const spec = readFileSync(path.resolve("playwright/tests/role-access.visual.spec.ts"), "utf8");
+  const literals = (pattern: RegExp): string[] => {
+    const body = pattern.exec(spec)?.[1] ?? "";
+    return [...body.matchAll(/"([^"]+)"|(\d+)/g)].map((m) => m[1] ?? m[2]);
+  };
+  const states = literals(/const STATES = \[([^\]]*)\]/);
+  const locales = literals(/for \(const locale of \[([^\]]*)\] as const\)/);
+  const widths = literals(/for \(const width of \[([^\]]*)\]\)/);
+  return states.flatMap((state) =>
+    locales.flatMap((locale) => widths.map((width) => `role-access-${state}-${locale}-${width}.png`)),
+  );
+}
+
+test("the checker's frame inventory is exactly the frames the Playwright spec writes", () => {
+  const discovered = new Set(specFrames());
+  const listed = new Set<string>(EXPECTED_ROLE_FRAMES);
+  expect(listed.size, "duplicate entry in EXPECTED_ROLE_FRAMES").toBe(EXPECTED_ROLE_FRAMES.length);
+  expect([...discovered].filter((name) => !listed.has(name)).sort(), "written by the spec but not expected by the checker").toEqual([]);
+  expect([...listed].filter((name) => !discovered.has(name)).sort(), "expected by the checker but never written by the spec").toEqual([]);
+  expect(discovered.size, "an empty discovery must not pass").toBeGreaterThan(0);
+});
 test("role frame inventory refuses absent, duplicate and empty evidence independently", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "role-frame-census-"));
   const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 1]);
   const files = EXPECTED_ROLE_FRAMES.map(name => { const file = path.join(dir, name); writeFileSync(file, bytes); return file; });
-  expect(files).toHaveLength(48);
+  expect(files).toHaveLength(EXPECTED_ROLE_FRAMES.length);
   expect(roleFrameErrors(files)).toEqual([]);
   expect(roleFrameErrors(files.slice(1))).toEqual([expect.stringContaining("expected one frame, found 0")]);
   mkdirSync(path.join(dir, "duplicate"));
@@ -17,7 +45,7 @@ test("role frame inventory refuses absent, duplicate and empty evidence independ
   expect(roleFrameErrors([...files, duplicate])).toEqual([expect.stringContaining("found 2")]);
   writeFileSync(files[0], "");
   expect(roleFrameErrors(files)).toEqual([expect.stringContaining("empty or invalid PNG")]);
-  expect(roleFrameErrors([])).toHaveLength(48);
+  expect(roleFrameErrors([])).toHaveLength(EXPECTED_ROLE_FRAMES.length);
 });
 
 test("the census CLI refuses an external root even when its frame inventory is complete", () => {
