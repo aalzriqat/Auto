@@ -41,13 +41,39 @@ function expectArgument(node) {
   return inner.arguments[0] ?? null;
 }
 
+const MARKER_PREFILTER = "guardrail-4-fixture";
+const MARKER_COMMENT = /^\/\/\s*guardrail-4-fixture(?![\w-])(.*)$/u;
+
 /**
- * Every literal count pin in one test file.
- * @returns {{ line: number, matcher: string, value: number }[]}
+ * Every `// guardrail-4-fixture: <reason>` line comment in a parsed file. Found
+ * through the token trivia, so the text inside a string or template is not a marker.
+ * @returns {{ line: number, reason: string }[]}
  */
-export function findCountPins(filePath, text) {
-  if (!PREFILTER.test(text)) return [];
-  const sourceFile = parseSource(filePath, text);
+function findMarkers(sourceFile, text) {
+  const seen = new Set();
+  const markers = [];
+  const take = (ranges) => {
+    for (const range of ranges ?? []) {
+      if (range.kind !== ts.SyntaxKind.SingleLineCommentTrivia || seen.has(range.pos)) continue;
+      seen.add(range.pos);
+      const match = MARKER_COMMENT.exec(text.slice(range.pos, range.end).trimEnd());
+      if (!match) continue;
+      const afterColon = match[1].trim().startsWith(":") ? match[1].trim().slice(1).trim() : "";
+      markers.push({ line: sourceFile.getLineAndCharacterOfPosition(range.pos).line + 1, reason: afterColon });
+    }
+  };
+  const visit = (node) => {
+    take(ts.getLeadingCommentRanges(text, node.pos));
+    take(ts.getTrailingCommentRanges(text, node.end));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  take(ts.getLeadingCommentRanges(text, sourceFile.endOfFileToken.pos));
+  return markers.sort((a, b) => a.line - b.line);
+}
+
+/** Every literal count pin in one parsed file, exempt or not. */
+function collectPins(sourceFile) {
   const pins = [];
   const visit = (node) => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
@@ -69,6 +95,55 @@ export function findCountPins(filePath, text) {
   return pins;
 }
 
+/**
+ * Pair each marker that has a reason with the one pin it exempts: a pin on the
+ * marker's own line first, then a pin on the next line. A marker without a
+ * reason exempts nothing (it is reported by markerProblems).
+ */
+function pairMarkers(pins, markers) {
+  const exempt = new Set();
+  const unused = [];
+  for (const marker of markers) {
+    if (marker.reason === "") continue;
+    const hit = [marker.line, marker.line + 1]
+      .map((line) => pins.find((pin) => pin.line === line && !exempt.has(pin)))
+      .find(Boolean);
+    if (hit) exempt.add(hit);
+    else unused.push(marker);
+  }
+  return { exempt, unused };
+}
+
+/**
+ * Every literal count pin in one test file that no marker exempts.
+ * @returns {{ line: number, matcher: string, value: number }[]}
+ */
+export function findCountPins(filePath, text) {
+  if (!PREFILTER.test(text)) return [];
+  const sourceFile = parseSource(filePath, text);
+  const pins = collectPins(sourceFile);
+  if (!text.includes(MARKER_PREFILTER)) return pins;
+  const { exempt } = pairMarkers(pins, findMarkers(sourceFile, text));
+  return pins.filter((pin) => !exempt.has(pin));
+}
+
+/**
+ * Marker misuse in one file, like ESLint's required directive description and its
+ * unused-directive report: a marker with no reason, and a reasoned marker that
+ * exempts no flagged assertion on its line or the next.
+ * @returns {{ code: "COUNT-PIN-MARKER-NO-REASON" | "COUNT-PIN-MARKER-UNUSED", line: number }[]}
+ */
+export function markerProblems(filePath, text) {
+  if (!text.includes(MARKER_PREFILTER)) return [];
+  const sourceFile = parseSource(filePath, text);
+  const markers = findMarkers(sourceFile, text);
+  const problems = markers
+    .filter((marker) => marker.reason === "")
+    .map((marker) => ({ code: "COUNT-PIN-MARKER-NO-REASON", line: marker.line }));
+  const { unused } = pairMarkers(collectPins(sourceFile), markers);
+  for (const marker of unused) problems.push({ code: "COUNT-PIN-MARKER-UNUSED", line: marker.line });
+  return problems.sort((a, b) => a.line - b.line);
+}
 /** Test files the guardrail judges: any tree location, source extensions from the config. */
 export function inCountPinScope(repoPath, extensions) {
   return isTestLike(repoPath) && extensions.some((ext) => repoPath.endsWith(ext));
@@ -113,7 +188,7 @@ export function compareCountPins({ pr, target, skips, renames = new Map() }) {
     errors.push(
       [
         `COUNT-PIN-GROWN ${filePath}: ${pins.length} > target ${was} (+${pins.length - was}); ` +
-          "compare the set with an independent discovery in both directions instead of pinning its size",
+          "convert the pin to set equality in both directions, or mark it `// guardrail-4-fixture: <reason>` if it is a fixture count",
         ...rows,
       ].join("\n"),
     );

@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveTrustedGitExecutable } from "./gitExecutable.mjs";
 import { doorModules, extractFacts, resolvePublicFunctions } from "./convexFunctions.mjs";
-import { analyzePins, compareCountPins, inCountPinScope } from "./countPins.mjs";
+import { analyzePins, compareCountPins, inCountPinScope, markerProblems } from "./countPins.mjs";
 import { analyzeTree, compareRatchets } from "./ratchets.mjs";
 import {
   BASELINE_PATH,
@@ -350,16 +350,25 @@ function measureCountPins({ cwd, baseCommit, inventory, readDisk, targetBlobs, t
   const extensions = enforcementScope(trustedConfig, proposedConfig).extensions;
   const inScope = (p) => inCountPinScope(p, extensions);
   const fileCache = new Map();
-  const pr = analyzePins(new Map(inventory.filter(inScope).map((p) => [p, readDisk(p)])), fileCache);
+  const prFiles = new Map(inventory.filter(inScope).map((p) => [p, readDisk(p)]));
+  const pr = analyzePins(prFiles, fileCache);
+  const markerErrors = [...prFiles].flatMap(([filePath, text]) =>
+    markerProblems(filePath, text).map(({ code, line }) =>
+      code === "COUNT-PIN-MARKER-NO-REASON"
+        ? `${code} ${filePath}:${line}: the \`// guardrail-4-fixture:\` marker needs a reason after the colon`
+        : `${code} ${filePath}:${line}: the \`// guardrail-4-fixture:\` marker exempts no count assertion on its line or the next; remove it`,
+    ),
+  );
   const targetPaths = [...targetBlobs.keys()].filter(inScope);
   const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
   const target = analyzePins(new Map(targetPaths.map((p) => [p, texts.get(targetBlobs.get(p))])), fileCache);
-  return compareCountPins({
+  const compared = compareCountPins({
     pr,
     target,
     renames: renamedFrom(cwd, baseCommit),
     skips: trustedConfig.countPinSkips.map((entry) => entry.path),
   });
+  return { ...compared, errors: [...compared.errors, ...markerErrors] };
 }
 
 /**
