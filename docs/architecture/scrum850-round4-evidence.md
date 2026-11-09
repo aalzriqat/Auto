@@ -842,3 +842,67 @@ Completed before the fix commit:
 
 Regression validators, committed-source mutant/restoration and contract renewal
 are recorded below after completion. No pending result above is counted as passed.
+
+Completed after the fix commit:
+
+- All seven scenario/library validator files passed, 379 tests, exit 0
+  (`s850-r6-regression.log`, 387.12 seconds elapsed):
+  scripts/regression/scenarioRecord.test.ts,
+  scripts/regression/localExecution.test.ts,
+  scripts/regression/pilotDoorAnalysis.test.ts,
+  scripts/regression/pilotDoorInventory.test.ts,
+  scripts/regression/prRunner.test.ts,
+  scripts/regression/refreshRulings.test.ts,
+  scripts/regression/implFixture.test.ts. The supplied protected refreshRulings
+  edit was exercised as supplied; it was never edited or staged. This validates
+  definitions/runner behavior, not execution of the whole library on a platform.
+- Source binding: all three literal R6 names occur in the failing-first commit,
+  and that complete test-file blob is identical to HEAD. Three records cite that
+  commit; no non-failing commit is used as failing-first evidence.
+- At committed fix `e4244d43449497ee1b9e2c653910d065e6e365ea`, the mutant added only
+  `allocations: args.allocations ?? []` to after, retaining summary fields. The
+  complete maintenance suite failed: 2 failed / 44 passed, exit 1. The privacy
+  test fails on the returned vehicle id, not just a metadata mismatch. Log:
+  `s850-r6-mutant-after-allocations.log`.
+- In the mutant command's finally block, `git checkout HEAD --
+  convex/accountingCutover.ts` restored the file. Scoped `git status --porcelain`
+  was empty and `git diff --exit-code HEAD -- convex/accountingCutover.ts` exited
+  0; only then was RESTORED_SOURCE_STATUS_CLEAN=true printed. Restored complete
+  suite: 46 passed, exit 0 (`s850-r6-restored-green.log`). No mutant remains.
+- First post-fix renewal check exited 10: exactly entries 708-711 were stale,
+  all because of the accountingCutover backend blob (`s850-r6-renewal-initial.log`).
+  Four unchanged client calls and the four opening exports' validators were
+  source-reviewed against starting f08af5815. Only the local edit-audit summary
+  helper and edit-audit payload changed in the backend module. Exactly those
+  four entries' renewal strings were hand-appended, preserving previous notes.
+  A structural comparison proved every other JSON field unchanged. No renew
+  tool write mode, expiry, extractor, fingerprint, identity, multiplicity,
+  rationale or threshold change was used.
+- Renewal notes commit `073b8f9a4bad7c2c249e5adc44211b3c49ba8505` changes only the two
+  existing OpeningBalanceApprovalPanel/OpeningBalanceCard baseline shards.
+  After that commit, the required command exited 0 (`s850-r6-renewal-final.log`):
+
+```text
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 28cf683f8013f1bba4773d766f05aa6f892a2a18
+renewal evidence: 945 renewed entries checked, 0 unrenewed, 0 stale, 0 malformed, 0 missing
+RENEWAL_EXIT=0
+```
+
+Positive suite totals before the final-head rerun: 18 distinct files, 547 tests
+(88 + 80 + 379), excluding reds, mutants and repeated maintenance runs. These
+are measured named-file results, not a claim that all repository tests ran.
+The final-head run is reported in the handoff after this records commit. No
+production code, test, scenario or contract evidence blob changes in this final
+records-only commit.
+
+| Commit | Files |
+| --- | --- |
+| `00210358412583a22f5eecf414da2d7b70c0d68f` | Maintenance test file only; committed red 3 failed / 43 passed. |
+| `e4244d43449497ee1b9e2c653910d065e6e365ea` | accountingCutover summary fix, ADR, SCRUM-486 matrix, this evidence, three regression scenarios. |
+| `073b8f9a4bad7c2c249e5adc44211b3c49ba8505` | Four renewal notes in two existing baseline shards only. |
+
+Not verified: real backend behavior/OCC, cloud limits, production data or old
+leaking audit prevalence, historical audit cleanup, rendered EN/AR phone/desktop,
+Playwright, explorer swarm, fresh Jira/GitHub/three review-comment surfaces,
+independent seats, CI, release rehearsal or deployment. These are coordinator or
+release-lane obligations; no pilot or full-lifecycle certification is claimed.
