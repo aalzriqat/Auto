@@ -34,11 +34,35 @@ function literalCount(node) {
   return Number.isInteger(value) ? value : null;
 }
 
-/** `expect(arg)` -> arg; anything else (including `expect(arg).not`) -> null. */
+/** The expression a `expect.poll` callback directly returns: an expression body or a single `return`. */
+function pollSubject(callback) {
+  const fn = skipWrappers(callback);
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return null;
+  if (!ts.isBlock(fn.body)) return fn.body;
+  const [only, ...rest] = fn.body.statements;
+  return rest.length === 0 && only && ts.isReturnStatement(only) ? (only.expression ?? null) : null;
+}
+
+/**
+ * The subject of an assertion's expect root, or null when the receiver is not one.
+ * Recognised roots: `expect(x)`, `expect.soft(x)`, `expect.poll(() => x)`, each
+ * optionally followed by `.resolves` or `.rejects` (Vitest expect API). Anything
+ * else, including any `.not`, is null.
+ */
 function expectArgument(node) {
-  const inner = skipWrappers(node);
-  if (!ts.isCallExpression(inner) || !ts.isIdentifier(inner.expression) || inner.expression.text !== "expect") return null;
-  return inner.arguments[0] ?? null;
+  let inner = skipWrappers(node);
+  while (ts.isPropertyAccessExpression(inner) && (inner.name.text === "resolves" || inner.name.text === "rejects")) {
+    inner = skipWrappers(inner.expression);
+  }
+  if (!ts.isCallExpression(inner)) return null;
+  const callee = inner.expression;
+  const first = inner.arguments[0] ?? null;
+  if (ts.isIdentifier(callee)) return callee.text === "expect" ? first : null;
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression) || callee.expression.text !== "expect") {
+    return null;
+  }
+  if (callee.name.text === "soft") return first;
+  return callee.name.text === "poll" && first ? pollSubject(first) : null;
 }
 
 const MARKER_PREFILTER = "guardrail-4-fixture";
