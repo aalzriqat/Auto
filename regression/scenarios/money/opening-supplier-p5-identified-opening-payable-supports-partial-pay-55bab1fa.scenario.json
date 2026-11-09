@@ -28,7 +28,7 @@
         "payableId": "OPENING_A",
         "amount": 40.001,
         "paymentMethod": "CASH",
-        "idempotencyKey": "p5-partial"
+        "idempotencyKey": "KEY_1"
       }
     },
     {
@@ -41,7 +41,7 @@
         "payableId": "OPENING_A",
         "disputed": true,
         "reason": "Synthetic",
-        "idempotencyKey": "p5-dispute"
+        "idempotencyKey": "KEY_2"
       }
     },
     {
@@ -54,7 +54,7 @@
         "payableId": "LEGACY_IDLESS_OPENING_A",
         "amount": 10.001,
         "paymentMethod": "CASH",
-        "idempotencyKey": "p5-legacy-partial"
+        "idempotencyKey": "KEY_3"
       }
     },
     {
@@ -66,7 +66,7 @@
       "input": {
         "payableId": "LEGACY_IDLESS_OPENING_A",
         "disputed": false,
-        "idempotencyKey": "p5-legacy-dispute"
+        "idempotencyKey": "KEY_4"
       }
     }
   ],
@@ -105,5 +105,5 @@
       "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
     }
   ],
-  "fingerprint": "224e7ffc13c5188a1145916bcc1b85425337f464ce7946bbc9bcf0011add0afb"
+  "fingerprint": "4953f8dcf57864ec36db241a42d0403464b91e24ac55bd8adeef1ebb3ccba89d"
 }

@@ -297,9 +297,9 @@ test("identified opening payable supports partial payment and dispute; legacy su
   await post(s);
   const payable = (await rows(s)).payables[0];
   await s.owner.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId: payable._id,
-    amount: 40.001, paymentMethod: "CASH", idempotencyKey: "p5-partial" });
+    amount: 40.001, paymentMethod: "CASH", idempotencyKey: "KEY_1" });
   expect((await rows(s)).payables[0]).toMatchObject({ amountDue: 100.003, amountPaid: 40.001, supplierId: s.supplierId });
-  await s.owner.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId: payable._id, disputed: true, reason: "Synthetic", idempotencyKey: "p5-dispute" });
+  await s.owner.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId: payable._id, disputed: true, reason: "Synthetic", idempotencyKey: "KEY_2" });
   const stored = await rows(s);
   await s.t.run(async ctx => {
     await ctx.db.patch(payable._id, { supplierId: undefined, supplierSnapshotVersion: undefined });
@@ -309,9 +309,9 @@ test("identified opening payable supports partial payment and dispute; legacy su
     }) });
   });
   await refuse(s, () => s.owner.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId: payable._id,
-    amount: 10.001, paymentMethod: "CASH", idempotencyKey: "p5-legacy-partial" }), "SUPPLIER_IDENTITY_UNRESOLVED");
+    amount: 10.001, paymentMethod: "CASH", idempotencyKey: "KEY_3" }), "SUPPLIER_IDENTITY_UNRESOLVED");
   await refuse(s, () => s.owner.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId: payable._id,
-    disputed: false, idempotencyKey: "p5-legacy-dispute" }), "SUPPLIER_IDENTITY_UNRESOLVED");
+    disputed: false, idempotencyKey: "KEY_4" }), "SUPPLIER_IDENTITY_UNRESOLVED");
 });
 
 test("unrelated employee opening allocations still post without supplier metadata", async () => {
