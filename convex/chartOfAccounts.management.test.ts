@@ -460,7 +460,7 @@ test("custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without a
   );
   expect(draft).toBeDefined();
   await expect(
-    identity.mutation(api.accountingCutover.approveOpeningBalance, {
+    identity.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId,
       draftId: draft._id,
     }),
@@ -480,7 +480,7 @@ test("custom 2500 and 2510 OTHER_PAYABLE allocations draft and approve without a
   });
   await t
     .withIdentity({ subject: "coa-approver" })
-    .mutation(api.accountingCutover.approveOpeningBalance, {
+    .mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId,
       draftId: draft._id,
     });

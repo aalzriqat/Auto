@@ -1,0 +1,163 @@
+{
+  "id": "opening-edit-audit-singleton-vehicle",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round7-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "allocationKind": "VEHICLE_INVENTORY",
+        "amountMinor": 1000000,
+        "lineCount": 2,
+        "allocationCount": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingCutover.openingBalanceStatus",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.status",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingCutover.listOpeningStockChoices",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingReports.trialBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingLedger.listJournalEntries",
+      "input": {
+        "paginationOpts": {
+          "numItems": 10,
+          "cursor": null
+        }
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Memo-edit"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actionType",
+          "actorId",
+          "fromDate"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dedicatedReaders.withholdAmountsAndRefuseStockAndGLReaders",
+      "value": true
+    },
+    {
+      "observable": "audit.containsProtectedAmountOrMonetaryKeys",
+      "value": false
+    },
+    {
+      "observable": "editAudit.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "editAudit.versions",
+      "value": [
+        0,
+        1
+      ]
+    },
+    {
+      "observable": "editAudit.lineAndAllocationCounts",
+      "value": [
+        2,
+        1
+      ]
+    },
+    {
+      "observable": "editAudit.allocationKinds",
+      "value": [
+        "VEHICLE_INVENTORY"
+      ]
+    },
+    {
+      "observable": "journalEntries.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R7 singleton vehicle inventory edit audit withholds pending amounts"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
+  },
+  "fingerprint": "25570d8dfc8d1b398766a0beb4f22947f04a87029990e2a57cbcda3c4b851678"
+}

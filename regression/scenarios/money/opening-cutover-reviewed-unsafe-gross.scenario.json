@@ -1,0 +1,125 @@
+{
+  "id": "opening-cutover-reviewed-unsafe-gross",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round4-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 9007199254740991,
+        "debit": "CASH_ON_HAND",
+        "credit": "RETAINED_EARNINGS"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "reason": "Synthetic-opening-correction"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 1,
+        "debit": "VAT_RECEIVABLE",
+        "credit": "SALES_TAX_PAYABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.signOffCutover",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.listSignOffs",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "error.code",
+      "value": "CUTOVER_UNSAFE_TOTAL"
+    },
+    {
+      "observable": "accountingCutoverSignOffs.count",
+      "value": 0
+    },
+    {
+      "observable": "financialAuditLog.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R4 reviewed opening unsafe gross sign-off refuses without writes"
+  },
+  "matrixRow": "SCRUM-850-cutover-attestation-exactness",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "a1918002ef42fe9fd8ad0fdf5518fbb1a7468765"
+  },
+  "fingerprint": "1cbc43761768801ed74050e8e3336067c8381f6326ec91ae231e1112ebd7bdd0"
+}

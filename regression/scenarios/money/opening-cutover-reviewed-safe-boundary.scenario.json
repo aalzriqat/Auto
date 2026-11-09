@@ -1,0 +1,117 @@
+{
+  "id": "opening-cutover-reviewed-safe-boundary",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round4-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 4503599627370494,
+        "debit": "CASH_ON_HAND",
+        "credit": "RETAINED_EARNINGS"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "reason": "Synthetic-opening-correction"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.approveVoid",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "amountMinor": 2,
+        "debit": "VAT_RECEIVABLE",
+        "credit": "SALES_TAX_PAYABLE"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.signOffCutover",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.listSignOffs",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "signOff.snapshot.grossDebitMinor",
+      "value": 9007199254740990
+    },
+    {
+      "observable": "signOff.snapshot.grossCreditMinor",
+      "value": 9007199254740990
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R4 reviewed safe boundary sign-off remains exact"
+  },
+  "matrixRow": "SCRUM-850-cutover-attestation-exactness",
+  "fingerprint": "35873ca16fee355ac4469dc86ea8ca8da0be8c26520ea29fd60f07ad1a58fb3a"
+}

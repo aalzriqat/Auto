@@ -35,7 +35,7 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
-import { toMinorUnits, denominationOf } from "./utils/money";
+import { addBalanceMinor, isUnsafeBalanceError, toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
@@ -48,6 +48,8 @@ import { resolvePrepaidScheduleSource } from "./utils/openingPrepaidBasis";
 import { assertOpeningVehicleBasis, listOpeningStockEvidence } from "./utils/openingVehicleBasis";
 import { orgResetState } from "./utils/orgResetGeneration";
 import { hasNamedOpeningDeposit, refuseOpeningDepositDirectPost } from "./utils/openingDepositContainment";
+import { openingLedgerHasActivity } from "./utils/openingVoidProof";
+import { openingChangeBoundary, refuseOpeningChange } from "./utils/openingMaintenanceErrors";
 
 /**
  * SCRUM-54: an opening line on the BANK_ACCOUNT control account must name the
@@ -154,6 +156,16 @@ function unvouchableDenominationMessage(recorded: string | undefined): string {
   return `This opening balance is denominated "${recorded}", which is not a currency AutoFlow can price — the minor-unit scale would have to be guessed, and a wrong guess misstates the organization's entire starting position by a factor of ten. Reject it and submit it again in a supported currency.`;
 }
 
+function addCutoverMinor(total: number, minor: number): number {
+  try {
+    return addBalanceMinor(total, minor);
+  } catch (error) {
+    if (!isUnsafeBalanceError(error)) throw error;
+    throwAppError(AppErrorCode.CUTOVER_UNSAFE_TOTAL,
+      "Cutover totals cannot be represented exactly. Ask finance to review the journal totals.");
+  }
+}
+
 /**
  * A deliberately minimal, sign-off-scoped total — not a substitute for
  * accountingReports.trialBalance (which is per-currency and drives the real
@@ -191,8 +203,8 @@ async function sumAllPostedJournalLinesByCurrency(
       .collect();
     for (const line of lines) {
       const bucket = byCurrency.get(line.currency) ?? { totalDebitsMinor: 0, totalCreditsMinor: 0 };
-      bucket.totalDebitsMinor += line.debitMinor;
-      bucket.totalCreditsMinor += line.creditMinor;
+      bucket.totalDebitsMinor = addCutoverMinor(bucket.totalDebitsMinor, line.debitMinor);
+      bucket.totalCreditsMinor = addCutoverMinor(bucket.totalCreditsMinor, line.creditMinor);
       byCurrency.set(line.currency, bucket);
     }
   }
@@ -236,19 +248,11 @@ async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizatio
  * state, decides: a REVERSED entry is still history, and a later period being
  * open says nothing about earlier postings. DRAFT/VALIDATED never count.
  *
- * Deliberately no category filter: an ordinary new opening after the reversal of
- * an old one is refused too. No correction path exists yet (SCRUM-850); the
- * refusal only tells the finance owner a cutover correction needs review.
+ * SCRUM-850: an ordinary reversed journal still counts. The shared inspector
+ * excuses only an exactly verified governed opening void pair.
  */
 async function hasPostedLedgerActivity(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
-  for (const status of ["POSTED", "REVERSED"] as const) {
-    const entry = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .first();
-    if (entry) return true;
-  }
-  return false;
+  return openingLedgerHasActivity(ctx, orgId);
 }
 
 /**
@@ -437,10 +441,69 @@ export const draftOpeningBalance = mutation({
   },
 });
 
+/** Audit readers have finance authority, not necessarily cost/payroll access.
+ * Omit all amounts: even totals reveal singleton amounts or successive deltas.
+ * Keep free text and individual lines/allocations out of this broader log. */
+function openingDraftAuditSummary(draft: Doc<"openingBalanceDrafts">) {
+  return {
+    version: draft.version ?? 0,
+    lineCount: draft.lines.length,
+    allocationCount: draft.allocations?.length ?? 0,
+    allocationKinds: [...new Set((draft.allocations ?? []).map(allocation => allocation.kind))],
+    asOfDate: draft.asOfDate,
+    currency: draft.currency ?? null,
+  };
+}
+
+/** SCRUM-850: retains the original preparer and pending state. The same
+ * preflight used by posting validates the complete replacement, including
+ * allocations and payroll authority, rather than trusting edited UI fields. */
+export const editOpeningBalanceDraft = mutation({
+  args: {
+    orgId: v.id("organizations"), draftId: v.id("openingBalanceDrafts"),
+    lines: v.array(v.object({ accountId: v.id("chartOfAccounts"), debitMinor: v.number(), creditMinor: v.number(),
+      description: v.optional(v.string()), bankAccountId: v.optional(v.id("bankAccounts")) })),
+    asOfDate: v.number(), memo: v.optional(v.string()), expectedCurrency: v.string(),
+    allocations: v.optional(v.array(openingAllocationValidator)),
+  },
+  returns: v.object({ draftId: v.string() }),
+  handler: async (ctx, args) => openingChangeBoundary(async () => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const draft = await requireOwnedRow(ctx, args.orgId, "openingBalanceDrafts", args.draftId);
+    if (draft.status !== "PENDING_APPROVAL") refuseOpeningChange("OPENING_CHANGE_STATE");
+    if (draft.createdBy !== user._id) refuseOpeningChange("OPENING_CHANGE_PREPARER");
+    if (await containsEmployeeAdvanceControl(ctx, args.orgId, draft)) await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
+    await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
+    const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
+    const replacement = { ...draft, lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency };
+    try { await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
+    catch (error) {
+      if (error instanceof OpeningPreflightError) throw error.original;
+      throw error;
+    }
+    const version = (draft.version ?? 0) + 1;
+    if (!Number.isSafeInteger(version) || version <= 0) refuseOpeningChange("OPENING_DRAFT_CHANGED");
+    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency, version });
+    await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
+      resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
+      before: openingDraftAuditSummary(draft),
+      after: { ...openingDraftAuditSummary({ ...replacement, version }), memoChanged: (draft.memo ?? null) !== (args.memo ?? null) } });
+    return { draftId: String(draft._id) };
+  }),
+});
+
+/** OCC protects the transaction; this token also binds the earlier client review. */
+function assertReviewedOpeningVersion(draft: Doc<"openingBalanceDrafts">, expectedVersion: number): void {
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion !== (draft.version ?? 0)) {
+    refuseOpeningChange("OPENING_DRAFT_CHANGED");
+  }
+}
+
 export const approveOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
     draftId: v.id("openingBalanceDrafts"),
+    expectedVersion: v.number(),
   },
   handler: async (ctx, args): Promise<{ journalId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -449,6 +512,7 @@ export const approveOpeningBalance = mutation({
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
     }
+    assertReviewedOpeningVersion(draft, args.expectedVersion);
     // Segregation of duties, same as approveManualJournal: seeding an org's
     // entire starting GL position is at least as high-risk as an ordinary
     // manual journal, so the two-person check holds on *this* path.
@@ -786,6 +850,7 @@ export const rejectOpeningBalanceDraft = mutation({
   args: {
     orgId: v.id("organizations"),
     draftId: v.id("openingBalanceDrafts"),
+    expectedVersion: v.number(),
     rejectionReason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -800,6 +865,7 @@ export const rejectOpeningBalanceDraft = mutation({
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This opening balance draft has already been resolved.");
     }
+    assertReviewedOpeningVersion(draft, args.expectedVersion);
     if (await containsEmployeeAdvanceControl(ctx, args.orgId, draft)) {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_PAYROLL]);
     }
@@ -1080,6 +1146,7 @@ export const listPendingOpeningBalanceDrafts = query({
         }));
         return {
           _id: draft._id,
+          version: draft.version ?? 0,
           asOfDate: draft.asOfDate,
           memo: draft.memo,
           createdBy: draft.createdBy,
@@ -1148,7 +1215,7 @@ export const openingBalanceStatus = query({
     canReadOpeningStockCost: boolean;
     currency: string;
   }> => {
-    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const { role, user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     // SCRUM-555: index read + in-memory narrowing (convex-lint cleanup, behaviour-preserving).
     const postedEntry = await findPostedOpeningBalanceJournal(ctx, args.orgId);
@@ -1161,7 +1228,7 @@ export const openingBalanceStatus = query({
     const isOwner = isSystemOwnerRole(role);
     const canManageFinance =
       isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
-    const canEnter = canManageFinance && postedEntry === null && pending === null;
+    const canEnter = canManageFinance && postedEntry === null && (pending === null || pending.createdBy === user._id);
 
     const mayViewPayroll = isOwner || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
       role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
@@ -1616,8 +1683,8 @@ export const compareLegacyToGL = query({
     let legacyOutMinor = 0;
     for (const tx of legacyTxns) {
       const minor = toMinorUnits(tx.amount, currency);
-      if (tx.type === "IN") legacyInMinor += minor;
-      else legacyOutMinor += minor;
+      if (tx.type === "IN") legacyInMinor = addCutoverMinor(legacyInMinor, minor);
+      else legacyOutMinor = addCutoverMinor(legacyOutMinor, minor);
     }
 
     const glEvents = (
@@ -1638,8 +1705,8 @@ export const compareLegacyToGL = query({
         .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId!))
         .collect();
       for (const line of lines) {
-        glTotalDebitMinor += line.debitMinor;
-        glTotalCreditMinor += line.creditMinor;
+        glTotalDebitMinor = addCutoverMinor(glTotalDebitMinor, line.debitMinor);
+        glTotalCreditMinor = addCutoverMinor(glTotalCreditMinor, line.creditMinor);
         glCurrencies.add(line.currency);
       }
     }

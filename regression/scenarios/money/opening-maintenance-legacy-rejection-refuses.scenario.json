@@ -1,0 +1,74 @@
+{
+  "id": "opening-maintenance-legacy-rejection-refuses",
+  "fingerprint": "633bb6ce9893535ca554a7340d2c360115d752c3cd5ba2d7407c6a878f6b4147",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round2-local",
+    "firstSeen": "2026-11-08"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "version": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Unseen-replacement"
+      }
+    },
+    {
+      "actor": {
+        "role": "accountant",
+        "org": "A"
+      },
+      "action": "accountingCutover.rejectOpeningBalanceDraft",
+      "input": {
+        "omitExpectedVersion": true,
+        "rejectionReason": "Legacy"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "reject.refused",
+      "value": true
+    },
+    {
+      "observable": "reject.databaseUnchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing"
+  },
+  "matrixRow": "SCRUM-850-opening-maintenance-money",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "72f92b1d9b908ad7290843fd31632aafda340372"
+  }
+}

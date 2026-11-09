@@ -125,13 +125,13 @@ describe("Phase 17 — opening balance journal", () => {
 
     // The same preparer cannot also approve their own draft.
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
         orgId: ctx.orgId,
         draftId: draft.draftId as Id<"openingBalanceDrafts">,
       })
     ).rejects.toThrow(/cannot be the same as the preparer/i);
 
-    const result = await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+    const result = await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });
@@ -181,14 +181,14 @@ describe("Phase 17 — opening balance journal", () => {
     });
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+      ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
         orgId: ctx.orgId,
         draftId: draft.draftId as Id<"openingBalanceDrafts">,
         rejectionReason: "Wrong numbers",
       })
     ).rejects.toThrow(/cannot be the same as the preparer/i);
 
-    await ctx.asReviewer.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+    await ctx.asReviewer.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
       rejectionReason: "Wrong numbers",
@@ -475,7 +475,7 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
         { accountId: syntheticOffset._id, debitMinor: 0, creditMinor: 1_000 },
       ],
     });
-    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });
@@ -608,7 +608,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
 
     // Rejected by someone other than the preparer, as segregation of duties
     // requires on this path.
-    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
       rejectionReason: "Wrong opening cash figure",
@@ -659,7 +659,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       if (settings) await c.db.patch(settings._id, { currency: "USD" });
     });
 
-    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
     });
@@ -704,7 +704,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
       }
     );
 
-    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+    await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
     });
@@ -752,7 +752,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
     });
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
         orgId: ctx.orgId,
         draftId: draftId as Id<"openingBalanceDrafts">,
       })
@@ -760,7 +760,7 @@ describe("SCRUM-62 — a pending opening balance cannot be re-denominated", () =
 
     // Refusing must not strand it: rejection stays available, so the org can
     // always recover by re-submitting.
-    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+    await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
       rejectionReason: "Re-submitting with a recorded currency",
@@ -827,7 +827,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
       });
 
       await expect(
-        ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+        ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
           orgId: ctx.orgId,
           draftId: draftId as Id<"openingBalanceDrafts">,
         })
@@ -843,7 +843,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
 
       // And it is never a dead end: rejection stays available, so the org can
       // re-submit in a denomination that can be vouched for.
-      await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+      await ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, { expectedVersion: 0,
         orgId: ctx.orgId,
         draftId: draftId as Id<"openingBalanceDrafts">,
         rejectionReason: "Re-submitting in a supported currency",
@@ -918,7 +918,7 @@ describe("SCRUM-62 — an opening balance posts only in a denomination AutoFlow 
         ],
       }
     );
-    await twoPerson.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+    await twoPerson.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: twoPerson.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
     });
@@ -1249,7 +1249,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
     // And the server refuses it, so UI and backend agree rather than the UI
     // enabling an action the backend then rejects.
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
         orgId: ctx.orgId,
         draftId: draftId as Id<"openingBalanceDrafts">,
       })
@@ -1314,7 +1314,7 @@ describe("SCRUM-52 — the approval UI can actually be built on this query", () 
 
     // Before SCRUM-52 nothing in the product could reach this call, so the
     // draft sat PENDING_APPROVAL forever and the org's GL never started.
-    const result = await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+    const result = await ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draftId as Id<"openingBalanceDrafts">,
     });
@@ -1539,7 +1539,7 @@ describe("SCRUM-850 — an opening balance cannot be posted over posted ledger a
     const d = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId, expectedCurrency: "JOD", asOfDate: Date.now(), lines: obLines(ctx),
     });
-    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId, draftId: d.draftId as Id<"openingBalanceDrafts">,
     });
     expect(await postedOpeningJournals(ctx)).toHaveLength(1);
@@ -1623,7 +1623,7 @@ describe("SCRUM-850 — an opening balance cannot be posted over posted ledger a
     await insertBusinessJournal(ctx);
     const before = await ledgerRows(ctx);
     await expect(
-      ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+      ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
         orgId: ctx.orgId, draftId: d.draftId as Id<"openingBalanceDrafts">,
       })
     ).rejects.toThrow(LATE);

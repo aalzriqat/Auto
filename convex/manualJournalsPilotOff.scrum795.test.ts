@@ -167,7 +167,7 @@ async function openingLines(w: Awaited<ReturnType<typeof seedManualJournalWorld>
       asOfDate: Date.now(),
       lines: await openingLines(w),
     });
-    const result = await w.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+    const result = await w.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: w.orgId,
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });

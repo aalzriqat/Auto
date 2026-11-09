@@ -84,12 +84,12 @@ test.describe("opening onboarding against the attested workflow Preview", () => 
       await expect(actors.owner.getByText("Opening balance awaiting your approval", { exact: true })).toBeVisible();
       await actors.owner.getByRole("button", { name: "Approve", exact: true }).click();
       const approval = await actors.ownerWire.successful(openingFunctions.approve);
-      expect(approval.args).toEqual({ orgId: fixture.orgId, draftId: pending[0]._id });
+      expect(approval.args).toEqual({ orgId: fixture.orgId, draftId: pending[0]._id, expectedVersion: pending[0].version });
       const posted = { ...openingResult(approval.result), draftId: pending[0]._id };
       const before = await assertNativeOpening(actors, fixture, posted);
       await actors.owner.reload(); await actors.ownerWire.guard();
       await expect(actors.owner.getByText("Opening balance recorded.", { exact: true })).toBeVisible();
-      await expect(actors.ownerClient.mutation(api.accountingCutover.approveOpeningBalance, { orgId: fixture.orgId, draftId: pending[0]._id }))
+      await expect(actors.ownerClient.mutation(api.accountingCutover.approveOpeningBalance, { orgId: fixture.orgId, draftId: pending[0]._id, expectedVersion: pending[0].version }))
         .rejects.toThrow(/already been resolved/i);
       expect(await assertNativeOpening(actors, fixture, posted)).toEqual(before);
       await info.attach("opening-review-native-proof.json", { contentType: "application/json",

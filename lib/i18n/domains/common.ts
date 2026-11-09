@@ -1,6 +1,36 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
+  ServerError_CUTOVER_UNSAFE_TOTAL: [
+    "Cutover totals cannot be represented exactly. Ask finance to review the journal totals.",
+    "لا يمكن تمثيل إجماليات التحول المحاسبي بدقة. اطلب من قسم المالية مراجعة إجماليات القيود.",
+  ],
+  ServerError_ACCOUNT_SNAPSHOT_UNSAFE_TOTAL: [
+    "This balance cannot be represented exactly. Ask finance to review the account totals.",
+    "لا يمكن عرض هذا الرصيد بدقة. اطلب من قسم المالية مراجعة إجماليات الحساب.",
+  ],
+  ServerError_OPENING_DRAFT_CHANGED: [
+    "This opening draft changed after your review. Review the updated draft before deciding.",
+    "تغيّرت المسودة الافتتاحية بعد مراجعتك. راجع المسودة المحدّثة قبل اتخاذ القرار.",
+  ],
+  ServerError_OPENING_CHANGE_STATE: ["This opening is no longer in the required state. Refresh and try again.", "لم يعد الرصيد الافتتاحي في الحالة المطلوبة. حدّث الصفحة وحاول مجدداً."],
+  ServerError_OPENING_CHANGE_PREPARER: ["Only the preparer can edit this pending opening balance.", "يمكن لمُعدّ الرصيد الافتتاحي فقط تعديل المسودة المعلّقة."],
+  ServerError_OPENING_CHANGE_SECOND_PERSON: ["The opening void approver must be different from the requester.", "يجب أن يكون معتمد إلغاء الرصيد الافتتاحي شخصاً غير مقدّم الطلب."],
+  ServerError_OPENING_VOID_REASON: ["Enter a reason of up to 500 characters for the opening void.", "أدخل سبب إلغاء الرصيد الافتتاحي بما لا يتجاوز 500 حرف."],
+  ServerError_OPENING_VOID_ACTIVITY: ["Operations have started. This opening needs a reviewed correction and cannot be voided.", "بدأت العمليات. يحتاج الرصيد الافتتاحي إلى تصحيح مُراجع ولا يمكن إلغاؤه."],
+  ServerError_OPENING_VOID_CONFLICT: ["This opening has changed or has dependent records. Ask finance to review a correction.", "تغيّر الرصيد الافتتاحي أو توجد سجلات تعتمد عليه. اطلب من المسؤول المالي مراجعة التصحيح."],
+  ServerError_OPENING_VOID_PERIOD: ["The original opening period must still be open before the opening can be voided.", "يجب أن تكون الفترة المحاسبية الأصلية مفتوحة لإلغاء الرصيد الافتتاحي."],
+  ServerError_OPENING_CHANGE_UNAVAILABLE: ["The opening change could not be completed. Please try again later.", "تعذّر إكمال تعديل الرصيد الافتتاحي. حاول مجدداً لاحقاً."],
+  OpeningEditDraft: ["Edit draft", "تعديل المسودة"],
+  OpeningSaveDraft: ["Save changes for approval", "حفظ التعديلات للموافقة"],
+  OpeningDraftEdited: ["Draft updated. A different person must approve it.", "تم تحديث المسودة. يجب اعتمادها من شخص آخر."],
+  OpeningRequestVoid: ["Request void", "طلب الإلغاء"],
+  OpeningApproveVoid: ["Approve void", "اعتماد الإلغاء"],
+  OpeningVoidReason: ["Reason for void", "سبب الإلغاء"],
+  OpeningVoidNote: ["Before operations start, a different person may approve a full reversal of this opening and its allocations. Then you can enter a fresh opening.", "قبل بدء العمليات، يمكن لشخص آخر اعتماد عكس الرصيد الافتتاحي وتوزيعاته بالكامل. يمكنك بعدها إدخال رصيد افتتاحي جديد."],
+  OpeningVoidConfirm: ["Void this opening and all its allocations? The original journal and approval history will be kept.", "هل تريد إلغاء هذا الرصيد الافتتاحي وجميع توزيعاته؟ سيُحتفظ بالقيد الأصلي وسجل الموافقات."],
+  OpeningVoidRequested: ["Void requested. A different person must approve it.", "تم طلب الإلغاء. يجب اعتماده من شخص آخر."],
+  OpeningVoided: ["Opening voided. You can now enter a fresh opening.", "تم إلغاء الرصيد الافتتاحي. يمكنك الآن إدخال رصيد افتتاحي جديد."],
   // RT11-DOORS / SCRUM-760#c23862; English matches rt11DoorContainment.ts.
   ServerError_CUSTODY_FINALIZED_MOVEMENT_PILOT_DISABLED: ["Reversing or reimbursing custody on a finalized deal is not available during the pilot. Nothing has been changed.", "عكس حركة عهدة أو سداد مستحقاتها بعد إتمام الصفقة غير متاح خلال المرحلة التجريبية. لم يتم تغيير أي شيء."],
   ServerError_CUSTODY_WRITEOFF_PILOT_DISABLED: ["Writing off a custody shortage is not available during the pilot. Resolve the shortage before closing the custody record. Nothing has been changed.", "شطب عجز العهدة غير متاح خلال المرحلة التجريبية. عالج العجز قبل إغلاق العهدة. لم يتم تغيير أي شيء."],

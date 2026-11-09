@@ -1,0 +1,77 @@
+{
+  "id": "opening-edit-audit-unsafe-history",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round7-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "fixture.retainUnsafePendingDraft",
+      "input": {
+        "currency": "JOD",
+        "debitMinorOperands": [
+          4503599627370496,
+          4503599627370497
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "cashMinor": 200003
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "EDIT_OPENING_DRAFT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.memoChanged",
+      "value": false
+    },
+    {
+      "observable": "editAudit.containsMonetaryKeysOrAmounts",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R7 correcting an unsafe retained draft omits historical and replacement audit amounts"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
+  },
+  "fingerprint": "20b13f06bbb48ef754981a159bb62c680a035ea314412f64e0f4c40eec56edd0"
+}

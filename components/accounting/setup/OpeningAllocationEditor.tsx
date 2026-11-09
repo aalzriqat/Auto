@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
+import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
 import { OPENING_PREPAID_EXPENSE_OPTIONS } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
@@ -143,7 +144,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
       case "VEHICLE_INVENTORY": {
         const choice = vehicles?.find(item => item.vehicleId === value && item.available);
         if (choice) { replaceRow({ ...row, partyId: choice.vehicleId, partyLabel,
-          ...(choice.amountMinor != null ? { amount: fromMinorUnits(choice.amountMinor, currency).toFixed(scaleForCurrency(currency)) } : {}) }); return; }
+          ...(choice.amountMinor != null ? { amount: formatMinorAsMajor(choice.amountMinor, scaleForCurrency(currency)) } : {}) }); return; }
         break;
       }
     }
