@@ -26,15 +26,29 @@ through their recovery, rather than a nonexistent receipt supplierId field.
 | openingPayablePayments | same-org payableId parent supplierId | parent is ordinary OPENING OTHER_PAYABLE | by_creation_time, parent get |
 | vehicles | sourcedSupplierId when SOURCED | STOCK; soft-deleted vehicles, as P3 count | by_creation_time |
 | vehicleOwnershipConversions | supplierId when supplierName exists or fromSourceType SOURCED | history without a supplier; toSourceType alone does not imply a stored supplier | by_creation_time |
-| financeApplications | supplierGapBasis.supplierId when basis exists | no basis | by_creation_time |
+| financeApplications | supplierGapBasis.supplierId for every persisted basis and every held concession | no basis and no held concession | by_creation_time |
 | expenses | vendorSupplierId and costBearerSupplierId when SUPPLIER | ordinary SHOWROOM vendor text per OQ-3; deleted expenses | by_creation_time |
-| vehicleEdits | effective sourcedSupplierId or payload.purchaseSupplierId for pending supplier intake | resolved requests; metadata-only updates inherit existing sourced identity | by_creation_time, vehicle get |
+| vehicleEdits | effective sourcedSupplierId or payload.purchaseSupplierId for pending supplier intake | resolved requests; metadata-only updates inherit existing sourced identity; UPDATE source missing, foreign or deleted | by_creation_time, vehicle get |
 | openingBalanceDrafts | allocations[].supplierId for SUPPLIER_PAYABLE and SUPPLIER_RECOVERABLE | other allocation kinds; id-less OTHER_PAYABLE ordinary creditor | by_creation_time |
 
 Each reason counts affected rows, not amounts. A draft with two unresolved
 supplier allocations counts once per reason. No status exemption is invented
 for posted, rejected or voided drafts. Historical replay fallback is not launch
-evidence. Missing UPDATE source vehicles make the table UNAVAILABLE.
+evidence. A pending UPDATE with a missing, foreign or deleted vehicle is exempt:
+`vehicleEdits.resolve` refuses that source with "Vehicle not found." before any
+vehicle/acquisition write. Approval's earlier request-status patch rolls back
+with the uncaught refusal. Such a request cannot create supplier money. Tests
+call the actual approval mutation for all three shapes and compare stored rows.
+A failed database get remains a genuine read failure and makes evidence UNAVAILABLE.
+
+P3's scope stays unchanged: `holdsConcession` selects an unfinalized, in-flight
+application with a positive supplier share. P7 calls that predicate and also
+counts **every persisted supplierGapBasis**, including CLOSED/finalized history.
+A terminal basis is still a stored supplier-bearing record; a P3 repair exemption
+is not launch evidence that its identity exists. An in-flight held concession
+without a basis is also unresolved, matching P3. An application with neither a
+held concession nor a basis is exempt. The comparison test proves P3 and P7
+against terminal, held/unbound-basis and held/absent-basis shapes.
 
 ## Two places to run the check
 
@@ -55,19 +69,39 @@ bound trusted-accounting-release-verdict remain separate required evidence.
 ## Read limits and failure handling
 
 Scan each table globally in its native by_creation_time index, including rows
-whose organization no longer exists. One query performs one paginate call,
-at most eight source documents and eight same-table parent/source gets, with
-maximumRowsRead 64 and maximumBytesRead four MiB. The scan has no filter and
-returns at most eight documents. The byte budget plus one maximum-size document
-of stopping headroom and eight maximum-size joined documents is thirteen MiB,
-below the sixteen MiB transaction limit. There are at most nine index ranges.
-The row budget is deliberately above numItems: reaching maximumRowsRead itself
-can return SplitRequired, even on small documents. SplitRequired refuses with
-UNAVAILABLE because its page may be incomplete. No collect or post-filtered
-bounded sample can stand in for a full walk.
+whose organization no longer exists. One query performs one paginate call.
+`SUPPLIER_LAUNCH_PAGE_SIZE = 1000` is shared by the backend and release parser.
+`scanOptions` and `finishedPage` are extracted from P3 with their defaults
+unchanged. P7 supplies maximumRowsRead 1001 (one lookahead above numItems) and
+the same maximumBytesRead four MiB. A normal full page must not hit the native
+row-limit split merely because another row exists. SplitRequired still refuses
+with UNAVAILABLE; no incomplete page is accepted.
 
-The caller walks each continuation to READY within the shared rollout deadline
-and a fixed page cap. A limit, exception, malformed page, non-progressing or
+The page performs at most 1,001 scan reads plus 1,000 parent/source gets: at most
+2,001 documents and 1,001 index ranges, below the documented 32,000-document and
+4,096-range limits. Parent results are cached per page, including missing sources
+and the ordinary-creditor exemption. These are upper bounds from the code, not
+measurements of production resource use. The four MiB budget bounds pagination
+only: joined parent reads also consume the transaction's sixteen MiB allowance.
+Large parent documents can still exceed it and refuse as a genuine read failure;
+there is no worst-case joined-byte guarantee. Pages of large source documents
+refuse through native split status. No byte/read threshold is relaxed.
+
+The driver fixture accepts 5,000 vehicles in five calls and 20,000 expenses in
+twenty, plus nine calls for the other empty tables: 34 total instead of 3,134
+with eight-row pages. This measures the driver call count against fixed page
+responses. A separate real harness walk inserts 1,001 conversion rows and proves
+that the backend returns 1,000 then one; another proves native byte splitting.
+It is not a 25,000-row platform or wall-clock benchmark. No internalAction,
+new index, schema deployment or backfill is needed for this call-count budget.
+
+`releaseGuard.ts` owns the phase and response validation. Its shared
+`walkCursorPages` in `releaseCursorPages.ts` walks each continuation to READY within the shared rollout deadline
+and a fixed page cap. Existing repairs retain acceptance at exact deadline
+equality; P7 retains its stricter equality refusal. Both reject a call returning
+late. The shared walker also refuses repeated cursors. `rolloutRelease.mjs`
+has one `finishSuccessfulRollout` helper that invokes P7 before the shared
+summary and sole successful exit; both empty and verified branches call it. A limit, exception, malformed page, non-progressing or
 repeated cursor, excessive page size, unknown reason, unsafe count, missing
 table result or exhausted bound is UNAVAILABLE. Partial counts are withheld.
 Unexpected query errors are logged server-side and return a fixed coded
@@ -113,5 +147,10 @@ The internal query and CLI caller follow these native patterns; a maintained
 counter would require money-writer changes and cannot certify old documents.
 [GitHub Actions secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets)
 supports preserving the existing step-scoped credential rather than adding one.
+[Node 22 TypeScript type stripping](https://nodejs.org/docs/latest-v22.x/api/typescript.html)
+requires explicit .ts extensions and type-only imports. The root already uses
+noEmit; allowImportingTsExtensions permits these imports during typechecking,
+as [TypeScript documents](https://www.typescriptlang.org/tsconfig/allowImportingTsExtensions.html).
+The shared registry is runtime-neutral and does not import Convex/server code.
 Documentation supports the design; executed tests and runtime evidence must
 separately prove its implementation.

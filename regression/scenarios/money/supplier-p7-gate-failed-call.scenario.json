@@ -14,7 +14,7 @@
         "role": "RELEASE_OPERATOR",
         "org": "A"
       },
-      "action": "rolloutRelease.requireSupplierLaunchEvidence",
+      "action": "rolloutRelease.finishSuccessfulRollout",
       "input": {
         "failedCall": true,
         "thrownIO": true,
@@ -47,9 +47,9 @@
     }
   ],
   "impl": {
-    "file": "scripts/supplierLaunchGate.test.ts",
+    "file": "scripts/releaseGuard.supplierLaunch.test.ts",
     "testName": "failed CLI, thrown I/O and deadline never become zero"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "d193c31912e9995b98c0635081e991e06d0eca532cf44f6a45160b52f5eef472"
+  "fingerprint": "3b765898be57dff4ce0184f87113c3735cec26ee85010189704df34de385772a"
 }

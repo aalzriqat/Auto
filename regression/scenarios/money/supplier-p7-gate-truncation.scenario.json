@@ -14,7 +14,7 @@
         "role": "RELEASE_OPERATOR",
         "org": "A"
       },
-      "action": "rolloutRelease.requireSupplierLaunchEvidence",
+      "action": "rolloutRelease.finishSuccessfulRollout",
       "input": {
         "morePages": true,
         "maxPages": 2
@@ -46,9 +46,9 @@
     }
   ],
   "impl": {
-    "file": "scripts/supplierLaunchGate.test.ts",
+    "file": "scripts/releaseGuard.supplierLaunch.test.ts",
     "testName": "a truncated walk fails closed at the bound"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "c3c7fc6465f2eb89cedf0d7a84d0d35aee868dcbe76595ca106e9c1cc2439fc8"
+  "fingerprint": "56d7464e4a96cf6ef2ef0ea5251eac5e2274ba735b646478327e205dae39ff33"
 }

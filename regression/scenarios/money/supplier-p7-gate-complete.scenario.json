@@ -14,7 +14,7 @@
         "role": "RELEASE_OPERATOR",
         "org": "A"
       },
-      "action": "rolloutRelease.requireSupplierLaunchEvidence",
+      "action": "rolloutRelease.finishSuccessfulRollout",
       "input": {
         "tables": 11,
         "allCounts": 0
@@ -42,9 +42,9 @@
     }
   ],
   "impl": {
-    "file": "scripts/supplierLaunchGate.test.ts",
+    "file": "scripts/releaseGuard.supplierLaunch.test.ts",
     "testName": "complete zero requires independent evidence for every table"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "c465027fefd7671f07a7f2e606cf337f0599131a4fd8296825a088d8f9dd4976"
+  "fingerprint": "5e04f423f057b3f48449c5d0ebd03d45179faaa21b27c46b7205fcc4c3c1d0c1"
 }

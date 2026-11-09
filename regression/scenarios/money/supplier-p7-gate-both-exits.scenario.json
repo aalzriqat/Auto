@@ -14,7 +14,7 @@
         "role": "RELEASE_OPERATOR",
         "org": "A"
       },
-      "action": "rolloutRelease.requireSupplierLaunchEvidence",
+      "action": "rolloutRelease.finishSuccessfulRollout",
       "input": {
         "rolloutSuccessExits": 2
       }
@@ -41,9 +41,9 @@
     }
   ],
   "impl": {
-    "file": "scripts/supplierLaunchGate.test.ts",
-    "testName": "both successful rollout exits invoke the same refusing phase"
+    "file": "scripts/supplierLaunchRollout.test.ts",
+    "testName": "empty rollout success requires complete supplier evidence"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "a6b0ecdef6757d035796e417a3faa5a3488657e182738617bf62e03a3551bf77"
+  "fingerprint": "a6114333909a9d7193881f265064032d8992beb93be5b96b940c582a351168b2"
 }

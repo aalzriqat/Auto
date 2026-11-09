@@ -14,7 +14,7 @@
         "role": "RELEASE_OPERATOR",
         "org": "A"
       },
-      "action": "rolloutRelease.requireSupplierLaunchEvidence",
+      "action": "rolloutRelease.finishSuccessfulRollout",
       "input": {
         "missingIdentityPerTable": 1
       }
@@ -45,9 +45,9 @@
     }
   ],
   "impl": {
-    "file": "scripts/supplierLaunchGate.test.ts",
+    "file": "scripts/releaseGuard.supplierLaunch.test.ts",
     "testName": "nonzero count refuses launch and returns counts only"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "0524ab0fd82be2cc2fefaab9c566e1b30fd061c6a22402a67f2d8c6194924244"
+  "fingerprint": "32c08a3dd8b2a756d4e9835ffb029f8bc15f84498d4b9c95c34613572744cac8"
 }

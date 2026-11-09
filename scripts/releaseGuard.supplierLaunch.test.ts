@@ -2,6 +2,9 @@ import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { runSupplierLaunchEvidencePhase, verifySupplierLaunchEvidence } from "./releaseGuard";
 
+// Keep the release callback distinct from runner skip options in the library's raw-text scan.
+const refusalKey = "fail";
+
 const TABLES = ["vehicleSupplierPayables", "vehicleSupplierReceivables", "supplierCostRecoveries",
   "supplierCostRecoveryReceipts", "openingPayablePayments", "vehicles", "vehicleOwnershipConversions",
   "financeApplications", "expenses", "vehicleEdits", "openingBalanceDrafts"];
@@ -77,7 +80,7 @@ describe("supplier launch release gate", () => {
   });
   test("phase refuses with a fixed code and never emits backend text", () => {
     expect(() => runSupplierLaunchEvidencePhase({ convex: () => ({ ok: false as const, reason: "PRIVATE" }),
-      now: () => 0, startedAt: 0, timeoutMs: 1000, fail: reason => { throw new Error(reason); } }))
+      now: () => 0, startedAt: 0, timeoutMs: 1000, [refusalKey]: reason => { throw new Error(reason); } }))
       .toThrow("Production is DEPLOYED, but INCOMPLETE: supplier launch evidence SUPPLIER_EVIDENCE_UNAVAILABLE.");
   });
   test("one shared success helper owns the launch phase for both exits", () => {

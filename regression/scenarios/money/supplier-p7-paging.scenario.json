@@ -50,5 +50,9 @@
     "testName": "walks beyond the first bounded page instead of declaring a truncated zero"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "502973e622d0ee744dc75ba2e90c5948b4a6495e106436e75f7121e77514aa53"
+  "fingerprint": "502973e622d0ee744dc75ba2e90c5948b4a6495e106436e75f7121e77514aa53",
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "2de1a4f1f44f5783fd96203d1c9ca9423196a808"
+  }
 }

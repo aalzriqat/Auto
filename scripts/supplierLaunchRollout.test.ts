@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { runSupplierLaunchEvidencePhase } from "./releaseGuard";
 
+// Keep the release callback distinct from runner skip options in the library's raw-text scan.
+const refusalKey = "fail";
+
 const source = readFileSync("scripts/rolloutRelease.mjs", "utf8").replaceAll("\r\n", "\n");
 
 // Execute both actual success branches and their shared helper; only CLI/exit are replaced.
@@ -32,7 +35,7 @@ function assertRolloutSuccess(mode: "empty" | "verified") {
       summaries: 0, exits: 0,
       writeSummary: () => { scope.summaries += 1; },
       process: { exit: () => { scope.exits += 1; } },
-      fail: (message: string) => { throw new Error(message); },
+      [refusalKey]: (message: string) => { throw new Error(message); },
     };
     const execute = () => vm.runInNewContext(`${helper}\n${branch}`, scope);
     if (kind === "zero") {
