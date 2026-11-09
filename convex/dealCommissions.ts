@@ -278,7 +278,7 @@ export const addLine = mutation({
         actionType: "ADD_DEAL_COMMISSION_LINE",
         resourceType: "dealCommissionLines",
         resourceId: lineId,
-        description: `Registered ${args.kind} commission of ${amountMinor} (minor, ${currency}) on sale ${args.saleId}`,
+        description: `Registered ${args.kind} deal commission line.`,
         before: null,
         after: { saleId: args.saleId, kind: args.kind, employeeId: args.employeeId, amountMinor, currency },
       });
@@ -333,7 +333,7 @@ export const removeLine = mutation({
         actionType: "REMOVE_DEAL_COMMISSION_LINE",
         resourceType: "dealCommissionLines",
         resourceId: args.lineId,
-        description: `Removed ${line.kind} commission of ${line.amountMinor} (minor, ${line.currency}) from sale ${line.saleId}`,
+        description: `Removed ${line.kind} deal commission line.`,
         before: { saleId: line.saleId, kind: line.kind, employeeId: line.employeeId, amountMinor: line.amountMinor },
         after: null,
       });

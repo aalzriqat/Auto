@@ -57,3 +57,19 @@ behavior or production prevalence. Independent seats and CI remain outstanding.
 - [Convex auth in functions](https://docs.convex.dev/auth/functions-auth): derive identity from the function context on the server.
 
 These sources support the design; repository tests must establish the behavior.
+
+
+Implementation review refined the projection before freeze. Restricted rows
+retain the resource type and audit-event id, and replace protected source ids
+with `WITHHELD`. The SCRUM-850 regression now asserts that stronger exclusion.
+Opening void text uses the maintenance reader's manage-payroll grant, distinct
+from opening allocation readback's view-or-manage grant. Untyped historical edit
+payloads without a provable payroll audience are withheld even if today's draft
+no longer contains employee controls. Unwind actors retain the same remittance
+fields as `unwindStatus`, through its shared predicate, while free text and the
+forward contribution stay withheld. Both `lines` and `lineCount` producer shapes
+retain their counts.
+
+The new indexed journal-to-opening lookup follows [Convex's native index
+pattern](https://docs.convex.dev/database/reading-data/indexes/). Exhaustive
+classification uses TypeScript's [`satisfies` operator](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html#the-satisfies-operator).

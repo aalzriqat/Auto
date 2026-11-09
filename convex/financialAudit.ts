@@ -8,87 +8,197 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import { Id } from "./_generated/dataModel";
-import { MutationCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
+import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
+import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
+import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
+import { canManageOpeningPayroll, canReadOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
+import { openingAllocationValidator } from "./utils/openingAllocationValidators";
+import { mayReadUnwindActorEvidence } from "./utils/dealUnwindGuard";
 import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
 import { scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 
-type AuditActionType =
-  | "EDIT_OPENING_DRAFT"
-  | "REQUEST_OPENING_VOID"
-  | "APPROVE_OPENING_VOID"
-  | "CREATE_PERIOD"
-  | "POST_EVENT"
-  | "POST_MANUAL_JOURNAL"
-  | "CREATE_MANUAL_JOURNAL_DRAFT"
-  | "REJECT_MANUAL_JOURNAL"
-  | "REVERSE_EVENT"
-  | "OPEN_PERIOD"
-  | "CLOSE_PERIOD"
-  | "LOCK_PERIOD"
-  | "REOPEN_PERIOD"
-  | "INIT_CHART"
-  | "UPDATE_ACCOUNT"
-  | "MIGRATE_TRANSACTION"
-  | "ALLOCATE_PAYMENT"
-  | "SET_SUPPLIER_DISPUTE"
-  | "REVERSE_ALLOCATION"
-  | "IGNORE_BANK_STATEMENT_LINE"
-  | "CORRECT_PREPAID_SCHEDULE"
-  | "REQUEST_PREPAID_CORRECTION"
-  | "APPROVE_PREPAID_CORRECTION"
-  | "REJECT_PREPAID_CORRECTION"
-  | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
-  | "REPAIR_MISSING_SYSTEM_ACCOUNTS"
-  | "ACKNOWLEDGE_CLOSE_WARNINGS"
-  | "SET_COMMISSION_AMOUNT"
-  // Who decided which car on a multi-vehicle quote carries which share of the
-  // reservation deposit, and what happened to a share whose car left the deal.
-  // Not a posting — the money does not move — but it decides where a customer's
-  // deposit lands, so it is not a decision that may go unrecorded.
-  | "ALLOCATE_DEPOSIT"
-  | "RESOLVE_DEPOSIT_ALLOCATION"
-  // Who decided that a financed consigned deal settles with the supplier
-  // directly rather than through the dealership. Like the deposit allocation
-  // above it moves no money by itself, and like it, it decides which way the
-  // money moves afterwards: whether the dealership ends up owing the supplier
-  // his entitlement or holding a claim on him for its margin. The two produce
-  // opposite balance sheets from the same sale.
-  | "SET_SUPPLIER_SETTLEMENT_ROUTE"
-  // SCRUM-447: retiring a registered expected payment / attesting a cheque face.
-  | "CORRECT_EXPECTED_PAYMENT"
-  | "ATTEST_CHEQUE_FACE"
-  // The finance company paid the supplier. Recorded as a fact off the
-  // settlement advice, with no journal behind it — which is exactly why it
-  // needs an audit trail: nothing in the ledger would otherwise show who
-  // asserted it, or when.
-  | "CONFIRM_SUPPLIER_DISBURSEMENT"
-  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE"
-  // What the vehicle commitment authority did after a sale was cancelled and
-  // its deposit money came back. Moves no money, and that is exactly why it
-  // needs a trail: whether the customer's DEAL was restored, blocked by a
-  // rival, left for a human to repair, or not examined at all is otherwise
-  // visible only as the absence of a change nobody recorded. The deferred
-  // half of the same decision lands on `pendingAccountingEvents`; this is the
-  // synchronous half, which has no queue row to land on.
-  | "SETTLE_COMMITMENT_AUTHORITY"
-  // SCRUM-239: the bank returned a finance-company disbursement cheque AFTER it
-  // cleared. One command undoes that disbursement (application receipt fields,
-  // allocations, payment, its cash-received posting); the trail records who
-  // asserted it and what was undone, because the ledger shows only the reversal.
-  | "RETURN_FINANCE_DISBURSEMENT_CHEQUE"
-  | "ADD_DEAL_COMMISSION_LINE"
-  | "REMOVE_DEAL_COMMISSION_LINE"
-  // SCRUM-693: the steps of unwinding a paid finance deal from the deal page.
-  | "DEAL_UNWIND_STARTED"
-  | "DEAL_UNWIND_FORWARD_RETURNED"
-  | "DEAL_UNWIND_REMITTANCE_REFUNDED"
-  | "DEAL_UNWIND_COMPLETED"
-  | "DEAL_UNWIND_ABANDONED";
+// Derive from the persisted union: schema additions must be classified here.
+type AuditActionType = Doc<"financialAuditLog">["actionType"];
+type AuditReadPolicy = "FINANCE" | "COST" | "OPENING" | "OPENING_VOID" | "JOURNAL" | "MANUAL_DRAFT" |
+  "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "UNWIND";
+
+/** Source-reader policies, not mutation authority. See the SCRUM-936 census/ADR. */
+export const AUDIT_READ_POLICY = {
+  EDIT_OPENING_DRAFT: "OPENING",
+  REQUEST_OPENING_VOID: "OPENING_VOID",
+  APPROVE_OPENING_VOID: "OPENING_VOID",
+  CREATE_PERIOD: "FINANCE",
+  POST_EVENT: "POST_EVENT",
+  POST_MANUAL_JOURNAL: "JOURNAL",
+  CREATE_MANUAL_JOURNAL_DRAFT: "MANUAL_DRAFT",
+  REJECT_MANUAL_JOURNAL: "MANUAL_DRAFT",
+  REVERSE_EVENT: "COST",
+  OPEN_PERIOD: "FINANCE",
+  CLOSE_PERIOD: "COST",
+  LOCK_PERIOD: "FINANCE",
+  REOPEN_PERIOD: "FINANCE",
+  INIT_CHART: "FINANCE",
+  UPDATE_ACCOUNT: "FINANCE",
+  MIGRATE_TRANSACTION: "MIGRATION",
+  ALLOCATE_PAYMENT: "COST",
+  SET_SUPPLIER_DISPUTE: "COST",
+  REVERSE_ALLOCATION: "COST",
+  IGNORE_BANK_STATEMENT_LINE: "FINANCE",
+  CORRECT_PREPAID_SCHEDULE: "FINANCE",
+  REQUEST_PREPAID_CORRECTION: "FINANCE",
+  APPROVE_PREPAID_CORRECTION: "FINANCE",
+  REJECT_PREPAID_CORRECTION: "FINANCE",
+  RESOLVE_SYSTEM_ACCOUNT_ADOPTION: "FINANCE",
+  REPAIR_MISSING_SYSTEM_ACCOUNTS: "FINANCE",
+  ACKNOWLEDGE_CLOSE_WARNINGS: "COST",
+  SET_COMMISSION_AMOUNT: "SALE_COMMISSION",
+  ALLOCATE_DEPOSIT: "SALES",
+  RESOLVE_DEPOSIT_ALLOCATION: "SALES",
+  SET_SUPPLIER_SETTLEMENT_ROUTE: "SALES",
+  CORRECT_EXPECTED_PAYMENT: "SALES",
+  ATTEST_CHEQUE_FACE: "FINANCE",
+  CONFIRM_SUPPLIER_DISBURSEMENT: "FINANCE",
+  AMEND_SUPPLIER_DISBURSEMENT_ADVICE: "FINANCE",
+  SETTLE_COMMITMENT_AUTHORITY: "SALES",
+  RETURN_FINANCE_DISBURSEMENT_CHEQUE: "FINANCE",
+  ADD_DEAL_COMMISSION_LINE: "COMMISSION",
+  REMOVE_DEAL_COMMISSION_LINE: "COMMISSION",
+  DEAL_UNWIND_STARTED: "UNWIND",
+  DEAL_UNWIND_FORWARD_RETURNED: "UNWIND",
+  DEAL_UNWIND_REMITTANCE_REFUNDED: "UNWIND",
+  DEAL_UNWIND_COMPLETED: "UNWIND",
+  DEAL_UNWIND_ABANDONED: "UNWIND",
+} satisfies Record<AuditActionType, AuditReadPolicy>;
+
+type AuditRow = Doc<"financialAuditLog">;
+type AuditReadRow = AuditRow & { detailsWithheld?: true; lineCount?: number };
+
+async function mayReadOpeningAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+  if (!canReadVehicleCost(role)) return false;
+  const voidAction = AUDIT_READ_POLICY[row.actionType] === "OPENING_VOID";
+  if (voidAction ? canManageOpeningPayroll(role) : canReadOpeningPayroll(role)) return true;
+  // The current draft may have had an employee removed since an older audit
+  // snapshot was written. An untyped historical payload cannot prove its audience.
+  if (row.actionType === "EDIT_OPENING_DRAFT" &&
+      (!isOpeningAuditSummary(row.before) || !isOpeningAuditSummary(row.after))) return false;
+  const draftId = ctx.db.normalizeId("openingBalanceDrafts", row.resourceId);
+  const draft = draftId ? await ctx.db.get(draftId) : null;
+  return draft?.orgId === row.orgId && !(await containsEmployeeAdvanceControl(ctx, row.orgId, draft));
+}
+
+async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+  if (!mayReadFinanceEconomics(role) || !canReadVehicleCost(role)) return false;
+  if (canReadOpeningPayroll(role)) return true;
+  const journalId = ctx.db.normalizeId("journalEntries", row.resourceId);
+  const journal = journalId ? await ctx.db.get(journalId) : null;
+  if (!journal || journal.orgId !== row.orgId) return false;
+  if (journal.category !== "OPENING_BALANCE") return true;
+  const draft = await ctx.db.query("openingBalanceDrafts")
+    .withIndex("by_org_journal", q => q.eq("orgId", row.orgId).eq("journalEntryId", journal._id)).unique();
+  return draft !== null && !(await containsEmployeeAdvanceControl(ctx, row.orgId, draft));
+}
+
+async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+  if (isSystemOwnerRole(role)) return true;
+  const policy = AUDIT_READ_POLICY[row.actionType];
+  switch (policy) {
+    case "OPENING": return mayReadOpeningAudit(ctx, role, row);
+    case "OPENING_VOID": return mayReadOpeningAudit(ctx, role, row);
+    case "JOURNAL": return mayReadJournalAudit(ctx, role, row);
+    case "MANUAL_DRAFT":
+      if (row.resourceType === "openingBalanceDrafts") return mayReadOpeningAudit(ctx, role, row);
+      // listPendingManualJournals intentionally requires manage:finance alone.
+      return row.resourceType === "manualJournalDrafts";
+    case "POST_EVENT":
+      return mayReadFinanceEconomics(role) &&
+        (row.resourceType === "accountingCutoverSignOffs" || canReadVehicleCost(role));
+    case "MIGRATION":
+      // The other migration producer records batch counts, not sale economics.
+      return mayReadFinanceEconomics(role) && (row.resourceId === row.resourceType || canReadVehicleCost(role));
+    case "COST": return mayReadFinanceEconomics(role) && canReadVehicleCost(role);
+    case "COMMISSION": return role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
+    case "SALE_COMMISSION":
+      // sales.get exposes commissionAmount under VIEW_SALES (PUBLIC_LEGACY);
+      // dealCommissions.forSale exposes it under VIEW_COMMISSIONS.
+      return role.permissions.includes(PERMISSIONS.VIEW_SALES) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
+    case "SALES": return role.permissions.includes(PERMISSIONS.VIEW_SALES);
+    case "FINANCE":
+    case "UNWIND": return mayReadFinanceEconomics(role);
+    default: return false;
+  }
+}
+
+function auditObject(raw: unknown): Record<string, unknown> | null {
+  return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+}
+
+/** Preserve #792's amount-free summary contract without trusting arbitrary keys. */
+function openingAuditSummary(raw: unknown): Record<string, unknown> | undefined {
+  const source = auditObject(raw);
+  if (!source) return undefined;
+  const summary: Record<string, unknown> = {};
+  for (const key of ["version", "lineCount", "allocationCount", "asOfDate"] as const) {
+    const count = source[key];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) summary[key] = count;
+  }
+  if (Array.isArray(source.lines)) summary.lineCount = source.lines.length;
+  if (Array.isArray(source.allocations)) summary.allocationCount = source.allocations.length;
+  const kinds = openingAllocationValidator.members.map(member => member.fields.kind.value);
+  if (Array.isArray(source.allocationKinds) && source.allocationKinds.every((kind: unknown) => kinds.some(allowed => allowed === kind))) {
+    summary.allocationKinds = source.allocationKinds;
+  }
+  if (source.currency === null || (typeof source.currency === "string" && /^[A-Z]{3}$/.test(source.currency))) summary.currency = source.currency;
+  if (typeof source.memoChanged === "boolean") summary.memoChanged = source.memoChanged;
+  return Object.keys(summary).length ? summary : undefined;
+}
+
+function isOpeningAuditSummary(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return true;
+  const source = auditObject(raw);
+  if (!source) return false;
+  const summary = openingAuditSummary(raw) ?? {};
+  return Object.keys(source).every(key => Object.hasOwn(summary, key));
+}
+
+function unwindActorAuditAmounts(raw: unknown): Record<string, unknown> | undefined {
+  const source = auditObject(raw);
+  if (!source) return undefined;
+  const amounts: Record<string, unknown> = {};
+  for (const key of ["remittanceMinor", "disbursedAmountMinor"] as const) {
+    const amount = source[key];
+    if (typeof amount === "number" && Number.isSafeInteger(amount) && amount >= 0) amounts[key] = amount;
+  }
+  if (source.remittanceMethod === "CASH" || source.remittanceMethod === "BANK_TRANSFER") amounts.remittanceMethod = source.remittanceMethod;
+  return Object.keys(amounts).length ? amounts : undefined;
+}
+
+async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<AuditReadRow> {
+  if (await mayReadAuditDetails(ctx, role, row)) return row;
+  // Explicit allowlist: never spread a restricted row, even when the schema grows.
+  const projected: AuditReadRow = {
+    _id: row._id, _creationTime: row._creationTime, orgId: row.orgId,
+    actorId: row.actorId, actionType: row.actionType, resourceType: row.resourceType,
+    resourceId: "WITHHELD", occurredAt: row.occurredAt,
+    description: "Financial audit details withheld.", detailsWithheld: true,
+  };
+  const after = auditObject(row.after);
+  const lineCount = Array.isArray(after?.lines) ? after.lines.length : after?.lineCount ?? after?.lines;
+  if (typeof lineCount === "number" && Number.isSafeInteger(lineCount) && lineCount >= 0) projected.lineCount = lineCount;
+  if (row.actionType === "EDIT_OPENING_DRAFT") {
+    projected.before = openingAuditSummary(row.before);
+    projected.after = openingAuditSummary(row.after);
+  }
+  if (AUDIT_READ_POLICY[row.actionType] === "UNWIND" && role.permissions.includes(PERMISSIONS.VIEW_SALES) && mayReadUnwindActorEvidence(role)) {
+    projected.before = unwindActorAuditAmounts(row.before);
+    projected.after = unwindActorAuditAmounts(row.after);
+  }
+  return projected;
+}
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
@@ -150,7 +260,7 @@ export const listAuditLog = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const requestedLimit = args.limit ?? 50;
     if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
       throw new ConvexError("limit must be a positive integer.");
@@ -204,7 +314,7 @@ export const listAuditLog = query({
       });
     }
 
-    return entries.slice(0, limit);
+    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry)));
   },
 });
 

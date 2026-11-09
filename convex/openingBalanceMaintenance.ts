@@ -16,6 +16,7 @@ import { assertNoOpeningVoidReferences } from "./utils/openingVoidReferences";
 import { inTurn } from "./utils/transactionReadHeadroom";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
+import { canManageOpeningPayroll } from "./utils/openingPayrollVisibility";
 
 type Opening = Doc<"openingBalanceDrafts">;
 
@@ -167,7 +168,7 @@ export const status = query({
     const owner = isSystemOwnerRole(role);
     const visibility = { userId: user._id,
       canViewCosts: owner || role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE),
-      canManagePayroll: owner || role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL) };
+      canManagePayroll: canManageOpeningPayroll(role) };
     const pending = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL")).first();
     const posted = await ctx.db.query("openingBalanceDrafts").withIndex("by_org_status", q => q.eq("orgId", args.orgId).eq("status", "POSTED")).take(2);
     const draft = posted.length === 1 ? posted[0] : null;

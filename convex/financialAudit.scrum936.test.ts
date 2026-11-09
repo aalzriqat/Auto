@@ -60,7 +60,7 @@ async function expectCostReaderRefusals(s: Seed) {
     paginationOpts: { numItems: 10, cursor: null } })).rejects.toThrow(/permission/i);
 }
 
-async function assertAllBranches(s: Seed, row: AuditRow, forbidden: readonly string[]) {
+async function assertAllBranches(s: Seed, row: AuditRow, forbidden: readonly string[], lineCount?: number) {
   for (const filter of [{}, { actorId: row.actorId }, { actionType: row.actionType }, { fromDate: 1 }]) {
     const args = { orgId: s.orgId, ...filter, limit: 200 };
     const rows = await s.finance.query(api.financialAudit.listAuditLog, args);
@@ -68,6 +68,7 @@ async function assertAllBranches(s: Seed, row: AuditRow, forbidden: readonly str
     expect(restricted).toBeDefined();
     expect(restricted).toMatchObject({ actorId: row.actorId, actionType: row.actionType,
       resourceType: row.resourceType, resourceId: "WITHHELD", occurredAt: row.occurredAt });
+    if (lineCount !== undefined) expect(restricted).toMatchObject({ lineCount });
     const text = JSON.stringify(restricted);
     for (const secret of forbidden) expect(text).not.toContain(secret);
     expect(await s.owner.query(api.financialAudit.listAuditLog, args)).toContainEqual(row);
@@ -121,7 +122,7 @@ async function postedOpening(kind: "VEHICLE_INVENTORY" | "EMPLOYEE_ADVANCE", doo
     if (!row) throw new Error("Missing posted-opening audit");
     // Authorized positive control has the actual structured total.
     expect(row.after).toMatchObject({ totalDebits: amountMinor, lines: 2 });
-    await assertAllBranches(s, row, [String(amountMinor), String(kind === "EMPLOYEE_ADVANCE" ? s.employeeId : stock!._id)]);
+    await assertAllBranches(s, row, [String(amountMinor), String(kind === "EMPLOYEE_ADVANCE" ? s.employeeId : stock!._id)], 2);
     await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
     const readback = await s.finance.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId });
     if (kind === "EMPLOYEE_ADVANCE") {
@@ -151,15 +152,15 @@ test("SCRUM-936 approved singleton employee posting audit inherits payroll withh
 test("SCRUM-936 legacy opening edit draft and total copies are projected in every branch", async () => {
   const s = await fixture();
   await expectCostReaderRefusals(s);
-  for (const after of [{ totalDebits: 1_000_000, lineCount: 2 },
-    { lines: [{ vehicleId: s.vehicleId, debitMinor: 1_000_000 }], allocations: [{ userId: s.employeeId, amountMinor: 110_003 }], memo: "private opening 1000000" }]) {
+  for (const { after, lineCount } of [{ after: { totalDebits: 1_000_000, lineCount: 2 }, lineCount: 2 },
+    { after: { lines: [{ vehicleId: s.vehicleId, debitMinor: 1_000_000 }], allocations: [{ userId: s.employeeId, amountMinor: 110_003 }], memo: "private opening 1000000" }, lineCount: 1 }]) {
     const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
       actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts", resourceId: "legacy-draft",
       description: "Draft changed 1000000 total", before: { totalDebits: 110_003, userId: s.employeeId }, after,
       idempotencyKey: `private-${s.employeeId}-1000000`, occurredAt: Date.now() }));
     const row = await s.t.run(ctx => ctx.db.get(id));
     if (!row) throw new Error("Missing legacy edit");
-    await assertAllBranches(s, row, ["1000000", "110003", String(s.vehicleId), String(s.employeeId), "private opening"]);
+    await assertAllBranches(s, row, ["1000000", "110003", String(s.vehicleId), String(s.employeeId), "private opening"], lineCount);
   }
   const draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId,
     status: "PENDING_APPROVAL", createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate, currency: "JOD",

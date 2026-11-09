@@ -5,6 +5,13 @@ import { AppErrorCode, throwAppError } from "./errors";
 import { DEAL_UNWIND_MESSAGES } from "./dealUnwindMessages";
 import { chequesForApplication, isFcLineage } from "./fcCheque";
 import { disbursementVersionOf, financeDisbursementKeys } from "./financeDisbursementKeys";
+import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
+
+/** Same actor tier as unwindStatus, separate from the finance economics grant. */
+export function mayReadUnwindActorEvidence(role: Doc<"roles">): boolean {
+  return isSystemOwnerRole(role) || (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
+    (role.permissions.includes(PERMISSIONS.VIEW_FINANCE) || role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL)));
+}
 
 /**
  * SCRUM-693: while a deal is being unwound, no other command may move its

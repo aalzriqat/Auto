@@ -1826,3 +1826,35 @@ Two edits changing only cash amounts require summaries differing only in version
 with no monetary key or amount delta. Unsafe retained history is still correctable,
 without a null total field or replacement amount in the audit. Separate source
 mutants reintroducing totalDebits in before and after must each fail these tests.
+
+
+### SCRUM-936-audit-reader-confidentiality
+
+Financial audit copies inherit the dedicated source reader's permission. Run
+`convex/financialAudit.scrum936.test.ts`. Twelve literal scenario tests are
+registered in `regression/scenarios/money/scrum936-*.scenario.json`, with
+failing-first commit `e5813b68f46b63546c3b448900efec0efa0241e9` (13 failed,
+including classification completeness). All four audit branches, both opening
+posting doors, singleton vehicle and employee openings, retained full-draft and
+total-only edits, posted manual journal history, commission add/remove/set,
+retained migration COGS, and supplier cost receipt/reversal payloads are covered.
+Each negative audit assertion has a source-reader refusal/withholding control
+and a full-row owner control. Explicit non-owner grants also restore full rows.
+Cost-only employee controls remain withheld under the opening payroll rule.
+Pending manual-journal drafts preserve their existing manage-finance audience.
+The stored rows remain unchanged. Classification is exhaustive over the schema.
+
+This is serial convex-test evidence. It is not platform, cloud, concurrency,
+production-data, independent-seat or pilot-release certification. The manual
+posting pilot switch remains blocked. Historical supplier and migration rows
+are inserted as fixtures, not emitted by executing their internal or disabled
+writers. The complete writer census and final checks are recorded in
+`docs/architecture/scrum936-audit-reader-evidence.md`.
+
+
+SCRUM-936 supplemental controls at
+`18992de610caea44ce5503f2362bfc27b36f5225` fail all 15 tests against that
+checkpoint's production sources. Two additional records cover posted-event line
+counts and unwind-actor remittance parity. The primary tests also cover protected
+source ids, mutable-draft payroll history and the stricter maintenance payroll
+predicate. Restricted resource types remain visible; source ids are `WITHHELD`.

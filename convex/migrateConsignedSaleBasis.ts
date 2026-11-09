@@ -429,7 +429,7 @@ async function correctOneSale(
     actionType: "MIGRATE_TRANSACTION",
     resourceType: "sales",
     resourceId: sale._id,
-    description: `Restated consigned sale to agent basis: removed ${revenueMinor} vehicle revenue and ${cogsMinor} cost, recognized ${commissionMinor} commission. Net income unchanged.`,
+    description: "Restated consigned sale to agent basis. Net income unchanged.",
     before: {
       basis: "PRINCIPAL",
       revenueMinor,

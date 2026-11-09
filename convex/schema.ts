@@ -1361,6 +1361,7 @@ export default defineSchema({
     })),
   })
     .index("by_org", ["orgId"])
+    .index("by_org_journal", ["orgId", "journalEntryId"])
     .index("by_org_status", ["orgId", "status"]),
 
   roles: defineTable({

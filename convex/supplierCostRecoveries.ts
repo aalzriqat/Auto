@@ -474,7 +474,7 @@ export const recordReceipt = mutation({
           actionType: "ALLOCATE_PAYMENT",
           resourceType: "supplierCostRecoveries",
           resourceId: recovery._id,
-          description: `Recovered ${args.amountMinor} (minor units, ${recovery.currency}) from ${recovery.sourcedFromName} against a supplier-borne vehicle cost.`,
+          description: "Recorded receipt against a supplier-borne vehicle cost.",
           before: { amountRecoveredMinor: recovery.amountRecoveredMinor, status: recovery.status },
           after: { amountRecoveredMinor, status },
           idempotencyKey: args.idempotencyKey,
@@ -607,9 +607,9 @@ export const reverseReceipt = mutation({
           actionType: "REVERSE_ALLOCATION",
           resourceType: "supplierCostRecoveryReceipts",
           resourceId: receipt._id,
-          description: `Reversed a ${receipt.amountMinor} (minor units, ${receipt.currency}) supplier cost recovery receipt: ${reason}`,
+          description: "Reversed a supplier cost recovery receipt.",
           before: { amountRecoveredMinor: recovery.amountRecoveredMinor, status: recovery.status },
-          after: { amountRecoveredMinor, status },
+          after: { amountRecoveredMinor, status, reason, receiptAmountMinor: receipt.amountMinor, currency: receipt.currency },
           idempotencyKey: args.idempotencyKey,
         });
 
