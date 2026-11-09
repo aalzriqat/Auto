@@ -49,7 +49,6 @@
           "date"
         ],
         "actions": [
-          "ATTEST_CHEQUE_FACE",
           "CONFIRM_SUPPLIER_DISBURSEMENT",
           "AMEND_SUPPLIER_DISBURSEMENT_ADVICE",
           "RETURN_FINANCE_DISBURSEMENT_CHEQUE",
@@ -99,5 +98,5 @@
     "key": "SCRUM-936",
     "failingFirst": "c941eba60f4c1125e78775b329702a50d5cd57ef"
   },
-  "fingerprint": "084597ad0452551a8ec87d43963da79653e19cccba171a9a8f83efe0be236067"
+  "fingerprint": "a97048c3a136563fe4631ec1c74a2be821f666391c1aec6b49c9924c5fa3ac19"
 }

@@ -25,7 +25,7 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 // Derive from the persisted union: schema additions must be classified here.
 type AuditActionType = Doc<"financialAuditLog">["actionType"];
 type AuditReadPolicy = "FINANCE" | "COST" | "OPENING" | "OPENING_VOID" | "JOURNAL" | "MANUAL_DRAFT" |
-  "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "APPLICATION_FINANCE" | "UNWIND";
+  "COMMISSION" | "SALE_COMMISSION" | "POST_EVENT" | "MIGRATION" | "SALES" | "APPLICATION_FINANCE" | "EXPECTED_PAYMENT" | "UNWIND";
 
 /** Source-reader policies, not mutation authority. See the SCRUM-936 census/ADR. */
 export const AUDIT_READ_POLICY = {
@@ -60,8 +60,8 @@ export const AUDIT_READ_POLICY = {
   ALLOCATE_DEPOSIT: "SALES",
   RESOLVE_DEPOSIT_ALLOCATION: "SALES",
   SET_SUPPLIER_SETTLEMENT_ROUTE: "SALES",
-  CORRECT_EXPECTED_PAYMENT: "SALES",
-  ATTEST_CHEQUE_FACE: "APPLICATION_FINANCE",
+  CORRECT_EXPECTED_PAYMENT: "EXPECTED_PAYMENT",
+  ATTEST_CHEQUE_FACE: "FINANCE",
   CONFIRM_SUPPLIER_DISBURSEMENT: "APPLICATION_FINANCE",
   AMEND_SUPPLIER_DISBURSEMENT_ADVICE: "APPLICATION_FINANCE",
   SETTLE_COMMITMENT_AUTHORITY: "SALES",
@@ -128,6 +128,7 @@ async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: Audit
       return role.permissions.includes(PERMISSIONS.VIEW_SALES) || role.permissions.includes(PERMISSIONS.VIEW_COMMISSIONS);
     case "SALES": return role.permissions.includes(PERMISSIONS.VIEW_SALES);
     case "APPLICATION_FINANCE":
+    case "EXPECTED_PAYMENT":
     case "UNWIND":
       // applications.get and unwindStatus authenticate VIEW_SALES before
       // projecting the finance tier; the audit copy must retain both gates.
@@ -181,6 +182,22 @@ function unwindActorAuditAmounts(raw: unknown): Record<string, unknown> | undefi
   return Object.keys(amounts).length ? amounts : undefined;
 }
 
+/** Method/date belong to the application reader; cheque evidence to collections. */
+function expectedPaymentAuditSummary(ctx: QueryCtx, role: Doc<"roles">, raw: unknown): Record<string, unknown> | undefined {
+  const source = auditObject(raw);
+  if (!source) return undefined;
+  const summary: Record<string, unknown> = {};
+  if (role.permissions.includes(PERMISSIONS.VIEW_SALES)) {
+    const method = source.expectedPaymentMethod;
+    if (method === null || method === "CASH" || method === "BANK_TRANSFER" || method === "CHEQUE") summary.expectedPaymentMethod = method;
+    const date = source.expectedPaymentDate;
+    if (date === null || (typeof date === "number" && Number.isFinite(date))) summary.expectedPaymentDate = date;
+  }
+  if (mayReadFinanceEconomics(role) && Array.isArray(source.chequeIds) && source.chequeIds.every((id: unknown) =>
+    typeof id === "string" && ctx.db.normalizeId("postDatedCheques", id) !== null)) summary.chequeIds = source.chequeIds;
+  return Object.keys(summary).length ? summary : undefined;
+}
+
 async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<AuditReadRow> {
   if (await mayReadAuditDetails(ctx, role, row)) return row;
   // Explicit allowlist: never spread a restricted row, even when the schema grows.
@@ -200,6 +217,11 @@ async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow)
   if (AUDIT_READ_POLICY[row.actionType] === "UNWIND" && role.permissions.includes(PERMISSIONS.VIEW_SALES) && mayReadUnwindActorEvidence(role)) {
     projected.before = unwindActorAuditAmounts(row.before);
     projected.after = unwindActorAuditAmounts(row.after);
+  }
+  if (AUDIT_READ_POLICY[row.actionType] === "EXPECTED_PAYMENT") {
+    projected.before = expectedPaymentAuditSummary(ctx, role, row.before);
+    projected.after = expectedPaymentAuditSummary(ctx, role, row.after);
+    if (mayReadFinanceEconomics(role)) projected.description = row.description;
   }
   return projected;
 }

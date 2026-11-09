@@ -83,3 +83,24 @@ finance-only access cannot bypass the application's base gate. The existing
 unwind-actor remittance exception remains a partial projection, with its shared
 predicate. The new literal public-function regression failed first at
 `c941eba60f4c1125e78775b329702a50d5cd57ef`.
+
+
+The mixed-reader classification was reassessed before another patch/review round.
+A uniform module gate is insufficient: an action registered in applications may
+copy a cheque whose dedicated reader is collections. The corrected decision is
+per actual stored object and field, not per writer module or monetary-looking
+name. The source-reader matrix is:
+
+| Action family | Full row | Restricted fields retained |
+| --- | --- | --- |
+| Supplier disbursement/advice and returned disbursement | view:sales + finance tier | Event metadata only otherwise |
+| Cheque-face attestation | view:finance (collections.listCheques) | No sales grant is required |
+| Expected-payment correction | view:sales + view:finance | Method/date under sales; cheque ids and correction description under finance |
+| Unwind | view:sales + finance tier | Remittance fields under the existing sales/unwind-actor predicate |
+
+The blanket application classification for cheque-face attestation was rejected
+because the finance-only collections reader already returns every copied fact.
+Public writer tests now prove that positive control and the mixed correction
+reader separately. This preserves the central exhaustive projection design while
+replacing an incorrect classification assumption. The new literal tests fail at
+`9956ef3e01b055416dd920bce89aa85210949c8f`. No reader grant or pilot switch changes.
