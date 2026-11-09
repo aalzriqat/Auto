@@ -169,6 +169,7 @@ describe("a rename is compared with the old path's target count", () => {
   const FILLER = Array.from({ length: 30 }, (_, i) => `// filler line ${i}`).join("\n");
   const BIG = `${PIN}${FILLER}\n`;
   const renameAndCommit = (root: string, edited?: string): void => {
+    git(root, "checkout", "-q", "-b", "pr");
     git(root, "mv", "lib/pinned.test.ts", "lib/renamed.test.ts");
     if (edited !== undefined) write(root, "lib/renamed.test.ts", edited);
     git(root, "add", "-A");
