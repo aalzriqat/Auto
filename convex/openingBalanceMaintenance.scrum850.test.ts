@@ -96,6 +96,87 @@ async function fixture(allFamilies = false) {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
+test("SCRUM-850 R6 finance-only audit reader cannot recover opening stock costs or employee advances after edit", async () => withFrozenScheduler(async () => {
+  const s = await fixture(true);
+  await s.t.run(async (ctx) => {
+    const userId = await ctx.db.insert("users", { clerkId: "s850-audit-reader", email: "audit@example.test" });
+    const roleId = await ctx.db.insert("roles", { orgId: s.orgId, name: "FINANCE_ONLY", permissions: ["view:finance", "manage:finance"] });
+    await ctx.db.insert("memberships", { orgId: s.orgId, userId, roleId });
+  });
+  const finance = s.t.withIdentity({ subject: "s850-audit-reader" });
+  const stock = s.payload.allocations?.find(row => row.kind === "VEHICLE_INVENTORY");
+  const advance = s.payload.allocations?.find(row => row.kind === "EMPLOYEE_ADVANCE");
+  if (stock?.kind !== "VEHICLE_INVENTORY" || advance?.kind !== "EMPLOYEE_ADVANCE") throw new Error("Missing sensitive allocations");
+  const input: OpeningInput = { ...s.payload, memo: "private-before-memo", lines: [
+    { accountId: stock.accountId, debitMinor: 1_000_000, creditMinor: 0, description: "private-line-description" },
+    { accountId: advance.accountId, debitMinor: 110_003, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_310_006 },
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 200_003, creditMinor: 0 },
+  ], allocations: [stock, advance] };
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, input);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing opening draft");
+  // The dedicated readers withhold this exact draft from this exact identity.
+  await expect(finance.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/permission/i);
+  expect(await finance.query(api.accountingCutover.openingBalanceStatus, { orgId: s.orgId })).toMatchObject({ pendingDraftId: null });
+  const readAudit = () => finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
+  const before = JSON.stringify(await readAudit());
+  expect(before).not.toContain(String(stock.vehicleId));
+  expect(before).not.toContain(String(advance.userId));
+
+  await s.owner.mutation(edit, { ...input, draftId: draft._id, memo: "private-after-memo", lines: [
+    input.lines[0], { ...input.lines[1], debitMinor: 110_007 },
+    { ...input.lines[2], creditMinor: 1_310_010 }, input.lines[3],
+  ], allocations: [stock, { ...advance, amountMinor: 110_007 }] });
+  const rows = await readAudit();
+  const serialized = JSON.stringify(rows);
+  for (const forbidden of [String(stock.vehicleId), String(advance.userId), "1000000", "110003", "110007",
+    "private-before-memo", "private-after-memo", "private-line-description"]) {
+    expect(serialized).not.toContain(forbidden);
+  }
+  const edits = rows.filter(row => row.actionType === "EDIT_OPENING_DRAFT");
+  expect(edits).toHaveLength(1);
+  expect(edits[0]).toMatchObject({
+    before: { version: 0, lineCount: 4, allocationCount: 2, allocationKinds: ["VEHICLE_INVENTORY", "EMPLOYEE_ADVANCE"], totalDebits: 1_310_006, asOfDate: s.asOfDate, currency: "JOD" },
+    after: { version: 1, lineCount: 4, allocationCount: 2, allocationKinds: ["VEHICLE_INVENTORY", "EMPLOYEE_ADVANCE"], totalDebits: 1_310_010, asOfDate: s.asOfDate, currency: "JOD", memoChanged: true },
+  });
+}), 30_000);
+
+test("SCRUM-850 R6 opening edit audit retains successive versions and empty allocation counts without copying content", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing opening draft");
+  for (const memo of ["Changed", "Changed"]) {
+    await s.owner.mutation(edit, { ...s.payload, draftId: draft._id, asOfDate: s.asOfDate + 86_400_000, memo });
+  }
+  const rows = await s.owner.query(api.financialAudit.listAuditLog, { orgId: s.orgId, actionType: "EDIT_OPENING_DRAFT" });
+  expect(rows).toHaveLength(2);
+  expect(rows).toEqual(expect.arrayContaining([
+    expect.objectContaining({ before: { version: 0, lineCount: 2, allocationCount: 0, allocationKinds: [], totalDebits: 200_003, asOfDate: s.asOfDate, currency: "JOD" },
+      after: { version: 1, lineCount: 2, allocationCount: 0, allocationKinds: [], totalDebits: 200_003, asOfDate: s.asOfDate + 86_400_000, currency: "JOD", memoChanged: true } }),
+    expect.objectContaining({ before: { version: 1, lineCount: 2, allocationCount: 0, allocationKinds: [], totalDebits: 200_003, asOfDate: s.asOfDate + 86_400_000, currency: "JOD" },
+      after: { version: 2, lineCount: 2, allocationCount: 0, allocationKinds: [], totalDebits: 200_003, asOfDate: s.asOfDate + 86_400_000, currency: "JOD", memoChanged: false } }),
+  ]));
+}), 20_000);
+
+test("SCRUM-850 R6 correcting an unsafe retained draft audits unavailable historical total without rounding", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+  if (!draft) throw new Error("Missing opening draft");
+  // Retained malformed history, not an amount today's public writer admits.
+  await s.t.run(ctx => ctx.db.patch(draft._id, { lines: [
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 4_503_599_627_370_496, creditMinor: 0 },
+    { accountId: s.account("CASH_ON_HAND"), debitMinor: 4_503_599_627_370_497, creditMinor: 0 },
+  ] }));
+  await s.owner.mutation(edit, { ...s.payload, draftId: draft._id });
+  const rows = await s.owner.query(api.financialAudit.listAuditLog, { orgId: s.orgId, actionType: "EDIT_OPENING_DRAFT" });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ before: { version: 0, totalDebits: null }, after: { version: 1, totalDebits: 200_003, memoChanged: false } });
+  expect(JSON.stringify(rows)).not.toContain("9007199254740992");
+}), 20_000);
+
 function openingAmount(s: Seed, minor: number) {
   s.payload.lines = [
     { accountId: s.account("CASH_ON_HAND"), debitMinor: minor, creditMinor: 0 },
