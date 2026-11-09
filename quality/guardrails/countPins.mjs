@@ -93,17 +93,19 @@ export function analyzePins(files, fileCache = new Map()) {
 /**
  * @param {{ pr: Map<string, object[]>, target: Map<string, object[]>, skips: Iterable<string> }} trees
  *   pins per file of the PR tree and the trusted target tree; `skips` are the
- *   skip-listed paths of the TARGET config.
+ *   skip-listed paths of the TARGET config. `renames` maps a renamed file's new path to
+ *   its old path, whose target count it is compared with.
  */
-export function compareCountPins({ pr, target, skips }) {
+export function compareCountPins({ pr, target, skips, renames = new Map() }) {
   const skipped = new Set(skips);
+  const renamedTo = new Map([...renames].map(([to, from]) => [from, to]));
   const errors = [];
   const notices = [];
   const grown = [];
   for (const filePath of [...pr.keys()].sort(compareCodeUnits)) {
     if (skipped.has(filePath)) continue;
     const pins = pr.get(filePath);
-    const was = target.get(filePath)?.length ?? 0;
+    const was = target.get(renames.get(filePath) ?? filePath)?.length ?? 0;
     if (pins.length > was) grown.push({ filePath, pins, was });
   }
   for (const { filePath, pins, was } of grown) {
@@ -117,9 +119,10 @@ export function compareCountPins({ pr, target, skips }) {
     );
   }
   for (const [filePath, was] of [...target].sort(([a], [b]) => compareCodeUnits(a, b))) {
-    if (skipped.has(filePath)) continue;
-    const now = pr.get(filePath)?.length ?? 0;
-    if (now < was.length) notices.push(`count pins can tighten: ${filePath} ${was.length} -> ${now}`);
+    const current = renamedTo.get(filePath) ?? filePath;
+    if (skipped.has(filePath) || skipped.has(current)) continue;
+    const now = pr.get(current)?.length ?? 0;
+    if (now < was.length) notices.push(`count pins can tighten: ${current} ${was.length} -> ${now}`);
   }
   const total = (trees) => [...trees].reduce((sum, [p, pins]) => sum + (skipped.has(p) ? 0 : pins.length), 0);
   return { errors, notices, totals: { pr: total(pr), target: total(target) } };

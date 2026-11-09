@@ -131,6 +131,10 @@
       "reason": "Frozen 19-permission accountant template before the commissions grant; a historical fixture, not a growing collection."
     },
     {
+      "path": "convex/orgFinancialReset.test.ts",
+      "reason": "SCRUM-565 owns the reset table set; convert after it merges"
+    },
+    {
       "path": "convex/scrum413PrepareDealAuthorities.test.ts",
       "reason": "Frozen list of the 77 pre-SCRUM-413 owner fallback permissions; it records history and never grows."
     },

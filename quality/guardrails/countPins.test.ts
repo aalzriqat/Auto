@@ -15,6 +15,7 @@ import {
   check,
   expectFailure,
   fixtureRepo,
+  git,
   registerFixtureCleanup,
   write,
   writeConfig,
@@ -160,5 +161,39 @@ describe("the skip list", () => {
     const root = fixtureRepo(TARGET);
     const result = await check(root);
     expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+});
+
+describe("a rename is compared with the old path's target count", () => {
+  // Enough unchanged lines that git's rename detection (50% similarity) still pairs the files.
+  const FILLER = Array.from({ length: 30 }, (_, i) => `// filler line ${i}`).join("\n");
+  const BIG = `${PIN}${FILLER}\n`;
+  const renameAndCommit = (root: string, edited?: string): void => {
+    git(root, "mv", "lib/pinned.test.ts", "lib/renamed.test.ts");
+    if (edited !== undefined) write(root, "lib/renamed.test.ts", edited);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "rename");
+  };
+
+  test("positive control: a rename with no change to its pins passes", async () => {
+    const root = fixtureRepo({ ...TARGET, "lib/pinned.test.ts": BIG });
+    renameAndCommit(root);
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("negative control: a rename that adds a pin fails against the old path's count", async () => {
+    const root = fixtureRepo({ ...TARGET, "lib/pinned.test.ts": BIG });
+    renameAndCommit(root, `${BIG}expect([].length).toHaveLength(20);\n`);
+    const result = await check(root);
+    expectFailure(result.errors, /^COUNT-PIN-GROWN lib\/renamed\.test\.ts: 2 > target 1 \(\+1\)/);
+  }, TIMEOUT);
+
+  test("positive control: a rename that removes its pin passes and offers the tighter count", async () => {
+    const root = fixtureRepo({ ...TARGET, "lib/pinned.test.ts": BIG });
+    renameAndCommit(root, BIG.replace("toBe(12)", "toBe(0)"));
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+    expect(result.notices).toContain("count pins can tighten: lib/renamed.test.ts 1 -> 0");
   }, TIMEOUT);
 });

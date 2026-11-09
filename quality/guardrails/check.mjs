@@ -321,11 +321,32 @@ function measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope }) {
 }
 
 /**
+ * Renames between the target and HEAD as `newPath -> oldPath` (git rename
+ * detection), so a renamed test file is compared with the OLD path's target
+ * count and a rename cannot reset it to zero. Only committed renames are seen;
+ * an uncommitted rename counts against zero, which fails closed.
+ */
+function renamedFrom(cwd, baseCommit) {
+  const result = git(cwd, ["diff", "--find-renames", "--name-status", "-z", baseCommit, "HEAD"]);
+  const renames = new Map();
+  if (result.status !== 0) return renames;
+  const fields = result.stdout.toString("utf8").split("\0");
+  for (let i = 0; i < fields.length; i += 1) {
+    if (/^R\d*$/u.test(fields[i])) {
+      renames.set(normalizeRepoPath(fields[i + 2]), normalizeRepoPath(fields[i + 1]));
+      i += 2;
+    } else if (/^[CADMTUXB]\d*$/u.test(fields[i])) {
+      i += /^C/u.test(fields[i]) ? 2 : 1;
+    }
+  }
+  return renames;
+}
+/**
  * Guardrail 4: literal count pins in test files, counted per file in the PR tree
  * (disk) and the trusted target tree (git objects) by the same code. A file may
  * keep or lower its count; the skip list comes from the TARGET config only.
  */
-function measureCountPins({ cwd, inventory, readDisk, targetBlobs, trustedConfig, proposedConfig }) {
+function measureCountPins({ cwd, baseCommit, inventory, readDisk, targetBlobs, trustedConfig, proposedConfig }) {
   const extensions = enforcementScope(trustedConfig, proposedConfig).extensions;
   const inScope = (p) => inCountPinScope(p, extensions);
   const fileCache = new Map();
@@ -333,7 +354,12 @@ function measureCountPins({ cwd, inventory, readDisk, targetBlobs, trustedConfig
   const targetPaths = [...targetBlobs.keys()].filter(inScope);
   const texts = readBlobs(cwd, targetPaths.map((p) => targetBlobs.get(p)));
   const target = analyzePins(new Map(targetPaths.map((p) => [p, texts.get(targetBlobs.get(p))])), fileCache);
-  return compareCountPins({ pr, target, skips: trustedConfig.countPinSkips.map((entry) => entry.path) });
+  return compareCountPins({
+    pr,
+    target,
+    renames: renamedFrom(cwd, baseCommit),
+    skips: trustedConfig.countPinSkips.map((entry) => entry.path),
+  });
 }
 
 /**
@@ -392,7 +418,7 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
   errors.push(...ratchets.errors);
   notices.push(...ratchets.notices);
   const countPins = measureCountPins({
-    cwd, inventory, readDisk, targetBlobs, trustedConfig: trusted.config, proposedConfig: proposed.config,
+    cwd, baseCommit, inventory, readDisk, targetBlobs, trustedConfig: trusted.config, proposedConfig: proposed.config,
   });
   errors.push(...countPins.errors);
   notices.push(...countPins.notices);
