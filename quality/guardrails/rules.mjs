@@ -332,7 +332,7 @@ const DOMAIN_SCOPE = /^convex\/domains\//u;
 const DOMAIN_MODULE = /^convex\/domains\/([^/]+)\/./u;
 // A pure-policy module: any path with a `policy` directory, or a file named
 // policy.ts, *policy.ts (dealPolicy.ts) or *.policy.ts, in any production root.
-const POLICY_MODULE = /(?:^|\/)policy\/|(?:^|\/)[^/]*policy\.[cm]?[jt]sx?$/iu;
+const POLICY_MODULE = /(?:(?:^|\/)policy\/)|(?:(?:^|\/)[^/]*policy\.[cm]?[jt]sx?$)/iu;
 const REACT_PACKAGE = /^react(?:-dom)?(?:\/|$)/u;
 
 /** Every production file is an importer; tests and fixtures are not judged. */

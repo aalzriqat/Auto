@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterEach, expect } from "vitest";
 
 import { runGuardrails } from "./check.mjs";
+import { resolveTrustedGitExecutable } from "./gitExecutable.mjs";
 
 export const TIMEOUT = 60_000;
 export const ZERO_SHA = "0".repeat(40);
@@ -49,7 +50,7 @@ export interface FixtureBaseline {
 
 export function git(cwd: string, ...args: string[]): string {
   const result = spawnSync(
-    "git",
+    resolveTrustedGitExecutable(),
     ["-c", "user.email=guardrails@test", "-c", "user.name=guardrails", "-c", "core.autocrlf=false", ...args],
     { cwd, encoding: "utf8" },
   );

@@ -53,6 +53,21 @@ describe("pure policy modules cannot import the generated server module", () => 
     expect(found("convex/accounting/policyHelpers.ts", "../_generated/server")).toEqual([]);
   });
 
+  test("classification table: exactly these paths are pure-policy modules", () => {
+    const matches = [
+      "convex/policy/x.ts",
+      "a/policy/b.ts",
+      "policy/x.ts",
+      "convex/domains/deal/dealPolicy.ts",
+      "x/foo.policy.ts",
+      "policy.ts",
+      "x/policy.mjs",
+    ];
+    const misses = ["x/policyx.ts", "x/policy.ts.bak", "x/mypolicyfile.ts", "xpolicy/a.ts"];
+    for (const file of matches) expect(found(file, "@/convex/_generated/server"), file).toEqual([SERVER]);
+    for (const file of misses) expect(found(file, "@/convex/_generated/server"), file).toEqual([]);
+  });
+
   test("a policy test file is out of scope", () => {
     expect(found("convex/accounting/policy/refunds.test.ts", "../../_generated/server")).toEqual([]);
   });
