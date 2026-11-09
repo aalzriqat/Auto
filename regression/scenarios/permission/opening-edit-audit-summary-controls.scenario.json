@@ -1,0 +1,115 @@
+{
+  "id": "opening-edit-audit-summary-controls",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round6-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "cashMinor": 200003,
+        "allocations": []
+      }
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Changed",
+        "dateOffsetDays": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Changed",
+        "dateOffsetDays": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "EDIT_OPENING_DRAFT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.versionTransitions",
+      "value": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "observable": "audit.memoChanged",
+      "value": [
+        true,
+        false
+      ]
+    },
+    {
+      "observable": "audit.lineCount",
+      "value": 2
+    },
+    {
+      "observable": "audit.allocationCount",
+      "value": 0
+    },
+    {
+      "observable": "audit.allocationKinds",
+      "value": []
+    },
+    {
+      "observable": "audit.totalDebits",
+      "value": 200003
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R6 opening edit audit retains successive versions and empty allocation counts without copying content"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "00210358412583a22f5eecf414da2d7b70c0d68f"
+  },
+  "fingerprint": "49b100891b03b70e70cc91d3ba98bb027340ef2653582c2f3b92ee99bca3d453"
+}

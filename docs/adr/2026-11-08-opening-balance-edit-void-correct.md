@@ -87,6 +87,38 @@ The enumeration starts with `postOpeningBalanceDraft`, follows `materializeOpeni
 
 Historical rows without matching result identity, malformed links, partial resets, or incomplete inventories refuse. No migration guesses an opening's provenance. The UI uses a server-resolved capability and permission-filtered content; it cannot authorize a void. Finance authority is required on all commands, payroll authority when payroll allocations are present, and cost authority before returning cost-bearing draft content. Every caller-supplied draft id uses `requireOwnedRow`.
 
+## Review round 6: opening edit audit confidentiality
+
+`EDIT_OPENING_DRAFT` stores summary metadata in both snapshots: draft version,
+line count, allocation count, unique allocation kinds, exact total debits,
+as-of date and currency. The after snapshot also records whether the memo
+changed. It copies no lines, allocations, account/bank/vehicle/employee ids,
+individual amounts, descriptions, row keys, notes or memo text. The ordinary
+audit envelope retains the actor and draft reference. A malformed retained
+draft whose old debit total is unavailable or unsafe records `null`, not a
+rounded historical total; a valid replacement still passes posting preflight.
+
+This adopts Option A from S850-R5-1. `financialAudit.listAuditLog` has broader
+finance authority than the dedicated cost/payroll readers and returns stored
+rows. Minimizing at the writer avoids replicating their authorization policy
+across a generic reader. Keeping full content and adding reader redaction is
+outside this change. The complete current draft remains behind its dedicated
+permissions; the audit summarizes the edit rather than claiming to reconstruct
+every earlier draft. Aggregate totals can equal individual amounts in small
+drafts; this decision does not claim to prevent inference from permitted totals.
+
+This changes future edit writes, not previously stored audit rows. Void reasons
+remain user-entered free text in the existing request/approval audit payloads;
+they do not automatically copy allocation data, but may contain what the
+operator types. Broader historical remediation and log policy are coordinator
+follow-ups, not silently added to this PR.
+
+Checked 2026-11-09: [OWASP Logging Cheat Sheet, event attributes and data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude)
+supports summary properties and excluding commercially sensitive or more highly
+classified content. [Convex function authentication](https://docs.convex.dev/auth/functions-auth)
+supports deriving identity inside server functions. These sources guide the
+design; public-function harness tests provide the local behavioral evidence.
+
 ## Two void designs
 
 **A, chosen: one bounded approval transaction.** Store a request on the posted draft. Approval reads the complete org-wide POSTED and REVERSED ledger inventory, verifies previously governed void pairs, validates every materialized target and its downstream references, and requires the original period to remain open. It then removes opening-only projections, posts the reversal, updates snapshots, marks the draft VOIDED, and writes an audit row in the same mutation. No intermediate economic state is committed. Bounds refuse rather than delete a partial set. Request and approval repeat activity checks, including queued or existing accounting events, so intervening operations invalidate a request. Replay returns the existing verified reversal without new writes. Fresh opening admission ignores only verified governed void pairs, never a category or a bare REVERSED status.

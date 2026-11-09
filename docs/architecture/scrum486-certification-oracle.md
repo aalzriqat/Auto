@@ -1795,3 +1795,31 @@ inclusive; excluded rows must not participate in aggregation or unmigrated count
 | `cutover-legacy-out-before-total` | `SCRUM-850 R5 legacy OUT excludes large row before date range` |
 | `cutover-legacy-out-after-total` | `SCRUM-850 R5 legacy OUT excludes large row after date range` |
 | `cutover-legacy-out-deleted-total` | `SCRUM-850 R5 legacy OUT excludes large deleted row` |
+
+
+## SCRUM-850-opening-audit-confidentiality
+
+S850-R5-1 / SCRUM-902 c24475: a finance-only audit reader must not receive the
+opening draft's attributed cost or payroll content that its dedicated readers
+withhold. ADR: `docs/adr/2026-11-08-opening-balance-edit-void-correct.md`, round 6.
+Failing-first commit `00210358412583a22f5eecf414da2d7b70c0d68f` contains these
+literal tests in `convex/openingBalanceMaintenance.scrum850.test.ts`; all three
+fail there before the summary fix. Records are in the permission and money
+scenario folders. This is serial public-function harness evidence, not cloud
+or release certification. Historical audit rows are not repaired by this change.
+
+| Scenario | Literal backend test |
+| --- | --- |
+| `opening-edit-audit-sensitive-content` | `SCRUM-850 R6 finance-only audit reader cannot recover opening stock costs or employee advances after edit` |
+| `opening-edit-audit-summary-controls` | `SCRUM-850 R6 opening edit audit retains successive versions and empty allocation counts without copying content` |
+| `opening-edit-audit-unsafe-history` | `SCRUM-850 R6 correcting an unsafe retained draft audits unavailable historical total without rounding` |
+
+The first case proves stock-choice refusal and withheld pendingDraftId for the
+same finance-only identity, then checks every returned audit row for both ids,
+the old/new individual amounts and free-text sentinels. It also requires one
+EDIT_OPENING_DRAFT row with versions 0/1, four lines, two allocation kinds and
+literal aggregate debits 1,310,006 / 1,310,010. A cash line distinguishes those
+permitted aggregates from the forbidden attributed amounts. Controls require
+successive versions 0/1/2, no allocations, changed/unchanged memo flags and exact
+dates/totals. Retained unsafe history records a null old total and exact new
+200,003. A source mutant restoring full after allocations is required to fail.

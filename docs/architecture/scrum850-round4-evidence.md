@@ -625,3 +625,220 @@ No real backend, Convex limits or OCC, production prevalence, external dynamic
 callers, browser rendering, phone/desktop EN/AR audit, bug-hunter run, deployment,
 production repair or pilot readiness was verified. No I/O reduction is claimed.
 No push, merge or deferred-workflow activation was performed.
+
+
+## Round 6 — S850-R5-1 opening edit audit confidentiality
+
+Starting worktree/branch: `E:/tmp/auto-850`,
+`claude/scrum850-opening-correction`, `f08af5815e1524512b7bca978746499554b179cd`.
+A fresh fetch measured origin/main at the supplied
+`28cf683f8013f1bba4773d766f05aa6f892a2a18`, zero behind at the start.
+The coordinator owns Jira, GitHub and independent seats. No external posts,
+push, deployment, production access or browser tests were performed in this lane.
+Protected supplied edits and ignored coordinator reproduction remain untouched.
+
+### Reproduction, design and reviewer differences
+
+Finding ACCEPTED; proposed Option A ADOPTED, with exact historical-total handling.
+Invariant: new edit audit rows contain summary metadata, not copies of content
+that dedicated cost/payroll readers withhold. Finance authority to read an audit
+is not authority to read each allocation. The public edit retains its existing
+preparer, tenant, state, payroll, currency and complete replacement preflight.
+
+I read the supplied coordinator reproduction but used the existing maintenance
+fixture to reproduce independently through registered public functions. A real
+finance-only membership has exactly view:finance and manage:finance. Its stock
+choice query refuses for permission; openingBalanceStatus.pendingDraftId is null.
+Before editing, the audit contains neither sensitive id. After the preparer's
+edit, the old implementation returns both vehicle and employee ids, stock
+1,000,000 and advance 110,003/110,007 in full before/after copies. The public
+reader's unfiltered result is tested, not just a private database read.
+
+Failing-first commit `00210358412583a22f5eecf414da2d7b70c0d68f` contains all three
+literal R6 test registrations, no production fix. Complete-file committed run:
+
+```text
+pnpm exec vitest run --maxWorkers=1 convex/openingBalanceMaintenance.scrum850.test.ts
+Test Files 1 failed (1)
+Tests 3 failed | 43 passed (46)
+VITEST_EXIT=1
+```
+
+Log: `%TEMP%/s850-r6-red-final-test-commit.log`. The first fails on the returned
+vehicle id; the others fail on missing summary/version metadata and unavailable
+historical-total semantics. Initial authoring had an invalid test fixture return
+(an identity wrapper returned from t.run); it was corrected before the final test
+commit. That authoring error is not substituted for the committed behavioral red.
+
+Both snapshots now contain version, lineCount, allocationCount, unique
+allocationKinds, totalDebits, asOfDate and currency. after.memoChanged records the
+change without copying memo text. The envelope still identifies the actor,
+resource draft, action and time. No line/description, allocation/note/row key,
+account/bank/vehicle/beneficiary id or individual amount is copied by this writer.
+The helper reuses exactOpeningTotals (BigInt). An unrepresentable historical
+before total is null; a valid replacement can still be submitted. No new I/O.
+
+Differences in proof from the supplied recommendation: a cash line makes allowed
+aggregate totals 1,310,006 and 1,310,010 distinguishable from forbidden individual
+amounts. An aggregate in a one-line draft can equal an individual amount; this
+fix does not claim to prevent inference from allowed aggregates. Tests search
+both snapshots and the complete public response for ids, old/new amounts and
+free-text sentinels, then positively require the edit row, versions and counts.
+Controls cover successive versions, no allocations, as-of date and changed/
+unchanged memo flags. A retained unsafe historical draft is corrected publicly
+and records null rather than a rounded old total.
+
+A read-only advisory design attack under invariant-closure-workflow agreed with
+Option A, identified the aggregate-inference and free-text limits, and requested
+the unsafe historical-total control. It was not a review seat or certification.
+engineering-principles' subtract-before-add rule favored writer minimization over
+permission infrastructure in listAuditLog. clean-code-guard and test-guard are
+applied to the final scoped source/test diff.
+
+Sources checked 2026-11-09:
+[OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude)
+recommends summary event properties and excluding commercially sensitive or
+higher-classification data; [Convex function authentication](https://docs.convex.dev/auth/functions-auth)
+places identity checking in server functions. Documentation supports this choice;
+registered-function tests measure the implementation locally.
+
+### Reader census
+
+Scope: tracked repository source at this round's fixed source, including queries,
+internal code, exports, app/components/apps/dealer-worker/lib, schema and generic
+admin table registries. Graft's table census was supplemented by literal git grep
+for financialAuditLog, listAuditLog, financialAudit imports/calls, dynamic reset/
+deletion registries and admin table access. Graft's graph lacks the new edit
+export; its missing caller edges are not evidence of no callers. Generic platform
+CLI/dashboard/export access and previously deployed code/data are outside this
+repository census.
+
+| Reader / file:line | Authorization and returned content |
+| --- | --- |
+| `convex/financialAudit.ts:143,169` actor branch | manage:finance; whole stored rows, newest first, bounded and date-filtered. |
+| `convex/financialAudit.ts:175` action branch | Same whole-row reader, action index. |
+| `convex/financialAudit.ts:184` fromDate branch | Same whole-row reader, time lower bound. |
+| `convex/financialAudit.ts:192,207` default branch/result | Same whole-row reader, time index; final array sliced to <=200. None reconstructs removed fields. |
+| `convex/adminOrgs.ts:95,473,484` deleteRowsByOrgBatch | Deletion manifest selects this table; internal full row read, uses ids for deletion and returns deletion counts. No row export. |
+| `convex/orgFinancialReset.ts:88,450,503,511,783` orgRows / resetOrgFinancialData | Internal reset/dry-run reads full rows for deletion/counting, returns reset summary, not audit payloads. |
+| `convex/adminData.ts:16,41,210,233` generic Data Browser | Explicit table allowlist excludes financialAuditLog; id/table agreement enforced for record reads. No financial-audit export. |
+| `app/admin/audit/page.tsx:19` | Calls adminAudit.listAuditLog, a separate adminAuditLog table, not this reader. |
+| `components/accounting/ManualJournalTab.tsx:69-75` | Calls pending/manual-journal commands, not financial audit rows. |
+| Tracked app/components/apps/dealer-worker/lib | No financialAudit.listAuditLog UI caller or financialAuditLog export in this enumerated source scope. |
+
+The public reader still returns whole stored rows. New summary rows have no
+removed content for it or the two internal deletion readers to return. This does
+NOT certify historical rows: a full-content edit row written by older code
+remains readable. No historical rewrite, redaction or production prevalence claim.
+
+Test-only direct readers (file:line, relative to convex/):
+accountingCutoverExactness.scrum850.test.ts:71 (whole audit rows);
+accountingGenericReversalAuthority.test.ts:306 (economic footprint);
+accountingMigrationRetirement.test.ts:143 and accountingSourceFamilyRetired.test.ts:136
+(id footprints); applications.test.ts:2353,2424 (whole rows);
+claimsRetirement.test.ts:122 (count); commitmentRestorationSpine.test.ts:235
+(filtered rows); consignedSaleCostAccessRule.scrum886.test.ts:1104 (count);
+dealCommissions.test.ts:433,530 (actions/whole org rows);
+dealUnwind.test.ts:410,1012 (org/filter rows);
+financeDisbursementChequeReturn.test.ts:277,394,824,1297 (filtered/whole rows);
+financedConsignedSettlement.test.ts:6548 (rows);
+migrateConsignedSaleBasis.test.ts:259,294,521 and
+migrateConsignedSaleBasisProdShape.test.ts:206 (rows/filter);
+multiVehicleDepositAllocation.test.ts:2985,3095 (rows/filter);
+salesCommissionEntry.test.ts:1021 (rows);
+scrum486Certification.test.ts:785,795,939 (rows/whole-table footprints);
+supplierSettlementAudit.test.ts:20 (org-filtered rows).
+The R6 tests call the public reader in openingBalanceMaintenance.scrum850.test.ts.
+Manifest-only/count-change assertions are not application readers. These harness
+reads inspect stored rows; they do not reconstruct removed fields.
+
+### PR writer census and coordinator-only adjacent observations
+
+`git diff 28cf683f8013f1bba4773d766f05aa6f892a2a18...HEAD -- convex` plus
+working R6 source enumerates three added auditLog calls. financialAudit.ts adds
+only their action type variants. The reversal change adds a refusal guard, not
+an audit payload change. The following table includes the indirectly affected
+sign-off copy so its upstream arithmetic is not mistaken for a new content copy.
+
+| Writer / fixed file:line | Stored payload and verdict |
+| --- | --- |
+| `convex/accountingCutover.ts:490` EDIT_OPENING_DRAFT | Summary before/after above; no attributed cost/payroll amount or vehicle/beneficiary id. actorId identifies the preparer, not an allocation beneficiary. |
+| `convex/openingBalanceMaintenance.ts:81-82` REQUEST_OPENING_VOID | after reason and journalEntryId; no automatic allocation/line copy or cost/payroll amount. |
+| `convex/openingBalanceMaintenance.ts:125-127` APPROVE_OPENING_VOID | after requestedBy, reason, reversalJournalId; requestedBy is the request actor, not an employee allocation. No automatic cost/payroll copy. |
+| `convex/accountingCutover.ts:1858` signOffCutover (indirect) | Pre-existing after snapshot, currency gross totals and counters; R4 changes checked source aggregation, not payload shape. No per-car or per-employee content. |
+
+The void reason is caller-supplied free text. Thus a universal claim that no PR
+row can contain an operator-typed id or amount would be false. No broader reason
+policy is changed. The three new writes automatically copy none of the reviewed
+attributed content after this repair. Existing create/opening-post audit calls
+at accountingCutover.ts:430,714,887 are unchanged payloads versus the PR base:
+counts, aggregate debits and workflow actor references/rejection reason, not full
+allocation copies.
+
+Coordinator follow-up only, outside this repair: existing dealCommissions.ts:275
+and :330 copy employeeId plus amountMinor (and amounts in descriptions; pilot
+switches affect reachability); sales.ts:2317 copies commissionAmount and posted
+delta with amounts in description; migrateConsignedSaleBasis.ts:426 copies COGS
+and revenue in a migration audit; supplierCostRecoveries.ts:471,604 copies cost
+recovery amounts and descriptions. These are source observations of pre-existing
+writes, not newly reproduced permission findings or a certification of all their
+callers. deposits.ts:741 also stores vehicle ids and deposit allocation amounts,
+which are deposits, not opening costs. Existing free-text memo/reason writers can
+also contain operator text. No other module was edited for these observations.
+
+### Impact and five predicted failures
+
+| Area | Disposition |
+| --- | --- |
+| Writers/readers | One edit writer minimized; generic reader unchanged and tested publicly. |
+| Historical data | Existing audit rows unchanged; unsafe old draft total is unavailable, not rounded. |
+| State transitions/reversal/idempotency | Same pending preparer edit and version increment; no spend/reversal door or retry behavior added. |
+| Authorization/tenancy | Existing checks/preflight retained; no new caller id boundary; tenant write guard run. |
+| Ledger/native projections | No posting, snapshot, allocation-materialization or bank write changed. |
+| Audit/UI | Actor/draft/time plus metadata retained; no UI change or visual claim. |
+| E2E/runtime/release | Serial convex-test evidence; cloud/OCC, production data, pilot gates, seats and browser hunters remain unavailable in this lane. |
+
+Predictions: (1) sanitizing after but leaving before leaks; search the whole
+response. (2) Removing the audit entirely conceals edits; require its action,
+versions/counts/totals. (3) Free text copies preserve the leak; use memo and line
+sentinels. (4) Full allocations reappear; source mutant must fail. (5) Computing
+an old aggregate with Number fabricates audit history or blocks valid repair;
+public correction of unsafe retained history requires null then exact 200,003.
+
+### Execution record
+
+Logs use `%TEMP%/s850-r6-*.log`. Results below are local evidence only.
+
+Completed before the fix commit:
+
+- Backend batch: 5 files / 88 tests passed, exit 0 (`s850-r6-backend.log`):
+  convex/openingBalanceMaintenance.scrum850.test.ts (46),
+  convex/accountingCutoverExactness.scrum850.test.ts (12),
+  convex/accountingPhase10.test.ts, convex/accountingPhase7.test.ts,
+  convex/accountingPhase9.test.ts.
+- Caller batch: 6 files / 80 tests passed, exit 0 (`s850-r6-caller-tests.log`):
+  convex/adminData.test.ts, convex/bankReconciliation.test.ts,
+  components/accounting/setup/OpeningBalanceCard.namedDeposit.scrum858.test.tsx,
+  components/accounting/setup/OpeningBalanceMaintenance.scrum850.test.tsx,
+  scripts/economicCommandCensus.test.ts, scripts/tenantWriteGuard.test.ts.
+- The named-file enumeration was `git grep -l -E
+  'editOpeningBalanceDraft|listAuditLog|EDIT_OPENING_DRAFT' -- '*test.ts' '*test.tsx'`:
+  nine existing files (the above minus exactness and tenant guard). All were run
+  in full. `git ls-files 'convex/financialAudit*.test.ts'` returns no tracked files;
+  those names are not represented as tests run. The Phase7/9/10 suites exercise
+  the existing financial audit module, including public listAuditLog.
+- `pnpm typecheck`: exit 0 (`s850-r6-type-root.log`). Root configuration excludes
+  convex, test-utils, apps, packages and dealer-worker as roots; imports may be followed.
+- `pnpm typecheck:convex`: exit 0 (`s850-r6-type-convex.log`). Includes convex and
+  test-utils, excludes generated files as roots and does not cover app roots;
+  imports may be followed. Neither config is claimed to cover the whole monorepo.
+- ESLint on convex/accountingCutover.ts and
+  convex/openingBalanceMaintenance.scrum850.test.ts: exit 0, no diagnostics
+  (`s850-r6-eslint.log`). These are the touched TS files.
+- `node scripts/contractSkew/checkBaselineIdentity.mjs`: exit 0, 945 identities
+  matched; backend finding identity is explicitly not measured by this command.
+- Two-axis advisory review: Standards zero findings; Spec zero findings.
+  Read-only source inspection, not independent seats or certification.
+
+Regression validators, committed-source mutant/restoration and contract renewal
+are recorded below after completion. No pending result above is counted as passed.

@@ -441,6 +441,23 @@ export const draftOpeningBalance = mutation({
   },
 });
 
+/** Audit readers have finance authority, not necessarily cost/payroll access.
+ * Keep free text and individual lines/allocations out of this broader log. */
+function openingDraftAuditSummary(draft: Doc<"openingBalanceDrafts">) {
+  const totals = exactOpeningTotals(draft.lines);
+  const debit = totals?.debit;
+  return {
+    version: draft.version ?? 0,
+    lineCount: draft.lines.length,
+    allocationCount: draft.allocations?.length ?? 0,
+    allocationKinds: [...new Set((draft.allocations ?? []).map(allocation => allocation.kind))],
+    // An old malformed draft may be corrected; never round its historical total.
+    totalDebits: debit !== undefined && debit >= 0n && debit <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(debit) : null,
+    asOfDate: draft.asOfDate,
+    currency: draft.currency ?? null,
+  };
+}
+
 /** SCRUM-850: retains the original preparer and pending state. The same
  * preflight used by posting validates the complete replacement, including
  * allocations and payroll authority, rather than trusting edited UI fields. */
@@ -472,8 +489,8 @@ export const editOpeningBalanceDraft = mutation({
     await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency, version });
     await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
       resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
-      before: { lines: draft.lines, allocations: draft.allocations ?? [], asOfDate: draft.asOfDate, memo: draft.memo ?? null, currency: draft.currency ?? null },
-      after: { lines, allocations: args.allocations ?? [], asOfDate: args.asOfDate, memo: args.memo ?? null, currency: args.expectedCurrency } });
+      before: openingDraftAuditSummary(draft),
+      after: { ...openingDraftAuditSummary({ ...replacement, version }), memoChanged: (draft.memo ?? null) !== (args.memo ?? null) } });
     return { draftId: String(draft._id) };
   }),
 });

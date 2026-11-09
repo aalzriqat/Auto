@@ -1,0 +1,123 @@
+{
+  "id": "opening-edit-audit-sensitive-content",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round6-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "stockMinor": 1000000,
+        "employeeAdvanceMinor": 110003,
+        "cashMinor": 200003,
+        "memo": "private-before-memo"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingCutover.listOpeningStockChoices",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingCutover.openingBalanceStatus",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "employeeAdvanceMinor": 110007,
+        "memo": "private-after-memo"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "limit": 200
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "stockChoices.refused",
+      "value": true
+    },
+    {
+      "observable": "openingBalanceStatus.pendingDraftId",
+      "value": null
+    },
+    {
+      "observable": "audit.containsAllocationVehicleOrEmployeeIdsOrAmounts",
+      "value": false
+    },
+    {
+      "observable": "audit.containsDraftMemoOrLineDescription",
+      "value": false
+    },
+    {
+      "observable": "editAudit.versionFromTo",
+      "value": [
+        0,
+        1
+      ]
+    },
+    {
+      "observable": "editAudit.lineAndAllocationCounts",
+      "value": [
+        4,
+        2
+      ]
+    },
+    {
+      "observable": "editAudit.totalDebitsBeforeAfter",
+      "value": [
+        1310006,
+        1310010
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R6 finance-only audit reader cannot recover opening stock costs or employee advances after edit"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "00210358412583a22f5eecf414da2d7b70c0d68f"
+  },
+  "fingerprint": "1bee66e565046673ac267b09851a03b62339de039af0c9f4c87e1b59724b9781"
+}
