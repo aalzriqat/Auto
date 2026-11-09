@@ -18,6 +18,7 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { draftPayrollReader, projectAuditRow } from "./utils/financialAuditProjection";
 import type { AuditActionType } from "./utils/financialAuditProjection";
+import { hasPlanFeature } from "./subscriptions";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
@@ -133,8 +134,12 @@ export const listAuditLog = query({
       });
     }
 
-    const needsPayroll = draftPayrollReader(ctx, args.orgId);
-    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry, needsPayroll)));
+    let accounting: Promise<boolean> | undefined;
+    const access = {
+      needsPayroll: draftPayrollReader(ctx, args.orgId),
+      hasAccounting: () => accounting ??= hasPlanFeature(ctx, args.orgId, "accounting"),
+    };
+    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry, access)));
   },
 });
 

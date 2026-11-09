@@ -64,6 +64,26 @@ type AuditRow = Doc<"financialAuditLog">;
 type AuditReadRow = AuditRow & { detailsWithheld?: true; lineCount?: number };
 
 type DraftPayrollReader = (draftId: Id<"openingBalanceDrafts">) => Promise<boolean>;
+type AuditReadAccess = { needsPayroll: DraftPayrollReader; hasAccounting: () => Promise<boolean> };
+
+/** Dedicated readers: ledger, migration progress, periods, chart, prepaid corrections. */
+const ACCOUNTING_ACTIONS: ReadonlySet<AuditActionType> = new Set([
+  "POST_MANUAL_JOURNAL", "POST_EVENT", "REVERSE_EVENT", "MIGRATE_TRANSACTION",
+  "CREATE_PERIOD", "OPEN_PERIOD", "CLOSE_PERIOD", "LOCK_PERIOD", "REOPEN_PERIOD", "ACKNOWLEDGE_CLOSE_WARNINGS",
+  "INIT_CHART", "UPDATE_ACCOUNT", "REPAIR_MISSING_SYSTEM_ACCOUNTS", "RESOLVE_SYSTEM_ACCOUNT_ADOPTION",
+  "CORRECT_PREPAID_SCHEDULE", "REQUEST_PREPAID_CORRECTION", "APPROVE_PREPAID_CORRECTION", "REJECT_PREPAID_CORRECTION",
+]);
+
+async function mayReadAccountingAudit(ctx: QueryCtx, row: AuditRow, access: AuditReadAccess): Promise<boolean> {
+  if (!ACCOUNTING_ACTIONS.has(row.actionType)) return true;
+  // Cutover sign-offs and openings have independent readers without this feature gate.
+  if (row.actionType === "POST_EVENT" && row.resourceType === "accountingCutoverSignOffs") return true;
+  if (await access.hasAccounting()) return true;
+  if (row.actionType !== "POST_MANUAL_JOURNAL" || row.resourceType !== "journalEntries") return false;
+  const id = ctx.db.normalizeId("journalEntries", row.resourceId);
+  const journal = id ? await ctx.db.get(id) : null;
+  return journal?.orgId === row.orgId && journal.category === "OPENING_BALANCE";
+}
 
 /** One request owns both caches, including in-flight reads during Promise.all. */
 export function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): DraftPayrollReader {
@@ -115,8 +135,11 @@ async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: Audit
   return draft !== null && !(await needsPayroll(draft._id));
 }
 
-async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<boolean> {
+async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, access: AuditReadAccess): Promise<boolean> {
+  // Entitlement applies to owners too, before the role shortcut.
+  if (!(await mayReadAccountingAudit(ctx, row, access))) return false;
   if (isSystemOwnerRole(role)) return true;
+  const { needsPayroll } = access;
   const policy = AUDIT_READ_POLICY[row.actionType];
   switch (policy) {
     case "OPENING": return mayReadOpeningAudit(ctx, role, row, needsPayroll);
@@ -210,8 +233,8 @@ function expectedPaymentAuditSummary(ctx: QueryCtx, role: Doc<"roles">, raw: unk
   return Object.keys(summary).length ? summary : undefined;
 }
 
-export async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<AuditReadRow> {
-  if (await mayReadAuditDetails(ctx, role, row, needsPayroll)) return row;
+export async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, access: AuditReadAccess): Promise<AuditReadRow> {
+  if (await mayReadAuditDetails(ctx, role, row, access)) return row;
   // Explicit allowlist: never spread a restricted row, even when the schema grows.
   const projected: AuditReadRow = {
     _id: row._id, _creationTime: row._creationTime, orgId: row.orgId,

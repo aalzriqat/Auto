@@ -92,6 +92,7 @@ test.each(["owner", "finance"] as const)("SCRUM-936 %s audit accounting details 
 
 test("SCRUM-936 expired plan withholds accounting families while independent readers retain their audit facts", async () => {
   const s = await fixture();
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price", "view:sales", "view:commissions", "manage:payroll"] }));
   const rows = await s.t.run(async ctx => {
     const subscription = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
     if (!subscription) throw new Error("Missing fixture subscription");
@@ -128,10 +129,21 @@ test("SCRUM-936 expired plan withholds accounting families while independent rea
   await expect(s.owner.query(api.chartOfAccounts.list, { orgId: s.orgId })).rejects.toThrow(/Upgrade required/);
   expect(await s.owner.query(api.financialAudit.listPendingManualJournals, { orgId: s.orgId })).toEqual([]);
   expect(await s.owner.query(api.accountingCutover.listSignOffs, { orgId: s.orgId })).toEqual([]);
-  const audit = await s.owner.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
-  for (const { row, withheld } of rows) {
-    if (withheld) expect(audit.find(item => item._id === row?._id)).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
-    else expect(audit).toContainEqual(row);
+  for (const reader of [s.owner, s.finance]) {
+    const audit = await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
+    for (const { row, withheld } of rows) {
+      if (withheld) expect(audit.find(item => item._id === row?._id)).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
+      else expect(audit).toContainEqual(row);
+    }
+  }
+  await s.t.run(async ctx => {
+    const sub = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
+    if (!sub) throw new Error("Missing fixture subscription");
+    await ctx.db.patch(sub._id, { status: "active" });
+  });
+  for (const reader of [s.owner, s.finance]) {
+    const audit = await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
+    for (const { row } of rows) expect(audit).toContainEqual(row);
   }
 });
 
@@ -209,7 +221,7 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   if (typeof handler !== "function") throw new Error("Registered audit query unavailable");
   const invoke = handler as (ctx: QueryCtx, args: FunctionArgs<typeof api.financialAudit.listAuditLog>) => Promise<FunctionReturnType<typeof api.financialAudit.listAuditLog>>;
   const draftIds = new Set(drafts.map(row => row.draftId as string));
-  const totals = { accountGets: 0, draftGets: 0, controlLookups: 0 };
+  const totals = { accountGets: 0, draftGets: 0, controlLookups: 0, subscriptionLookups: 0 };
   const getsByAccount = new Map<string, number>();
   const args = { orgId: s.orgId, limit: 200 };
   const observe = () => s.finance.query(ctx => invoke({ ...ctx, db: new Proxy(ctx.db, { get(db, key) {
@@ -224,6 +236,7 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
     };
     if (key === "query") return (table: Parameters<typeof db.query>[0]) => {
       if (table === "chartOfAccounts") totals.controlLookups += 1;
+      if (table === "subscriptions") totals.subscriptionLookups += 1;
       return db.query(table);
     };
     const value: unknown = Reflect.get(db, key);
@@ -238,6 +251,7 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   expect(totals.accountGets).toBe(3);
   expect([...getsByAccount.values()]).toEqual([1, 1, 1]);
   expect(totals.controlLookups).toBe(0);
+  expect(totals.subscriptionLookups).toBe(1);
   expect(totals.draftGets).toBeLessThanOrEqual(2);
   // A new request must not reuse an earlier request's permission decision.
   await s.t.run(ctx => ctx.db.patch(drafts[0].draftId, { lines: [
@@ -248,6 +262,7 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   expect(totals.accountGets).toBe(6);
   expect([...getsByAccount.values()]).toEqual([1, 1, 1]);
   expect(totals.controlLookups).toBe(0);
+  expect(totals.subscriptionLookups).toBe(2);
 });
 
 async function expectCostReaderRefusals(s: Seed) {
