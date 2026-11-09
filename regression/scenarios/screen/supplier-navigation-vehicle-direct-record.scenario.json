@@ -1,0 +1,53 @@
+{
+  "id": "supplier-navigation-vehicle-direct-record",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "vehicles.openSupplierRecord",
+      "input": {
+        "vehicleId": "outside-list"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dialogTitle",
+      "value": "TOYOTA_CAMRY"
+    },
+    {
+      "observable": "directVehicleGet",
+      "value": true
+    },
+    {
+      "observable": "inventoryListQuery",
+      "value": false
+    },
+    {
+      "observable": "closeWorks",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierVehicleTarget.test.tsx",
+    "testName": "a supplier vehicle outside the loaded inventory opens directly by id without a page walk"
+  },
+  "matrixRow": "SCRUM869-navigation-screen",
+  "fingerprint": "9ff737caa648c731186b394777494bf1549610cd6e11e91fd54e11a581f565b2"
+}

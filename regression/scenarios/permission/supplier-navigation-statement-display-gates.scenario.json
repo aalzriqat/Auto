@@ -1,0 +1,58 @@
+{
+  "id": "supplier-navigation-statement-display-gates",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierNavigation.statement",
+      "input": {
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "targetPermission": false,
+        "costPermission": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "plainSourceLabel",
+      "value": true
+    },
+    {
+      "observable": "sourceLink",
+      "value": false
+    },
+    {
+      "observable": "statementCost",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierNavigation.test.tsx",
+    "testName": "unavailable target permission leaves the statement label and cost access gates the whole statement"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "7ce329607680c676493aff292bb37edca2bf56b5d3b8c690db29249f87aaab55"
+}

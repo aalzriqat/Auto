@@ -1,0 +1,62 @@
+{
+  "id": "supplier-navigation-payer-opening-label",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierRowDetails.render",
+      "input": {
+        "locales": [
+          "en",
+          "ar"
+        ],
+        "role": "AR",
+        "openingPermission": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payer",
+      "value": true
+    },
+    {
+      "observable": "openingLabel",
+      "value": true
+    },
+    {
+      "observable": "openingLink",
+      "value": false
+    },
+    {
+      "observable": "unknownFallbacks",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierNavigation.test.tsx",
+    "testName": "receivable metadata identifies the payer and keeps opening labels plain without opening access"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "f219a5f95721186112c32bf9eedbee37fd07c251240885209f072b24c1c68c28"
+}

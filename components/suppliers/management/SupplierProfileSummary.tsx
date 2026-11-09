@@ -24,4 +24,3 @@ export function SupplierSummary({ supplier }: Readonly<{ supplier: FullSupplier 
     </dl>
   );
 }
-

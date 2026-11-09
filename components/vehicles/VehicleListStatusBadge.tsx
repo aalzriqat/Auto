@@ -24,4 +24,3 @@ export function StatusBadge({ status, t }: Readonly<{ status: string; t: Transla
       return <Badge variant="outline">{label}</Badge>;
   }
 }
-

@@ -1,0 +1,65 @@
+{
+  "id": "supplier-navigation-target-labels",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "targetStates": [
+          "sameOrg",
+          "foreignOrg",
+          "deleted"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "sameOrgLabel",
+      "value": true
+    },
+    {
+      "observable": "href",
+      "value": null
+    },
+    {
+      "observable": "foreignLabel",
+      "value": false
+    },
+    {
+      "observable": "deletedLabel",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "missing target permissions preserve labels without links and foreign or deleted targets disclose no label"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "3780d29a20d9c936c72bdfcbd814eecbbb6bba6e5b2bd47a5c4575b7253bc9ab"
+}

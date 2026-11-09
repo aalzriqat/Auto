@@ -11,4 +11,3 @@ export function Money({ minor, currency }: Readonly<{ minor: number; currency: s
     </bdi>
   );
 }
-

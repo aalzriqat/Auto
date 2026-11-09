@@ -68,4 +68,3 @@ export function settledClaimRow(claim: Doc<"vehicleSupplierReceivables">, receip
     },
   };
 }
-

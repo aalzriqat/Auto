@@ -1,0 +1,49 @@
+{
+  "id": "supplier-navigation-coded-money-error",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "storedAmount": "NaN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "publicError",
+      "value": "SUPPLIER_NAVIGATION_UNAVAILABLE"
+    },
+    {
+      "observable": "serverErrorLogged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "invalid stored money returns a coded generic error without exposing technical detail"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "ecb874a68c7171ad9f36dd4be30b2f16fdff3be0b505e0c177db4939182155e0"
+}

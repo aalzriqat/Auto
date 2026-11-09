@@ -1951,3 +1951,52 @@ The pending-legacy-draft scenario cites failing-first commit
 instead of refusing. Other new records are preventive controls and have no
 bugRef. Rulings: SCRUM-868 c23871/c23873, OQ-4, and SCRUM-850 c24749.
 This is harness evidence, not real-backend, OCC, production or pilot certification.
+
+### SCRUM869-navigation-identity
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Canonical statement source | One linked payable: 9500000 JOD minor units, A/P, original supplier snapshot and creation timestamp. Same-name different-id and id-less records are absent | `convex/supplierNavigation.scrum869.test.ts`, authoritative statement source case |
+| Settled and opening source | Paid amount is 9500000 minor units. Posted opening payable and recovery link to opening Settings, with A/P and A/R roles | Same suite, settled and P5 opening cases |
+| Sale and expense source | A/R sale uses its deal route. Expense retains Transport invoice label without an invented record route, plus its recorded vehicle link | Same suite, sale/expense case |
+| Relationship identity | SOURCED uses sourcedSupplierId; native owned purchase payable uses supplierId. SOLD owned stock remains included; deleted, same-name and id-less controls do not enter | Same suite, sourced/owned relationship case |
+
+### SCRUM869-navigation-permissions
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Cost boundary | Finance-only response equals the complete vehicle metadata allowlist: vehicleId, label, model, status and href. No cost fields; outstanding and settled statement queries refuse | Backend finance-without-cost case, whole-shape `toEqual` |
+| Target boundary | Without view:vehicles, vehicle label remains and href is null. Foreign/deleted source has no label. UI removes target links and the entire cost statement when permission is absent | Backend missing-target case and both EN/AR UI permission cases |
+| Tenancy | Supplier from org B supplied to org A refuses; querying org B without membership refuses; finance permission absent refuses | Backend public-reader refusal case |
+| Safe error | Stored NaN refuses with SUPPLIER_NAVIGATION_UNAVAILABLE and detailed server log; UI errors are localized, without raw technical text | Backend invalid-money and component error cases |
+| Direct vehicle opening | Missing id or vehicle permission produces no direct record query. A supplier id outside loaded inventory opens the actual detail dialog using vehicles.get, without inventory-list queries | `components/suppliers/management/SupplierVehicleTarget.test.tsx` |
+
+### SCRUM869-navigation-bounds
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Continuation | Two synthetic linked vehicles, page size 1: first page is incomplete; continuation returns the different remaining vehicle and is done | Backend continuation case |
+| Distant end cursor | 52 linked vehicles; numItems 1 and caller maximumRowsRead 1000000 cannot widen server cap: at most 50 returned, SplitRequired, split cursor present, isDone false | Backend distant-endCursor case |
+| Honest notice | Nonterminal relationship list has EN/AR incomplete notice and load-more 25; no partial monetary total | `components/suppliers/management/SupplierNavigation.test.tsx` |
+
+### SCRUM869-navigation-screen
+
+The component checks use the real supplier components and dictionaries, with SDK
+and auth boundaries supplied synthetic records. They cover EN and AR source
+links, A/P and A/R, payer/payee, currency and minor-unit formatting, timestamps,
+plain opening labels when manage:finance is absent, ownership/status, RTL,
+loading, empty, error and incomplete states. The direct vehicle check renders
+the actual existing detail dialog. Local Chromium fixture renders at 375 and
+1440 pixels use application CSS and blocked network access; they are not
+cloud-backed screen-audit or mobile certification.
+
+Twenty permanent records are stored as
+`regression/scenarios/{money,permission,tenancy,screen}/supplier-navigation-*.scenario.json`.
+Their exact executable registrations are the 11 backend cases, six EN/AR
+component cases and three direct-vehicle cases (20 literal test registrations;
+localized cases execute a bounded EN/AR loop). Every stored fingerprint comes from the expected value printed by
+`scripts/regression/scenarioRecord.test.ts` and is checked again by that file.
+Run those three named test files and the regression library with one worker.
+These are read-only harness and synthetic screen controls. They neither certify
+OCC/platform read limits nor fulfill SCRUM-760's independent real-backend
+hunters, exact-SHA release rehearsal or P7 launch evidence.
