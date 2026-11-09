@@ -16,7 +16,7 @@
       },
       "action": "applications.attestChequeFace",
       "input": {
-        "faceAmount": "12500.000",
+        "faceAmount": 12500,
         "noteMarker": "private-face-12500000"
       }
     },
@@ -80,5 +80,5 @@
     "key": "SCRUM-936",
     "failingFirst": "9956ef3e01b055416dd920bce89aa85210949c8f"
   },
-  "fingerprint": "dacc410f0c46935e206f38e5b4d0bb9cdbb3a4183db0e5e0eda7c7c718648c60"
+  "fingerprint": "2c5888502d569f65f86af87d62da4e3f4f96136bba8a0bfa96e65ecbdba1dc54"
 }

@@ -1860,9 +1860,23 @@ source ids, mutable-draft payroll history and the stricter maintenance payroll
 predicate. Restricted resource types remain visible; source ids are `WITHHELD`.
 
 
-The completed SCRUM-936 library contains fourteen records for fourteen behavioral
+The initial SCRUM-936 library contains fourteen records for fourteen behavioral
 tests. The legacy-edit and direct-employee records include the historical-employee and
-void-reason controls from the supplemental checkpoint. All eighteen source mutants produced failed tests
-and were restored clean. Both typechecks and the source-freshness check passed.
+void-reason controls from the supplemental checkpoint. The initial eighteen source mutants produced failed tests
+and were restored clean. Both typechecks and the source-freshness check passed at that checkpoint.
 The unrelated refreshRulings parse failure and thermally interrupted broad
 SCRUM-858 read-budget suite remain failed/incomplete verification, not waivers.
+
+Three further records cover the application base-reader gate and real public
+cheque writers. `c941eba60f4c1125e78775b329702a50d5cd57ef` fails the application
+gate test (1 failed, 15 passed). `9956ef3e01b055416dd920bce89aa85210949c8f`
+fails the literal cheque-face-reader and expected-payment-reader tests (2 failed,
+16 passed). The final library has seventeen behavioral records and one separate
+schema classification test. Cheque attestation retains the finance-only reader's
+existing full visibility; expected-payment method/date follow view:sales while
+cheque ids and the stored cancellation reason follow view:finance. No new policy
+is inferred from the writer module. The final source checkpoint
+`26fe73f57f621a571097d4c75c9cc526b4d0b677` passed 307 tests in seven focused files.
+The final-head proof and repeated mutation results are in the evidence report.
+All nineteen final-source mutants failed tests and were restored clean. The
+restored four-file proof passed 137 tests, and the two required guards passed 32.

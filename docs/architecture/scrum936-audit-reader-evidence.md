@@ -34,18 +34,18 @@ The audit reader itself requires `manage:finance` in every case.
 | accountingPeriods.close 790 | CLOSE_PERIOD | Checklist and override text | closeChecklist 715, S | Cost policy |
 | accountingPeriods.lock 833 | LOCK_PERIOD | Fiscal metadata | periods.list/get, F | Finance policy |
 | accountingPeriods.reopen 884 | REOPEN_PERIOD | Period/reason | periods.list/get, F | Finance policy |
-| applications.correctExpectedPayment 4052 | CORRECT_EXPECTED_PAYMENT | Methods, dates, cheque ids, reason | applications.get 1550, view:sales; these fields OPEN | Sales policy |
-| applications.attestChequeFace 4126 | ATTEST_CHEQUE_FACE | Cheque amount, currency, note | Application/payment finance projection, F | Ordinary finance |
+| applications.correctExpectedPayment 4052 | CORRECT_EXPECTED_PAYMENT | Methods, dates, cheque ids, reason | applications.get 1550: view:sales for method/date; collections.listCheques 964: F for cheque ids and cancellationReason | Field projection preserves each reader tier; confirmed cheque evidence leak to sales-only audit viewers |
+| applications.attestChequeFace 4126 | ATTEST_CHEQUE_FACE | Cheque amount, currency, note | collections.listCheques 964 and hydrateCheque 430: F, without view:sales | Cleared by real public writer/control: finance-only reader already sees the same amount/id/note |
 | applications.setSupplierSettlementRoute 4263 | SET_SUPPLIER_SETTLEMENT_ROUTE | Route and supplier label | applications.get, view:sales, OPEN route | Sales policy |
-| applications.returnFinanceDisbursementCheque 5540 | RETURN_FINANCE_DISBURSEMENT_CHEQUE | Disbursement amount and source ids | financeApplicationProjection 276, F | Ordinary finance |
-| applications.confirmSupplierDisbursement 5838 | CONFIRM_SUPPLIER_DISBURSEMENT | Amount, approval and discrepancy | financeApplicationProjection 316, F | Ordinary finance |
-| applications.amendSupplierDisbursementAdvice 6094 | AMEND_SUPPLIER_DISBURSEMENT_ADVICE | Prior/current amount, reference and reason | Same, F | Ordinary finance |
+| applications.returnFinanceDisbursementCheque 5540 | RETURN_FINANCE_DISBURSEMENT_CHEQUE | Disbursement amount and source ids | applications.get 1550: view:sales, then financeApplicationProjection 276: F | Application base gate and finance tier both retained |
+| applications.confirmSupplierDisbursement 5838 | CONFIRM_SUPPLIER_DISBURSEMENT | Amount, approval and discrepancy | applications.get: view:sales, then financeApplicationProjection 316: F | Confirmed retained-row application base gate leak |
+| applications.amendSupplierDisbursementAdvice 6094 | AMEND_SUPPLIER_DISBURSEMENT_ADVICE | Prior/current amount, reference and reason | Same, view:sales plus F | Application base gate and finance tier both retained |
 | bankReconciliation.ignoreLine 312 | IGNORE_BANK_STATEMENT_LINE | Amount, bank text, reason | listStatementLines 79, F | Finance-only reader already sees this amount; not a cost leak |
 | chartOfAccounts.repairMissingSystemAccounts 788 | REPAIR_MISSING_SYSTEM_ACCOUNTS | Account codes/summary | chart.list 618, F | No monetary copy |
 | chartOfAccounts.confirmSystemAccountAdoption 1065 | RESOLVE_SYSTEM_ACCOUNT_ADOPTION | Account codes/system keys | Adoption reader 1001, F | No monetary copy |
 | dealCommissions.addLine 275 | ADD_DEAL_COMMISSION_LINE | Employee/line/sale ids, amount | forSale 123, view:commissions | Confirmed public writer/read leak |
 | dealCommissions.removeLine 330 | REMOVE_DEAL_COMMISSION_LINE | Employee/amount in before and description | Same | Confirmed public writer/read leak |
-| dealUnwind.startDealUnwind 289 | DEAL_UNWIND_STARTED | Remittance, ids, free reason | unwindStatus 967/1020, F or actor; free text F | Full payload uses F; actor tier retains permitted remittance |
+| dealUnwind.startDealUnwind 289 | DEAL_UNWIND_STARTED | Remittance, ids, free reason | unwindStatus 967/1020 requires view:sales, then F or actor; free text F | Full payload uses view:sales+F; actor tier retains permitted remittance under the same base gate |
 | dealUnwind.recordDealUnwindForwardReturn 394 | DEAL_UNWIND_FORWARD_RETURNED | Forward reference/state | Same, full detail F | Finance/actor projection |
 | dealUnwind.finishDealUnwind 788 | DEAL_UNWIND_REMITTANCE_REFUNDED | Amount and reversed ids | Same | Finance/actor projection |
 | dealUnwind.finishDealUnwind 812 | DEAL_UNWIND_COMPLETED | Reference, disposition, inspection text | Same, text F | Finance/actor projection |
@@ -128,14 +128,18 @@ where its dedicated reader already serves it.
 
 ## Validation
 
-Production source is frozen at `371a647993f9f4e02becddfdb459614bdf78bf93`.
-Baseline source notes are committed at `715e1a47e`.
+The initial production-source checkpoint is `371a647993f9f4e02becddfdb459614bdf78bf93`.
+The final mixed-reader production-source checkpoint is
+`26fe73f57f621a571097d4c75c9cc526b4d0b677`. The following broad-suite results
+were measured before the application and cheque refinements; the later focused
+reruns and final-head proof are listed separately below.
+Initial baseline source notes are committed at `715e1a47e`.
 
 | Check | Result |
 | --- | --- |
 | First failing-first checkpoint | 13 failed tests at e5813b68f; intended disclosure/classification failures |
 | Supplemental checkpoint against its committed production sources | 15 failed tests at 18992de61 |
-| Named affected backend suites | 67 completed suites, 1,920 tests green after the Phase 10 recheck |
+| Named affected backend suites, initial checkpoint | 67 completed suites, 1,920 tests green after the Phase 10 recheck |
 | Additional broad openingClosureReaders.scrum858 suite | INCOMPLETE / failed local verification; interrupted for the machine CPU bound, no threshold or test change |
 | Regression validators and required guards | Initial nine-file run: seven passed; tenant guard hook timed out; refreshRulings failed before collection |
 | Tenant write guard recheck | 13 passed on unchanged source |
@@ -267,7 +271,7 @@ All commands used named files and `--maxWorkers=1`.
 | scripts/tenantWriteGuard.test.ts | PASS, 13 tests on unchanged rerun |
 | scripts/economicCommandCensus.test.ts | PASS |
 
-### Mutation results
+### Initial mutation results
 
 The four branch mutants bypassed the shared projection only for that branch.
 Every mutation ran a named suite with one worker. Every source was restored with
@@ -323,7 +327,7 @@ change, issue change or UNKNOWN-to-PASS conversion was used. The normal read-onl
 command then checked all 945 entries with zero stale evidence. This measures
 source/blob attribution, not live contract compatibility or runtime correctness.
 
-Fourteen SCRUM-761 records cover fourteen behavioral tests, plus the separate
+The initial fourteen SCRUM-761 records cover fourteen behavioral tests, plus the separate
 classification test, under `SCRUM-936-audit-reader-confidentiality` in the SCRUM-486 matrix. The existing legacy-edit and direct-employee records also name the mutable
 historical employee snapshot and payroll-view-without-maintenance-authority
 void controls. Their literal tests are present at the
@@ -350,7 +354,7 @@ with short tokens and the supplemental failing-first SHA. The validator was not
 changed or weakened. Final restored results are recorded after the rerun.
 
 
-### Final restored proof and scenario inventory
+### Initial restored proof and scenario inventory
 
 After source restoration, both backend files passed all 63 tests. The corrected
 record and implementation-fixture validators then passed all 71 tests. The
@@ -362,10 +366,13 @@ types. The schema/table test covers all 44 declared action types.
 
 | Scenario record | Literal test | Failing-first commit |
 | --- | --- | --- |
+| `scrum936-application-reader-gates` | SCRUM-936 application audit details inherit both sales and finance read gates | `c941eba60f4c1125e78775b329702a50d5cd57ef` |
+| `scrum936-cheque-face-reader-control` | SCRUM-936 cheque face audit remains visible to its dedicated finance-only reader | `9956ef3e01b055416dd920bce89aa85210949c8f` |
 | `scrum936-commission-add` | SCRUM-936 adding a deal commission audit inherits the commission reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-commission-remove` | SCRUM-936 removing a deal commission audit inherits the commission reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-commission-set` | SCRUM-936 setting a sale commission audit inherits its dedicated reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-event-line-count` | SCRUM-936 restricted posted events retain their line count without source text | `18992de610caea44ce5503f2362bfc27b36f5225` |
+| `scrum936-expected-payment-reader-tiers` | SCRUM-936 expected payment audit separates open method metadata from finance cheque evidence | `9956ef3e01b055416dd920bce89aa85210949c8f` |
 | `scrum936-legacy-cost-receipt` | SCRUM-936 historical supplier cost receipt audit inherits cost reader gates | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-legacy-cost-reversal` | SCRUM-936 historical supplier cost receipt reversal audit inherits cost reader gates | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-legacy-manual-post` | SCRUM-936 legacy posted manual journal totals and memo are withheld while pilot posting stays blocked | `e5813b68f46b63546c3b448900efec0efa0241e9` |
@@ -376,3 +383,100 @@ types. The schema/table test covers all 44 declared action types.
 | `scrum936-post-opening-direct-employee` | SCRUM-936 owner-direct singleton employee posting audit inherits payroll withholding | `18992de610caea44ce5503f2362bfc27b36f5225` |
 | `scrum936-post-opening-direct-vehicle` | SCRUM-936 owner-direct singleton vehicle posting audit inherits cost withholding | `e5813b68f46b63546c3b448900efec0efa0241e9` |
 | `scrum936-unwind-actor-parity` | SCRUM-936 unwind actors retain permitted remittance amounts while finance text stays withheld | `18992de610caea44ce5503f2362bfc27b36f5225` |
+
+### Final mixed-reader controls and proof boundaries
+
+The application base-gate checkpoint `c941eba60f4c1125e78775b329702a50d5cd57ef`
+reported **1 failed, 15 passed**. Its initial action set also included a synthetic
+cheque attestation payload. Source review cleared that action: collections already
+exposes the attestation amount, id and note under view:finance alone. That action
+was removed from the application-gate case and replaced by a real public-writer
+positive control. The three supplier-disbursement/advice actions retain the
+application reader's view:sales base gate plus finance tier. The unwind full and
+actor tiers also retain view:sales.
+
+The real cheque writer controls at
+`9956ef3e01b055416dd920bce89aa85210949c8f` reported **2 failed, 16 passed**:
+the first exposed an over-restrictive attestation classification; the second
+exposed cheque ids and correction reason to a sales-only audit viewer. The fix
+preserves finance-only attestation visibility and projects expected-payment
+method/date for sales readers separately from cheque ids/reason for finance
+readers. Both tests exercise all four audit branches, public source-reader
+controls, authorized full-row controls, and unchanged stored audit evidence.
+
+After that fix, seven named files passed **307 tests**:
+financialAudit.scrum936, openingBalanceMaintenance.scrum850, accountingPhase7,
+accountingPhase10, accountingPhase17, applications and dealUnwind. This is the
+latest production-source checkpoint, `26fe73f57f621a571097d4c75c9cc526b4d0b677`.
+The broad 67-suite/1,920-test result above belongs to the earlier checkpoint;
+it is not claimed as a complete rerun against the latest production source.
+
+The final seventeen scenario records pass scenarioRecord and implFixture:
+**2 files, 71 tests passed**. The cheque-face record uses numeric 12500 for the
+canonical face amount; no validator changed. Both root and Convex typechecks
+were rerun on the latest production source and exited 0. The latest financialAudit
+and test ESLint run exited 0 with no diagnostics. The unchanged-source guard
+and broader validator results, including the two explicit limitations, remain
+as itemized above.
+
+The scoped advisory recheck closed its application/PDC/unwind findings statically
+at that source checkpoint. It ran no tests, edited no files and is not a formal
+seat or runtime certification.
+
+### Final production-source mutation replay
+
+Each of the following nineteen mutations produced actual failed tests and exit 1.
+Each was restored by `git checkout HEAD -- <file>`, then proved clean by empty
+`git status --porcelain <file>` output. The four branch and missing-classification
+mutants are repeated here against the latest production source. Thirteen helper
+functions are covered, including expectedPaymentAuditSummary. No assertion,
+timeout, authz gate or pilot switch was weakened. No mutant survived.
+
+| Mutant | Failed tests | Restore clean |
+| --- | --- | --- |
+| branch-actor (`branch:actor`) | 17 | Yes |
+| branch-action (`branch:action`) | 17 | Yes |
+| branch-date (`branch:date`) | 17 | Yes |
+| branch-default (`branch:default`) | 17 | Yes |
+| missing-post-journal-classification (`classification`) | 6 | Yes |
+| new-unclassified-action (`new-action`) | 1 | Yes |
+| opening-policy-bypass (`mayReadOpeningAudit`) | 3 | Yes |
+| journal-policy-bypass (`mayReadJournalAudit`) | 5 | Yes |
+| all-details-bypass (`mayReadAuditDetails`) | 17 | Yes |
+| object-projection-missing (`auditObject`) | 8 | Yes |
+| opening-summary-missing (`openingAuditSummary`) | 4 | Yes |
+| historical-summary-trust (`isOpeningAuditSummary`) | 1 | Yes |
+| unwind-amounts-missing (`unwindActorAuditAmounts`) | 1 | Yes |
+| row-projection-bypass (`projectAuditRow`) | 17 | Yes |
+| payroll-read-grant-denied (`canReadOpeningPayroll`) | 4 | Yes |
+| payroll-maintenance-overgrant (`canManageOpeningPayroll`) | 2 | Yes |
+| payroll-source-missed (`containsEmployeeAdvanceControl`) | 2 | Yes |
+| unwind-actor-grant-denied (`mayReadUnwindActorEvidence`) | 1 | Yes |
+| expected-payment-summary-missing (`expectedPaymentAuditSummary`) | 1 | Yes |
+
+### Final contract note renewal
+
+The latest financialAudit reader changes made three entries for
+financialAudit:createManualJournal stale. Its entire exported command declaration,
+argument validator and explicit return validator are unchanged from the PR base
+after normalizing line endings. Only those three existing entries received further
+appended source/blob notes in the ManualJournalTab shard. All non-renewal fields
+and each prior renewal string are unchanged. This supplements the earlier notes
+on 62 unique entries; it does not add a waiver, extend an expiry or turn UNKNOWN
+into PASS. No baseline write mode or extractor change was used.
+
+### Restored final-source checks
+
+After all nineteen mutants were restored, the combined named proof passed
+**4 files, 137 tests**: financialAudit.scrum936 (18),
+openingBalanceMaintenance.scrum850 (48), scenarioRecord (70), and implFixture (1).
+The required tenantWriteGuard and economicCommandCensus rerun passed
+**2 files, 32 tests**. ESLint on all sixteen touched TypeScript files exited 0
+with zero errors and the same pre-existing sales.ts:1408 unused-variable warning.
+The final-head rerun and read-only contract command outputs accompany the
+implementer handoff; no CI or release gate pass is claimed by these local checks.
+
+Comparing every edited baseline shard against the PR base confirms fifteen
+shards, sixty-two unique entries with appended notes, zero changed non-renewal
+fields, unchanged shard metadata, and every prior renewal string preserved.
+The three latest notes append to entries already among those sixty-two.
