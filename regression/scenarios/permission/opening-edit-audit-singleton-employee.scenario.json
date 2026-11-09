@@ -1,0 +1,131 @@
+{
+  "id": "opening-edit-audit-singleton-employee",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round7-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "allocationKind": "EMPLOYEE_ADVANCE",
+        "amountMinor": 110003,
+        "lineCount": 2,
+        "allocationCount": 1
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "dedicatedOpeningAndGLReaders",
+      "input": {
+        "permissions": [
+          "view:finance",
+          "manage:finance"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "memo": "Memo edit"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actionType",
+          "actorId",
+          "fromDate"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "dedicatedReaders.withholdAmountsAndRefuseStockAndGLReaders",
+      "value": true
+    },
+    {
+      "observable": "audit.containsProtectedAmountOrMonetaryKeys",
+      "value": false
+    },
+    {
+      "observable": "editAudit.rowCount",
+      "value": 1
+    },
+    {
+      "observable": "editAudit.versions",
+      "value": [
+        0,
+        1
+      ]
+    },
+    {
+      "observable": "editAudit.lineAndAllocationCounts",
+      "value": [
+        2,
+        1
+      ]
+    },
+    {
+      "observable": "editAudit.allocationKinds",
+      "value": [
+        "EMPLOYEE_ADVANCE"
+      ]
+    },
+    {
+      "observable": "journalEntries.count",
+      "value": 0
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R7 singleton employee advance edit audit withholds pending amounts"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
+  },
+  "fingerprint": "baee9611b5ef6c9cc5726fb60fb9646e478f6d1cdf3a94980f0fff254f84776e"
+}

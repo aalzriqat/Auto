@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum850-round6-local",
+    "runId": "scrum850-round7-local",
     "firstSeen": "2026-11-09"
   },
   "steps": [
@@ -28,8 +28,7 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Changed",
-        "dateOffsetDays": 1
+        "cashMinor": 200007
       }
     },
     {
@@ -39,13 +38,12 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Changed",
-        "dateOffsetDays": 1
+        "cashMinor": 200011
       }
     },
     {
       "actor": {
-        "role": "owner",
+        "role": "finance-only",
         "org": "A"
       },
       "action": "financialAudit.listAuditLog",
@@ -71,7 +69,7 @@
     {
       "observable": "audit.memoChanged",
       "value": [
-        true,
+        false,
         false
       ]
     },
@@ -88,8 +86,12 @@
       "value": []
     },
     {
-      "observable": "audit.totalDebits",
-      "value": 200003
+      "observable": "editAudit.containsMonetaryKeysOrAmounts",
+      "value": false
+    },
+    {
+      "observable": "editAudit.amountOnlyEditsChangeOnlySummaryVersions",
+      "value": true
     }
   ],
   "rulings": [
@@ -104,12 +106,12 @@
   ],
   "impl": {
     "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
-    "testName": "SCRUM-850 R6 opening edit audit retains successive versions and empty allocation counts without copying content"
+    "testName": "SCRUM-850 R7 amount-only successive edits reveal versions and counts without amount deltas"
   },
   "matrixRow": "SCRUM-850-opening-audit-confidentiality",
   "bugRef": {
     "key": "SCRUM-850",
-    "failingFirst": "00210358412583a22f5eecf414da2d7b70c0d68f"
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
   },
-  "fingerprint": "49b100891b03b70e70cc91d3ba98bb027340ef2653582c2f3b92ee99bca3d453"
+  "fingerprint": "67f0152a1f7e3af92ee3b0cc41877d35c024211d841f198c0c8e3ca644a4aaa2"
 }

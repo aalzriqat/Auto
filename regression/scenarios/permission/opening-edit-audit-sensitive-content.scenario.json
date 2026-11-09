@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum850-round6-local",
+    "runId": "scrum850-round7-local",
     "firstSeen": "2026-11-09"
   },
   "steps": [
@@ -93,11 +93,8 @@
       ]
     },
     {
-      "observable": "editAudit.totalDebitsBeforeAfter",
-      "value": [
-        1310006,
-        1310010
-      ]
+      "observable": "editAudit.containsMonetaryKeysOrAmounts",
+      "value": false
     }
   ],
   "rulings": [
@@ -112,12 +109,12 @@
   ],
   "impl": {
     "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
-    "testName": "SCRUM-850 R6 finance-only audit reader cannot recover opening stock costs or employee advances after edit"
+    "testName": "SCRUM-850 R7 mixed draft edit audit contains metadata without protected amounts or totals"
   },
   "matrixRow": "SCRUM-850-opening-audit-confidentiality",
   "bugRef": {
     "key": "SCRUM-850",
-    "failingFirst": "00210358412583a22f5eecf414da2d7b70c0d68f"
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
   },
-  "fingerprint": "1bee66e565046673ac267b09851a03b62339de039af0c9f4c87e1b59724b9781"
+  "fingerprint": "5586d36a4350e27fb9901960a0698241cb991e4221beb87d0aad7b30e6611fe6"
 }

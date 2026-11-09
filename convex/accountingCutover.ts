@@ -442,17 +442,14 @@ export const draftOpeningBalance = mutation({
 });
 
 /** Audit readers have finance authority, not necessarily cost/payroll access.
+ * Omit all amounts: even totals reveal singleton amounts or successive deltas.
  * Keep free text and individual lines/allocations out of this broader log. */
 function openingDraftAuditSummary(draft: Doc<"openingBalanceDrafts">) {
-  const totals = exactOpeningTotals(draft.lines);
-  const debit = totals?.debit;
   return {
     version: draft.version ?? 0,
     lineCount: draft.lines.length,
     allocationCount: draft.allocations?.length ?? 0,
     allocationKinds: [...new Set((draft.allocations ?? []).map(allocation => allocation.kind))],
-    // An old malformed draft may be corrected; never round its historical total.
-    totalDebits: debit !== undefined && debit >= 0n && debit <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(debit) : null,
     asOfDate: draft.asOfDate,
     currency: draft.currency ?? null,
   };

@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum850-round6-local",
+    "runId": "scrum850-round7-local",
     "firstSeen": "2026-11-09"
   },
   "steps": [
@@ -46,15 +46,11 @@
   ],
   "expected": [
     {
-      "observable": "audit.before.totalDebits",
-      "value": null
-    },
-    {
-      "observable": "audit.after.totalDebits",
-      "value": 200003
-    },
-    {
       "observable": "audit.memoChanged",
+      "value": false
+    },
+    {
+      "observable": "editAudit.containsMonetaryKeysOrAmounts",
       "value": false
     }
   ],
@@ -70,12 +66,12 @@
   ],
   "impl": {
     "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
-    "testName": "SCRUM-850 R6 correcting an unsafe retained draft audits unavailable historical total without rounding"
+    "testName": "SCRUM-850 R7 correcting an unsafe retained draft omits historical and replacement audit amounts"
   },
   "matrixRow": "SCRUM-850-opening-audit-confidentiality",
   "bugRef": {
     "key": "SCRUM-850",
-    "failingFirst": "00210358412583a22f5eecf414da2d7b70c0d68f"
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
   },
-  "fingerprint": "3fdd16c76dcf6273d268789123de024af79dafe6e6ed9795cfabb9f1772fcb9f"
+  "fingerprint": "20b13f06bbb48ef754981a159bb62c680a035ea314412f64e0f4c40eec56edd0"
 }

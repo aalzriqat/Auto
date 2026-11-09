@@ -87,25 +87,27 @@ The enumeration starts with `postOpeningBalanceDraft`, follows `materializeOpeni
 
 Historical rows without matching result identity, malformed links, partial resets, or incomplete inventories refuse. No migration guesses an opening's provenance. The UI uses a server-resolved capability and permission-filtered content; it cannot authorize a void. Finance authority is required on all commands, payroll authority when payroll allocations are present, and cost authority before returning cost-bearing draft content. Every caller-supplied draft id uses `requireOwnedRow`.
 
-## Review round 6: opening edit audit confidentiality
+## Review rounds 6–7: opening edit audit confidentiality
 
 `EDIT_OPENING_DRAFT` stores summary metadata in both snapshots: draft version,
-line count, allocation count, unique allocation kinds, exact total debits,
+line count, allocation count, unique allocation kinds,
 as-of date and currency. The after snapshot also records whether the memo
 changed. It copies no lines, allocations, account/bank/vehicle/employee ids,
-individual amounts, descriptions, row keys, notes or memo text. The ordinary
-audit envelope retains the actor and draft reference. A malformed retained
-draft whose old debit total is unavailable or unsafe records `null`, not a
-rounded historical total; a valid replacement still passes posting preflight.
+amounts (including totals), descriptions, row keys, notes or memo text. The ordinary
+audit envelope retains the actor and draft reference. Unsafe retained history
+uses the same summary without amounts; a valid replacement still passes posting preflight.
 
-This adopts Option A from S850-R5-1. `financialAudit.listAuditLog` has broader
+This adopts Option A from S850-R6-1, strengthening the round-6 S850-R5-1 repair.
+`financialAudit.listAuditLog` has broader
 finance authority than the dedicated cost/payroll readers and returns stored
 rows. Minimizing at the writer avoids replicating their authorization policy
 across a generic reader. Keeping full content and adding reader redaction is
 outside this change. The complete current draft remains behind its dedicated
 permissions; the audit summarizes the edit rather than claiming to reconstruct
-every earlier draft. Aggregate totals can equal individual amounts in small
-drafts; this decision does not claim to prevent inference from permitted totals.
+every earlier draft. No monetary field is permitted in either snapshot,
+regardless of allocation count. Singleton amounts and differences between
+successive totals must not disclose pending figures. Counts, kinds, dates,
+currency and memo-change flags do not derive from monetary values.
 
 This changes future edit writes, not previously stored audit rows. Void reasons
 remain user-entered free text in the existing request/approval audit payloads;

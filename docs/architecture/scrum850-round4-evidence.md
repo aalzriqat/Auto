@@ -906,3 +906,134 @@ leaking audit prevalence, historical audit cleanup, rendered EN/AR phone/desktop
 Playwright, explorer swarm, fresh Jira/GitHub/three review-comment surfaces,
 independent seats, CI, release rehearsal or deployment. These are coordinator or
 release-lane obligations; no pilot or full-lifecycle certification is claimed.
+
+## Round 7 — S850-R6-1: pending edit audits carry no amounts
+
+Starting revision: `9f5cefac3c0a1bb520e3065071dee17a05b4cadd` on
+`claude/scrum850-opening-correction`, base main
+`28cf683f8013f1bba4773d766f05aa6f892a2a18`. No merge, push, Jira or GitHub
+operation is part of this implementer lane. The coordinator owns external
+records and independent certification.
+
+### Independent reproduction and decision
+
+Finding: ACCEPTED, HIGH permission defect. Proposed fix: ADOPTED (Seat 2
+Option A). Read both round-6 seat reports and the reviewer's singleton test,
+then wrote repository tests against the registered public draft/edit/audit
+functions using the existing real-document fixture. The finance-only identity
+has exactly view:finance and manage:finance. Before editing, no protected amount
+appears in its audit response. After an authorized memo edit, the old summary
+copies 110003 for a singleton employee advance and 1000000 for singleton stock.
+Stock choices and GL readers refuse that same identity. Maintenance withholds
+editable content. Opening status withholds employee pendingDraftId and reports
+canReadOpeningStockCost=false in both cases; a vehicle draft id may remain
+visible, but no pending amount is returned by that status query.
+
+Invariant: neither snapshot of an edit audit visible to manage:finance carries
+a monetary figure from a pending opening draft; successive summaries must not
+reveal amount deltas. The round-6 mixed test missed this because its allowed
+aggregate differed from each protected individual amount.
+
+Alternatives considered: permission-aware audit projection would require
+historical shape handling and changes to four generic reader branches; suppressing
+all edit audit rows would lose actor/version evidence. Writer minimization
+closes the new-write disclosure while retaining the existing event envelope.
+It adds no database operation. No measured I/O reduction is claimed.
+
+Difference from reviewer: no production-design deviation from Option A. The
+tests reuse the repository fixture rather than copying the external test, cover
+all four listAuditLog index branches, and replace the unsafe-history null-total
+expectation with unconditional absence. The successive-edit control changes
+only cash amounts, so it covers drafts with no sensitive allocation kind too.
+Seat 1's view that singleton inference was acceptable is superseded by the
+explicit round-7 invariant; a posted-opening audit is a different lifecycle.
+
+### Summary field census and impact
+
+| Field | Source | Money or derived from money? |
+| --- | --- | --- |
+| version | draft version, default 0 | No; edit sequence |
+| lineCount | lines.length | No; structural count |
+| allocationCount | allocations.length, default 0 | No; structural count |
+| allocationKinds | unique allocation kind literals | No; categories |
+| asOfDate | draft date | No; date |
+| currency | currency code or null | No; denomination metadata |
+| memoChanged (after only) | comparison of old/new memo text | No; Boolean, no text copied |
+
+Removed: totalDebits, its local exactOpeningTotals call, the temporary debit
+variable, and the unsafe-before-total null conversion/comment. exactOpeningTotals
+remains in use by withSuspenseBalancing and assertExactOpeningBalance; its
+posting validation is unchanged. No schema, auth gate or reader was changed.
+
+Scope enumerated with graft plus tracked-file git searches: the changed writer
+is editOpeningBalanceDraft, its only summary helper feeds before and after,
+and the actor/action/date/default branches of financialAudit.listAuditLog return
+the stored audit records. The CREATE draft audit carries a line count; posted
+opening and rejection audits are unchanged. Request/approve void audit payloads
+are unchanged. No scheduler, outbox, native projection, journal or snapshot
+consumer depends on the removed summary amount. Existing audit rows are not
+rewritten. Retry remains another versioned edit event, not a monetary movement;
+posted/void/approval behavior and tenancy are exercised by the affected suites.
+
+Automatic correct workflow: recurring class is sensitive draft content copied
+to the broader audit audience, first as full content at f08af5815 (R5 report),
+then as totals at 9f5cefac3 (R6 reproduction). Prevention is in backend output
+and public-function tests, with literal permitted singleton snapshot shapes and
+monetary-key/amount exclusions. No agent-rule-only remedy or unrelated gate
+change was added. Types alone cannot classify a number as a confidential amount
+in the generic audit schema.
+
+Five predicted failures checked: before-only total survives; after-only total
+survives; mixed totals survive despite hiding individual amounts; successive
+amount edits expose a delta; unsafe history blocks correction or retains a
+money key. Singleton controls additionally retain the row, actor, draft,
+versions, counts, kinds and no-journal behavior.
+
+### Failing-first and local validation
+
+`b4250b0c7c822bc05ca99504984b107e050d2662` changes only
+convex/openingBalanceMaintenance.scrum850.test.ts. At that committed revision:
+
+```text
+pnpm exec vitest run --maxWorkers=1 convex/openingBalanceMaintenance.scrum850.test.ts -t 'SCRUM-850 R7'
+Test Files  1 failed (1)
+Tests       5 failed | 43 skipped (48)
+exit 1
+```
+
+The five selected cases fail on actual returned amounts, not setup, missing
+exports or validation errors. The 43 unselected cases are not claimed to have
+run in that red selection. All five literal test names are present at the test
+commit. The three revised round-6 scenario records and two new singleton records
+cite that commit; SCRUM-486 binds each to its current literal name.
+
+After removing totals: selected tests 5 passed; complete affected batch 12 files,
+182 tests passed, exit 0. Named files: convex/openingBalanceMaintenance.scrum850.test.ts,
+convex/accountingCutoverExactness.scrum850.test.ts,
+convex/accountingCutoverLegacyExactness.scrum850.test.ts,
+convex/accountingPhase10.test.ts, convex/accountingPhase7.test.ts,
+convex/accountingPhase9.test.ts, convex/adminData.test.ts,
+convex/bankReconciliation.test.ts,
+components/accounting/setup/OpeningBalanceCard.namedDeposit.scrum858.test.tsx,
+components/accounting/setup/OpeningBalanceMaintenance.scrum850.test.tsx,
+scripts/economicCommandCensus.test.ts and scripts/tenantWriteGuard.test.ts.
+The tracked test-file census for editOpeningBalanceDraft, listAuditLog and
+EDIT_OPENING_DRAFT found nine files; all nine are in this batch. The extra three
+are the two exactness suites and tenant guard. Logs: %TEMP%/codex850-r7-*.log.
+
+### Sources and evidence boundary
+
+Checked official sources on 2026-11-09:
+[OWASP Logging Cheat Sheet — data to exclude](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html#data-to-exclude)
+supports excluding commercially sensitive content and data beyond the log
+audience's classification. That supports removing totals rather than counting
+allocations to decide sensitivity.
+[Convex convex-test documentation](https://docs.convex.dev/testing/convex-test)
+supports exercising functions with identities in its mock backend. These serial
+harness runs do not establish real-platform OCC, cloud limits or production.
+
+Not verified in this lane: stored historical exposure or its cleanup, real
+backend/cloud behavior, production, rendered EN/AR phone/desktop, scripted
+Playwright, screen audit, explorer swarm, independent seats, CI/Sonar, live PR
+comments, Jira, release rehearsal or deployment. The protected pre-existing
+local files are excluded from staging. No pilot-readiness claim is made.
