@@ -121,7 +121,7 @@ async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: Audit
   if (!journal || journal.orgId !== row.orgId) return false;
   if (journal.category !== "OPENING_BALANCE") return true;
   const draft = await ctx.db.query("openingBalanceDrafts")
-    .withIndex("by_org_journal", q => q.eq("orgId", row.orgId).eq("journalEntryId", journal._id)).unique();
+    .withIndex("by_orgId_and_journalEntryId", q => q.eq("orgId", row.orgId).eq("journalEntryId", journal._id)).unique();
   return draft !== null && !(await needsPayroll(draft._id));
 }
 
