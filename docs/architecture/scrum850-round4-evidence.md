@@ -448,3 +448,180 @@ The first fixed-file run passed all twelve tests (exit 0), log
 `%TEMP%/s850-r5-first-green.log`. Required complete named-file batches, final-HEAD
 green, mutants, typechecks, lint, validators and contract renewal results are
 recorded below after execution. No pending measurement is counted as passed.
+
+Completed checks through the implementation and renewal commits:
+
+- `pnpm typecheck`: exit 0, no diagnostics (`%TEMP%/s850-r5-type-root.log`).
+  Root application roots exclude convex, test-utils, apps, packages and
+  dealer-worker. Imports may still be followed.
+- `pnpm typecheck:convex`: exit 0, no diagnostics
+  (`%TEMP%/s850-r5-type-convex.log`). Includes convex and test-utils, excludes
+  generated files as roots, and does not typecheck the application roots.
+  Imports may still be followed.
+- `pnpm exec eslint convex/accountingCutover.ts convex/accountingCutoverLegacyExactness.scrum850.test.ts`:
+  exit 0, no diagnostics (`%TEMP%/s850-r5-eslint.log`). These are the touched TS files.
+- All seven existing `scripts/regression/` test files passed, 379 tests, exit 0
+  (`%TEMP%/s850-r5-regression.log`). Named files: scenarioRecord.test.ts,
+  localExecution.test.ts, pilotDoorAnalysis.test.ts, pilotDoorInventory.test.ts,
+  prRunner.test.ts, refreshRulings.test.ts, implFixture.test.ts. This validates
+  library definitions and runner behavior, not platform execution of the library.
+  The supplied protected refreshRulings test was exercised as supplied, never
+  edited or staged.
+- `node scripts/contractSkew/checkBaselineIdentity.mjs`: exit 0, 945 baseline
+  identities matched. This does not measure backend finding identity.
+- After fix commit `2d79b87beb5fad8a818161109c4eaaa04fd3c75e`, the required renewal
+  check exited 10 with exactly four stale entries, all due to the backend blob.
+  Client expressions and the four opening exports' validators were source-reviewed
+  against starting HEAD. The module diff is exactly the two legacy additions.
+  Only each stale entry's renewal string was appended in the two existing shards,
+  preserving all prior notes. A structural comparison verified every other field
+  unchanged. No renewal tool write mode, expiry, fingerprint, extractor, identity
+  or threshold change was used. Notes were committed at
+  `c6fe56fb4b18c9135bd0380e9f0180648a642cad`.
+- Required post-commit command:
+  `node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 95ffa13e91e9c619336ac9d4274c560d3b132121`
+  exited 0: 945 renewed entries checked, 0 unrenewed, 0 stale, 0 malformed,
+  0 missing (`%TEMP%/s850-r5-renewal-final.log`). Freshness is source evidence,
+  not a live-spec or runtime claim.
+
+Advisory two-axis review at `2d79b87be` used two read-only subagents under the
+repository skill. Standards: zero findings, INSPECTED only. Spec: zero findings,
+INSPECTED only. Neither ran tests, claimed certification or served as an independent
+seat. Self-review also applied clean-code-guard and test-guard. Literal test
+registrations remain for scenario-source binding, with shared scenario bodies.
+
+### Complete named-file census and batches
+
+Tracked enumeration, including literal references beyond direct imports:
+`git grep -l -E 'accountingCutover|signOffCutover|listSignOffs|compareLegacyToGL' -- '*test.ts' '*test.tsx'`.
+It contains 44 files: the 32 existing backend files listed in round 4, both
+SCRUM-850 exactness suites, and ten additional component/library/script files.
+Every file is run, not only the test names matching the search. The one thermal
+exception is execution partitioning of the full closure-reader file, described
+below. The union still covers its complete 88-test set.
+
+All batches use `pnpm exec vitest run --maxWorkers=1` followed by exactly these
+names. Logs are `%TEMP%/s850-r5-suiteNN.log`, except 04a and the 07 rerun.
+
+| Batch | Files | Tests | Result |
+| --- | ---: | ---: | --- |
+| 01 | 6 | 139 | Passed |
+| 02 | 5 | 82 | Passed |
+| 03 | 5 | 144 | Passed |
+| 04a | 3 | 64 | Passed |
+| 05 | 5 | 112 | Passed |
+| 06 | 5 | 75 | Passed |
+| 07 rerun | 4 | 144 | Passed |
+| 08 | 6 | 138 | Passed |
+| 09 | 4 | 91 | Passed, including tenant write guard |
+
+Each named file in a passed batch completed successfully:
+
+```text
+01: convex/accountingPhase17.test.ts convex/accountingPhase18.test.ts convex/openingBalanceIndexReads.test.ts convex/openingBalanceMaintenance.scrum850.test.ts convex/accountingCutoverExactness.scrum850.test.ts convex/accountingCutoverLegacyExactness.scrum850.test.ts
+02: convex/adminOrgs.test.ts convex/chartOfAccounts.management.test.ts convex/costDisclosure.scrum902f.test.ts convex/costReaders.scrum902d.test.ts convex/manualJournalsPilotOff.scrum795.test.ts
+03: convex/openingAllocatedAdvances.test.ts convex/openingAllocatedPartners.test.ts convex/openingAllocatedPrepaids.test.ts convex/openingAllocatedReceivables.test.ts convex/openingBalanceBankIdentity.test.ts
+04a: convex/openingBankReconciliation.scrum858.test.ts convex/openingCommissionPayroll.test.ts convex/openingCommissionReadBudget.test.ts
+05: convex/openingInventoryCap.scrum858.test.ts convex/openingManagementSettlement.test.ts convex/openingNamedDeposits.scrum858.test.ts convex/openingPrepaidConsumerReports.test.ts convex/openingPrepaidRounding.scrum858.test.ts
+06: convex/openingRehearsalPublicComposite.test.ts convex/openingRemainingFamilies.test.ts convex/openingReversalDoors.scrum858.test.ts convex/openingStockCashBankReplay.test.ts convex/openingSupplierLiabilityReplay.test.ts
+07 rerun: convex/openingSuspense.scrum858.test.ts convex/supplierPayablesReconciliation.scrum876.opening.test.ts convex/supplierReceivables.test.ts convex/supplierReceivablesReconciliation.scrum869.test.ts
+08: components/accounting/setup/OpeningAllocationVisualFixture.test.tsx components/accounting/setup/OpeningBalanceApprovalContainer.test.tsx components/accounting/setup/OpeningBalanceApprovalPanel.test.tsx components/accounting/setup/OpeningBalanceCard.namedDeposit.scrum858.test.tsx components/accounting/setup/OpeningBalanceMaintenance.scrum850.test.tsx lib/errors.test.ts
+09: scripts/contractSkew/contractSkew.test.ts scripts/economicCommandCensus.test.ts scripts/orgDeletionCoverage.test.ts scripts/tenantWriteGuard.test.ts
+```
+
+Execution correction: I initially started batch 07 and the root typecheck before
+collecting completion of batches 04 and 06. I stopped batch 07 and returned to
+the two-job limit; its interrupted log is not passing evidence. Root typecheck
+had already completed successfully when termination was attempted. No source
+mutation ran concurrently with a test batch. Two whole-file closure-reader
+attempts were stopped after sustained CPU use at the 4,000-journal range case.
+An early isolated attempt was also interrupted to finish other active checks.
+These attempts are not represented as passes. The three other files in batch
+04 completed separately in 04a. No fixture, threshold or timeout was changed.
+
+The closure-reader file was then partitioned by exact name patterns. The 85-case
+complement excludes exactly three heavy registrations, each of which is run in
+its own command. Vitest reports filter skips in each partition; the skips are
+covered in the other partitions, rather than omitted scenarios. All commands
+retain the named file and `--maxWorkers=1 --reporter=verbose`.
+
+- `--testNamePattern "^cumulative GL after provenance.*ranges"`: one passed,
+  87 filtered, exit 0 (`s850-r5-closure-range-rerun.log`).
+- `--testNamePattern "^cumulative GL closeChecklist.*ranges"`: one passed,
+  87 filtered, exit 0 (`s850-r5-closure-snapshot-range.log`).
+- `--testNamePattern "^(?!cumulative GL after provenance.*ranges|cumulative GL closeChecklist.*ranges|checklist control projection preserves large relevant AR history).*"`:
+  85 passed, three filtered, exit 0 (`s850-r5-closure-rest.log`).
+- The remaining AR history command is recorded below after completion.
+
+- `--testNamePattern "^checklist control projection preserves large relevant AR history"`:
+  one passed, 87 filtered, exit 0 (`s850-r5-closure-ar-range.log`).
+
+The closure partitions cover 85 + 1 + 1 + 1 = 88 of 88 tests. No scenario is
+left filtered across the union. The complete census therefore passes 1,077
+tests across all 44 named files. Adding the seven regression-validator files
+makes 51 distinct files and 1,456 passing tests, counting each positive scenario
+once and excluding red, interrupted, mutant and repeated focused runs. This is
+serial local evidence, not cloud certification.
+
+### Mutants, restoration and final records
+
+Only `convex/accountingCutover.ts` was changed for each mutant, after all other
+test processes completed. Both mutants start from committed source at
+`c6fe56fb4b18c9135bd0380e9f0180648a642cad` and run the complete twelve-test new
+file with `pnpm exec vitest run --maxWorkers=1`.
+
+| Mutant | Observed failure | Result |
+| --- | --- | --- |
+| Replace only legacy IN checked addition with `legacyInMinor += minor` | Literal `SCRUM-850 R5 unsafe legacy IN total refuses with CUTOVER_UNSAFE_TOTAL` resolves instead of refusing | 1 failed, 11 passed, exit 1; killed |
+| Replace only legacy OUT checked addition with `legacyOutMinor += minor` | Literal `SCRUM-850 R5 unsafe legacy OUT total refuses with CUTOVER_UNSAFE_TOTAL` resolves instead of refusing | 1 failed, 11 passed, exit 1; killed |
+
+Logs: `%TEMP%/s850-r5-mutant-in.log`, `%TEMP%/s850-r5-mutant-out.log`.
+After each run, `git checkout HEAD -- convex/accountingCutover.ts` restores the
+source; scoped `git status --porcelain` is empty and `git diff --exit-code HEAD --
+convex/accountingCutover.ts` exits 0. The restoration command prints
+`IN_RESTORED_SOURCE_STATUS_CLEAN=true` and
+`OUT_RESTORED_SOURCE_STATUS_CLEAN=true` only after those checks.
+The restored complete suite then passes 12 of 12, exit 0
+(`%TEMP%/s850-r5-restored-green.log`). Neither new source path survived mutation.
+The older round-4 GL-side mutants were not repeated in round 5; their entire
+public-query/sign-off test file was rerun.
+
+A direct source-binding check read the test file from failing-first commit
+`79260cee658a894ab55eec20f6143839af93df01` and verified all twelve scenario
+`impl.testName` values literally occur there. Exactly two records carry that
+bug reference, and ten preventive controls have none. The test file is byte
+identical between that commit and the final source tree.
+
+| Commit | Files changed |
+| --- | --- |
+| `79260cee658a894ab55eec20f6143839af93df01` | New `convex/accountingCutoverLegacyExactness.scrum850.test.ts` only. |
+| `2d79b87beb5fad8a818161109c4eaaa04fd3c75e` | Two production lines in `convex/accountingCutover.ts`; ADR, SCRUM-486 matrix, this evidence file; twelve `cutover-legacy-{in,out}-{unsafe,ordinary,boundary,before,after,deleted}-total.scenario.json` records. |
+| `c6fe56fb4b18c9135bd0380e9f0180648a642cad` | Four appended renewal strings in the existing OpeningBalanceApprovalPanel and OpeningBalanceCard baseline shards. |
+| Final evidence commit | This file only, completing execution results and limitations. |
+
+Every commit subject ends `(SCRUM-850)` and carries
+`Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>`. The round-5 diff contains
+19 paths. Durable memory was updated in the existing gross-exactness lesson
+and its existing index pointer outside the repository. No protected file or
+unrelated untracked file was edited or staged. No review-evidence JSON was written.
+
+### Sources and unverified work
+
+The ADR and this record cite the official sources read on 2026-11-09:
+[ECMAScript Number.isSafeInteger](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-number.issafeinteger),
+[Convex data types](https://docs.convex.dev/database/types), and
+[Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors).
+Safe operands do not establish a safe cumulative Number result. The existing
+checked helper and coded ConvexError provide exact-or-refuse containment without
+a public representation change. Documentation supports this design but does not
+prove its execution; public-function tests and source mutants supply that proof
+within the serial harness.
+
+S850-R4-1 is independently reproduced and locally fixed. It remains for the
+coordinator to obtain exact-head independent re-review and CI. Jira state,
+GitHub comments and current CodeRabbit coverage were not queried in this lane.
+The supplied round-4 reports are historical input, not current certification.
+No real backend, Convex limits or OCC, production prevalence, external dynamic
+callers, browser rendering, phone/desktop EN/AR audit, bug-hunter run, deployment,
+production repair or pilot readiness was verified. No I/O reduction is claimed.
+No push, merge or deferred-workflow activation was performed.
