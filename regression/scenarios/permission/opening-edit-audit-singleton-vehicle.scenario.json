@@ -28,12 +28,44 @@
         "role": "finance-only",
         "org": "A"
       },
-      "action": "dedicatedOpeningAndGLReaders",
+      "action": "accountingCutover.openingBalanceStatus",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.status",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingCutover.listOpeningStockChoices",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingReports.trialBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "accountingLedger.listJournalEntries",
       "input": {
-        "permissions": [
-          "view:finance",
-          "manage:finance"
-        ]
+        "paginationOpts": {
+          "numItems": 10,
+          "cursor": null
+        }
       }
     },
     {
@@ -51,7 +83,7 @@
       },
       "action": "accountingCutover.editOpeningBalanceDraft",
       "input": {
-        "memo": "Memo edit"
+        "memo": "Memo-edit"
       }
     },
     {
@@ -127,5 +159,5 @@
     "key": "SCRUM-850",
     "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
   },
-  "fingerprint": "f2dfc7d8f5f847f9f4f2d1a6873b16028dd6294f634dec7436049c8c0d342b53"
+  "fingerprint": "25570d8dfc8d1b398766a0beb4f22947f04a87029990e2a57cbcda3c4b851678"
 }

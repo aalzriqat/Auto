@@ -1048,6 +1048,40 @@ Completed at fix commit `f9eb9453226b289ad9fd9992b36edd91a915ed0d`:
   previous renewal text remains a prefix. No tool write mode, expiry change,
   fingerprint change, extractor change or UNKNOWN-to-PASS assertion was used.
 
+Final record/binding validation:
+
+- The seven-file validator batch initially returned 378 passed / 1 failed,
+  exit 1: scenarioRecord rejected my two new records' non-dotted grouped action
+  and memo prose. After fixing those inputs it correctly refused parameterized
+  test registrations. No validator or gate was changed. The singleton cases
+  now have two literal registrations sharing one implementation, and the
+  records enumerate the five dedicated public readers. The memo sentinel uses
+  a space-free token. Their amounts and assertions are unchanged.
+- scenarioRecord.test.ts then passed all 70 tests. The other six files had
+  already passed: localExecution.test.ts 193, pilotDoorAnalysis.test.ts 39,
+  pilotDoorInventory.test.ts 13, prRunner.test.ts 58, refreshRulings.test.ts 5,
+  implFixture.test.ts 1. Combined: 379 distinct validator tests passed across
+  seven files, not a claim that the original failed batch was green. The supplied
+  protected refreshRulings test was run as supplied and never edited or staged.
+- The correction run also passed all 48 maintenance tests. evaluate from the
+  unchanged scripts/regression/prRunner.mjs joined the actual Vitest JSON report
+  to all five records: five PASS results, no TEST_NOT_FOUND or missing execution.
+- Failing-first b4250b0c7 contains each full literal scenario name and the
+  documented five-case red run. Its initial singleton table used $name, which
+  Vitest truncated in registered titles. The later literal-registration repair
+  changes registration and the memo token, not the confidentiality assertions.
+  To verify continuity, the current literal cases were rerun against
+  accountingCutover.ts from b4250b0c7: all five failed on actual leaked amounts,
+  exit 1. The finally block restored HEAD and proved the source status clean.
+- Post-note committed renewal check: 945 renewed entries checked, 0 unrenewed,
+  0 stale, 0 malformed, 0 missing, exit 0. Its full command is the same as above;
+  neither write mode nor a live-spec claim is involved.
+
+Final-head affected suites, typechecks, lint and renewal will be rerun after
+the records commit and reported in the handoff. The source/record definitions
+are validated locally; complete library execution on a real backend is not
+established by the validator suites.
+
 ### Sources and evidence boundary
 
 Checked official sources on 2026-11-09:

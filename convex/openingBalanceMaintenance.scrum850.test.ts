@@ -112,48 +112,53 @@ function expectNoAuditAmounts(rows: unknown, amounts: readonly number[]) {
   expect(serialized).not.toMatch(/"[^"\n]*(?:amount|debit|credit|cost|price|balance|total)[^"\n]*":/i);
 }
 
-test.each([
-  { name: "SCRUM-850 R7 singleton employee advance edit audit withholds pending amounts", kind: "EMPLOYEE_ADVANCE" },
-  { name: "SCRUM-850 R7 singleton vehicle inventory edit audit withholds pending amounts", kind: "VEHICLE_INVENTORY" },
-] as const)("$name", async ({ kind }) => withFrozenScheduler(async () => {
-  const s = await fixture(kind === "VEHICLE_INVENTORY");
-  const finance = await financeOnlyReader(s);
-  const allocation = kind === "EMPLOYEE_ADVANCE"
-    ? { kind, rowKey: "only-advance", accountId: s.account("EMPLOYEE_ADVANCES"), userId: s.employeeId, amountMinor: 110_003 }
-    : s.payload.allocations?.find(row => row.kind === "VEHICLE_INVENTORY");
-  if (!allocation) throw new Error("Missing singleton allocation");
-  const input: OpeningInput = { orgId: s.orgId, asOfDate: s.asOfDate, expectedCurrency: "JOD", lines: [
-    { accountId: allocation.accountId, debitMinor: allocation.amountMinor, creditMinor: 0 },
-    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: allocation.amountMinor },
-  ], allocations: [allocation] };
-  await s.owner.mutation(api.accountingCutover.draftOpeningBalance, input);
-  const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
-  if (!draft) throw new Error("Missing singleton draft");
-  const status = await finance.query(api.accountingCutover.openingBalanceStatus, { orgId: s.orgId });
-  expect(status.canReadOpeningStockCost).toBe(false);
-  expect(JSON.stringify(status)).not.toContain(String(allocation.amountMinor));
-  if (kind === "EMPLOYEE_ADVANCE") expect(status.pendingDraftId).toBeNull();
-  expect(await finance.query(api.openingBalanceMaintenance.status, { orgId: s.orgId })).toMatchObject({ editable: null });
-  await expect(finance.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/permission/i);
-  await expect(finance.query(api.accountingReports.trialBalance, { orgId: s.orgId })).rejects.toThrow(/permission/i);
-  await expect(finance.query(api.accountingLedger.listJournalEntries, { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } })).rejects.toThrow(/permission/i);
-  const baseline = await finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId });
-  expectNoAuditAmounts(baseline, [allocation.amountMinor]);
-  expect(baseline.filter(row => row.actionType === "EDIT_OPENING_DRAFT")).toEqual([]);
+async function singletonAuditConfidentiality(kind: "EMPLOYEE_ADVANCE" | "VEHICLE_INVENTORY") {
+  return withFrozenScheduler(async () => {
+    const s = await fixture(kind === "VEHICLE_INVENTORY");
+    const finance = await financeOnlyReader(s);
+    const allocation = kind === "EMPLOYEE_ADVANCE"
+      ? { kind, rowKey: "only-advance", accountId: s.account("EMPLOYEE_ADVANCES"), userId: s.employeeId, amountMinor: 110_003 }
+      : s.payload.allocations?.find(row => row.kind === "VEHICLE_INVENTORY");
+    if (!allocation) throw new Error("Missing singleton allocation");
+    const input: OpeningInput = { orgId: s.orgId, asOfDate: s.asOfDate, expectedCurrency: "JOD", lines: [
+      { accountId: allocation.accountId, debitMinor: allocation.amountMinor, creditMinor: 0 },
+      { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: allocation.amountMinor },
+    ], allocations: [allocation] };
+    await s.owner.mutation(api.accountingCutover.draftOpeningBalance, input);
+    const draft = await s.t.run(ctx => ctx.db.query("openingBalanceDrafts").unique());
+    if (!draft) throw new Error("Missing singleton draft");
+    const status = await finance.query(api.accountingCutover.openingBalanceStatus, { orgId: s.orgId });
+    expect(status.canReadOpeningStockCost).toBe(false);
+    expect(JSON.stringify(status)).not.toContain(String(allocation.amountMinor));
+    if (kind === "EMPLOYEE_ADVANCE") expect(status.pendingDraftId).toBeNull();
+    expect(await finance.query(api.openingBalanceMaintenance.status, { orgId: s.orgId })).toMatchObject({ editable: null });
+    await expect(finance.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/permission/i);
+    await expect(finance.query(api.accountingReports.trialBalance, { orgId: s.orgId })).rejects.toThrow(/permission/i);
+    await expect(finance.query(api.accountingLedger.listJournalEntries, { orgId: s.orgId, paginationOpts: { numItems: 10, cursor: null } })).rejects.toThrow(/permission/i);
+    const baseline = await finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId });
+    expectNoAuditAmounts(baseline, [allocation.amountMinor]);
+    expect(baseline.filter(row => row.actionType === "EDIT_OPENING_DRAFT")).toEqual([]);
 
-  await s.owner.mutation(edit, { ...input, draftId: draft._id, memo: "Memo edit" });
-  for (const filter of [{}, { actionType: "EDIT_OPENING_DRAFT" }, { actorId: s.ownerId }, { fromDate: 1 }]) {
-    const rows = await finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter });
-    expectNoAuditAmounts(rows, [allocation.amountMinor]);
-    const edits = rows.filter(row => row.actionType === "EDIT_OPENING_DRAFT");
-    expect(edits).toHaveLength(1);
-    const metadata = { lineCount: 2, allocationCount: 1, allocationKinds: [kind], asOfDate: s.asOfDate, currency: "JOD" };
-    expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: String(draft._id) });
-    expect(edits[0].before).toEqual({ ...metadata, version: 0 });
-    expect(edits[0].after).toEqual({ ...metadata, version: 1, memoChanged: true });
-  }
-  expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual([]);
-}), 30_000);
+    await s.owner.mutation(edit, { ...input, draftId: draft._id, memo: "Memo-edit" });
+    for (const filter of [{}, { actionType: "EDIT_OPENING_DRAFT" }, { actorId: s.ownerId }, { fromDate: 1 }]) {
+      const rows = await finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter });
+      expectNoAuditAmounts(rows, [allocation.amountMinor]);
+      const edits = rows.filter(row => row.actionType === "EDIT_OPENING_DRAFT");
+      expect(edits).toHaveLength(1);
+      const metadata = { lineCount: 2, allocationCount: 1, allocationKinds: [kind], asOfDate: s.asOfDate, currency: "JOD" };
+      expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: String(draft._id) });
+      expect(edits[0].before).toEqual({ ...metadata, version: 0 });
+      expect(edits[0].after).toEqual({ ...metadata, version: 1, memoChanged: true });
+    }
+    expect(await s.t.run(ctx => ctx.db.query("journalEntries").collect())).toEqual([]);
+  });
+}
+
+// The scenario library requires literal, non-parameterized registrations.
+test("SCRUM-850 R7 singleton employee advance edit audit withholds pending amounts", async () =>
+  singletonAuditConfidentiality("EMPLOYEE_ADVANCE"), 30_000);
+test("SCRUM-850 R7 singleton vehicle inventory edit audit withholds pending amounts", async () =>
+  singletonAuditConfidentiality("VEHICLE_INVENTORY"), 30_000);
 
 test("SCRUM-850 R7 mixed draft edit audit contains metadata without protected amounts or totals", async () => withFrozenScheduler(async () => {
   const s = await fixture(true);
