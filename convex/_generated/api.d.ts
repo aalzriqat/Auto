@@ -126,6 +126,7 @@ import type * as mobilePushTokens from "../mobilePushTokens.js";
 import type * as mobileReleases from "../mobileReleases.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
+import type * as openingBalanceMaintenance from "../openingBalanceMaintenance.js";
 import type * as openingCommissionLiabilities from "../openingCommissionLiabilities.js";
 import type * as openingManagementSettlement from "../openingManagementSettlement.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -278,6 +279,7 @@ import type * as utils_openingDepositApplication from "../utils/openingDepositAp
 import type * as utils_openingDepositContainment from "../utils/openingDepositContainment.js";
 import type * as utils_openingDepositSelection from "../utils/openingDepositSelection.js";
 import type * as utils_openingInventoryContainment from "../utils/openingInventoryContainment.js";
+import type * as utils_openingMaintenanceErrors from "../utils/openingMaintenanceErrors.js";
 import type * as utils_openingManagementBasis from "../utils/openingManagementBasis.js";
 import type * as utils_openingManagementSchedule from "../utils/openingManagementSchedule.js";
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
@@ -291,6 +293,9 @@ import type * as utils_openingSupplierBasis from "../utils/openingSupplierBasis.
 import type * as utils_openingSupplierPosting from "../utils/openingSupplierPosting.js";
 import type * as utils_openingUnallocatedLiabilities from "../utils/openingUnallocatedLiabilities.js";
 import type * as utils_openingVehicleBasis from "../utils/openingVehicleBasis.js";
+import type * as utils_openingVoidCleanup from "../utils/openingVoidCleanup.js";
+import type * as utils_openingVoidProof from "../utils/openingVoidProof.js";
+import type * as utils_openingVoidReferences from "../utils/openingVoidReferences.js";
 import type * as utils_orgBusinessDay from "../utils/orgBusinessDay.js";
 import type * as utils_orgLifecycle from "../utils/orgLifecycle.js";
 import type * as utils_orgOwner from "../utils/orgOwner.js";
@@ -496,6 +501,7 @@ declare const fullApi: ApiFromModules<{
   mobileReleases: typeof mobileReleases;
   notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
+  openingBalanceMaintenance: typeof openingBalanceMaintenance;
   openingCommissionLiabilities: typeof openingCommissionLiabilities;
   openingManagementSettlement: typeof openingManagementSettlement;
   orgCustomFields: typeof orgCustomFields;
@@ -648,6 +654,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingDepositContainment": typeof utils_openingDepositContainment;
   "utils/openingDepositSelection": typeof utils_openingDepositSelection;
   "utils/openingInventoryContainment": typeof utils_openingInventoryContainment;
+  "utils/openingMaintenanceErrors": typeof utils_openingMaintenanceErrors;
   "utils/openingManagementBasis": typeof utils_openingManagementBasis;
   "utils/openingManagementSchedule": typeof utils_openingManagementSchedule;
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;
@@ -661,6 +668,9 @@ declare const fullApi: ApiFromModules<{
   "utils/openingSupplierPosting": typeof utils_openingSupplierPosting;
   "utils/openingUnallocatedLiabilities": typeof utils_openingUnallocatedLiabilities;
   "utils/openingVehicleBasis": typeof utils_openingVehicleBasis;
+  "utils/openingVoidCleanup": typeof utils_openingVoidCleanup;
+  "utils/openingVoidProof": typeof utils_openingVoidProof;
+  "utils/openingVoidReferences": typeof utils_openingVoidReferences;
   "utils/orgBusinessDay": typeof utils_orgBusinessDay;
   "utils/orgLifecycle": typeof utils_orgLifecycle;
   "utils/orgOwner": typeof utils_orgOwner;

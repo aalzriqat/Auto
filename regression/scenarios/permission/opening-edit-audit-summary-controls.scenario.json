@@ -1,0 +1,117 @@
+{
+  "id": "opening-edit-audit-summary-controls",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round7-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "currency": "JOD",
+        "cashMinor": 200003,
+        "allocations": []
+      }
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "cashMinor": 200007
+      }
+    },
+    {
+      "actor": {
+        "role": "owner-preparer",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "cashMinor": 200011
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "EDIT_OPENING_DRAFT"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.versionTransitions",
+      "value": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "observable": "audit.memoChanged",
+      "value": [
+        false,
+        false
+      ]
+    },
+    {
+      "observable": "audit.lineCount",
+      "value": 2
+    },
+    {
+      "observable": "audit.allocationCount",
+      "value": 0
+    },
+    {
+      "observable": "audit.allocationKinds",
+      "value": []
+    },
+    {
+      "observable": "editAudit.containsMonetaryKeysOrAmounts",
+      "value": false
+    },
+    {
+      "observable": "editAudit.amountOnlyEditsChangeOnlySummaryVersions",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/openingBalanceMaintenance.scrum850.test.ts",
+    "testName": "SCRUM-850 R7 amount-only successive edits reveal versions and counts without amount deltas"
+  },
+  "matrixRow": "SCRUM-850-opening-audit-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-850",
+    "failingFirst": "b4250b0c7c822bc05ca99504984b107e050d2662"
+  },
+  "fingerprint": "67f0152a1f7e3af92ee3b0cc41877d35c024211d841f198c0c8e3ca644a4aaa2"
+}

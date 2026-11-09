@@ -81,6 +81,7 @@ function draftFixture(
 ): PendingOpeningBalanceDraft {
   return {
     _id: "obd_1",
+    version: 0,
     asOfDate: Date.UTC(2026, 6, 1),
     memo: "Cutover 1 July 2026",
     createdBy: "user_accountant",

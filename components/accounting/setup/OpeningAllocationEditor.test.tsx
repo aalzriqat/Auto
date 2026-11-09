@@ -132,7 +132,7 @@ test.each(["en", "ar"] as const)("owned opening stock selection uses server-prov
     { target: { value: "vehicle-a" } });
   expect(screen.queryByRole("option", { name: /vehicle-a/ })).toBeNull();
   expect(onChange).toHaveBeenCalledWith([{ ...stockRow, partyId: "vehicle-a",
-    partyLabel: "SYNTHSTOCKVIN001 · 2024 Example Stock", amount: "8000.000" }]);
+    partyLabel: "SYNTHSTOCKVIN001 · 2024 Example Stock", amount: "8000" }]);
 });
 
 test.each(["en", "ar"] as const)("supplier snapshot and unknown-liability purposes have no invented party selector (%s)", (locale) => {

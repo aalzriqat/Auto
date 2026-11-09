@@ -213,7 +213,7 @@ async function postNamedDeposits(s: Seed) {
   const draftId = await draftAndApprove(s, [securityRow(s), reservationRow(s)], 150_000);
   const before = await counts(s);
   expect(before.deposits).toBe(0);
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: s.orgId,
     draftId: draftId as Id<"openingBalanceDrafts">,
   });
@@ -227,7 +227,7 @@ test("a named opening deposit materialises one HELD native row per customer only
   expect(pending.deposits).toBe(0);
   expect(pending.journals).toBe(0);
 
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: s.orgId,
     draftId: draftId as Id<"openingBalanceDrafts">,
   });
@@ -391,7 +391,7 @@ test("a named opening deposit keeps an exact fils amount at JOD scale 3 end to e
   const s = await seed();
   const FILS = 123_457;
   const draftId = await draftAndApprove(s, [securityRow(s, { amountMinor: FILS })], FILS);
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: s.orgId,
     draftId: draftId as Id<"openingBalanceDrafts">,
   });
@@ -534,7 +534,7 @@ function sell(
 }
 async function postOne(s: Seed, row: Record<string, unknown>, totalMinor: number) {
   const draftId = await draftAndApprove(s, [row], totalMinor);
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: s.orgId,
     draftId: draftId as Id<"openingBalanceDrafts">,
   });
@@ -773,7 +773,7 @@ async function openReservationAt(s: Seed, asOfDate: number) {
     lines: linesFor(s, 100_000),
     allocations: [reservationRow(s, { amountMinor: 100_000 })] as never,
   });
-  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, {
+  await s.accountant.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
     orgId: s.orgId,
     draftId: draftId as Id<"openingBalanceDrafts">,
   });

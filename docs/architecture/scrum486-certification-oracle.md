@@ -1391,6 +1391,115 @@ serial harness and jsdom evidence. It does not certify rendered viewport
 layout, a signed-in browser flow, cloud limits, OCC, production figures or the
 independent review seats. No posting, journal or lifecycle definition changed.
 
+## SCRUM-850-opening-maintenance-money
+
+Owner feature rules: SCRUM-850 c24748/c24749, supplied by the coordinator on 2026-11-08. The ADR is `docs/adr/2026-11-08-opening-balance-edit-void-correct.md`. These rows record local serial harness evidence, not activation or release certification. All tests below are explicit named registrations in `convex/openingBalanceMaintenance.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-edit-pending-independent-approval` | `SCRUM-850 preparer edits pending in place and a different actor approves the edited exact minor units` |
+| `opening-maintenance-edited-negative-refuses` | `SCRUM-850 edited lines receive the same draft validation: negative` |
+| `opening-maintenance-edited-nan-refuses` | `SCRUM-850 edited lines receive the same draft validation: nan` |
+| `opening-maintenance-edited-currency-refuses` | `SCRUM-850 edited lines receive the same draft validation: currency` |
+| `opening-maintenance-edited-bank-refuses` | `SCRUM-850 edited lines receive the same draft validation: bank` |
+| `opening-maintenance-edited-inactive-refuses` | `SCRUM-850 edited lines receive the same draft validation: inactive` |
+| `opening-maintenance-edited-allocation-refuses` | `SCRUM-850 edited lines receive the same draft validation: allocation` |
+| `opening-maintenance-all-families-void-replay-reentry` | `SCRUM-850 approved void unwinds all eleven allocation kinds and bank attribution then reposts the same masters` |
+| `opening-maintenance-void-refuses-activity-same-period` | `SCRUM-850 void refuses non-opening activity across the whole ledger otherPeriod=false` |
+| `opening-maintenance-void-refuses-activity-other-period` | `SCRUM-850 void refuses non-opening activity across the whole ledger otherPeriod=true` |
+| `opening-maintenance-void-rechecks-intervening-activity` | `SCRUM-850 approval rechecks intervening activity and owner direct path cannot bypass it` |
+| `opening-maintenance-later-activity-blocks-reentry` | `SCRUM-850 a later posting after a governed void still blocks every fresh opening door` |
+| `opening-maintenance-consumed-payable-refuses` | `SCRUM-850 consumed or damaged opening payable refuses without changing any table` |
+| `opening-maintenance-consumed-advance-refuses` | `SCRUM-850 consumed or damaged opening advance refuses without changing any table` |
+| `opening-maintenance-consumed-prepaid-refuses` | `SCRUM-850 consumed or damaged opening prepaid refuses without changing any table` |
+| `opening-maintenance-consumed-commission-refuses` | `SCRUM-850 consumed or damaged opening commission refuses without changing any table` |
+| `opening-maintenance-consumed-deposit-refuses` | `SCRUM-850 consumed or damaged opening deposit refuses without changing any table` |
+| `opening-maintenance-consumed-vehicle-refuses` | `SCRUM-850 consumed or damaged opening vehicle refuses without changing any table` |
+| `opening-maintenance-consumed-receivable-refuses` | `SCRUM-850 consumed or damaged opening receivable refuses without changing any table` |
+| `opening-maintenance-consumed-partner-refuses` | `SCRUM-850 consumed or damaged opening partner refuses without changing any table` |
+| `opening-maintenance-consumed-missing-refuses` | `SCRUM-850 consumed or damaged opening missing refuses without changing any table` |
+| `opening-maintenance-management-plan-and-closed-period-refuse` | `SCRUM-850 unposted management dependencies and closed periods refuse an opening void` |
+| `opening-maintenance-unposted-payroll-refuses` | `SCRUM-850 unposted payroll source references survive and prevent void` |
+| `opening-maintenance-unposted-payment-intent-refuses` | `SCRUM-850 unposted payment-intent source references survive and prevent void` |
+| `opening-maintenance-unlisted-native-source-refuses` | `SCRUM-850 an unlisted materialized opening advance prevents void without writes` |
+| `opening-maintenance-generic-reversal-of-void-refuses` | `SCRUM-850 generic reversal cannot undo the governed opening void journal` |
+| `opening-maintenance-damaged-pair-blocks-reentry` | `SCRUM-850 a damaged governed reversal never authorizes a fresh opening` |
+| `opening-maintenance-ambiguous-headers-refuse` | `SCRUM-850 ambiguous posted opening headers refuse a void without writes` |
+
+The composite fixture posts 1,960,018 JOD minor units per side across eleven allocation kinds. The void leaves 3,920,036 gross minor units per side and zero net on every account, with bank balance zero. A fresh opening using the same stock/partner masters restores bank balance 300,003. Original and reversal journals and immutable allocation results survive; replay changes no application table or scheduler row. Eight native source tables are empty after void. These checks do not compare component tables byte-for-byte.
+
+## SCRUM-850-opening-snapshot-exactness
+
+SCRUM-858 c23884: each snapshot-derived figure is exact or UNAVAILABLE/refused.
+Round-3 local serial harness checks; these do not certify runtime OCC or release.
+Named backend registrations are in `convex/openingBalanceMaintenance.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-snapshot-replacement-exactness` | `SCRUM-850 R3 replacement gross snapshots refuse rounded trial and balance sheet figures` |
+| `opening-snapshot-writer-atomic-refusal` | `SCRUM-850 R3 unsafe snapshot write refuses replacement atomically including scheduled work` |
+| `opening-snapshot-period-overflow` | `SCRUM-850 R3 elapsed periods with unsafe gross totals refuse public snapshot reports` |
+| `opening-snapshot-ordinary-replacement` | `SCRUM-850 R3 ordinary replacement preserves exact trial balance and balance sheet` |
+| `opening-snapshot-cross-account-containment` | `SCRUM-850 R3 cross-account statement totals refuse and retained unsafe operands never cancel into a figure` |
+| `opening-snapshot-reader-unavailable` | `SCRUM-850 R3 snapshot overflow preserves existing reconciliation unavailable contracts` |
+| `opening-vehicle-prefill-exactness` | `SCRUM-850 R3 opening vehicle selection prefills exact boundary minor units` in `components/accounting/setup/OpeningAllocationVisualFixture.test.tsx` |
+| `opening-money-arabic-separator-preserved` | `accepts Arabic-Indic and Persian digits without accepting grouping ambiguity` in `lib/financeFeeTemplateForm.test.ts` |
+
+All six new defect tests have red evidence at
+`adc6ec810ed7c8747dab3519b07034657b77ec50`. Only the ordinary replacement and
+unchanged Arabic-parser controls claim no failing-first commit.
+
+N1 correction: `opening-maintenance-legacy-decision-refuses` covers the literal
+approve expansion registered at `72f92b1d9`; the companion
+`opening-maintenance-legacy-rejection-refuses` covers
+`SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing`
+at that same red commit. Each record contains only its own decision's step and
+expected refusal/database comparison. The tamper control claims no red commit.
+
+## SCRUM-850-cutover-attestation-exactness
+
+SCRUM-850 c24749 and SCRUM-858 c23884: retained opening/reversal history must
+produce exact reviewed per-currency attestation totals or refuse before any
+sign-off/audit write. Round-4 local serial harness evidence only.
+Tests are literal registrations in `convex/accountingCutoverExactness.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-cutover-reviewed-unsafe-gross` | `SCRUM-850 R4 reviewed opening unsafe gross sign-off refuses without writes` |
+| `opening-cutover-direct-unsafe-gross` | `SCRUM-850 R4 direct opening unsafe gross sign-off refuses without writes` |
+| `opening-cutover-reviewed-ordinary` | `SCRUM-850 R4 reviewed ordinary sign-off persists exact gross history` |
+| `opening-cutover-direct-ordinary` | `SCRUM-850 R4 direct ordinary sign-off persists exact gross history` |
+| `opening-cutover-reviewed-safe-boundary` | `SCRUM-850 R4 reviewed safe boundary sign-off remains exact` |
+| `opening-cutover-direct-safe-boundary` | `SCRUM-850 R4 direct safe boundary sign-off remains exact` |
+| `opening-cutover-reviewed-currency-separation` | `SCRUM-850 R4 reviewed sign-off keeps historical currencies separate` |
+| `opening-cutover-direct-currency-separation` | `SCRUM-850 R4 direct sign-off keeps historical currencies separate` |
+| `opening-cutover-unsafe-debit-history` | `SCRUM-850 R4 unsafe debit history refuses with the arithmetic code` |
+| `opening-cutover-unsafe-credit-history` | `SCRUM-850 R4 unsafe credit history refuses with the arithmetic code` |
+| `cutover-legacy-unsafe-gross-debit` | `SCRUM-850 R4 legacy comparison refuses unsafe gross debit` |
+| `cutover-legacy-unsafe-gross-credit` | `SCRUM-850 R4 legacy comparison refuses unsafe gross credit` |
+
+Six defect cases fail at `a1918002ef42fe9fd8ad0fdf5518fbb1a7468765`.
+Six positive controls pass there and claim no failing-first evidence.
+The per-currency fixture represents retained historical currencies by changing
+test data after the public opening lifecycle. The one-sided and legacy fixtures
+also seed retained data explicitly; they do not claim an enabled corrupt writer.
+Ordinary sign-off checks both `listSignOffs` persistence and the financial audit
+copy. Unsafe sign-off checks the empty sign-off table and unchanged full audit
+rows, including the legitimate earlier opening/void audits.
+
+## SCRUM-850-opening-maintenance-permission
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-preparer-finance-tenant-refusals` | `SCRUM-850 edit and void enforce preparer finance payroll and tenant authority without writes` |
+| `opening-maintenance-payroll-authority-for-edit-and-void` | `SCRUM-850 payroll authority is required for editing and voiding payroll-bearing openings` |
+
+Pending drafts retain the preparer and second-actor approval. Void approval must differ from its requester, including for owners. Finance, payroll and tenant ownership refusals preserve every application schema table and the scheduler. The two-person void check is also asserted in the money composite.
+
+All thirty scenario records name failing-first commit `c2a275b2572b56ac39a24516b853ab5b0c131faf`, which contains these exact test registrations. Initial commands were absent; additional source-inventory, reversal-of-void and ambiguous-header controls each failed against the first implementation before repair. Existing opening-family and permission ruling digests are used from `regression/rulings.json`. The coordinator supplied the SCRUM-850 decisions but not the verbatim comment bodies/digests; no SCRUM-850 Jira digest is invented or claimed current. That specific digest attribution remains a coordinator follow-up.
+
+Independent seats, a signed-in roles-by-language-by-viewport audit, the unscripted explorer, real-backend execution/OCC and production parity remain unverified. Part 2 corrections are design only.
+
 ## SCRUM-932 chart management regressions
 
 Matrix row `SCRUM932-coa-management` binds the following registered-function
@@ -1644,3 +1753,76 @@ file from its saved bytes produced SHA256
 `8a9934b478e1fd7ad67496c6a4228666463bf2eeb266cd39aa021d527144e7a4`
 and an empty diff against backend fix commit
 `4fe8a46c03a979ff253629963ccf587c1b07bd89`.
+
+### SCRUM-850 round 2 regression rows
+
+Each row remains local harness evidence, not release certification. Bug
+reproductions cite `72f92b1d9b908ad7290843fd31632aafda340372`; the tampered-void
+row is a preventive control that passed there and claims no failing-first commit.
+The legacy decision rows bind the actual approve/reject expansions from that SHA.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-maintenance-exact-rehydration` | `SCRUM-850 R1 unchanged large allocation survives registered edit approval and posting` |
+| `opening-maintenance-void-reader-neutrality` | `SCRUM-850 F1 verified void and reentry preserve all three reconciliations and checklist warnings` |
+| `opening-maintenance-tampered-void-readers-refuse` | `SCRUM-850 F1 tampered reversal remains unavailable in all three reconciliations` |
+| `opening-maintenance-stale-approval-refuses` | `SCRUM-850 F2 stale approval refuses without writes and current reviewed version posts` |
+| `opening-maintenance-stale-rejection-refuses` | `SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects` |
+| `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing` |
+| `opening-maintenance-legacy-rejection-refuses` | `SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing` |
+
+## SCRUM-850-cutover-legacy-reader-exactness
+
+Round-5 local serial harness coverage for S850-R4-1. A public legacy comparison
+returns exact monetary totals or refuses with `CUTOVER_UNSAFE_TOTAL`. The two
+unsafe cases fail at `79260cee658a894ab55eec20f6143839af93df01`; ten preventive
+controls pass there and have no `bugRef`. Literal tests are registered in
+`convex/accountingCutoverLegacyExactness.scrum850.test.ts`. Fixtures seed retained
+transactions directly because the legacy writer is retired. Date endpoints are
+inclusive; excluded rows must not participate in aggregation or unmigrated counts.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `cutover-legacy-in-unsafe-total` | `SCRUM-850 R5 unsafe legacy IN total refuses with CUTOVER_UNSAFE_TOTAL` |
+| `cutover-legacy-in-ordinary-total` | `SCRUM-850 R5 ordinary legacy IN total returns exact 3003` |
+| `cutover-legacy-in-boundary-total` | `SCRUM-850 R5 safe boundary legacy IN total returns exact 9007199254740990` |
+| `cutover-legacy-in-before-total` | `SCRUM-850 R5 legacy IN excludes large row before date range` |
+| `cutover-legacy-in-after-total` | `SCRUM-850 R5 legacy IN excludes large row after date range` |
+| `cutover-legacy-in-deleted-total` | `SCRUM-850 R5 legacy IN excludes large deleted row` |
+| `cutover-legacy-out-unsafe-total` | `SCRUM-850 R5 unsafe legacy OUT total refuses with CUTOVER_UNSAFE_TOTAL` |
+| `cutover-legacy-out-ordinary-total` | `SCRUM-850 R5 ordinary legacy OUT total returns exact 3003` |
+| `cutover-legacy-out-boundary-total` | `SCRUM-850 R5 safe boundary legacy OUT total returns exact 9007199254740990` |
+| `cutover-legacy-out-before-total` | `SCRUM-850 R5 legacy OUT excludes large row before date range` |
+| `cutover-legacy-out-after-total` | `SCRUM-850 R5 legacy OUT excludes large row after date range` |
+| `cutover-legacy-out-deleted-total` | `SCRUM-850 R5 legacy OUT excludes large deleted row` |
+
+
+## SCRUM-850-opening-audit-confidentiality
+
+S850-R6-1 / S850-R5-1 / SCRUM-902 c24475: a finance-only audit reader must not
+receive any monetary figure from a pending opening draft, including totals or
+successive-edit deltas. ADR: `docs/adr/2026-11-08-opening-balance-edit-void-correct.md`, rounds 6–7.
+Failing-first commit `b4250b0c7c822bc05ca99504984b107e050d2662` contains these
+literal tests in `convex/openingBalanceMaintenance.scrum850.test.ts`; all five
+fail there on disclosed amounts. Records are in the permission and money
+scenario folders. This is serial public-function harness evidence, not cloud
+or release certification. Historical audit rows are not repaired by this change.
+
+| Scenario | Literal backend test |
+| --- | --- |
+| `opening-edit-audit-singleton-employee` | `SCRUM-850 R7 singleton employee advance edit audit withholds pending amounts` |
+| `opening-edit-audit-singleton-vehicle` | `SCRUM-850 R7 singleton vehicle inventory edit audit withholds pending amounts` |
+| `opening-edit-audit-sensitive-content` | `SCRUM-850 R7 mixed draft edit audit contains metadata without protected amounts or totals` |
+| `opening-edit-audit-summary-controls` | `SCRUM-850 R7 amount-only successive edits reveal versions and counts without amount deltas` |
+| `opening-edit-audit-unsafe-history` | `SCRUM-850 R7 correcting an unsafe retained draft omits historical and replacement audit amounts` |
+
+Singleton controls prove dedicated stock/GL reader refusal, withheld draft
+content, audit absence before editing, and one edit row afterwards through all
+four audit-reader branches. Employee pendingDraftId is withheld; stock cost
+permission is false in both cases. Each snapshot retains versions, counts,
+kinds, date and currency. The after snapshot retains memoChanged. No journal posts.
+The mixed case preserves the id and free-text exclusions and rejects aggregates.
+Two edits changing only cash amounts require summaries differing only in version,
+with no monetary key or amount delta. Unsafe retained history is still correctable,
+without a null total field or replacement amount in the audit. Separate source
+mutants reintroducing totalDebits in before and after must each fail these tests.

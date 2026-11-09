@@ -1,0 +1,79 @@
+{
+  "id": "cutover-legacy-in-boundary-total",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum850-round5-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "test-harness",
+        "org": "A"
+      },
+      "action": "fixture.retainLegacyTransactions",
+      "input": {
+        "currency": "JOD",
+        "type": "IN",
+        "rows": [
+          {
+            "amount": 4503599627370.496,
+            "date": 1767225600000
+          },
+          {
+            "amount": 4503599627370.494,
+            "date": 1767225600000
+          }
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.compareLegacyToGL",
+      "input": {
+        "fromDate": 1767225600000,
+        "toDate": 1769817600000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "legacy.totalInMinor",
+      "value": 9007199254740990
+    },
+    {
+      "observable": "legacy.totalOutMinor",
+      "value": 0
+    },
+    {
+      "observable": "legacy.transactionCount",
+      "value": 2
+    },
+    {
+      "observable": "unmigratedCount",
+      "value": 2
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
+    }
+  ],
+  "impl": {
+    "file": "convex/accountingCutoverLegacyExactness.scrum850.test.ts",
+    "testName": "SCRUM-850 R5 safe boundary legacy IN total returns exact 9007199254740990"
+  },
+  "matrixRow": "SCRUM-850-cutover-legacy-reader-exactness",
+  "fingerprint": "8a31e8cad8f5e7fbec30deb5cd49e002e375c9f8c01e178a2c528e418726fc15"
+}

@@ -305,7 +305,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
         { accountId: syntheticOffset!._id, debitMinor: 0, creditMinor: 500_000 },
       ],
     });
-    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, { expectedVersion: 0,
       orgId: ctx.orgId,
       draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });

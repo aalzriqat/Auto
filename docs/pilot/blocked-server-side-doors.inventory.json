@@ -12,6 +12,13 @@
   "ruling": "owner ruling needed"
  },
  {
+  "door": "accountingCutover.editOpeningBalanceDraft",
+  "class": "UNCLASSIFIED",
+  "effect": "SCRUM-850: preparer-only editing of a pending opening draft with the same posting preflight; no posted journal is edited",
+  "ruling": "owner ruling needed",
+  "note": "SCRUM-850 c24748/c24749 authorize the feature rules. This inventory class records that separate pilot activation/certification is not established by this local implementation."
+ },
+ {
   "door": "accountingCutover.postOpeningBalanceDirect",
   "class": "UNCLASSIFIED",
   "effect": "posts opening balances directly to the ledger; same ruling and same gap",
@@ -1778,6 +1785,20 @@
   "door": "notifications.markAsRead",
   "class": "NON_FINANCIAL",
   "reason": "notification state"
+ },
+ {
+  "door": "openingBalanceMaintenance.approveVoid",
+  "class": "UNCLASSIFIED",
+  "effect": "SCRUM-850: a different actor atomically reverses the opening journal, snapshots and native allocations before operations; retains audit history",
+  "ruling": "owner ruling needed",
+  "note": "Serial harness evidence is not independent pilot or real-backend certification. No after-operations correction door is added."
+ },
+ {
+  "door": "openingBalanceMaintenance.requestVoid",
+  "class": "UNCLASSIFIED",
+  "effect": "SCRUM-850: records a fixed requester and reason for an opening-only void; refuses operations and dependent financial records",
+  "ruling": "owner ruling needed",
+  "note": "Two-person feature rule supplied in SCRUM-850 c24748/c24749; pilot activation/certification remains separate."
  },
  {
   "door": "openingManagementSettlement.approve",

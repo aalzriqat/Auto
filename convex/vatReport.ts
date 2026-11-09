@@ -21,6 +21,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { getPostedLines } from "./accountingReports";
+import { addBalanceMinor } from "./utils/money";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 function currencyKey(accountId: string, currency: string): string {
@@ -73,8 +74,8 @@ export const generateVatSummary = query({
         if (line.accountId !== outputAccountId && line.accountId !== inputAccountId) continue;
         const key = currencyKey(line.accountId, line.currency);
         const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, debitMinor: 0, creditMinor: 0 };
-        existing.debitMinor += line.debitMinor;
-        existing.creditMinor += line.creditMinor;
+        existing.debitMinor = addBalanceMinor(existing.debitMinor, line.debitMinor);
+        existing.creditMinor = addBalanceMinor(existing.creditMinor, line.creditMinor);
         totals.set(key, existing);
       }
     }
@@ -84,11 +85,11 @@ export const generateVatSummary = query({
       const entry = byCurrency.get(t.currency) ?? { outputVatMinor: 0, inputVatMinor: 0 };
       if (t.accountId === outputAccountId) {
         // SALES_TAX_PAYABLE is CREDIT-normal — collected VAT increases the credit side.
-        entry.outputVatMinor += t.creditMinor - t.debitMinor;
+        entry.outputVatMinor = addBalanceMinor(entry.outputVatMinor, addBalanceMinor(t.creditMinor, -t.debitMinor));
       }
       if (t.accountId === inputAccountId) {
         // VAT_RECEIVABLE is DEBIT-normal — paid/reclaimable VAT increases the debit side.
-        entry.inputVatMinor += t.debitMinor - t.creditMinor;
+        entry.inputVatMinor = addBalanceMinor(entry.inputVatMinor, addBalanceMinor(t.debitMinor, -t.creditMinor));
       }
       byCurrency.set(t.currency, entry);
     }
@@ -97,7 +98,7 @@ export const generateVatSummary = query({
       currency,
       outputVatMinor: v2.outputVatMinor,
       inputVatMinor: v2.inputVatMinor,
-      netDueMinor: v2.outputVatMinor - v2.inputVatMinor,
+      netDueMinor: addBalanceMinor(v2.outputVatMinor, -v2.inputVatMinor),
     }));
 
     const orgSettings = await ctx.db
