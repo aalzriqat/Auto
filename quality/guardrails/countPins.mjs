@@ -68,34 +68,87 @@ function expectArgument(node) {
 const MARKER_PREFILTER = "guardrail-4-fixture";
 const MARKER_COMMENT = /^\/\/\s*guardrail-4-fixture(?![\w-])(.*)$/u;
 
+// A `/` after one of these tokens divides; after anything else it opens a regex literal.
+const DIVISION_PREDECESSORS = new Set([
+  ts.SyntaxKind.Identifier,
+  ts.SyntaxKind.PrivateIdentifier,
+  ts.SyntaxKind.NumericLiteral,
+  ts.SyntaxKind.BigIntLiteral,
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.RegularExpressionLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.CloseParenToken,
+  ts.SyntaxKind.CloseBracketToken,
+  ts.SyntaxKind.CloseBraceToken,
+  ts.SyntaxKind.PlusPlusToken,
+  ts.SyntaxKind.MinusMinusToken,
+  ts.SyntaxKind.ThisKeyword,
+  ts.SyntaxKind.SuperKeyword,
+  ts.SyntaxKind.TrueKeyword,
+  ts.SyntaxKind.FalseKeyword,
+  ts.SyntaxKind.NullKeyword,
+]);
+
 /**
- * Every `// guardrail-4-fixture: <reason>` line comment in a parsed file. Found
- * through the token trivia, so the text inside a string or template is not a marker.
+ * Every line comment of a file, through one full scanner pass (`skipTrivia`
+ * false), so a comment directly before a closing delimiter is seen. The scanner
+ * has no grammar context, so the two context-dependent rescans are done here as
+ * the compiler API documents them: `reScanTemplateToken` for the `}` that
+ * resumes a template literal, and `reScanSlashToken` for a `/` that starts a
+ * regex literal. A string, template or regex body is one token, never a comment.
+ * (Plain JSX text containing `//` is not handled; it can only matter if it also
+ * spells the marker.)
+ * @returns {{ pos: number, text: string }[]}
+ */
+function lineComments(filePath, text) {
+  const variant = /\.[jt]sx$/u.test(filePath) ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard;
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, variant, text);
+  const comments = [];
+  const braces = [];
+  let previous = ts.SyntaxKind.Unknown;
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+    if (kind === ts.SyntaxKind.SingleLineCommentTrivia) {
+      comments.push({ pos: scanner.getTokenStart(), text: scanner.getTokenText() });
+      continue;
+    }
+    if (kind === ts.SyntaxKind.WhitespaceTrivia || kind === ts.SyntaxKind.NewLineTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+      continue;
+    }
+    let token = kind;
+    if (token === ts.SyntaxKind.TemplateHead) braces.push("template");
+    else if (token === ts.SyntaxKind.OpenBraceToken) braces.push("brace");
+    else if (token === ts.SyntaxKind.CloseBraceToken && braces.pop() === "template") {
+      token = scanner.reScanTemplateToken(false);
+      if (token === ts.SyntaxKind.TemplateMiddle) braces.push("template");
+    } else if (
+      (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
+      !DIVISION_PREDECESSORS.has(previous)
+    ) {
+      token = scanner.reScanSlashToken();
+    }
+    previous = token;
+  }
+  return comments;
+}
+
+/**
+ * Every `// guardrail-4-fixture: <reason>` line comment in a parsed file.
  * @returns {{ line: number, reason: string }[]}
  */
 function findMarkers(sourceFile, text) {
-  const seen = new Set();
   const markers = [];
-  const take = (ranges) => {
-    for (const range of ranges ?? []) {
-      if (range.kind !== ts.SyntaxKind.SingleLineCommentTrivia || seen.has(range.pos)) continue;
-      seen.add(range.pos);
-      const match = MARKER_COMMENT.exec(text.slice(range.pos, range.end).trimEnd());
-      if (!match) continue;
-      const afterColon = match[1].trim().startsWith(":") ? match[1].trim().slice(1).trim() : "";
-      markers.push({ line: sourceFile.getLineAndCharacterOfPosition(range.pos).line + 1, reason: afterColon });
-    }
-  };
-  const visit = (node) => {
-    take(ts.getLeadingCommentRanges(text, node.pos));
-    take(ts.getTrailingCommentRanges(text, node.end));
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  take(ts.getLeadingCommentRanges(text, sourceFile.endOfFileToken.pos));
-  return markers.sort((a, b) => a.line - b.line);
+  for (const comment of lineComments(sourceFile.fileName, text)) {
+    const match = MARKER_COMMENT.exec(comment.text.trimEnd());
+    if (!match) continue;
+    const rest = match[1].trim();
+    markers.push({
+      line: sourceFile.getLineAndCharacterOfPosition(comment.pos).line + 1,
+      reason: rest.startsWith(":") ? rest.slice(1).trim() : "",
+    });
+  }
+  return markers;
 }
-
 /** Every literal count pin in one parsed file, exempt or not. */
 function collectPins(sourceFile) {
   const pins = [];
