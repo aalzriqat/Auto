@@ -1885,7 +1885,7 @@ Round 2 adds five literal regression checks to the same backend suite and five
 records, bringing the SCRUM-936 library to twenty-two scenarios plus the schema
 classification check. The request-reuse case fails at
 `e934f16d1` with 8,200 line-account gets for a 200-row synthetic page. It requires
-zero such gets after the fix, two org-scoped control lookups, at most two draft
+zero such gets at that checkpoint, two org-scoped control lookups, at most two draft
 gets, correct visibility for both drafts, and fresh decisions on a later request.
 The four public supplier-writer cases fail at `0d219ab0b` because authorized
 audit rows lack structured payment method, supplier snapshot name, and operation
@@ -1894,3 +1894,29 @@ controls, all audit branches, amount-free descriptions, and unchanged stored row
 Full failing-first SHAs are stored in the records. Earlier scenarios are retained.
 The maintenance payroll rule and unwind actor predicate retain their permissions.
 See the round 2 evidence appendix for checks and explicit execution limits.
+
+Round 3 retains those twenty-two scenarios and adds ten literal checks: active
+and inactive duplicates of both payroll control keys, owner and non-owner plan
+lifecycles, the accounting-reader entitlement census, missing and foreign draft
+evidence, and the sales-only SET_COMMISSION_AMOUNT positive control. The duplicate
+regressions fail first at `c928ff01c`; the entitlement regressions fail first at
+`896249060`. The three Seat 1 coverage controls change no production behavior.
+Their corresponding source mutations fail the tests.
+
+The request-reuse scenario now follows the actual referenced account ids rather
+than assuming unique system keys. Its mixed 200-row page requires three account
+gets, one per distinct account, zero control-index lookups, at most two draft
+gets and one subscription lookup. A later request reads fresh state. The
+duplicate cases reference the non-canonical account, preserve inactive controls,
+withhold protected draft and journal copies, and keep ordinary/payroll-authorized
+positive controls. The page-size and draft-read bounds, feature gates and grants
+are unchanged. Account reads are now bounded by distinct referenced ids.
+
+The plan cases keep event metadata and counts while withholding protected
+accounting details for expired, cancelled, past-due, free and absent subscription
+states, including for owners. Active and restored plans retain full rows. An
+active subscription with an old period end follows stored status. Independent
+opening, manual-draft, supplier, sales, commission, application, bank and sign-off
+families remain readable under their existing grants. The action census tests
+both owner and explicitly granted non-owner readers. This matrix row remains a
+local backend permission oracle, not cloud or release certification.

@@ -55,7 +55,7 @@ async function fixture() {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
-test.each(["missing", "foreign"] as const)("SCRUM-936 %s draft evidence cannot grant payroll audit access", async state => {
+async function untrustedDraftAudit(state: "missing" | "foreign") {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
   const id = await s.t.run(async ctx => {
@@ -72,7 +72,10 @@ test.each(["missing", "foreign"] as const)("SCRUM-936 %s draft evidence cannot g
     expect(row).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
     expect(JSON.stringify(row)).not.toContain("Private draft reason");
   }
-});
+}
+
+test("SCRUM-936 missing draft evidence cannot grant payroll audit access", async () => untrustedDraftAudit("missing"));
+test("SCRUM-936 foreign draft evidence cannot grant payroll audit access", async () => untrustedDraftAudit("foreign"));
 
 test("SCRUM-936 sales-only commission reader retains SET_COMMISSION_AMOUNT audit details without accounting plan", async () => withFrozenScheduler(async () => {
   const s = await fixture();
@@ -92,7 +95,7 @@ test("SCRUM-936 sales-only commission reader retains SET_COMMISSION_AMOUNT audit
   }
 }));
 
-test.each(["owner", "finance"] as const)("SCRUM-936 %s audit accounting details follow stored plan entitlement and recover on renewal", async viewer => {
+async function auditPlanLifecycle(viewer: "owner" | "finance") {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
   const journalEntryId = await s.t.run(ctx => ctx.db.insert("journalEntries", { orgId: s.orgId,
@@ -125,7 +128,10 @@ test.each(["owner", "finance"] as const)("SCRUM-936 %s audit accounting details 
   expect(await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 })).toContainEqual(row);
   expect(await reader.query(api.accountingLedger.getJournalEntry, { orgId: s.orgId, journalEntryId })).toMatchObject({ entry: { memo: "Private manual memo" } });
   expect(await s.t.run(ctx => ctx.db.get(id))).toEqual(row);
-});
+}
+
+test("SCRUM-936 owner audit accounting details follow stored plan entitlement and recover on renewal", async () => auditPlanLifecycle("owner"));
+test("SCRUM-936 finance audit accounting details follow stored plan entitlement and recover on renewal", async () => auditPlanLifecycle("finance"));
 
 test("SCRUM-936 expired plan withholds accounting families while independent readers retain their audit facts", async () => {
   const s = await fixture();
@@ -184,10 +190,7 @@ test("SCRUM-936 expired plan withholds accounting families while independent rea
   }
 });
 
-test.each([
-  ["EMPLOYEE_ADVANCES", true], ["EMPLOYEE_ADVANCES", false],
-  ["COMMISSION_PAYABLE", true], ["COMMISSION_PAYABLE", false],
-] as const)("SCRUM-936 legacy duplicate %s active=%s withholds its draft without failing the audit page", async (key, active) => {
+async function duplicatePayrollAudit(key: "EMPLOYEE_ADVANCES" | "COMMISSION_PAYABLE", active: boolean) {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
   const rows = await s.t.run(async ctx => {
@@ -226,7 +229,12 @@ test.each([
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price", "manage:payroll"] }));
   const authorized = await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
   for (const row of rows) expect(authorized).toContainEqual(row);
-});
+}
+
+test("SCRUM-936 active duplicate employee advance control withholds audit details", async () => duplicatePayrollAudit("EMPLOYEE_ADVANCES", true));
+test("SCRUM-936 inactive duplicate employee advance control withholds audit details", async () => duplicatePayrollAudit("EMPLOYEE_ADVANCES", false));
+test("SCRUM-936 active duplicate commission control withholds audit details", async () => duplicatePayrollAudit("COMMISSION_PAYABLE", true));
+test("SCRUM-936 inactive duplicate commission control withholds audit details", async () => duplicatePayrollAudit("COMMISSION_PAYABLE", false));
 
 test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and request", async () => {
   const s = await fixture();

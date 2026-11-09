@@ -1,0 +1,72 @@
+{
+  "id": "scrum936-plan-lifecycle-owner",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "manualApproval": true,
+        "states": [
+          "active",
+          "expired",
+          "cancelled",
+          "past_due",
+          "free",
+          "missing",
+          "restored"
+        ],
+        "allBranches": true,
+        "activeOldPeriodEnd": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.unentitledDetailsWithheld",
+      "value": true
+    },
+    {
+      "observable": "audit.lineCount",
+      "value": 2
+    },
+    {
+      "observable": "audit.activeAndRestoredRowsFull",
+      "value": true
+    },
+    {
+      "observable": "ledger.unentitledReadRefused",
+      "value": true
+    },
+    {
+      "observable": "storedAudit.unchanged",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 owner audit accounting details follow stored plan entitlement and recover on renewal"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "89624906059269b9e8c670357be40dc299370314"
+  },
+  "fingerprint": "29f7bd0b865f4f90fc9582a00b34ee0b0e8f1c45b50603b3248bc9384a24ae99"
+}

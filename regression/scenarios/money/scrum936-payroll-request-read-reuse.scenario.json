@@ -54,11 +54,11 @@
     },
     {
       "observable": "db.lineAccountGets",
-      "value": 0
+      "value": 3
     },
     {
       "observable": "db.controlIndexLookups",
-      "value": 2
+      "value": 0
     },
     {
       "observable": "db.draftGets.atMost",
@@ -67,6 +67,14 @@
     {
       "observable": "newRequest.allRowsWithheld",
       "value": true
+    },
+    {
+      "observable": "db.eachDistinctAccountGets",
+      "value": 1
+    },
+    {
+      "observable": "db.subscriptionLookupsPerRequest",
+      "value": 1
     }
   ],
   "rulings": [
@@ -84,5 +92,5 @@
     "key": "SCRUM-936",
     "failingFirst": "e934f16d16de72acd72355a7faf322c67da62dbe"
   },
-  "fingerprint": "39fc11ff2a6071403db14f12095cee19751b964e5164387a1099ab4cda6fc38c"
+  "fingerprint": "e4dec53efe7df406e16dacd68dd3f4e9462f5b40e004cc2cba090264ea7377f8"
 }

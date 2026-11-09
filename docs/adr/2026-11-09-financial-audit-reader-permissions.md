@@ -4,7 +4,9 @@ Date: 2026-11-09. Issue: SCRUM-936. Baseline: 0498711b0cd642631a4b5c85a1b60fca01
 Status: accepted for implementation, pending independent review.
 
 Invariant: `financialAudit.listAuditLog` must not disclose an amount, protected
-identity, or free text that the source reader withholds from the same viewer.
+identity, or free text that the source reader withholds from the same viewer,
+whether through role permissions or plan entitlement. Supported legacy data must
+not make the audit page fail. These requirements apply to historical rows too.
 `manage:finance` authorizes reading the event trail, not every copied payload.
 The coordinator supplied SCRUM-902 c24475 and the S850-R5-1, S850-R6-1 and
 S850-R7-PRE-1 reproductions. Jira, review seats and release work belong to the
@@ -107,7 +109,7 @@ replacing an incorrect classification assumption. The new literal tests fail at
 
 ## Round 2 implementation refinements
 
-The audit query owns an in-flight promise cache keyed by opening draft id and
+Round 2 introduced an in-flight promise cache keyed by opening draft id and
 one lazy lookup of the organization's EMPLOYEE_ADVANCES and COMMISSION_PAYABLE
 account ids through `by_org_systemKey`. Opening and opening-journal events share
 the draft decision. Caches end with the request. Missing or foreign drafts do
@@ -116,7 +118,7 @@ The shared helper still checks employee allocation kinds before control lines.
 Cutover and maintenance callers use its original account-read path. Maintenance
 now calls that helper instead of maintaining a second payroll rule.
 
-This uses native indexed reads and request-local promises rather than a persisted
+That implementation used native indexed reads and request-local promises rather than a persisted
 cache, which would need invalidation when draft content or account keys change.
 The public-handler regression observes actual harness database calls and compares
 its result with normal public-query dispatch. It does not establish cloud costs,
@@ -147,3 +149,56 @@ Official sources rechecked before these edits on 2026-11-09:
 - [Convex reading data](https://docs.convex.dev/database/reading-data): retrieve documents through the function context.
 - [OWASP Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): retain structured event facts while restricting access to sensitive log content.
 - [OWASP Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html): validate permissions on each request and test both allowed and refused access.
+
+## Round 3 corrections
+
+The projection now lives in `convex/utils/financialAuditProjection.ts`. The query
+continues to project each selected row, and authorized readers receive the full
+stored row. Extraction and supplier-comment reductions meet main's file-size
+ceilings without changing the supplier audit payloads or raising an allowance.
+
+The round 2 system-key lookup assumed uniqueness that legacy accounts do not
+have. Replace it with a request-local promise memo keyed by each referenced
+account id. The shared opening payroll helper still checks employee allocations
+first, then the actual line account's organization and system key. Active and
+inactive EMPLOYEE_ADVANCES and COMMISSION_PAYABLE duplicates are controls.
+Selecting a canonical account with `.first()` or the posting resolver would
+miss a draft referencing a non-canonical duplicate. Collecting every duplicate
+adds unnecessary reads. Missing and foreign drafts remain withheld.
+
+One lazy `hasPlanFeature(ctx, orgId, "accounting")` decision belongs to each audit
+request. Apply it before the owner shortcut to manual approvals, ledger posting
+and reversal, migration, periods, chart repair/adoption and prepaid correction
+details. INIT_CHART, UPDATE_ACCOUNT and ACKNOWLEDGE_CLOSE_WARNINGS follow their
+data-class readers even though the census has no current producer for them.
+Accounting migration progress also requires the feature, including batch-count
+events. Pending manual drafts retain their manage-finance reader audience.
+
+The guard refuses a new direct import from the subscription API module.
+`convex/utils/subscriptionFeatures.ts` therefore owns the unchanged native plan
+catalogue, getOrgPlan and hasPlanFeature. `subscriptions.ts` retains their exports
+for its existing callers. Both requireFeature and the audit projection use the
+same native implementation. This adds no new import exception or feature logic.
+
+Two mixed action types need resource-specific treatment. POST_EVENT sign-offs
+follow `accountingCutover.listSignOffs`, which has no accounting feature gate.
+POST_MANUAL_JOURNAL openings follow the independent opening readers. Without
+entitlement, only a same-org journal with category OPENING_BALANCE proves that
+exception. A missing, foreign or unresolvable journal does not prove it. Other
+opening, supplier, sales, commission, application, bank and cutover sign-off
+families retain their existing role checks and full/partial projections.
+
+Use the native subscription decision rather than a new expiry calculation.
+`getOrgPlan` maps missing and non-active subscriptions to free. Active status
+uses its stored plan even if currentPeriodEnd is old. Restoration is visible on
+the next request. A blanket gate on the query would hide independently readable
+families and the event trail, so it is rejected. Rewriting stored audit rows
+would discard authorized evidence and cannot replace read-time projection.
+
+Sources rechecked on 2026-11-09: [Convex reading data and unique-result behavior](https://docs.convex.dev/database/reading-data#using-a-unique-result),
+[indexes](https://docs.convex.dev/database/reading-data/indexes/),
+[limits](https://docs.convex.dev/production/state/limits), and the OWASP
+[Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+and [Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
+cheat sheets. The regression suite establishes local behavior. These sources do
+not establish cloud resource usage, concurrency, or production prevalence.

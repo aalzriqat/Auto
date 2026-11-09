@@ -740,3 +740,238 @@ implementer round. The existing ignore changes, generated working-copy file,
 The commit hook skipped secret scanning of the DealCockpit baseline shard
 because it exceeds 1,048,576 bytes. That shard received only reviewed appended
 source/blob notes; no complete secret-scan coverage is claimed for it.
+
+## Round 3 implementation evidence
+
+Starting HEAD was `afb4b8c2296ef95d959ad291273c929137f6be1b` in
+`E:\tmp\auto-936`, branch `claude/scrum936-audit-reader-gate`. The first commands
+printed HEAD and full porcelain status. Fetch measured zero commits behind
+`origin/main`, sampled at `b1c81da8f0c8e1d1bb9bf6a057791e169885dd3a`.
+This is an implementer handoff for PR #800, not an independent certification.
+The supplied findings replace Jira access for this authorized local round.
+
+### Findings and selected resolutions
+
+| Item | Finding | Proposed fix | Independent evidence and resolution |
+| --- | --- | --- | --- |
+| F1 | ACCEPTED | MODIFIED | The initial guard reproduced all eight size failures. Extracted projection; shortened supplier comments while keeping every payload field. The later plan import exposed a new no-door-import violation. Extracted the unchanged native plan catalogue and helpers to a utility, preserving subscription exports. No guard exception or ceiling increase. |
+| S2-1 | ACCEPTED | ADOPTED | Four public-query tests fail on unique() for both control keys, each with active and inactive duplicates. The dedicated opening reader answers. Read each actual referenced account through a request-local promise memo, preserving the allocation-first, same-org/system-key rule without requiring active status. |
+| S2-2 | ACCEPTED | MODIFIED | Owner and non-owner expiry reproductions fail while the dedicated journal reader refuses Upgrade required. One lazy native accounting decision precedes owner bypass. Resource-specific opening and sign-off exceptions preserve their independent readers. Accounting migration batch counts also inherit their feature-gated reader. |
+| Seat 1 A | ACCEPTED, coverage gap | ADOPTED | Added missing and foreign draft cases without controls. Returning readable for that branch fails both tests. Production behavior was already correct. |
+| Seat 1 E | ACCEPTED, coverage gap | ADOPTED | Added a view:sales-only commission positive control, with no accounting entitlement or commission grant. Restricting it to view:commissions fails. Production behavior was already correct. |
+| Sonar S7765 | ACCEPTED | ADOPTED | Replaced equality some() with includes() in the extracted opening-summary helper. The allowed-kind array is explicitly readonly unknown[] so the runtime validation remains unchanged. Local lint passes; a new Sonar analysis is unavailable without publishing this head. |
+
+The projection's returned metadata, count allowlist, retained stored rows and
+authorized full-row behavior are unchanged. There are no writes to financial
+state, altered amounts, new reversal obligations, plan switches or permission
+grants. Only read-time accounting disclosure changes. This is HIGH-risk reader
+authorization work despite the MEDIUM severity of the individual findings.
+
+Rejected alternatives: choosing the first/canonical control would miss a
+non-canonical draft line. Collecting controls would add reads and change the
+guardrail count. Persisting decisions would require invalidation. A blanket
+query entitlement gate would remove independent families and the event trail.
+Deleting historical payloads would remove authorized evidence. A second
+entitlement implementation would drift from the native subscription decision.
+
+The dependency map covered the audit query's four branches, the opening helper's
+cutover/maintenance callers, and the native plan helper's subscription, marketplace,
+notification, website and WhatsApp consumers. Existing subscription imports keep
+their exports. Catalogue, getOrgPlan and hasPlanFeature were moved verbatim after
+newline normalization. No other caller imports were rewritten. Focused subscription,
+seat-count, notification and administrator tests verify those shared exports.
+
+### Plan-reader census
+
+This census was derived from the current writer bodies and the following reader
+preconditions, rather than treating a writer's mutation authority as secrecy.
+All rows still require the audit query's manage:finance entry grant.
+
+| Family and current producer | Dedicated reader inspected | Accounting entitlement |
+| --- | --- | --- |
+| Approved manual journal, financialAudit | accountingLedger.getJournalEntry | Required |
+| Ledger posting/reversal, accounting/postingEngine and reversals | accountingLedger.getJournalEntry | Required |
+| Consigned-sale restatement, migrateConsignedSaleBasis | accountingLedger.getJournalEntry | Required |
+| Batch migration, accountingMigration | auditLegacyTransactions, duplicateEventCheck, migrationGapAnalysis | Required, including counts |
+| Period create/open/close/lock/reopen | accountingPeriods.list/get/closeChecklist | Required |
+| Chart repair/adoption | chartOfAccounts.list/get | Required |
+| Prepaid corrections | prepaidExpenses.listPendingCorrectionRequests/listCorrections/listSchedules | Required |
+| INIT_CHART, UPDATE_ACCOUNT, ACKNOWLEDGE_CLOSE_WARNINGS | Corresponding chart/period readers; unused types from the writer census | Required |
+| Opening draft/edit/post/void | accountingCutover.listPendingOpeningBalanceDrafts/postedOpeningAllocationReadback/openingBalanceStatus and openingBalanceMaintenance.status | No feature gate; retain cost/payroll checks |
+| Pending/rejected manual drafts | financialAudit.listPendingManualJournals | No feature gate; manage:finance |
+| Supplier payable/receivable/cost recovery | sourcingPayables.list/get, supplierReceivables.list, supplierCostRecoveries.list | No feature gate; finance plus cost |
+| Sales, deposits and sale commission | sales.get | No feature gate; view:sales and existing field projections |
+| Deal commission lines | dealCommissions.forSale | No feature gate; view:commissions |
+| Application finance/expected-payment/unwind | applications.get, collections.listCheques, dealUnwind.unwindStatus | No feature gate; preserve their sales/finance and partial-field rules |
+| Bank statement line | bankReconciliation.listStatementLines | No feature gate; view:finance |
+| Cutover sign-off POST_EVENT | accountingCutover.listSignOffs | No feature gate; view:finance |
+
+POST_MANUAL_JOURNAL with no entitlement is exempt only when its referenced
+journal exists in the same org and has category OPENING_BALANCE. Missing or
+foreign evidence cannot prove that exception. POST_EVENT sign-offs are recognized
+by their dedicated resource type. The literal census test checks both owner and
+explicitly granted non-owner audiences, then restores entitlement and checks full
+rows. The lifecycle tests cover active, expired, cancelled, past_due, free,
+missing and restored subscriptions. An active row with an old period end keeps
+its plan, matching getOrgPlan's stored-state contract. There is no new clock read.
+
+### Red, green and mutation evidence
+
+| Checkpoint | Result |
+| --- | --- |
+| F1 initial node quality/guardrails/check.mjs | Exit 1, eight blocking failures on the four reported files |
+| F1 extraction audit suite | 23 passed; guard then exited 0 |
+| S2-1 failing-first c928ff01c | 4 failed, 23 passed; each failure is the duplicate unique() exception |
+| S2-1 implementation 0ea80c1c0 | Audit and maintenance: 75 passed in two files |
+| S2-2 failing-first 896249060 | 3 failed, 27 passed; protected accounting details are returned without entitlement |
+| S2-2 implementation 4c3e3e229 | Audit and subscription gates: 48 passed in two files |
+| Seat 1 controls 4df00b06b | 33 audit tests passed; no production change |
+| Scenario binding and literal test registrations | 104 passed in audit plus both scenario-validator files |
+| Native helper extraction 0c0d714c4 | 85 passed in audit, subscriptionGates, scalingCliffs and utils/notifications; adminAuditTrail separately passed 9 |
+
+The first duplicate fixture attempt omitted postedBy/postedAt and failed schema
+validation. Those unrelated failures are not the recorded reproduction. The test
+commit was amended before behavior work, and its recorded red run has the right
+four unique() failures. A mutation attempt initially matched LF text against CRLF
+source and installed nothing. Its green run is not counted as a mutation kill.
+The corrected mutation script normalizes newlines and refuses a missing anchor.
+The correct skill was applied to the repeated malformed-fixture class: schema
+validation and the existing backend typecheck reject that shape. No new exception,
+gate change or unrelated harness work was introduced.
+
+Final source mutations at 0c0d714c4 all exited 1 with assertion failures:
+
+| Mutation | Failed / passed |
+| --- | --- |
+| Account memo reuses the first account for distinct ids | 5 / 28 |
+| Accounting check follows owner shortcut | 2 / 31 |
+| Missing/foreign draft returns readable | 2 / 31 |
+| Sale commission requires view:commissions only | 1 / 32 |
+
+Each source mutation was restored with git checkout HEAD -- on the projection
+file and empty scoped porcelain status. The tests use real harness documents and
+the registered public query. The mixed page contains 200 rows from two drafts,
+including forty repeated cash lines per draft. It measures three actual account
+gets, one per distinct referenced id, no control-index lookup, at most two draft
+gets and one subscription lookup per request. A second request observes changed
+draft state and rereads accounts. These are harness DB calls, not cloud document
+or byte counts, billing, latency, platform-limit or OCC measurements.
+
+On this fixture the account strategy retrieves three referenced accounts rather
+than two indexed system-key results. The extra account read preserves the actual
+legacy classification. The entitlement decision adds its one subscription read.
+This is a correctness and bounded-reuse claim, not a speedup or lower-cost claim.
+
+### Regression records and source research
+
+All twenty-two earlier records remain. Ten new records bind the duplicate,
+entitlement, draft-provenance and sales-only controls to literal tests. The existing
+request-reuse record now requires three account gets, zero indexed control lookups
+and one subscription lookup, reflecting the referenced-account design rather than
+the invalid uniqueness assumption. Its 200-row denominator, visibility checks,
+distinct-account bound, request freshness and draft-read bound are preserved.
+The same SCRUM-486 matrix row links the full set of thirty-two records.
+
+Official sources were checked before implementation and reused for related
+changes on 2026-11-09: [Convex reading data and unique()](https://docs.convex.dev/database/reading-data#using-a-unique-result),
+[indexes](https://docs.convex.dev/database/reading-data/indexes/),
+[limits](https://docs.convex.dev/production/state/limits),
+[OWASP Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+and [OWASP Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html).
+They support checking actual resource attributes, request-local decisions,
+bounded reads, and preserving log events while restricting details. The generated
+Convex guidelines also recommend shared native helpers across functions. The
+repository's import-boundary guard, not architectural preference, required the
+native subscription helper extraction. No parallel feature system was added.
+
+[Convex's shared-code guidance](https://docs.convex.dev/understanding/best-practices/#use-helper-functions-to-write-shared-code)
+was also checked for the extraction: share plain TypeScript helpers rather than
+introducing an extra registered query or another entitlement implementation.
+
+Self-review predicted five failures: a non-canonical/inactive control escapes;
+the memo conflates ids or survives a request; missing/foreign evidence grants
+access; owners bypass entitlement; and mixed action types hide independent
+readers. Tests and mutations address these cases. This is implementer self-review,
+not an independent seat. Cloud behavior and production data prevalence remain
+unmeasured. CI, both independent seats, CodeRabbit and release certification remain
+outside this local handoff. The three PR comment APIs were read; reviews and inline
+comments were empty, and the conversation reports CodeRabbit skipped automatic
+review. No new CodeRabbit or Sonar result is claimed for the local commits.
+
+### Round 3 final verification
+
+After all four final mutations were restored, the following named invocation
+passed **29 files, 778 tests**, exit 0. It includes the six existing guardrail
+test files, the subscription module's three directly referenced test files,
+both scenario validators and the required financial and command-guard suites.
+
+```powershell
+npx vitest run --maxWorkers=1 convex/financialAudit.scrum936.test.ts convex/accountingPhase10.test.ts convex/openingBalanceMaintenance.scrum850.test.ts convex/accountingCutoverExactness.scrum850.test.ts convex/accountingCutoverLegacyExactness.scrum850.test.ts scripts/tenantWriteGuard.test.ts scripts/economicCommandCensus.test.ts quality/guardrails/convexRatchets.test.ts quality/guardrails/crossDomain.test.ts quality/guardrails/doors.test.ts quality/guardrails/guardrails.test.ts quality/guardrails/policyRules.test.ts quality/guardrails/ratchets.test.ts convex/subscriptionGates.test.ts convex/pushSubscriptions.test.ts convex/scalingCliffs.test.ts convex/adminAuditTrail.test.ts convex/utils/notifications.test.ts convex/sourcingPayables.test.ts convex/supplierReceivables.test.ts convex/supplierCostRecoveries.test.ts convex/dealUnwind.test.ts convex/supplierReceivablesReconciliation.scrum869.test.ts convex/openingCommissionPayroll.test.ts convex/openingAllocatedAdvances.test.ts convex/openingBalanceIndexReads.test.ts convex/openingCommissionReadBudget.test.ts scripts/regression/scenarioRecord.test.ts scripts/regression/implFixture.test.ts
+```
+
+The scenario validators account for 71 of those tests. The audit suite has 33
+tests. Earlier 24-file verification passed 664 tests before the native helper
+extraction; it is superseded by the restored final-source run above. The directly
+referenced subscription test census searched tracked convex and scripts test
+files for api/internal subscriptions calls and direct subscription imports. It
+returned adminAuditTrail, scalingCliffs and subscriptionGates; all ran in full.
+
+Both `pnpm typecheck` and `pnpm typecheck:convex` exited 0 after the native helper
+extraction. The root check excludes convex; the backend check includes convex
+and test-utils. ESLint exited 0 with no diagnostics on all nine changed TypeScript
+source/test files. No watcher, dev server or watch-mode test was started.
+
+`node quality/guardrails/check.mjs` exits 0, measuring 1,051 production files and
+265 import-boundary violations, all grandfathered. Formatted line counts are:
+
+| File | Current | Trusted ceiling |
+| --- | ---: | ---: |
+| financialAudit.ts | 631 | 685 |
+| sourcingPayables.ts | 1032 | 1033 |
+| supplierCostRecoveries.ts | 765 | 765 |
+| supplierReceivables.ts | 730 | 739 |
+| subscriptions.ts | 643 | 807 |
+| utils/financialAuditProjection.ts | 417 | 600, new-file cap |
+| utils/subscriptionFeatures.ts | 174 | 600, new-file cap |
+
+The supported `--write-baseline --source HEAD` command also changed sourceCommit
+metadata. Its diff was not solely lower ceilings, so the baseline was restored
+byte-for-byte and left unchanged. No threshold, gate, waiver or import allowance
+was raised. Both generated-declaration commits stage two Linux-order additions
+from the committed blob using hash-object/update-index. Each script checked that
+the working-copy bytes were unchanged. No Windows-regenerated declaration was staged.
+
+Contract commands:
+
+```powershell
+node scripts/contractSkew/checkBaselineIdentity.mjs
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base b1c81da8f0c8e1d1bb9bf6a057791e169885dd3a
+```
+
+Both exit 0. Identity matches all 948 entries. Renewal reports 948 checked and
+zero unrenewed, stale, malformed or missing entries. The first pass correctly
+refused 15 stale entries. The later native-helper extraction required nine more
+notes, six for newly changed subscription definitions and three for the updated
+audit module. There are 24 appended notes across 21 unique entries in nine shards.
+The per-entry review compares registered argument and explicit return validators
+with the full sampled PR base. Those validators are unchanged. A preservation
+check against the starting HEAD proves unchanged non-renewal fields and shard
+metadata, unchanged entry counts and every prior renewal string retained.
+The subscription definitions are byte-identical at the declaration level; only
+their native helper definitions moved. The check required new backend evidence
+paths on those entries because subscriptions was newly changed in this round.
+
+The control-character grep over the shards returned 1 with no matches. These
+notes renew source/blob freshness only. They neither waive contract findings nor
+claim live runtime compatibility. The baseline annotations retain their existing
+UNKNOWN status, expiry, fingerprints and rationale. The local source-check and
+renewal logs are `.s936-r3-final-identity.log` and `.s936-r3-final-renewal.log`.
+
+A final fetch still measured zero commits behind the same full origin/main SHA.
+No CI, Linux codegen freshness run, screen audit, explorer swarm, real-backend
+rehearsal, platform I/O, OCC test or independent review seat ran in this round.
+Those are unavailable certification evidence, not passed gates. The owner forbids
+pushes, PR writes, merges, deployments and Jira work here; none occurred. The
+pre-existing ignore files, generated working copy, test-results and `.s936-*`
+artifacts remain unstaged. A durable referenced-account classification lesson
+was added to the owner's memory index outside the repository.
