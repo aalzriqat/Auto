@@ -46,6 +46,11 @@ beforeEach(() => {
     ".github/scripts/v.cjs",
     ".github/workflows/w.yml",
     ".github/scriptsx/v.cjs",
+    "quality/guardrails/astCounts.mjs",
+    "quality/other.mjs",
+    "quality/guardrailsx/a.mjs",
+    "quality/guardrails.mjs",
+    "quality/a/guardrails/b.mjs",
   ]) {
     touch(f);
   }
@@ -59,6 +64,17 @@ describe("validateLcovSources", () => {
   test.each(["convex/a.ts", "apps/mobile/src/a.tsx", "apps/mobile/app/(app)/x.tsx", "scripts/v.cjs", "packages/shared/src/x.ts"])("accepts %s", (sf) => {
     expect(validate(rec(sf))).toBe(1);
   });
+
+  test("accepts a source under quality/guardrails/", () => {
+    expect(validate(rec("quality/guardrails/astCounts.mjs"))).toBe(1);
+  });
+
+  test.each(["quality/other.mjs", "quality/guardrailsx/a.mjs", "quality/guardrails.mjs", "quality/a/guardrails/b.mjs"])(
+    "refuses %s: only the exact quality/guardrails/ directory is admitted",
+    (sf) => {
+      expect(() => validate(rec(sf))).toThrow(/outside allowlist/);
+    },
+  );
 
   test("normalises backslashes as before", () => {
     expect(validate(rec("apps\\mobile\\src\\a.tsx"))).toBe(1);
