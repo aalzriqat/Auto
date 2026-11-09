@@ -617,9 +617,9 @@ describe("getLocalizedErrorMessage - coded server refusals", () => {
     // SCRUM-426 guardrail 4: the codes the gates produce are diffed with every forward
     // finalize/transfer code the error enum declares, in both directions, not counted.
     const { AppErrorCode } = await import("../convex/utils/errors");
-    const declared = new Set(Object.values(AppErrorCode).filter((code) => /^FORWARD_(?:FINALIZE|TRANSFER)_/.test(code)));
+    const declared = new Set<string>(Object.values(AppErrorCode).filter((code) => /^FORWARD_(?:FINALIZE|TRANSFER)_/.test(code)));
     expect([...declared].filter((code) => !seen.has(code)).sort(), "declared in AppErrorCode but never produced by a gate here").toEqual([]);
-    expect([...seen].filter((code) => !declared.has(code as never)).sort(), "produced by a gate but not declared in AppErrorCode").toEqual([]);
+    expect([...seen].filter((code) => !declared.has(code)).sort(), "produced by a gate but not declared in AppErrorCode").toEqual([]);
     expect(declared.size, "an empty enum scan must not pass").toBeGreaterThan(0);
   });
 
