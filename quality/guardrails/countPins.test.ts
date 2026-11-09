@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { findCountPins } from "./countPins.mjs";
+import { findCountPins, markerProblems } from "./countPins.mjs";
 import {
   TIMEOUT,
   baseConfig,
@@ -197,4 +197,73 @@ describe("a rename is compared with the old path's target count", () => {
     expect(result.errors).toEqual([]);
     expect(result.notices).toContain("count pins can tighten: lib/renamed.test.ts 1 -> 0");
   }, TIMEOUT);
+});
+describe("inline exemption marker for fixture counts", () => {
+  const MARK = "// guardrail-4-fixture:";
+  const withBody = (body: string): string => `import { expect, test } from 'vitest';\ntest('t', () => {\n${body}\n});\n`;
+
+  test("negative control: an unmarked new pin fails, and the message names both fixes", async () => {
+    const root = fixtureRepo(TARGET);
+    write(root, "lib/clean.test.ts", withBody("  expect([].length).toBe(12);"));
+    const result = await check(root);
+    expectFailure(result.errors, /^COUNT-PIN-GROWN lib\/clean\.test\.ts: 1 > target 0/);
+    expectFailure(
+      result.errors,
+      /convert the pin to set equality in both directions, or mark it `\/\/ guardrail-4-fixture: <reason>` if it is a fixture count/,
+    );
+  }, TIMEOUT);
+
+  test("positive control: a marker with a reason on the line above exempts the pin", async () => {
+    const root = fixtureRepo(TARGET);
+    write(root, "lib/clean.test.ts", withBody(`  ${MARK} the fixture seeds exactly 12 rows\n  expect([].length).toBe(12);`));
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+    expect(result.countPins).toEqual({ pr: 1, target: 1 });
+  }, TIMEOUT);
+
+  test("positive control: a marker with a reason at the end of the same line exempts the pin", async () => {
+    const root = fixtureRepo(TARGET);
+    write(root, "lib/clean.test.ts", withBody(`  expect([].length).toBe(12); ${MARK} the fixture seeds exactly 12 rows`));
+    const result = await check(root);
+    expect(result.errors).toEqual([]);
+  }, TIMEOUT);
+
+  test("a marker exempts exactly one assertion", async () => {
+    const root = fixtureRepo(TARGET);
+    write(
+      root,
+      "lib/clean.test.ts",
+      withBody(`  ${MARK} the fixture seeds exactly 12 rows\n  expect([].length).toBe(12);\n  expect([].length).toBe(13);`),
+    );
+    const result = await check(root);
+    expectFailure(result.errors, /^COUNT-PIN-GROWN lib\/clean\.test\.ts: 1 > target 0 \(\+1\)[^\n]*\n {2}line 5: toBe\(13\)$/);
+  }, TIMEOUT);
+
+  test("negative control: a marker with no reason fails, bare or with only a colon", async () => {
+    for (const bare of ["// guardrail-4-fixture:", "// guardrail-4-fixture", "// guardrail-4-fixture:   "]) {
+      const root = fixtureRepo(TARGET);
+      write(root, "lib/clean.test.ts", withBody(`  ${bare}\n  expect([].length).toBe(12);`));
+      const result = await check(root);
+      expectFailure(result.errors, /^COUNT-PIN-MARKER-NO-REASON lib\/clean\.test\.ts:3\b/);
+    }
+  }, TIMEOUT);
+
+  test("negative control: a stray marker that exempts nothing fails", async () => {
+    const root = fixtureRepo(TARGET);
+    write(root, "lib/clean.test.ts", withBody(`  ${MARK} nothing here is pinned\n  expect([].length).toBe(9);`));
+    const result = await check(root);
+    expectFailure(result.errors, /^COUNT-PIN-MARKER-UNUSED lib\/clean\.test\.ts:3\b/);
+  }, TIMEOUT);
+
+  test("negative control: a marker two lines above its pin does not reach it", async () => {
+    const root = fixtureRepo(TARGET);
+    write(root, "lib/clean.test.ts", withBody(`  ${MARK} too far away\n  const a = 1;\n  expect([].length).toBe(12);`));
+    const result = await check(root);
+    expectFailure(result.errors, /^COUNT-PIN-MARKER-UNUSED lib\/clean\.test\.ts:3\b/);
+    expectFailure(result.errors, /^COUNT-PIN-GROWN lib\/clean\.test\.ts: 1 > target 0/);
+  }, TIMEOUT);
+
+  test("positive control: the marker text inside a string is not a marker", () => {
+    expect(markerProblems("lib/x.test.ts", "const s = '// guardrail-4-fixture:';")).toEqual([]);
+  });
 });
