@@ -328,3 +328,45 @@ describe("801-02: a marker pairs with the pin's whole line span", () => {
     ]);
   });
 });
+
+describe("801-03: every comment is enumerated with a full scanner pass", () => {
+  const UNUSED = (line: number) => [{ code: "COUNT-PIN-MARKER-UNUSED", line }];
+  const STRAY = "// guardrail-4-fixture: nothing to exempt";
+
+  test("negative control: a stray marker directly before a closing } is seen", () => {
+    expect(markerProblems("lib/x.test.ts", `test('t', () => {\n  ${STRAY}\n});\n`)).toEqual(UNUSED(2));
+  });
+
+  test("negative control: a stray marker directly before a closing ) is seen", () => {
+    expect(markerProblems("lib/x.test.ts", `foo(\n  a,\n  ${STRAY}\n);\n`)).toEqual(UNUSED(3));
+  });
+
+  test("negative control: a stray marker directly before a closing ] is seen", () => {
+    expect(markerProblems("lib/x.test.ts", `const a = [\n  1,\n  ${STRAY}\n];\n`)).toEqual(UNUSED(3));
+  });
+
+  test("negative control: a bare marker before a closing } gets NO-REASON", () => {
+    const text = "test('t', () => {\n  // guardrail-4-fixture\n});\n";
+    expect(markerProblems("lib/x.test.ts", text)).toEqual([{ code: "COUNT-PIN-MARKER-NO-REASON", line: 2 }]);
+  });
+
+  test("positive control: marker text in a string, template literal or regex literal is not a marker", () => {
+    const texts = [
+      "const s = '// guardrail-4-fixture: x';",
+      'const s = "// guardrail-4-fixture: x";',
+      "const t = `// guardrail-4-fixture: x`;",
+      "const t = `a ${b} // guardrail-4-fixture: x ${c} d`;",
+      "const t = `a ${`// guardrail-4-fixture: x ${d}`} e`;",
+      "const t = `a ${ {k: 1}.k } // guardrail-4-fixture: x`;",
+      "const r = /\\/\\/ guardrail-4-fixture: x/;",
+      "const r = x.split(/\\/\\/ guardrail-4-fixture: x/);",
+      "const n = a / b; const t = `// guardrail-4-fixture: x`;",
+    ];
+    for (const text of texts) expect(markerProblems("lib/x.test.ts", text), text).toEqual([]);
+  });
+
+  test("a real marker after a template literal and a regex literal is still seen", () => {
+    const text = `const t = \`a \${b}\`;\nconst r = /x\\//;\n${STRAY}\nfoo();\n`;
+    expect(markerProblems("lib/x.test.ts", text)).toEqual(UNUSED(3));
+  });
+});
