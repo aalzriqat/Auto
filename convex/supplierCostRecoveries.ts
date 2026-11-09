@@ -476,7 +476,7 @@ export const recordReceipt = mutation({
           resourceId: recovery._id,
           description: "Recorded receipt against a supplier-borne vehicle cost.",
           before: { amountRecoveredMinor: recovery.amountRecoveredMinor, status: recovery.status },
-          after: { amountRecoveredMinor, status },
+          after: { amountRecoveredMinor, status, paymentMethod: args.method, supplierName: recovery.sourcedFromName, amountMinor: args.amountMinor },
           idempotencyKey: args.idempotencyKey,
         });
 

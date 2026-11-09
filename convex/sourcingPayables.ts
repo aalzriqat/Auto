@@ -518,7 +518,7 @@ export const markPaid = mutation({
           resourceId: args.payableId,
           description: "Settled supplier payable in full.",
           before: { amountPaid: payable.amountPaid ?? 0, status: payable.status },
-          after: { amountPaid: paidInFull, status: "PAID" },
+          after: { amountPaid: paidInFull, status: "PAID", paymentMethod, supplierName: payable.sourcedFromName, amountMinor: settlementAmountMinor },
           idempotencyKey: args.idempotencyKey,
         });
       }
@@ -697,7 +697,8 @@ export const recordPartialPayment = mutation({
           resourceId: args.payableId,
           description: "Recorded payment against a supplier payable.",
           before: { amountPaid: alreadyPaid, status: payable.status },
-          after: { amountPaid: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID" },
+          after: { amountPaid: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID", paymentMethod,
+            supplierName: payable.sourcedFromName, amountMinor: toMinorUnits(args.amount, payable.currency) },
           idempotencyKey: args.idempotencyKey,
         });
 

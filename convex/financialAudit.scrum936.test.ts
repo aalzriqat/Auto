@@ -365,7 +365,7 @@ async function supplierAuditDetail(operation: "full" | "partial" | "commission" 
     expect(row.after).toMatchObject({ paymentMethod: "CASH", supplierName, amountMinor: operation === "full" ? 2000 : 1000 });
     expect(row.description).not.toMatch(/\d/);
     expect(row.description).not.toContain(supplierName);
-    await assertAllBranches(s, row, [supplierName, "CASH", operation === "full" ? "2000" : "1000"]);
+    await assertAllBranches(s, row, [supplierName, "CASH", `"amountMinor":${operation === "full" ? 2000 : 1000}`]);
   });
 }
 

@@ -488,7 +488,8 @@ export const recordReceipt = mutation({
           resourceId: args.receivableId,
           description: "Recorded receipt against a consigned-sale commission claim.",
           before: { amountReceived: alreadyReceived, status: row.status },
-          after: { amountReceived: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID" },
+          after: { amountReceived: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID", paymentMethod: receiptMethod,
+            supplierName: row.sourcedFromName, amountMinor: toMinorUnits(args.amount, row.currency) },
           idempotencyKey: args.idempotencyKey,
         });
 
