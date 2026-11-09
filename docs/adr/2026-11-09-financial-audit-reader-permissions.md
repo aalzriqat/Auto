@@ -104,3 +104,46 @@ Public writer tests now prove that positive control and the mixed correction
 reader separately. This preserves the central exhaustive projection design while
 replacing an incorrect classification assumption. The new literal tests fail at
 `9956ef3e01b055416dd920bce89aa85210949c8f`. No reader grant or pilot switch changes.
+
+## Round 2 implementation refinements
+
+The audit query owns an in-flight promise cache keyed by opening draft id and
+one lazy lookup of the organization's EMPLOYEE_ADVANCES and COMMISSION_PAYABLE
+account ids through `by_org_systemKey`. Opening and opening-journal events share
+the draft decision. Caches end with the request. Missing or foreign drafts do
+not grant access, and foreign account ids cannot match org-scoped controls.
+The shared helper still checks employee allocation kinds before control lines.
+Cutover and maintenance callers use its original account-read path. Maintenance
+now calls that helper instead of maintaining a second payroll rule.
+
+This uses native indexed reads and request-local promises rather than a persisted
+cache, which would need invalidation when draft content or account keys change.
+The public-handler regression observes actual harness database calls and compares
+its result with normal public-query dispatch. It does not establish cloud costs,
+bytes read, concurrency behavior, or platform-limit compliance.
+
+The undeployed opening lookup index is named
+`openingBalanceDrafts.by_orgId_and_journalEntryId`, following the generated
+guideline to include every indexed field in its name. Its key order is unchanged.
+
+All four supplier writers retain `paymentMethod`, the stored supplier snapshot
+as `supplierName`, and the operation's integer `amountMinor` in `after`.
+`markPaid` records the outstanding settlement amount, rather than the cumulative
+paid total. Partial payment and both receipt writers record that operation's
+amount. Descriptions remain free of amounts and supplier names. The existing
+reader policy withholds the entire protected payload from restricted viewers
+and returns the original row to authorized viewers. No historical rows are
+rewritten, and no financial operation or permission is enabled.
+
+The shared unwind predicate is named `isUnwindActor` because it governs both
+forward-return authority and reader projections. Its restored SCRUM-713 comment
+explains why CONFIRM alone is insufficient and why a default manager may qualify
+without the finance-economics grant. The predicate is unchanged.
+
+Official sources rechecked before these edits on 2026-11-09:
+
+- [Convex transaction limits](https://docs.convex.dev/production/state/limits): bound database reads per function.
+- [Convex indexes](https://docs.convex.dev/database/reading-data/indexes/): use equality constraints in declared field order.
+- [Convex reading data](https://docs.convex.dev/database/reading-data): retrieve documents through the function context.
+- [OWASP Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): retain structured event facts while restricting access to sensitive log content.
+- [OWASP Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html): validate permissions on each request and test both allowed and refused access.

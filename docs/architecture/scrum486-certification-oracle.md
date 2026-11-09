@@ -1880,3 +1880,17 @@ is inferred from the writer module. The final source checkpoint
 The final-head proof and repeated mutation results are in the evidence report.
 All nineteen final-source mutants failed tests and were restored clean. The
 restored four-file proof passed 137 tests, and the two required guards passed 32.
+
+Round 2 adds five literal regression checks to the same backend suite and five
+records, bringing the SCRUM-936 library to twenty-two scenarios plus the schema
+classification check. The request-reuse case fails at
+`e934f16d1` with 8,200 line-account gets for a 200-row synthetic page. It requires
+zero such gets after the fix, two org-scoped control lookups, at most two draft
+gets, correct visibility for both drafts, and fresh decisions on a later request.
+The four public supplier-writer cases fail at `0d219ab0b` because authorized
+audit rows lack structured payment method, supplier snapshot name, and operation
+amount. Each now checks restored authorized evidence, refused dedicated-reader
+controls, all audit branches, amount-free descriptions, and unchanged stored rows.
+Full failing-first SHAs are stored in the records. Earlier scenarios are retained.
+The maintenance payroll rule and unwind actor predicate retain their permissions.
+See the round 2 evidence appendix for checks and explicit execution limits.

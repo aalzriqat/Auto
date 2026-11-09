@@ -95,7 +95,7 @@ without changing their existing grants. Untyped historical edit payloads without
 a provable payroll audience stay withheld even after an employee is removed
 from the current draft. The shared legacy
 detector checks allocation kinds and employee-control accounts. A new indexed
-`openingBalanceDrafts.by_org_journal` lookup binds a posted opening to its draft
+`openingBalanceDrafts.by_orgId_and_journalEntryId` lookup binds a posted opening to its draft
 without scanning history. Payroll-sensitive opening totals follow the opening
 readback's P gate. The general ledger's cost-only reader currently has a broader
 audience; this change does not alter that separate API.
@@ -480,3 +480,263 @@ Comparing every edited baseline shard against the PR base confirms fifteen
 shards, sixty-two unique entries with appended notes, zero changed non-renewal
 fields, unchanged shard metadata, and every prior renewal string preserved.
 The three latest notes append to entries already among those sixty-two.
+
+## Round 2 implementation evidence
+
+Starting head: `4146c415929f34e0b1f68b255452f86f285b8f7c`.
+Production-source checkpoint: `d96f94af0bb06ae87f9bafe1e3141b14f13501fc`.
+Worktree: `E:\tmp\auto-936`, branch `claude/scrum936-audit-reader-gate`.
+The initial fetch measured zero commits behind origin/main. This round is local
+implementation evidence; Jira and the PR are not updated.
+
+| Work item | Change | Failing-first and green evidence |
+| --- | --- | --- |
+| 1. Generated declaration | `122953464` stages a blob built from HEAD with exactly the two requested registration lines. The file on disk is untouched. | No behavior change. Reviewed staged diff: two additions, zero other changes. Linux CI regeneration has not been rerun here. |
+| 2. Request read reuse | Test `e934f16d1`, implementation `9a020dfcf`. Cache in-flight draft decisions by id; resolve the two org control ids once per request. | Red: 1 failed, 18 passed, with 8,200 line-account gets. Green: 19 passed. A mixed 200-row page retains 100 full and 100 withheld rows, zero line-account gets, two indexed control lookups and at most two draft gets. A new request observes a changed draft. |
+| 3. Shared maintenance rule | `2e805c1a6` removes openingNeedsPayroll and calls containsEmployeeAdvanceControl. | No permission behavior change. Maintenance suite: 48 passed. Default cutover callers retain allocation-first and org-scoped account reads. |
+| 4. Index name | `1fa1d3255` renames schema and reader use to by_orgId_and_journalEntryId. | No permission behavior change. Audit suite: 19 passed, including opening-journal rows. The index is undeployed. |
+| 5. Supplier detail | Test `0d219ab0b`, implementation `0d8eba4de`. All four public writers add paymentMethod, supplierName and operation amountMinor to after. | Red: 4 failed, 19 passed on missing fields. Green: 94 passed in audit, sourcingPayables, supplierReceivables and supplierCostRecoveries. All branches, explicit non-owner grants, source-reader refusals and retained stored rows are checked. |
+| 6. Actor name | `d96f94af0` renames the helper and every production use to isUnwindActor and restores the SCRUM-713 rationale. | No permission behavior change. Audit and dealUnwind suites: 105 passed. |
+
+The read telemetry wraps actual harness DB calls without replacing responses.
+It invokes the authenticated registered public handler and requires equality
+with normal `api.financialAudit.listAuditLog` dispatch. These are harness
+operations, not measured Convex cloud documents, bytes or billing. The limiter
+addressed is repeated account-document retrieval within one request. Journal
+lookups and audit-page retrieval still occur and are outside the line-account
+get count. No cloud speedup, billed-cost reduction or platform-limit pass is claimed.
+
+During test construction, a missing journal fixture field and old timestamps
+were corrected before recording the valid read-cost red. The first supplier
+green attempt found that searching the entire response for `1000` matched a
+synthetic document id. The new assertion now checks the serialized amountMinor
+field. Existing tests, permissions, assertions and pilot switches are unchanged.
+
+### Round 2 source mutations
+
+Every mutation produced assertion failures with process exit 1. Each changed
+file was restored using `git checkout HEAD -- <file>` and then had empty scoped
+porcelain status. No mutation ran concurrently with another verification job.
+
+| Mutation | Failed / passed tests |
+| --- | --- |
+| draftPayrollReader shares one memo key across distinct drafts | 1 / 18 |
+| sourcingPayables.markPaid drops structured paymentMethod | 1 / 22 |
+| sourcingPayables.recordPartialPayment drops structured paymentMethod | 1 / 22 |
+| supplierReceivables.recordReceipt drops structured paymentMethod | 1 / 22 |
+| supplierCostRecoveries.recordReceipt drops structured paymentMethod | 1 / 22 |
+| mayReadAuditDetails removes the COST permission check | 6 / 17 |
+
+The final restored verification includes the renamed unwind helper and index.
+The original nineteen round 1 mutations above remain historical evidence; they
+are not presented as rerun against the round 2 source.
+
+### Round 2 regression and contract records
+
+Five new SCRUM-761 records bind the read-reuse case and each public supplier
+writer to their literal tests and full failing-first SHAs. All seventeen prior
+records are retained unchanged. The library now contains twenty-two SCRUM-936
+scenarios and the separate schema classification test. The existing SCRUM-486
+certification row includes these additions. No owner ruling changed.
+
+The initial contract identity check matched all 948 entries. Evidence renewal
+then correctly refused 18 stale entries, exit 10. Per-entry notes were appended
+in five existing shards after comparing the eight referenced exported argument
+and explicit return validators against PR base
+`0f8b54039d4ed0a792b9e582aa426a1ddb12c726`. They are unchanged. The changed
+declarations affect audit payloads or the equivalent actor helper rename;
+unmodified declarations only share changed modules. All non-renewal fields,
+metadata and prior renewal strings are preserved. Each new note ends with the
+current client/backend evidence-blobs. No expiry or finding status changes.
+
+The read-only command
+`node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 0f8b54039d4ed0a792b9e582aa426a1ddb12c726`
+then reported 948 checked, zero unrenewed, stale, malformed or missing entries.
+`git grep -n -P '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]' -- scripts/contractSkew/needs-evidence-baseline`
+returned 1 with no matches. This measures source attribution, not runtime or
+live contract compatibility.
+
+### Round 2 design review and sources
+
+The implementation reuses native Convex indexes and the shared payroll rule.
+A persistent cache was rejected because mutable drafts and account keys would
+require invalidation. Request-local promises share pending work across
+Promise.all without carrying decisions across viewers or requests. Supplier
+facts belong in structured evidence protected by the existing reader projection;
+discarding them from the stored record would reduce authorized audit detail.
+
+Official sources were rechecked before edits on 2026-11-09:
+[Convex limits](https://docs.convex.dev/production/state/limits),
+[indexes](https://docs.convex.dev/database/reading-data/indexes/),
+[reading data](https://docs.convex.dev/database/reading-data),
+[OWASP Logging](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html),
+and [OWASP Authorization](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html).
+The generated Convex guidelines additionally require index names to include all
+fields. These sources support the choices, while the tests establish local behavior.
+
+Self-review considered five failure modes: a memo key conflates drafts;
+request caches survive a draft change; control resolution loses org scoping;
+maintenance drifts from allocation/control semantics; and restored supplier facts
+leak through a less privileged projection. The new regressions and source
+mutations cover memo identity, request lifetime and the supplier projection.
+Org-scoped index constraints and unchanged fallback account ownership checks
+retain tenancy; the maintenance and opening-reader suites exercise the shared rule.
+This self-review is not an independent seat. No financial formula, journal,
+balance, reversal path or historical stored row changes.
+
+
+### Round 2 final checks
+
+All commands below use named test files and `--maxWorkers=1`. The ten explicitly
+required files passed together: **10 files, 271 tests**, exit 0. They are
+financialAudit.scrum936, accountingPhase10, openingBalanceMaintenance.scrum850,
+both accountingCutover Exactness SCRUM-850 files, tenantWriteGuard, sourcingPayables,
+supplierReceivables, supplierCostRecoveries and dealUnwind. The two scenario
+validators separately passed **71 tests** after the five new records were finalized.
+Their first run rejected prose tokens in the new metadata; the records now express
+supplier-name snapshot equality as a boolean. The existing validators were not changed.
+The correct skill was invoked because the earlier round documents the same mistake;
+the existing validator already fails that class, so no new gate or policy change was made.
+
+The expanded tracked-backend-reference census attempted **96 named files**: **94 passed**,
+**1 failed**, and **1 incomplete**. It recorded **2750 passed tests** and
+**6 failed tests**. The incomplete file produced no test summary, so no
+completed-test count is assigned to it. The commands ran each named file separately;
+the table gives the complete denominator. This is not a green full-suite claim.
+
+`convex/scrum802OptOutCensus.test.ts` failed six assertions, with three passing.
+Its tracked blob is unchanged from the starting head
+(`9263503c5f0f0aabc592cbd08d36076ebd106cba` at both revisions). Its testFiles
+scanner uses node:path.join, returning Windows backslashes, while expected
+paths and the SELF exclusion use forward slashes. A direct control returned
+`convex\sales.test.ts`, confirmed the file exists, and found it unequal to
+`convex/sales.test.ts`. The file and guard are unchanged; this remains failed
+local verification, not a waiver. No Jira follow-up was created, as instructed.
+
+`convex/openingClosureReaders.scrum858.test.ts` produced no test summary before
+exceeding the workstation CPU budget. Its worker was observed above 111 seconds
+of CPU. Only the npm/vitest process tree launched for that file was terminated;
+the remaining named suites continued. This repeats the thermal limitation
+recorded in the earlier round. It is incomplete verification, not a passed or
+skipped scenario. No test, timeout, gate or production source was weakened.
+
+Both `pnpm typecheck` (root, excludes convex/) and `pnpm typecheck:convex`
+(backend) exited 0. ESLint on all ten round-2 TypeScript source/test files exited
+0 with no diagnostics. The generated declaration is verified by its exact
+two-line committed diff rather than lint or local regeneration.
+
+| Named file | Result |
+| --- | --- |
+| `convex/accountingCutoverExactness.scrum850.test.ts` | PASS; 12 passed (12) |
+| `convex/accountingGenericReversalAuthority.test.ts` | PASS; 21 passed (21) |
+| `convex/accountingMigrationRetirement.test.ts` | PASS; 10 passed (10) |
+| `convex/accountingPhase10.test.ts` | PASS; 10 passed (10) |
+| `convex/accountingPhase18.test.ts` | PASS; 7 passed (7) |
+| `convex/accountingPhase7.test.ts` | PASS; 3 passed (3) |
+| `convex/accountingPhase8.test.ts` | PASS; 16 passed (16) |
+| `convex/accountingPhase9.test.ts` | PASS; 17 passed (17) |
+| `convex/accountingReleaseRehearsal.test.ts` | PASS; 18 passed (18) |
+| `convex/accountingSourceFamilyRetired.test.ts` | PASS; 11 passed (11) |
+| `convex/accountingVehicleInventory.test.ts` | PASS; 169 passed (169) |
+| `convex/adminOrgs.test.ts` | PASS; 18 passed (18) |
+| `convex/applications.test.ts` | PASS; 90 passed (90) |
+| `convex/bankReconciliation.test.ts` | PASS; 20 passed (20) |
+| `convex/cashApplicationFinancierLeg.test.ts` | PASS; 21 passed (21) |
+| `convex/cashDealCockpit.test.ts` | PASS; 29 passed (29) |
+| `convex/claimsRetirement.test.ts` | PASS; 23 passed (23) |
+| `convex/commitmentRestorationSpine.test.ts` | PASS; 15 passed (15) |
+| `convex/consignedDepositResolution.test.ts` | PASS; 60 passed (60) |
+| `convex/consignedPayableVat.scrum781.test.ts` | PASS; 17 passed (17) |
+| `convex/consignedSaleCostAccessRule.scrum886.test.ts` | PASS; 57 passed (57) |
+| `convex/costCorrectionRehearsalPublic.test.ts` | PASS; 8 passed (8) |
+| `convex/costDisclosure.scrum902f.test.ts` | PASS; 13 passed (13) |
+| `convex/costReaders.scrum902.test.ts` | PASS; 18 passed (18) |
+| `convex/dealCommissions.test.ts` | PASS; 25 passed (25) |
+| `convex/dealUnwind.test.ts` | PASS; 82 passed (82) |
+| `convex/expenseParties.scrum868.test.ts` | PASS; 22 passed (22) |
+| `convex/financeCompanyForward.test.ts` | PASS; 52 passed (52) |
+| `convex/financeDisbursementChequeReturn.test.ts` | PASS; 48 passed (48) |
+| `convex/financedConsignedSettlement.test.ts` | PASS; 243 passed (243) |
+| `convex/financialAudit.scrum936.test.ts` | PASS; 23 passed (23) |
+| `convex/idempotencyEconomicCommands.test.ts` | PASS; 25 passed (25) |
+| `convex/manualJournalAccountingDate.test.ts` | PASS; 19 passed (19) |
+| `convex/manualJournalsPilotOff.scrum795.test.ts` | PASS; 10 passed (10) |
+| `convex/manualJournalsPilotOffControl.scrum795.test.ts` | PASS; 5 passed (5) |
+| `convex/migrateConsignedSaleBasis.test.ts` | PASS; 22 passed (22) |
+| `convex/migrateConsignedSaleBasisProdShape.test.ts` | PASS; 3 passed (3) |
+| `convex/multiVehicleDepositAllocation.test.ts` | PASS; 94 passed (94) |
+| `convex/openingBalanceMaintenance.scrum850.test.ts` | PASS; 48 passed (48) |
+| `convex/openingClosureReaders.scrum858.test.ts` | INCOMPLETE; no test summary |
+| `convex/openingRehearsalPublicComposite.test.ts` | PASS; 40 passed (40) |
+| `convex/openingRemainingFamilies.test.ts` | PASS; 5 passed (5) |
+| `convex/openingReversalDoors.scrum858.test.ts` | PASS; 7 passed (7) |
+| `convex/openingSupplierLiabilityReplay.test.ts` | PASS; 10 passed (10) |
+| `convex/orgDeletionManifestRatchet.scrum563.test.ts` | PASS; 7 passed (7) |
+| `convex/orgFinancialReset.test.ts` | PASS; 31 passed (31) |
+| `convex/orgFinancialResetNarrow.scrum565.test.ts` | PASS; 35 passed (35) |
+| `convex/orgPurgeLifecycle.scrum297.test.ts` | PASS; 8 passed (8) |
+| `convex/pilotBlockedDoors.scrum795.test.ts` | PASS; 8 passed (8) |
+| `convex/prepaidExpenses.test.ts` | PASS; 89 passed (89) |
+| `convex/reconciliationOrgReferences.scrum889.test.ts` | PASS; 43 passed (43) |
+| `convex/saleCancellationOutcomeMatrix.test.ts` | PASS; 24 passed (24) |
+| `convex/salesCommissionEntry.test.ts` | PASS; 29 passed (29) |
+| `convex/scrum350Cons1V3PriceBasis.test.ts` | PASS; 2 passed (2) |
+| `convex/scrum486Certification.test.ts` | PASS; 64 passed (64) |
+| `convex/scrum802OptOutCensus.test.ts` | FAIL; 6 failed | 3 passed (9) |
+| `convex/sourcedVehicleHolds.test.ts` | PASS; 22 passed (22) |
+| `convex/sourcingPayables.test.ts` | PASS; 23 passed (23) |
+| `convex/specialOrdersHunt.scrum773.test.ts` | PASS; 3 passed (3) |
+| `convex/supplierBalances.scrum929.test.ts` | PASS; 22 passed (22) |
+| `convex/supplierCostRecoveries.test.ts` | PASS; 27 passed (27) |
+| `convex/supplierDueAging.scrum869.test.ts` | PASS; 53 passed (53) |
+| `convex/supplierDueAlerts.scrum869.test.ts` | PASS; 73 passed (73) |
+| `convex/supplierIdentity.test.ts` | PASS; 29 passed (29) |
+| `convex/supplierIdentityRepair.test.ts` | PASS; 25 passed (25) |
+| `convex/supplierObligationCorrections.test.ts` | PASS; 6 passed (6) |
+| `convex/supplierPayableSettlement.test.ts` | PASS; 3 passed (3) |
+| `convex/supplierPayablesReconciliation.scrum651.test.ts` | PASS; 24 passed (24) |
+| `convex/supplierPaymentsRecon.scrum869.test.ts` | PASS; 17 passed (17) |
+| `convex/supplierReceivables.test.ts` | PASS; 21 passed (21) |
+| `convex/supplierReceivablesReconciliation.scrum869.test.ts` | PASS; 105 passed (105) |
+| `convex/supplierRecoveryIdentity.scrum868.test.ts` | PASS; 15 passed (15) |
+| `convex/supplierRefusalTexts.scrum869.test.ts` | PASS; 7 passed (7) |
+| `convex/supplierSettledProvenance.scrum869.test.ts` | PASS; 22 passed (22) |
+| `convex/supplierSettlement.test.ts` | PASS; 15 passed (15) |
+| `convex/supplierSettlementAllocation.scrum869.test.ts` | PASS; 3 passed (3) |
+| `convex/supplierSettlementAudit.test.ts` | PASS; 11 passed (11) |
+| `convex/supplierSettlementCertification.test.ts` | PASS; 13 passed (13) |
+| `convex/supplierSettlementContainment.test.ts` | PASS; 12 passed (12) |
+| `convex/supplierSettlementIdentity.test.ts` | PASS; 20 passed (20) |
+| `convex/supplierSourcingCostGate.scrum902.test.ts` | PASS; 13 passed (13) |
+| `convex/supplierStatement.scrum869.test.ts` | PASS; 18 passed (18) |
+| `convex/unwindRehearsalPublic.test.ts` | PASS; 16 passed (16) |
+| `convex/vehicleCostCorrection.test.ts` | PASS; 61 passed (61) |
+| `convex/vehicleSupplierFirstLink.scrum868.test.ts` | PASS; 28 passed (28) |
+| `convex/vehicleSupplierIdentity.test.ts` | PASS; 43 passed (43) |
+| `convex/accountingCutoverLegacyExactness.scrum850.test.ts` | PASS; 12 passed (12) |
+| `convex/openingBalanceIndexReads.test.ts` | PASS; 9 passed (9) |
+| `convex/openingCommissionReadBudget.test.ts` | PASS; 2 passed (2) |
+| `convex/openingCommissionPayroll.test.ts` | PASS; 24 passed (24) |
+| `convex/openingAllocatedAdvances.test.ts` | PASS; 32 passed (32) |
+| `scripts/tenantWriteGuard.test.ts` | PASS; 13 passed (13) |
+| `scripts/economicCommandCensus.test.ts` | PASS; 19 passed (19) |
+| `scripts/supplierSettlementCensus.test.ts` | PASS; 9 passed (9) |
+| `scripts/regression/scenarioRecord.test.ts` | PASS; 70 passed (70) |
+| `scripts/regression/implFixture.test.ts` | PASS; 1 passed (1) |
+
+All changed production source was committed before the broad run. No mutation
+ran alongside the broad, required, lint or typecheck jobs. At most two test or
+typecheck jobs ran simultaneously, each Vitest job with one worker.
+
+No watcher, dev server, production-data query, screen audit, explorer swarm,
+real-backend rehearsal, platform I/O or OCC verification, CI rerun, formal review
+seat, Jira/Slack post, PR edit, push, merge or deployment occurred. Those
+certifications remain unavailable here; no release readiness is claimed. The
+PR conversation shows CodeRabbit skipped automatic review; there is no
+CodeRabbit coverage. The two independent review seats remain outside this
+implementer round. The existing ignore changes, generated working-copy file,
+`.s936-*` artifacts and test-results were not staged.
+
+The commit hook skipped secret scanning of the DealCockpit baseline shard
+because it exceeds 1,048,576 bytes. That shard received only reviewed appended
+source/blob notes; no complete secret-scan coverage is claimed for it.
