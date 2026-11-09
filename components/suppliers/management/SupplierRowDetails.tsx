@@ -3,31 +3,21 @@
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
-import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useTranslate } from "./shared";
 
 type Context = FunctionReturnType<typeof api.supplierStatement.outstanding>["payable"]["rows"][number]["context"];
-const SOURCE_PERMISSION: Record<NonNullable<Context["source"]>["kind"], string> = {
-  VEHICLE: "view:vehicles",
-  SALE: "view:sales",
-  APPLICATION: "view:sales",
-  OPENING: "manage:finance",
-  EXPENSE: "view:expenses",
-};
 
 function SourceLabel({ source }: Readonly<{ source: Context["source"] }>) {
   const translate = useTranslate();
-  const { hasPermission, isLoading } = usePermissions();
   const href = source?.href;
-  const canLink = source && !isLoading && hasPermission(SOURCE_PERMISSION[source.kind]);
   return <div className="break-words">
     {source && <span>{translate(`SuppliersRowSource${source.kind}`)}: </span>}
-    {source && href && canLink ? <Link href={href} prefetch={false} className="font-medium text-primary underline underline-offset-4"><bdi>{source.label}</bdi></Link> : <bdi>{source?.label || translate("SuppliersRowSourceUnavailable")}</bdi>}
+    {source && href ? <Link href={href} prefetch={false} className="font-medium text-primary underline underline-offset-4"><bdi>{source.label}</bdi></Link> : <bdi>{source?.label || translate("SuppliersRowSourceUnavailable")}</bdi>}
   </div>;
 }
 
-/** Server chooses the source and href. The client mirrors permissions while membership changes load. */
+/** Server chooses the source and href; reactive queries revalidate membership changes. */
 export function SupplierRowDetails({ context }: Readonly<{ context: Context | undefined }>) {
   const translate = useTranslate();
   const { locale } = useLanguage();

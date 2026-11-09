@@ -19,16 +19,14 @@ const PAGE_SIZE = 25;
 
 function VehicleGroup({ title, rows, status, loadMore }: Readonly<PageView & { title: string }>) {
   const translate = useTranslate();
-  const { hasPermission, isLoading } = usePermissions();
-  const canOpen = !isLoading && hasPermission("view:vehicles");
   const loading = status === "LoadingFirstPage";
   const incomplete = !loading && status !== "Exhausted";
   return <section className="min-w-0 space-y-3 rounded-xl border p-4" aria-label={title}>
     <h3 className="font-semibold">{title}</h3>
     {loading && <output className="block text-sm text-muted-foreground">{translate("SuppliersRelationshipsLoading")}</output>}
     {!loading && rows.length === 0 && !incomplete && <p className="text-sm text-muted-foreground">{translate("SuppliersRelationshipsEmpty")}</p>}
-    {!loading && <ul className="space-y-3">{(rows ?? []).map(row => <li key={row.vehicleId} className="min-w-0 space-y-1 border-b pb-3 last:border-0 last:pb-0">
-      {canOpen && row.href ? <Link prefetch={false} href={row.href} className="break-words font-medium text-primary underline underline-offset-4"><bdi>{row.label}</bdi></Link> : <span className="break-words font-medium"><bdi>{row.label}</bdi></span>}
+    {!loading && <ul className="space-y-3">{rows.map(row => <li key={row.id} className="min-w-0 space-y-1 border-b pb-3 last:border-0 last:pb-0">
+      {row.href ? <Link prefetch={false} href={row.href} className="break-words font-medium text-primary underline underline-offset-4"><bdi>{row.label}</bdi></Link> : <span className="break-words font-medium"><bdi>{row.label}</bdi></span>}
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="secondary">{translate(row.model === "SOURCED" ? "SuppliersRelationshipsSourced" : "SuppliersRelationshipsOwned")}</Badge>
         <Badge variant="outline">{translateVehicleStatus(row.status, translate)}</Badge>

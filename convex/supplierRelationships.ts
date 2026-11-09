@@ -10,7 +10,7 @@ import { supplierNavigationFailure, supplierVehicleHref, supplierVehicleLabel } 
 
 const MAX_ROWS = 50;
 const MAX_BYTES = 1024 * 1024;
-const vehicleRow = v.object({ vehicleId: v.id("vehicles"), label: v.string(),
+const vehicleRow = v.object({ id: v.string(), vehicleId: v.id("vehicles"), label: v.string(),
   model: v.union(v.literal("SOURCED"), v.literal("OWNED_ON_ACCOUNT")), status: v.string(), href: v.union(v.string(), v.null()) });
 
 function bounded(value: number | undefined, maximum: number): number {
@@ -23,8 +23,8 @@ function pageOptions(options: PaginationOptions): PaginationOptions {
     maximumRowsRead: bounded(options.maximumRowsRead, MAX_ROWS),
     maximumBytesRead: bounded(options.maximumBytesRead, MAX_BYTES) };
 }
-function project(vehicle: Doc<"vehicles">, model: "SOURCED" | "OWNED_ON_ACCOUNT", permissions: readonly string[]) {
-  return { vehicleId: vehicle._id, label: supplierVehicleLabel(vehicle), model, status: vehicle.status,
+function project(vehicle: Doc<"vehicles">, model: "SOURCED" | "OWNED_ON_ACCOUNT", permissions: readonly string[], id: string = vehicle._id) {
+  return { id, vehicleId: vehicle._id, label: supplierVehicleLabel(vehicle), model, status: vehicle.status,
     href: supplierVehicleHref(vehicle.orgId, vehicle._id, permissions) };
 }
 async function ownedVehicle(ctx: QueryCtx, orgId: Id<"organizations">, payable: Doc<"vehicleSupplierPayables">) {
@@ -51,12 +51,10 @@ export const vehicles = query({
       }
       const result = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", args.orgId).eq("supplierId", args.supplierId)).order("desc").paginate(options);
       const page: ReturnType<typeof project>[] = [];
-      const seen = new Set<string>();
       for (const payable of result.page) {
         const vehicle = await ownedVehicle(ctx, args.orgId, payable);
-        if (!vehicle || seen.has(vehicle._id)) continue;
-        seen.add(vehicle._id);
-        page.push(project(vehicle, "OWNED_ON_ACCOUNT", role.permissions));
+        if (!vehicle) continue;
+        page.push(project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id));
       }
       return { ...result, page, pageStatus: result.pageStatus ?? null, splitCursor: result.splitCursor ?? null };
     } catch (error) {

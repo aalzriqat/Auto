@@ -91,8 +91,12 @@ export async function addSupplierRowContext<S extends {
   rows: Array<{ kind: ObligationKind; id: string }>; totals: unknown[]; complete: boolean; incompleteReason?: "ROW_LIMIT" | "READ_BUDGET";
 }>(ctx: QueryCtx, args: NavigationArgs, section: S): Promise<Omit<S, "rows"> & { rows: Array<S["rows"][number] & { context: Context }> }> {
   const rows: Array<S["rows"][number] & { context: Context }> = [];
-  let cut = false;
+  let exhausted = false;
   for (const row of section.rows) {
+    if (exhausted) {
+      rows.push({ ...row, context: { role: row.kind === "PAYABLE" ? "AP" : "AR", occurredAt: null, counterparty: "", source: null, vehicleSource: null } });
+      continue;
+    }
     try {
       const obligation = await readObligation(ctx, args, row);
       if (!obligation || obligation.supplierId !== args.supplierId) {
@@ -103,11 +107,10 @@ export async function addSupplierRowContext<S extends {
         counterparty: obligation.sourcedFromName, ...await sourceFor(ctx, args, obligation) } });
     } catch (error) {
       if (!(error instanceof NavigationBudgetExhausted)) throw error;
-      cut = true;
-      break;
+      exhausted = true;
+      rows.push({ ...row, context: { role: row.kind === "PAYABLE" ? "AP" : "AR", occurredAt: null, counterparty: "", source: null, vehicleSource: null } });
     }
   }
-  if (cut) return { ...section, rows, totals: [], complete: false, incompleteReason: "READ_BUDGET" as const };
   return { ...section, rows };
 }
 

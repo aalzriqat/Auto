@@ -140,7 +140,7 @@ describe("supplier navigation by canonical id", () => {
     const s = await seed(["view:finance"]);
     await payable(s);
     const page = await related(s);
-    expect(page).toEqual({ page: [{ vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "SOURCED", status: "AVAILABLE", href: null }], isDone: true, continueCursor: expect.any(String), pageStatus: null, splitCursor: null });
+    expect(page).toEqual({ page: [{ id: s.vehicleId, vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "SOURCED", status: "AVAILABLE", href: null }], isDone: true, continueCursor: expect.any(String), pageStatus: null, splitCursor: null });
     await expect(outstanding(s)).rejects.toThrow(/FORBIDDEN|Missing required permission/);
     await expect(s.asUser.query(api.supplierStatement.settled, { orgId: s.orgId, supplierId: s.supplierId })).rejects.toThrow(/FORBIDDEN|Missing required permission/);
   });
@@ -156,10 +156,10 @@ describe("supplier navigation by canonical id", () => {
       await ctx.db.insert("vehicles", { ...fields, isDeleted: true });
     });
     expect((await related(s)).page.map((row: { vehicleId: string }) => row.vehicleId)).toEqual([s.vehicleId]);
-    await payable(s); // A SOURCED vehicle's payable must not become an owned relationship.
+    const purchaseId = await payable(s); // A SOURCED vehicle's payable must not become an owned relationship.
     expect((await related(s, "OWNED")).page).toEqual([]);
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK", sourcedSupplierId: undefined, status: "SOLD" }));
-    expect((await related(s, "OWNED")).page).toEqual([{ vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "OWNED_ON_ACCOUNT", status: "SOLD", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` }]);
+    expect((await related(s, "OWNED")).page).toEqual([{ id: purchaseId, vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "OWNED_ON_ACCOUNT", status: "SOLD", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` }]);
   });
 
   test("relationship bound returns an incomplete page and continuation reaches the remaining vehicle", async () => {
