@@ -130,11 +130,15 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   const invoke = handler as (ctx: QueryCtx, args: FunctionArgs<typeof api.financialAudit.listAuditLog>) => Promise<FunctionReturnType<typeof api.financialAudit.listAuditLog>>;
   const draftIds = new Set(drafts.map(row => row.draftId as string));
   const totals = { accountGets: 0, draftGets: 0, controlLookups: 0 };
+  const getsByAccount = new Map<string, number>();
   const args = { orgId: s.orgId, limit: 200 };
   const observe = () => s.finance.query(ctx => invoke({ ...ctx, db: new Proxy(ctx.db, { get(db, key) {
     if (key === "get") return async (...params: Parameters<typeof db.get>) => {
       const id = String(params.at(-1));
-      if (db.normalizeId("chartOfAccounts", id)) totals.accountGets += 1;
+      if (db.normalizeId("chartOfAccounts", id)) {
+        totals.accountGets += 1;
+        getsByAccount.set(id, (getsByAccount.get(id) ?? 0) + 1);
+      }
       if (draftIds.has(id)) totals.draftGets += 1;
       return Reflect.apply(db.get, db, params);
     };
@@ -150,15 +154,20 @@ test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and r
   expect(rows).toHaveLength(200);
   expect(rows.filter(row => row.detailsWithheld)).toHaveLength(100);
   expect(rows.filter(row => !row.detailsWithheld)).toHaveLength(100);
-  expect(totals.accountGets).toBe(0);
-  expect(totals.controlLookups).toBe(2);
+  // Three distinct referenced accounts, including forty repetitions per draft.
+  expect(totals.accountGets).toBe(3);
+  expect([...getsByAccount.values()]).toEqual([1, 1, 1]);
+  expect(totals.controlLookups).toBe(0);
   expect(totals.draftGets).toBeLessThanOrEqual(2);
   // A new request must not reuse an earlier request's permission decision.
   await s.t.run(ctx => ctx.db.patch(drafts[0].draftId, { lines: [
     { accountId: s.account("EMPLOYEE_ADVANCES"), debitMinor: 40, creditMinor: 0 },
   ] }));
+  getsByAccount.clear();
   expect((await observe()).every(row => row.detailsWithheld)).toBe(true);
-  expect(totals.controlLookups).toBe(4);
+  expect(totals.accountGets).toBe(6);
+  expect([...getsByAccount.values()]).toEqual([1, 1, 1]);
+  expect(totals.controlLookups).toBe(0);
 });
 
 async function expectCostReaderRefusals(s: Seed) {

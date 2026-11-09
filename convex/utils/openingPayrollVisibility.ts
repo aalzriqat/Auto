@@ -19,14 +19,11 @@ export async function containsEmployeeAdvanceControl(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   draft: Doc<"openingBalanceDrafts">,
-  controlAccountIds?: ReadonlySet<Id<"chartOfAccounts">>,
+  readAccount: (id: Id<"chartOfAccounts">) => Promise<Doc<"chartOfAccounts"> | null> = id => ctx.db.get(id),
 ): Promise<boolean> {
   if (draft.allocations?.some(row => row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION")) return true;
-  // Audit pages resolve these org-scoped controls once, rather than reading
-  // every line account again for each copy of the same opening event.
-  if (controlAccountIds) return draft.lines.some(line => controlAccountIds.has(line.accountId));
   for (const line of draft.lines) {
-    const account = await ctx.db.get(line.accountId);
+    const account = await readAccount(line.accountId);
     if (account?.orgId === orgId && (account.systemKey === SYSTEM_KEYS.EMPLOYEE_ADVANCES || account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE)) return true;
   }
   return false;

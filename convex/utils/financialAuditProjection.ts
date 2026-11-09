@@ -6,7 +6,6 @@ import { mayReadFinanceEconomics } from "./financeApplicationProjection";
 import { canManageOpeningPayroll, canReadOpeningPayroll, containsEmployeeAdvanceControl } from "./openingPayrollVisibility";
 import { openingAllocationValidator } from "./openingAllocationValidators";
 import { isUnwindActor } from "./dealUnwindGuard";
-import { SYSTEM_KEYS } from "./defaultChart";
 
 // Derive from the persisted union: schema additions must be classified here.
 export type AuditActionType = Doc<"financialAuditLog">["actionType"];
@@ -68,7 +67,15 @@ type DraftPayrollReader = (draftId: Id<"openingBalanceDrafts">) => Promise<boole
 
 /** One request owns both caches, including in-flight reads during Promise.all. */
 export function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): DraftPayrollReader {
-  let controls: Promise<ReadonlySet<Id<"chartOfAccounts">>> | undefined;
+  const accounts = new Map<Id<"chartOfAccounts">, Promise<Doc<"chartOfAccounts"> | null>>();
+  const readAccount = (id: Id<"chartOfAccounts">) => {
+    let account = accounts.get(id);
+    if (!account) {
+      account = ctx.db.get(id);
+      accounts.set(id, account);
+    }
+    return account;
+  };
   const decisions = new Map<Id<"openingBalanceDrafts">, Promise<boolean>>();
   return draftId => {
     const cached = decisions.get(draftId);
@@ -77,10 +84,7 @@ export function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): D
       const draft = await ctx.db.get(draftId);
       // Missing/foreign evidence never grants access.
       if (!draft || draft.orgId !== orgId) return true;
-      controls ??= Promise.all([SYSTEM_KEYS.EMPLOYEE_ADVANCES, SYSTEM_KEYS.COMMISSION_PAYABLE].map(systemKey =>
-        ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", systemKey)).unique()
-      )).then(accounts => new Set(accounts.flatMap(account => account ? [account._id] : [])));
-      return containsEmployeeAdvanceControl(ctx, orgId, draft, await controls);
+      return containsEmployeeAdvanceControl(ctx, orgId, draft, readAccount);
     })();
     decisions.set(draftId, decision);
     return decision;
@@ -233,4 +237,3 @@ export async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: Au
   }
   return projected;
 }
-
