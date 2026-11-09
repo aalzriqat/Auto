@@ -1,0 +1,51 @@
+{
+  "id": "opening-supplier-p5-direct-supplier-payable-refuses-deleted-identit-8cd98a60",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "DELETED_MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "supplierState": "deleted"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refusal.code",
+      "value": "SUPPLIER_NOT_FOUND"
+    },
+    {
+      "observable": "applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "direct SUPPLIER_PAYABLE refuses deleted identity atomically"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "7cedbdc1d9661aa2673394a9652e76a127d4ca41a640513d1f3f60803142dd83"
+}

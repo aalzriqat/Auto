@@ -1920,3 +1920,34 @@ opening, manual-draft, supplier, sales, commission, application, bank and sign-o
 families remain readable under their existing grants. The action census tests
 both owner and explicitly granted non-owner readers. This matrix row remains a
 local backend permission oracle, not cloud or release certification.
+### SCRUM868-P5-opening-supplier-identity
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Opening supplier identity | 100003 JOD minor units, MASTER_A, master name and version 3; approval after rename captures version 4 | `convex/openingSupplierIdentity.scrum868.test.ts`, direct master-snapshot cases and approval rename |
+| Identity admission and provenance | Missing/name-only, foreign, deleted and inactive new use refuse without state changes; different and one-sided ids do not match | Same suite, 36 literal preparation/review refusals and both basis cases |
+| Settlement and history | Id-less supplier openings refuse; ordinary creditor settles 100003; identified partial payment is 40001 and legacy partial 10001 refuses | Same suite, legacy, ordinary-creditor, inactive-retry and partial/dispute cases |
+| Pending review | Unbound approval refuses, edit increments version, stale version 0 refuses and version 1 posts | Same suite, pending legacy draft case |
+
+Run `convex/openingSupplierIdentity.scrum868.test.ts` through convex-test public
+mutations and queries. The 52 backend scenarios are registered under
+`regression/scenarios/money/opening-supplier-p5-*.scenario.json` and bind to the
+actual registered case names. Supplier openings use 100003 JOD minor units;
+the receipt and partial-payment inputs are 40001, and the refused legacy partial
+input is 10001. These are synthetic independent literals, not business data.
+
+Create, edit, approve and direct posting require a same-org active supplier for
+SUPPLIER_PAYABLE and SUPPLIER_RECOVERABLE. Identified OTHER_PAYABLE records use
+the same master snapshot; ordinary creditors remain id-less. Id/name/version
+come from the master, never the supplied label/version. Different or one-sided
+ids cannot satisfy opening provenance. Legacy reads preserve stored content;
+new supplier settlement without an id refuses, while inactive identified
+obligations remain serviceable and retries change no state. Pending edits keep
+reviewed-version binding. SCRUM-850 void/re-entry and audit confidentiality
+controls remain covered by their existing suites.
+
+The pending-legacy-draft scenario cites failing-first commit
+`16d16280cbe2c02cacc5605fc67077b03b6257de`, where the unbound approval resolves
+instead of refusing. Other new records are preventive controls and have no
+bugRef. Rulings: SCRUM-868 c23871/c23873, OQ-4, and SCRUM-850 c24749.
+This is harness evidence, not real-backend, OCC, production or pilot certification.

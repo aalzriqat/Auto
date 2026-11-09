@@ -44,6 +44,7 @@ type OpeningAllocationFields = {
   expenseSystemKey?: string;
   attestedUnexpiredBenefit?: boolean;
   counterpartyName?: string;
+  supplierId?: Id<"suppliers">;
   purpose?: "CLAIM" | "REFUNDABLE_DEPOSIT" | "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT";
   /** CUSTOMER_DEPOSIT only. A security deposit never names a vehicle; a reservation may. */
   depositKind?: OpeningDepositKind;
@@ -177,13 +178,16 @@ function prepaidExpensePayload(row: OpeningAllocationDraft, base: AllocationBase
 function counterpartyPayload(row: OpeningAllocationDraft, base: AllocationBase): AllocationPayloadRow | null {
   const counterpartyName = row.counterpartyName?.trim() ?? "";
   const title = row.title.trim();
-  if (!counterpartyName || counterpartyName.length > 200 || !title || title.length > 200) return null;
+  if (!title || title.length > 200) return null;
+  if (row.kind !== "OTHER_PAYABLE" && !row.supplierId) return null;
+  if (!row.supplierId && (!counterpartyName || counterpartyName.length > 200)) return null;
+  const identity = row.supplierId ? { supplierId: row.supplierId } : {};
   if (row.kind === "SUPPLIER_RECOVERABLE") {
     if (row.purpose !== "CLAIM" && row.purpose !== "REFUNDABLE_DEPOSIT") return null;
-    return { ...base, kind: row.kind, counterpartyName, title, purpose: row.purpose };
+    return { ...base, kind: row.kind, counterpartyName, title, purpose: row.purpose, ...identity };
   }
   if (row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
-    return { ...base, kind: row.kind, counterpartyName, title };
+    return { ...base, kind: row.kind, counterpartyName, title, ...identity };
   }
   return null;
 }

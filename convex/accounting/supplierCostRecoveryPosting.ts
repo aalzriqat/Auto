@@ -82,6 +82,7 @@ export async function postSupplierCostRecoveryReceipt(
     recoveryId: Id<"supplierCostRecoveries">;
     vehicleId?: Id<"vehicles">;
     openingSource?: {draftId:Id<"openingBalanceDrafts">;rowKey:string};
+    supplierId?: Id<"suppliers">;
     sourcedFromName: string;
     amountMinor: number;
     currency: string;
@@ -109,6 +110,7 @@ export async function postSupplierCostRecoveryReceipt(
     payload: {
       receiptId: args.receiptId.toString(),
       recoveryId: args.recoveryId.toString(),
+      supplierId: args.supplierId,
       sourcedFromName: args.sourcedFromName,
       amountMinor: args.amountMinor,
       currency: args.currency,

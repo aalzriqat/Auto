@@ -17,6 +17,7 @@ import type * as accounting_invoiceReceiptDisposition from "../accounting/invoic
 import type * as accounting_invoiceReceiptReservation from "../accounting/invoiceReceiptReservation.js";
 import type * as accounting_openingAllocations from "../accounting/openingAllocations.js";
 import type * as accounting_openingPartnerAllocations from "../accounting/openingPartnerAllocations.js";
+import type * as accounting_openingSupplierAllocations from "../accounting/openingSupplierAllocations.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
 import type * as accounting_receiptMovement from "../accounting/receiptMovement.js";
@@ -395,6 +396,7 @@ declare const fullApi: ApiFromModules<{
   "accounting/invoiceReceiptReservation": typeof accounting_invoiceReceiptReservation;
   "accounting/openingAllocations": typeof accounting_openingAllocations;
   "accounting/openingPartnerAllocations": typeof accounting_openingPartnerAllocations;
+  "accounting/openingSupplierAllocations": typeof accounting_openingSupplierAllocations;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
   "accounting/receiptMovement": typeof accounting_receiptMovement;
