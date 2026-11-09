@@ -293,3 +293,38 @@ describe("801-01: every expect root and modifier is normalised before the subjec
     expect(pinned("expect.extend(list).toHaveLength(12);")).toBe(0);
   });
 });
+
+describe("801-02: a marker pairs with the pin's whole line span", () => {
+  const body = (lines: string[]): string => `import { expect, test } from 'vitest';\ntest('t', () => {\n${lines.join("\n")}\n});\n`;
+  const NOTE = "// guardrail-4-fixture: page size";
+
+  test("positive control: a trailing marker on the closing line of spread-out arguments exempts the pin", () => {
+    const text = body(["  expect(", "    rows,", `  ).toHaveLength(200); ${NOTE}`]);
+    expect(findCountPins("lib/x.test.ts", text)).toEqual([]);
+    expect(markerProblems("lib/x.test.ts", text)).toEqual([]);
+  });
+
+  test("positive control: a trailing marker when the matcher is on the next line exempts the pin", () => {
+    const text = body(["  expect(rows)", `    .toHaveLength(200); ${NOTE}`]);
+    expect(findCountPins("lib/x.test.ts", text)).toEqual([]);
+    expect(markerProblems("lib/x.test.ts", text)).toEqual([]);
+  });
+
+  test("positive control: the line above the pin's first line still pairs", () => {
+    const text = body([`  ${NOTE}`, "  expect(rows)", "    .toHaveLength(200);"]);
+    expect(findCountPins("lib/x.test.ts", text)).toEqual([]);
+    expect(markerProblems("lib/x.test.ts", text)).toEqual([]);
+  });
+
+  test("negative control: a marker on the line after the span's end exempts nothing and is unused", () => {
+    const text = body(["  expect(rows)", "    .toHaveLength(200);", `  ${NOTE}`, "  expect(1).toBe(1);"]);
+    expect(findCountPins("lib/x.test.ts", text)).toHaveLength(1);
+    expect(markerProblems("lib/x.test.ts", text)).toEqual([{ code: "COUNT-PIN-MARKER-UNUSED", line: 5 }]);
+  });
+
+  test("the pin still reports its start line, matcher and value only", () => {
+    expect(findCountPins("lib/x.test.ts", body(["  expect(rows)", "    .toHaveLength(200);"]))).toEqual([
+      { line: 3, matcher: "toHaveLength", value: 200 },
+    ]);
+  });
+});
