@@ -616,6 +616,14 @@ describe("SCRUM-57 — classification ratchet", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
+  test("no command appears twice in the flattened manifest", () => {
+    // A duplicated entry would be walked twice and still pass every set check above.
+    const keys = Object.entries(ECONOMIC_COMMANDS).flatMap(([modulePath, names]) =>
+      names.map((name) => `${modulePath}#${name}`)
+    );
+    const duplicates = keys.filter((key, index) => keys.indexOf(key) !== index);
+    expect(duplicates).toEqual([]);
+  });
   /**
    * The OTHER direction, and the one that makes the denominator above a fact
    * rather than a claim in a comment.
