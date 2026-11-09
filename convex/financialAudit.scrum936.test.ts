@@ -7,6 +7,7 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import schema from "./schema";
 import * as financialAudit from "./financialAudit";
+import { AUDIT_READ_POLICY } from "./utils/financialAuditProjection";
 import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
 type OpeningInput = FunctionArgs<typeof api.accountingCutover.draftOpeningBalance>;
@@ -376,10 +377,7 @@ test("SCRUM-936 supplier cost receipt retains authorized structured audit facts"
 
 test("SCRUM-936 every stored audit action has an explicit reader classification", () => {
   const actions = schema.tables.financialAuditLog.validator.fields.actionType.members.map(m => m.value);
-  // Transitional namespace access lets this failing-first test run before the table exists.
-  const policy = (financialAudit as unknown as { AUDIT_READ_POLICY?: Record<string, unknown> }).AUDIT_READ_POLICY;
-  expect(policy).toBeDefined();
-  expect(Object.keys(policy ?? {}).sort()).toEqual([...actions].sort());
+  expect(Object.keys(AUDIT_READ_POLICY).sort()).toEqual([...actions].sort());
 });
 
 test("SCRUM-936 restricted posted events retain their line count without source text", async () => {

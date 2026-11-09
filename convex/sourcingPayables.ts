@@ -33,28 +33,18 @@ import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlemen
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
 
-/**
- * SCRUM-781, owner rulings SCRUM-773 c22401 and SCRUM-760 c23812: no reclaimable VAT on a consigned
- * supplier payable. Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN) in lib/i18n/domains/common.ts.
- */
+// SCRUM-781 / SCRUM-773 c22401 / SCRUM-760 c23812: no reclaimable consignment VAT.
+// Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN).
 export const CONSIGNED_PAYABLE_VAT_REFUSAL =
   "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.";
 
-/**
- * SCRUM-869: the over-application refusal of `recordPartialPayment`. Must equal
- * ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE (EN) in lib/i18n/domains/common.ts once `{projected}` and `{due}`
- * are filled. It names only an action the user can take: payable correction is pilot-disabled.
- */
+// SCRUM-869: matches ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE (EN) after amount substitution.
+// Payable correction is pilot-disabled; offer only reducing the payment.
 export function supplierPaymentExceedsBalanceMessage(projected: number, due: number): string {
   return `That would pay ${projected} against ${due} owed. Reduce the amount to the balance still owed.`;
 }
 
-/**
- * Whether this payable may carry an input-VAT reclassification. THE one answer, read by the
- * `markPaid` refusal and by the `list`/`get` flag the screens use to hide the VAT field, so the
- * screen can never offer what the mutation refuses. An opening liability has no vehicle to prove
- * ownership from, and a vehicle of another organization is not readable evidence: both fail closed.
- */
+// Shared VAT decision for mutations and list/get flags. Opening or foreign vehicles fail closed.
 function payableAcceptsVatReclass(
   payable: { origin?: string; saleId?: unknown },
   vehicle: Doc<"vehicles"> | null,

@@ -244,6 +244,7 @@ import type * as utils_financeDisbursementKeys from "../utils/financeDisbursemen
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
+import type * as utils_financialAuditProjection from "../utils/financialAuditProjection.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
 import type * as utils_financingProvenance from "../utils/financingProvenance.js";
@@ -620,6 +621,7 @@ declare const fullApi: ApiFromModules<{
   "utils/financeStatuses": typeof utils_financeStatuses;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;
+  "utils/financialAuditProjection": typeof utils_financialAuditProjection;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
   "utils/financingProvenance": typeof utils_financingProvenance;
