@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import type { FunctionArgs } from "convex/server";
+import type { FunctionArgs, FunctionReturnType } from "convex/server";
+import type { QueryCtx } from "./_generated/server";
 import { convexTestWithComponents, registerRateLimiter } from "../test-utils/convexTest";
 import { withFrozenScheduler } from "../test-utils/outboxWork";
 import { api } from "./_generated/api";
@@ -52,6 +53,68 @@ async function fixture() {
   return { t, owner, reviewer, finance, ...ids, asOfDate, account, vehicleId };
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
+
+test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and request", async () => {
+  const s = await fixture();
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
+  const drafts = await s.t.run(async ctx => {
+    const ids = [];
+    for (const payroll of [false, true]) {
+      const journalEntryId = await ctx.db.insert("journalEntries", { orgId: s.orgId, accountingDate: s.asOfDate, journalNumber: `QA-${payroll}`,
+        category: "OPENING_BALANCE", sourceType: "OPENING_BALANCE", sourceId: `synthetic-${payroll}`,
+        memo: "Synthetic opening", status: "POSTED", currency: "JOD", createdAt: Date.now(), postedAt: Date.now(), postedBy: s.ownerId });
+      const draftId = await ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "POSTED",
+        createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate, currency: "JOD", journalEntryId,
+        lines: [...Array.from({ length: 40 }, () => ({ accountId: s.account("CASH_ON_HAND"), debitMinor: 1, creditMinor: 0 })),
+          { accountId: s.account(payroll ? "COMMISSION_PAYABLE" : "RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 40 }] });
+      ids.push({ draftId, journalEntryId, payroll });
+    }
+    for (let index = 0; index < 200; index += 1) {
+      const draft = ids[index % 2];
+      const journal = index % 4 < 2;
+      await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+        actionType: journal ? "POST_MANUAL_JOURNAL" : "REQUEST_OPENING_VOID",
+        resourceType: journal ? "journalEntries" : "openingBalanceDrafts",
+        resourceId: journal ? draft.journalEntryId : draft.draftId,
+        description: "Synthetic protected evidence", after: { totalDebits: 40 }, occurredAt: Date.now() + index });
+    }
+    return ids;
+  });
+  const handler: unknown = Reflect.get(financialAudit.listAuditLog, "_handler");
+  if (typeof handler !== "function") throw new Error("Registered audit query unavailable");
+  const invoke = handler as (ctx: QueryCtx, args: FunctionArgs<typeof api.financialAudit.listAuditLog>) => Promise<FunctionReturnType<typeof api.financialAudit.listAuditLog>>;
+  const draftIds = new Set(drafts.map(row => row.draftId as string));
+  const totals = { accountGets: 0, draftGets: 0, controlLookups: 0 };
+  const args = { orgId: s.orgId, limit: 200 };
+  const observe = () => s.finance.query(ctx => invoke({ ...ctx, db: new Proxy(ctx.db, { get(db, key) {
+    if (key === "get") return async (...params: Parameters<typeof db.get>) => {
+      const id = String(params.at(-1));
+      if (db.normalizeId("chartOfAccounts", id)) totals.accountGets += 1;
+      if (draftIds.has(id)) totals.draftGets += 1;
+      return Reflect.apply(db.get, db, params);
+    };
+    if (key === "query") return (table: Parameters<typeof db.query>[0]) => {
+      if (table === "chartOfAccounts") totals.controlLookups += 1;
+      return db.query(table);
+    };
+    const value: unknown = Reflect.get(db, key);
+    return typeof value === "function" ? value.bind(db) : value;
+  } }) }, args));
+  const rows = await observe();
+  expect(rows).toEqual(await s.finance.query(api.financialAudit.listAuditLog, args));
+  expect(rows).toHaveLength(200);
+  expect(rows.filter(row => row.detailsWithheld)).toHaveLength(100);
+  expect(rows.filter(row => !row.detailsWithheld)).toHaveLength(100);
+  expect(totals.accountGets).toBe(0);
+  expect(totals.controlLookups).toBe(2);
+  expect(totals.draftGets).toBeLessThanOrEqual(2);
+  // A new request must not reuse an earlier request's permission decision.
+  await s.t.run(ctx => ctx.db.patch(drafts[0].draftId, { lines: [
+    { accountId: s.account("EMPLOYEE_ADVANCES"), debitMinor: 40, creditMinor: 0 },
+  ] }));
+  expect((await observe()).every(row => row.detailsWithheld)).toBe(true);
+  expect(totals.controlLookups).toBe(4);
+});
 
 async function expectCostReaderRefusals(s: Seed) {
   await expect(s.finance.query(api.accountingCutover.listOpeningStockChoices, { orgId: s.orgId })).rejects.toThrow(/permission/i);
