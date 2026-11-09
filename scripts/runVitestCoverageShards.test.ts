@@ -326,7 +326,7 @@ describe("runVitestCoverageShards", () => {
     // each file once, never the authority suite.
     const files = childBoundary.calls.slice(1, -1).flatMap(batchTestFiles);
     const expected = expectedVitestCensus().filter(
-      (file) => file !== "convex/unifiedDealFeeAuthority.test.ts" && /convex|scripts/.test(file.toLowerCase()),
+      (file) => file !== "convex/unifiedDealFeeAuthority.test.ts" && /convex|scripts|quality/.test(file.toLowerCase()),
     );
     expect([...files].sort()).toEqual(expected);
     expect(new Set(files).size).toBe(files.length);
@@ -337,21 +337,24 @@ describe("runVitestCoverageShards", () => {
     for (const threshold of EXPECTED_ZERO_THRESHOLDS) expect(merge).toContain(threshold);
   });
 
-  test("the Sonar census is exactly what the real `vitest list convex scripts` selects", async () => {
+  test("the Sonar census is exactly what the real `vitest list convex scripts quality` selects", async () => {
     const cp = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const directory = mkdtempSync(path.join(os.tmpdir(), "autoflow-sonar-list-"));
     tempDiscoveryRoots.push(directory);
     const out = path.join(directory, "list.json");
     const result = cp.spawnSync(
       process.execPath,
-      [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "list", "--filesOnly", `--json=${out}`, "convex", "scripts"],
+      [path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs"), "list", "--filesOnly", `--json=${out}`, "convex", "scripts", "quality"],
       { encoding: "utf8", timeout: 120_000 },
     );
     expect(result.status, result.stderr).toBe(0);
     const listed = (JSON.parse(readFileSync(out, "utf8")) as Array<{ file: string }>)
       .map((entry) => path.relative(process.cwd(), entry.file).split(path.sep).join("/"))
       .sort();
-    const expected = expectedVitestCensus().filter((file) => /convex|scripts/.test(file.toLowerCase()));
+    const expected = expectedVitestCensus().filter((file) => /convex|scripts|quality/.test(file.toLowerCase()));
+    // SCRUM-426: the guardrail suites are measured, so Sonar must run all of them, not only the one whose name contains "convex".
+    expect(listed).toContain("quality/guardrails/guardrails.test.ts");
+    expect(listed).toContain("quality/guardrails/crossDomain.test.ts");
     expect(listed.length).toBeGreaterThan(100);
     expect(listed).toEqual(expected);
   }, 180_000);
@@ -367,7 +370,7 @@ describe("runVitestCoverageShards", () => {
     expect(heavy).toContain("scripts/contractSkew/cliExit.test.ts");
     for (const file of heavy) {
       expect(unitBatches.filter((batch) => batch.includes(file))).toEqual([[file]]);
-      if (/convex|scripts/.test(file)) expect(sonarBatches.filter((batch) => batch.includes(file))).toEqual([[file]]);
+      if (/convex|scripts|quality/.test(file)) expect(sonarBatches.filter((batch) => batch.includes(file))).toEqual([[file]]);
     }
   });
 
