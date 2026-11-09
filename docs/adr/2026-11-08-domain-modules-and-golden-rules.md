@@ -4,7 +4,7 @@ Status: accepted. This is the repository copy of the SCRUM-418 architecture deci
 
 Two later changes refine it. On 2026-11-08 the decision was amended to follow the owner's ten golden rules and Matt Pocock's deep-module rules (SCRUM-418 §6, A1 to A10). The planning interview of 2026-11-09 (c24800, c24801) and the review response c24806 then set the timing of guardrail 9. The owner ruled on 2026-11-08 that this epic is not a SCRUM-760 blocker. Where this ADR does not amend c21105, c21105 binds in full, including every acceptance refinement. Jira SCRUM-418 remains the live record. If this file and Jira disagree, Jira wins and a reviewed PR corrects this file.
 
-Under the owner ruling of 2026-11-09, the agent answers design questions in this refactor by what Matt Pocock's rules would choose, and records each answer in SCRUM-418. For this epic that ruling overrides the sentence in `.claude/skills/README.md` that says an agent never answers its own grilling questions. Where those rules say nothing, the agent follows established practice and says so. The gates in "Gates this decision does not change" still bind (c24801).
+Under the owner ruling of 2026-11-09, the agent answers design questions in this refactor by what Matt Pocock's rules would choose, and records each answer in SCRUM-418. For this epic that ruling overrides the sentence in `.claude/skills/README.md` that says an agent never answers its own grilling questions. Where those rules say nothing, the agent follows established practice and says so. Owner rulings, the money gate (SCRUM-407, 411 and 413) and the gates in "Gates this decision does not change" still bind (c24801).
 
 ## Context
 

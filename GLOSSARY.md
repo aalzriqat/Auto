@@ -1,6 +1,6 @@
 # AutoFlow
 
-AutoFlow runs a car dealership. It sells vehicles for cash or through financing and keeps the dealership's books. It also tracks the money that customers, suppliers and staff owe and are owed. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. The architecture vocabulary follows the `codebase-design` skill. Decisions live in `docs/adr/`, and the ADR says which source wins when they disagree.
+AutoFlow runs a car dealership. It sells vehicles for cash or through financing and keeps the dealership's books. It also tracks the money that customers, suppliers and staff owe and are owed. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. The architecture vocabulary follows the `codebase-design` skill. Decisions live in `docs/adr/`. Owner rulings in Jira take precedence over both.
 
 ## Domains
 
@@ -68,7 +68,7 @@ _Avoid_: delivery
 The deal stage that is complete when every money obligation on the deal is finished. The obligations are the customer's, the finance company's and the supplier's, and one that never existed counts as finished.
 
 **Expected payment**:
-The method and date on which the dealership expects to receive the money for a deal.
+The method and date on which payment for a deal is expected to reach the dealership or, on the direct route, the supplier.
 
 **Disbursement**:
 The payment an outside finance company makes for a financed deal, either to the dealership or directly to the supplier.
