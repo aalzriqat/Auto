@@ -8,7 +8,7 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { mutation } from "./functions";
-import { Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -16,79 +16,9 @@ import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
 import { scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
-
-type AuditActionType =
-  | "EDIT_OPENING_DRAFT"
-  | "REQUEST_OPENING_VOID"
-  | "APPROVE_OPENING_VOID"
-  | "CREATE_PERIOD"
-  | "POST_EVENT"
-  | "POST_MANUAL_JOURNAL"
-  | "CREATE_MANUAL_JOURNAL_DRAFT"
-  | "REJECT_MANUAL_JOURNAL"
-  | "REVERSE_EVENT"
-  | "OPEN_PERIOD"
-  | "CLOSE_PERIOD"
-  | "LOCK_PERIOD"
-  | "REOPEN_PERIOD"
-  | "INIT_CHART"
-  | "UPDATE_ACCOUNT"
-  | "MIGRATE_TRANSACTION"
-  | "ALLOCATE_PAYMENT"
-  | "SET_SUPPLIER_DISPUTE"
-  | "REVERSE_ALLOCATION"
-  | "IGNORE_BANK_STATEMENT_LINE"
-  | "CORRECT_PREPAID_SCHEDULE"
-  | "REQUEST_PREPAID_CORRECTION"
-  | "APPROVE_PREPAID_CORRECTION"
-  | "REJECT_PREPAID_CORRECTION"
-  | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
-  | "REPAIR_MISSING_SYSTEM_ACCOUNTS"
-  | "ACKNOWLEDGE_CLOSE_WARNINGS"
-  | "SET_COMMISSION_AMOUNT"
-  // Who decided which car on a multi-vehicle quote carries which share of the
-  // reservation deposit, and what happened to a share whose car left the deal.
-  // Not a posting — the money does not move — but it decides where a customer's
-  // deposit lands, so it is not a decision that may go unrecorded.
-  | "ALLOCATE_DEPOSIT"
-  | "RESOLVE_DEPOSIT_ALLOCATION"
-  // Who decided that a financed consigned deal settles with the supplier
-  // directly rather than through the dealership. Like the deposit allocation
-  // above it moves no money by itself, and like it, it decides which way the
-  // money moves afterwards: whether the dealership ends up owing the supplier
-  // his entitlement or holding a claim on him for its margin. The two produce
-  // opposite balance sheets from the same sale.
-  | "SET_SUPPLIER_SETTLEMENT_ROUTE"
-  // SCRUM-447: retiring a registered expected payment / attesting a cheque face.
-  | "CORRECT_EXPECTED_PAYMENT"
-  | "ATTEST_CHEQUE_FACE"
-  // The finance company paid the supplier. Recorded as a fact off the
-  // settlement advice, with no journal behind it — which is exactly why it
-  // needs an audit trail: nothing in the ledger would otherwise show who
-  // asserted it, or when.
-  | "CONFIRM_SUPPLIER_DISBURSEMENT"
-  | "AMEND_SUPPLIER_DISBURSEMENT_ADVICE"
-  // What the vehicle commitment authority did after a sale was cancelled and
-  // its deposit money came back. Moves no money, and that is exactly why it
-  // needs a trail: whether the customer's DEAL was restored, blocked by a
-  // rival, left for a human to repair, or not examined at all is otherwise
-  // visible only as the absence of a change nobody recorded. The deferred
-  // half of the same decision lands on `pendingAccountingEvents`; this is the
-  // synchronous half, which has no queue row to land on.
-  | "SETTLE_COMMITMENT_AUTHORITY"
-  // SCRUM-239: the bank returned a finance-company disbursement cheque AFTER it
-  // cleared. One command undoes that disbursement (application receipt fields,
-  // allocations, payment, its cash-received posting); the trail records who
-  // asserted it and what was undone, because the ledger shows only the reversal.
-  | "RETURN_FINANCE_DISBURSEMENT_CHEQUE"
-  | "ADD_DEAL_COMMISSION_LINE"
-  | "REMOVE_DEAL_COMMISSION_LINE"
-  // SCRUM-693: the steps of unwinding a paid finance deal from the deal page.
-  | "DEAL_UNWIND_STARTED"
-  | "DEAL_UNWIND_FORWARD_RETURNED"
-  | "DEAL_UNWIND_REMITTANCE_REFUNDED"
-  | "DEAL_UNWIND_COMPLETED"
-  | "DEAL_UNWIND_ABANDONED";
+import { draftPayrollReader, projectAuditRow } from "./utils/financialAuditProjection";
+import type { AuditActionType } from "./utils/financialAuditProjection";
+import { hasPlanFeature } from "./utils/subscriptionFeatures";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
@@ -150,7 +80,7 @@ export const listAuditLog = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const requestedLimit = args.limit ?? 50;
     if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
       throw new ConvexError("limit must be a positive integer.");
@@ -204,7 +134,12 @@ export const listAuditLog = query({
       });
     }
 
-    return entries.slice(0, limit);
+    let accounting: Promise<boolean> | undefined;
+    const access = {
+      needsPayroll: draftPayrollReader(ctx, args.orgId),
+      hasAccounting: () => accounting ??= hasPlanFeature(ctx, args.orgId, "accounting"),
+    };
+    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry, access)));
   },
 });
 

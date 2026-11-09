@@ -244,6 +244,7 @@ import type * as utils_financeDisbursementKeys from "../utils/financeDisbursemen
 import type * as utils_financeStatuses from "../utils/financeStatuses.js";
 import type * as utils_financedSalePostingPlan from "../utils/financedSalePostingPlan.js";
 import type * as utils_financedSaleRecognition from "../utils/financedSaleRecognition.js";
+import type * as utils_financialAuditProjection from "../utils/financialAuditProjection.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_financingEconomics from "../utils/financingEconomics.js";
 import type * as utils_financingProvenance from "../utils/financingProvenance.js";
@@ -283,6 +284,7 @@ import type * as utils_openingMaintenanceErrors from "../utils/openingMaintenanc
 import type * as utils_openingManagementBasis from "../utils/openingManagementBasis.js";
 import type * as utils_openingManagementSchedule from "../utils/openingManagementSchedule.js";
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
+import type * as utils_openingPayrollVisibility from "../utils/openingPayrollVisibility.js";
 import type * as utils_openingPostingProof from "../utils/openingPostingProof.js";
 import type * as utils_openingPrepaidBasis from "../utils/openingPrepaidBasis.js";
 import type * as utils_openingReceivableBasis from "../utils/openingReceivableBasis.js";
@@ -331,6 +333,7 @@ import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
+import type * as utils_subscriptionFeatures from "../utils/subscriptionFeatures.js";
 import type * as utils_supplierConcession from "../utils/supplierConcession.js";
 import type * as utils_supplierDueAlertPlan from "../utils/supplierDueAlertPlan.js";
 import type * as utils_supplierDueDates from "../utils/supplierDueDates.js";
@@ -619,6 +622,7 @@ declare const fullApi: ApiFromModules<{
   "utils/financeStatuses": typeof utils_financeStatuses;
   "utils/financedSalePostingPlan": typeof utils_financedSalePostingPlan;
   "utils/financedSaleRecognition": typeof utils_financedSaleRecognition;
+  "utils/financialAuditProjection": typeof utils_financialAuditProjection;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/financingEconomics": typeof utils_financingEconomics;
   "utils/financingProvenance": typeof utils_financingProvenance;
@@ -658,6 +662,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingManagementBasis": typeof utils_openingManagementBasis;
   "utils/openingManagementSchedule": typeof utils_openingManagementSchedule;
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;
+  "utils/openingPayrollVisibility": typeof utils_openingPayrollVisibility;
   "utils/openingPostingProof": typeof utils_openingPostingProof;
   "utils/openingPrepaidBasis": typeof utils_openingPrepaidBasis;
   "utils/openingReceivableBasis": typeof utils_openingReceivableBasis;
@@ -706,6 +711,7 @@ declare const fullApi: ApiFromModules<{
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/storageValidation": typeof utils_storageValidation;
+  "utils/subscriptionFeatures": typeof utils_subscriptionFeatures;
   "utils/supplierConcession": typeof utils_supplierConcession;
   "utils/supplierDueAlertPlan": typeof utils_supplierDueAlertPlan;
   "utils/supplierDueDates": typeof utils_supplierDueDates;

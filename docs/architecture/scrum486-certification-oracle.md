@@ -1826,3 +1826,97 @@ Two edits changing only cash amounts require summaries differing only in version
 with no monetary key or amount delta. Unsafe retained history is still correctable,
 without a null total field or replacement amount in the audit. Separate source
 mutants reintroducing totalDebits in before and after must each fail these tests.
+
+
+### SCRUM-936-audit-reader-confidentiality
+
+Financial audit copies inherit the dedicated source reader's permission. Run
+`convex/financialAudit.scrum936.test.ts`. Twelve literal scenario tests are
+registered in `regression/scenarios/money/scrum936-*.scenario.json`, with
+failing-first commit `e5813b68f46b63546c3b448900efec0efa0241e9` (13 failed,
+including classification completeness). All four audit branches, both opening
+posting doors, singleton vehicle and employee openings, retained full-draft and
+total-only edits, posted manual journal history, commission add/remove/set,
+retained migration COGS, and supplier cost receipt/reversal payloads are covered.
+Each negative audit assertion has a source-reader refusal/withholding control
+and a full-row owner control. Explicit non-owner grants also restore full rows.
+Cost-only employee controls remain withheld under the opening payroll rule.
+Pending manual-journal drafts preserve their existing manage-finance audience.
+The stored rows remain unchanged. Classification is exhaustive over the schema.
+
+This is serial convex-test evidence. It is not platform, cloud, concurrency,
+production-data, independent-seat or pilot-release certification. The manual
+posting pilot switch remains blocked. Historical supplier and migration rows
+are inserted as fixtures, not emitted by executing their internal or disabled
+writers. The complete writer census and final checks are recorded in
+`docs/architecture/scrum936-audit-reader-evidence.md`.
+
+
+SCRUM-936 supplemental controls at
+`18992de610caea44ce5503f2362bfc27b36f5225` fail all 15 tests against that
+checkpoint's production sources. Two additional records cover posted-event line
+counts and unwind-actor remittance parity. The primary tests also cover protected
+source ids, mutable-draft payroll history and the stricter maintenance payroll
+predicate. Restricted resource types remain visible; source ids are `WITHHELD`.
+
+
+The initial SCRUM-936 library contains fourteen records for fourteen behavioral
+tests. The legacy-edit and direct-employee records include the historical-employee and
+void-reason controls from the supplemental checkpoint. The initial eighteen source mutants produced failed tests
+and were restored clean. Both typechecks and the source-freshness check passed at that checkpoint.
+The unrelated refreshRulings parse failure and thermally interrupted broad
+SCRUM-858 read-budget suite remain failed/incomplete verification, not waivers.
+
+Three further records cover the application base-reader gate and real public
+cheque writers. `c941eba60f4c1125e78775b329702a50d5cd57ef` fails the application
+gate test (1 failed, 15 passed). `9956ef3e01b055416dd920bce89aa85210949c8f`
+fails the literal cheque-face-reader and expected-payment-reader tests (2 failed,
+16 passed). The final library has seventeen behavioral records and one separate
+schema classification test. Cheque attestation retains the finance-only reader's
+existing full visibility; expected-payment method/date follow view:sales while
+cheque ids and the stored cancellation reason follow view:finance. No new policy
+is inferred from the writer module. The final source checkpoint
+`26fe73f57f621a571097d4c75c9cc526b4d0b677` passed 307 tests in seven focused files.
+The final-head proof and repeated mutation results are in the evidence report.
+All nineteen final-source mutants failed tests and were restored clean. The
+restored four-file proof passed 137 tests, and the two required guards passed 32.
+
+Round 2 adds five literal regression checks to the same backend suite and five
+records, bringing the SCRUM-936 library to twenty-two scenarios plus the schema
+classification check. The request-reuse case fails at
+`e934f16d1` with 8,200 line-account gets for a 200-row synthetic page. It requires
+zero such gets at that checkpoint, two org-scoped control lookups, at most two draft
+gets, correct visibility for both drafts, and fresh decisions on a later request.
+The four public supplier-writer cases fail at `0d219ab0b` because authorized
+audit rows lack structured payment method, supplier snapshot name, and operation
+amount. Each now checks restored authorized evidence, refused dedicated-reader
+controls, all audit branches, amount-free descriptions, and unchanged stored rows.
+Full failing-first SHAs are stored in the records. Earlier scenarios are retained.
+The maintenance payroll rule and unwind actor predicate retain their permissions.
+See the round 2 evidence appendix for checks and explicit execution limits.
+
+Round 3 retains those twenty-two scenarios and adds ten literal checks: active
+and inactive duplicates of both payroll control keys, owner and non-owner plan
+lifecycles, the accounting-reader entitlement census, missing and foreign draft
+evidence, and the sales-only SET_COMMISSION_AMOUNT positive control. The duplicate
+regressions fail first at `c928ff01c`; the entitlement regressions fail first at
+`896249060`. The three Seat 1 coverage controls change no production behavior.
+Their corresponding source mutations fail the tests.
+
+The request-reuse scenario now follows the actual referenced account ids rather
+than assuming unique system keys. Its mixed 200-row page requires three account
+gets, one per distinct account, zero control-index lookups, at most two draft
+gets and one subscription lookup. A later request reads fresh state. The
+duplicate cases reference the non-canonical account, preserve inactive controls,
+withhold protected draft and journal copies, and keep ordinary/payroll-authorized
+positive controls. The page-size and draft-read bounds, feature gates and grants
+are unchanged. Account reads are now bounded by distinct referenced ids.
+
+The plan cases keep event metadata and counts while withholding protected
+accounting details for expired, cancelled, past-due, free and absent subscription
+states, including for owners. Active and restored plans retain full rows. An
+active subscription with an old period end follows stored status. Independent
+opening, manual-draft, supplier, sales, commission, application, bank and sign-off
+families remain readable under their existing grants. The action census tests
+both owner and explicitly granted non-owner readers. This matrix row remains a
+local backend permission oracle, not cloud or release certification.

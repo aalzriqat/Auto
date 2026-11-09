@@ -146,7 +146,8 @@ async function singletonAuditConfidentiality(kind: "EMPLOYEE_ADVANCE" | "VEHICLE
       const edits = rows.filter(row => row.actionType === "EDIT_OPENING_DRAFT");
       expect(edits).toHaveLength(1);
       const metadata = { lineCount: 2, allocationCount: 1, allocationKinds: [kind], asOfDate: s.asOfDate, currency: "JOD" };
-      expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: String(draft._id) });
+      expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: "WITHHELD" });
+      expect(JSON.stringify(edits[0])).not.toContain(String(draft._id));
       expect(edits[0].before).toEqual({ ...metadata, version: 0 });
       expect(edits[0].after).toEqual({ ...metadata, version: 1, memoChanged: true });
     }

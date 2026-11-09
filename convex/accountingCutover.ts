@@ -1,5 +1,6 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
+import { canReadOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
 import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
@@ -718,8 +719,8 @@ async function postOpeningBalanceDraft(
     // legitimate operation here, but it is not the same event as a
     // two-person approval and the log should never conflate them.
     description: autoApproved
-      ? `Opening balance posted by owner without second approval: ${draft.lines.length} lines, ${totalDebits} total.`
-      : `Opening balance posted: ${draft.lines.length} lines, ${totalDebits} total.`,
+      ? `Opening balance posted by owner without second approval: ${draft.lines.length} lines.`
+      : `Opening balance posted: ${draft.lines.length} lines.`,
     after: {
       lines: draft.lines.length,
       totalDebits,
@@ -893,21 +894,6 @@ export const rejectOpeningBalanceDraft = mutation({
   },
 });
 
-/** Checks both allocations and GL controls. Older drafts may contain the
- * control line without operational rows; they are still payroll-sensitive. */
-async function containsEmployeeAdvanceControl(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  draft: Doc<"openingBalanceDrafts">,
-): Promise<boolean> {
-  if (draft.allocations?.some((row) => (row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION"))) return true;
-  for (const line of draft.lines) {
-    const account = await ctx.db.get(line.accountId);
-    if (account?.orgId === orgId && (account.systemKey === SYSTEM_KEYS.EMPLOYEE_ADVANCES || account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE)) return true;
-  }
-  return false;
-}
-
 type OpeningDraftAllocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
 function isRemainingOpeningAllocation(
   allocation: OpeningDraftAllocation,
@@ -1043,8 +1029,7 @@ export const listPendingOpeningBalanceDrafts = query({
     // reasoning as openingBalanceStatus.
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const visibleDrafts = [];
     for (const draft of drafts) {
       if (mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, draft))) visibleDrafts.push(draft);
@@ -1230,8 +1215,7 @@ export const openingBalanceStatus = query({
       isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
     const canEnter = canManageFinance && postedEntry === null && (pending === null || pending.createdBy === user._id);
 
-    const mayViewPayroll = isOwner || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const pendingVisible = !pending || mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, pending));
 
     return {
@@ -1617,8 +1601,7 @@ export const postedOpeningAllocationReadback = query({
       resultCounts.set(result.rowKey, (resultCounts.get(result.rowKey) ?? 0) + 1);
       resultByKey.set(result.rowKey, result);
     }
-    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const rows = await Promise.all((draft.allocations ?? []).map(async (allocation) => {
       if ((allocation.kind === "EMPLOYEE_ADVANCE" || allocation.kind === "EMPLOYEE_COMMISSION") && !mayViewPayroll) {
         return { kind: allocation.kind, restricted: true as const };

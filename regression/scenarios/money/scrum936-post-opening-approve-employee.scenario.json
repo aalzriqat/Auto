@@ -1,0 +1,79 @@
+{
+  "id": "scrum936-post-opening-approve-employee",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "kind": "EMPLOYEE_ADVANCE",
+        "amountMinor": 110003
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "authorized-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "positiveControl": "cost"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "restrictedAudit.protectedAmountIdentityAndTextVisible",
+      "value": false
+    },
+    {
+      "observable": "dedicatedReader.refusesOrWithholds",
+      "value": true
+    },
+    {
+      "observable": "authorizedAudit.fullStoredRowVisible",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 approved singleton employee posting audit inherits payroll withholding"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "e5813b68f46b63546c3b448900efec0efa0241e9"
+  },
+  "fingerprint": "fd798d98fb9b762ab5b05f0963c56c5ef58b913dbc055b6af73503318463f219"
+}

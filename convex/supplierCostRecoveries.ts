@@ -24,27 +24,14 @@ import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAcco
 // SCRUM-902: a supplier-borne cost is part of the acquisition cost, so its readers share the supplier statement's pair.
 import { STATEMENT_PERMISSIONS } from "./supplierStatement";
 
-/**
- * SCRUM-389 — recovering supplier-borne vehicle costs.
- *
- * A PAID expense whose `costBearer` is SUPPLIER debits Receivable from
- * Suppliers instead of an expense account, and opens exactly one row here in
- * the same transaction. The supplier then pays it back through immutable
- * receipts, each posted synchronously as its own ledger source.
- *
- * Invariants, in integer minor units of `currency`:
- *   - amountDueMinor = Σ LIVE receipts + remaining, remaining ≥ 0;
- *   - a LIVE receipt always has a POSTED event (no queued receipt exists);
- *   - the source expense can be reversed only once every receipt, and every
- *     receipt's event, is REVERSED and nothing is recovered.
- *
- * Out of scope and deliberately refused rather than half-built: write-off
- * (SCRUM-399), cheque receipts (SCRUM-400), netting against the supplier
- * payable at settlement (SCRUM-401). Until the write-off lands an unrecoverable
- * cost stays an OPEN receivable — visible, and never silently profit.
- */
+/** SCRUM-389: a paid SUPPLIER expense debits Receivable from Suppliers and opens
+ * one recovery atomically. Immutable receipts post synchronously as ledger sources.
+ * In currency minor units: due = LIVE receipts + remaining; remaining >= 0.
+ * LIVE receipts have POSTED events, never queued; expense reversal needs every receipt/event reversed and zero recovered.
+ * Write-off (SCRUM-399), cheques (400), and settlement netting (401) remain refused.
+ * Unrecoverable costs stay OPEN until write-off exists; they never become profit. */
 
-/** How many receipts one recovery may carry — a bound on every read of them. */
+// Bounds every receipt read for one recovery.
 export const MAX_RECEIPTS_PER_RECOVERY = 100;
 
 /** The one derivation of a recovery's status. Never set by hand. */
@@ -474,9 +461,9 @@ export const recordReceipt = mutation({
           actionType: "ALLOCATE_PAYMENT",
           resourceType: "supplierCostRecoveries",
           resourceId: recovery._id,
-          description: `Recovered ${args.amountMinor} (minor units, ${recovery.currency}) from ${recovery.sourcedFromName} against a supplier-borne vehicle cost.`,
+          description: "Recorded receipt against a supplier-borne vehicle cost.",
           before: { amountRecoveredMinor: recovery.amountRecoveredMinor, status: recovery.status },
-          after: { amountRecoveredMinor, status },
+          after: { amountRecoveredMinor, status, paymentMethod: args.method, supplierName: recovery.sourcedFromName, amountMinor: args.amountMinor },
           idempotencyKey: args.idempotencyKey,
         });
 
@@ -607,9 +594,9 @@ export const reverseReceipt = mutation({
           actionType: "REVERSE_ALLOCATION",
           resourceType: "supplierCostRecoveryReceipts",
           resourceId: receipt._id,
-          description: `Reversed a ${receipt.amountMinor} (minor units, ${receipt.currency}) supplier cost recovery receipt: ${reason}`,
+          description: "Reversed a supplier cost recovery receipt.",
           before: { amountRecoveredMinor: recovery.amountRecoveredMinor, status: recovery.status },
-          after: { amountRecoveredMinor, status },
+          after: { amountRecoveredMinor, status, reason, receiptAmountMinor: receipt.amountMinor, currency: receipt.currency },
           idempotencyKey: args.idempotencyKey,
         });
 
