@@ -267,3 +267,29 @@ describe("inline exemption marker for fixture counts", () => {
     expect(markerProblems("lib/x.test.ts", "const s = '// guardrail-4-fixture:';")).toEqual([]);
   });
 });
+
+describe("801-01: every expect root and modifier is normalised before the subject is classified", () => {
+  test("positive control: expect.soft, resolves, rejects and expect.poll pins are found", () => {
+    expect(pinned("expect.soft(list).toHaveLength(12);")).toBe(1);
+    expect(pinned("expect.soft(list.length).toBe(12);")).toBe(1);
+    expect(pinned("await expect(p).resolves.toHaveLength(12);")).toBe(1);
+    expect(pinned("await expect(p).rejects.toHaveLength(12);")).toBe(1);
+    expect(pinned("await expect.poll(() => list.length).toBe(12);")).toBe(1);
+    expect(pinned("await expect.poll(() => list).toHaveLength(12);")).toBe(1);
+    expect(pinned("await expect.poll(() => { return list.length; }).toBe(12);")).toBe(1);
+  });
+
+  test("negative control: the .not variant of each form is not a pin", () => {
+    expect(pinned("expect.soft(list).not.toHaveLength(12);")).toBe(0);
+    expect(pinned("expect.soft(list.length).not.toBe(12);")).toBe(0);
+    expect(pinned("await expect(p).resolves.not.toHaveLength(12);")).toBe(0);
+    expect(pinned("await expect(p).rejects.not.toHaveLength(12);")).toBe(0);
+    expect(pinned("await expect.poll(() => list.length).not.toBe(12);")).toBe(0);
+  });
+
+  test("negative control: a poll callback that does not directly return the subject is not a pin", () => {
+    expect(pinned("await expect.poll(() => { const n = list.length; return n; }).toBe(12);")).toBe(0);
+    expect(pinned("await expect.poll(source).toHaveLength(12);")).toBe(0);
+    expect(pinned("expect.extend(list).toHaveLength(12);")).toBe(0);
+  });
+});
