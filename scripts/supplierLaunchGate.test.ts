@@ -45,16 +45,26 @@ describe("supplier launch release gate", () => {
     expect(verifySupplierLaunchEvidence({ runPage: () => ({ ok: true, value: ready }), now: () => 1001,
       startedAt: 0, timeoutMs: 1000, maxPages: 3 })).toEqual(unavailable);
   });
-  test("both successful rollout exits invoke the same refusing phase", () => {
-    const source = readFileSync("scripts/rolloutRelease.mjs", "utf8").replaceAll("\r\n", "\n");
-    const exits = [...source.matchAll(/process\.exit\(0\)/g)];
-    expect(exits).toHaveLength(2);
-    for (const exit of exits) {
-      const span = source.slice(source.lastIndexOf("\n}", exit.index) + 2, exit.index);
-      expect(span).toContain("requireSupplierLaunchEvidence();");
-    }
-    expect(source).toContain('"supplierLaunchEvidence:scanPage"');
-    expect(source).toContain("if (!evidence.ok)");
-    expect(source).toContain("DEPLOYED, but INCOMPLETE: supplier launch evidence");
+  test("large tenant gate accepts 5000 vehicles and 20000 expenses in 25 data calls", () => {
+    const calls = new Map<string, number>();
+    const result = verifySupplierLaunchEvidence({
+      runPage: ({ table, cursor }) => {
+        const rows = table === "vehicles" ? 5000 : 20000;
+        if (table !== "vehicles" && table !== "expenses") return { ok: true, value: ready };
+        calls.set(table, (calls.get(table) ?? 0) + 1);
+        const end = Math.min(rows, Number(cursor ?? 0) + 1000);
+        return { ok: true, value: { ...ready, examined: 1000,
+          status: end === rows ? "READY" : "MORE", cursor: end === rows ? null : String(end) } };
+      },
+      now: () => 0, startedAt: 0, timeoutMs: 1000, maxPages: 20,
+    });
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual(new Map([["vehicles", 5], ["expenses", 20]]));
+  });
+  test("one shared success helper owns the launch phase for both exits", () => {
+    const source = readFileSync("scripts/rolloutRelease.mjs", "utf8");
+    expect(source.match(/runSupplierLaunchEvidencePhase\(/g)).toHaveLength(1);
+    expect(source.match(/finishSuccessfulRollout\(/g)).toHaveLength(3);
+    expect(source.match(/process\.exit\(0\)/g)).toHaveLength(1);
   });
 });

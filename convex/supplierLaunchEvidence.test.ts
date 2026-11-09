@@ -3,6 +3,8 @@ import { makeFunctionReference } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedSupplier } from "../test-utils/supplierFixture";
 import schema from "./schema";
+import { api } from "./_generated/api";
+import { ALL_PERMISSIONS } from "./utils/permissions";
 
 // Literal oracle, deliberately independent of the production census.
 const TABLES = ["vehicleSupplierPayables", "vehicleSupplierReceivables", "supplierCostRecoveries",
@@ -73,6 +75,27 @@ async function assertMissingIdentity(table: typeof TABLES[number]) {
 }
 
 describe("supplier launch evidence", () => {
+  test.each(["missing", "foreign", "deleted"])("dead pending %s edit is exempt and approval refuses without writes", async mode => {
+    const w = await fixture(true);
+    await w.t.run(async ctx => {
+      const roleId = await ctx.db.insert("roles", { orgId: w.orgId, name: "OWNER", permissions: ALL_PERMISSIONS });
+      await ctx.db.insert("memberships", { orgId: w.orgId, userId: w.userId, roleId });
+      await ctx.db.patch(w.editId, { type: "UPDATE", vehicleId: w.vehicleId,
+        payload: { sourcedFromName: "Unbound supplier", sourceCost: 100 } });
+      if (mode === "missing") await ctx.db.delete(w.vehicleId);
+      if (mode === "deleted") await ctx.db.patch(w.vehicleId, { isDeleted: true });
+      if (mode === "foreign") {
+        const orgId = await ctx.db.insert("organizations", { name: "Other", createdAt: 1 });
+        await ctx.db.patch(w.vehicleId, { orgId });
+      }
+    });
+    const before = await w.t.run(async ctx => Promise.all(TABLES.map(table => ctx.db.query(table).collect())));
+    await expect(w.t.withIdentity({ subject: "p7" }).mutation(api.vehicleEdits.resolve,
+      { orgId: w.orgId, requestId: w.editId, status: "APPROVED" })).rejects.toThrow("Vehicle not found.");
+    expect(await w.t.run(async ctx => Promise.all(TABLES.map(table => ctx.db.query(table).collect())))).toEqual(before);
+    expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1, counts: ZERO });
+  });
+
   // SCRUM-761 requires one literal, non-parameterized registration per scenario.
   test("launch payable without identity counts one", async () => { await assertMissingIdentity("vehicleSupplierPayables"); });
   test("launch receivable without identity counts one", async () => { await assertMissingIdentity("vehicleSupplierReceivables"); });
@@ -117,7 +140,7 @@ describe("supplier launch evidence", () => {
     expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1,
       counts: { ...ZERO, MISSING_SUPPLIER_ID: 1 } });
     await w.t.run(ctx => ctx.db.delete(w.vehicleId));
-    expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual(unavailable);
+    expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1, counts: ZERO });
   });
   test("pending supplier text without an ownership decision still needs identity", async () => {
     const w = await fixture(true);
@@ -176,13 +199,13 @@ describe("supplier launch evidence", () => {
   test("walks beyond the first bounded page instead of declaring a truncated zero", async () => {
     const w = await fixture(true);
     await w.t.run(async ctx => {
-      for (let n = 0; n < 8; n += 1) {
+      for (let n = 0; n < 1000; n += 1) {
         await ctx.db.insert("vehicleOwnershipConversions", { orgId: w.orgId, vehicleId: w.vehicleId,
           fromSourceType: "SOURCED", toSourceType: "STOCK", convertedBy: w.userId, convertedAt: n });
       }
     });
     const first = await w.t.query(scan, { table: "vehicleOwnershipConversions", cursor: null });
-    expect(first).toEqual({ status: "MORE", cursor: expect.any(String), examined: 8, counts: { ...ZERO, MISSING_SUPPLIER_ID: 7 } });
+    expect(first).toEqual({ status: "MORE", cursor: expect.any(String), examined: 1000, counts: { ...ZERO, MISSING_SUPPLIER_ID: 999 } });
     expect(await w.t.query(scan, { table: "vehicleOwnershipConversions", cursor: first.cursor })).toEqual({ status: "READY",
       cursor: null, examined: 1, counts: { ...ZERO, MISSING_SUPPLIER_ID: 1 } });
   });
