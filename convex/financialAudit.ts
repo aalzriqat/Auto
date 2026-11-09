@@ -16,7 +16,7 @@ import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
 import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { canManageOpeningPayroll, canReadOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
-import { mayReadUnwindActorEvidence } from "./utils/dealUnwindGuard";
+import { isUnwindActor } from "./utils/dealUnwindGuard";
 import { assertManualJournalsEnabled } from "./utils/manualJournalContainment";
 import { scaleForCurrency } from "./utils/money";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
@@ -236,7 +236,7 @@ async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow,
     projected.before = openingAuditSummary(row.before);
     projected.after = openingAuditSummary(row.after);
   }
-  if (AUDIT_READ_POLICY[row.actionType] === "UNWIND" && role.permissions.includes(PERMISSIONS.VIEW_SALES) && mayReadUnwindActorEvidence(role)) {
+  if (AUDIT_READ_POLICY[row.actionType] === "UNWIND" && role.permissions.includes(PERMISSIONS.VIEW_SALES) && isUnwindActor(role)) {
     projected.before = unwindActorAuditAmounts(row.before);
     projected.after = unwindActorAuditAmounts(row.after);
   }

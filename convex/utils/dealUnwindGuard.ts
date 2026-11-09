@@ -7,8 +7,14 @@ import { chequesForApplication, isFcLineage } from "./fcCheque";
 import { disbursementVersionOf, financeDisbursementKeys } from "./financeDisbursementKeys";
 import { isSystemOwnerRole, PERMISSIONS } from "./permissions";
 
-/** Same actor tier as unwindStatus, separate from the finance economics grant. */
-export function mayReadUnwindActorEvidence(role: Doc<"roles">): boolean {
+/**
+ * SCRUM-713: the forward-return step is delegable to a finance handler
+ * (CONFIRM + VIEW_FINANCE) or a deal canceller (CONFIRM + CANCEL_CLOSED_DEAL,
+ * the default MANAGER). CONFIRM alone must not confer unwind actor authority.
+ * This actor tier also governs unwindStatus and audit remittance evidence,
+ * separately from the finance economics grant.
+ */
+export function isUnwindActor(role: Doc<"roles">): boolean {
   return isSystemOwnerRole(role) || (role.permissions.includes(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT) &&
     (role.permissions.includes(PERMISSIONS.VIEW_FINANCE) || role.permissions.includes(PERMISSIONS.CANCEL_CLOSED_DEAL)));
 }

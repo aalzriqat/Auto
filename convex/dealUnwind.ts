@@ -25,7 +25,7 @@ import { PERMISSIONS, isSystemOwnerRole, type Permission } from "./utils/permiss
 import { mayReadFinanceEconomics } from "./utils/financeApplicationProjection";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 import { DEAL_UNWIND_MESSAGES, type DealUnwindRefusalCode } from "./utils/dealUnwindMessages";
-import { activeDealUnwindFor, mayReadUnwindActorEvidence, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
+import { activeDealUnwindFor, isUnwindActor, paidDealReversalRoute, receiptPostedToPaymentAccount } from "./utils/dealUnwindGuard";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { isForwardPlanVersion, planVersionOf } from "./utils/financedSalePostingPlan";
@@ -329,7 +329,7 @@ export const recordDealUnwindForwardReturn = mutation({
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, MONEY_STEP_PERMS);
-    if (!mayReadUnwindActorEvidence(role)) refuseUnwindPermission();
+    if (!isUnwindActor(role)) refuseUnwindPermission();
     const reference = requiredText(args.reference, MAX_DIRECT_PAYMENT_REFERENCE_CHARS, "DEAL_UNWIND_EVIDENCE_REQUIRED");
     return await runWithIdempotency(
       ctx,
@@ -979,7 +979,7 @@ export const unwindStatus = query({
       const forward = await deriveForwardState(ctx, app);
       const forwardPending = forward.applies && unwind.forwardReturn === undefined;
       step = forwardPending ? "AWAITING_FORWARD_RETURN" : "AWAITING_FINISH";
-      if (forwardPending && mayReadUnwindActorEvidence(role)) {
+      if (forwardPending && isUnwindActor(role)) {
         const refusal = await refusalOf(() => assertForwardReturnable(ctx, args.orgId, app, now));
         if (refusal) refusals.forwardReturn = refusal;
         canForwardReturn = refusal === null;
@@ -1007,7 +1007,7 @@ export const unwindStatus = query({
     // NOT `forwardDueMinor` (deposit + dealer contribution: a visible deposit
     // would reveal the protected contribution) nor any free text.
     const financeReader = mayReadFinanceEconomics(role);
-    const unwindActor = mayReadUnwindActorEvidence(role);
+    const unwindActor = isUnwindActor(role);
     let customerReceiptPreview: { amountMinor: number; currency: string } | null = null;
     if (unwind?.status === "ACTIVE" && (financeReader || unwindActor)) {
       const sale = await ctx.db.get(unwind.saleId);
