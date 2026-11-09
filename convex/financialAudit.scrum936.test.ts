@@ -324,6 +324,56 @@ test("SCRUM-936 historical consigned migration COGS audit inherits cost reader g
 test("SCRUM-936 historical supplier cost receipt audit inherits cost reader gates", async () => historicalCostAudit("ALLOCATE_PAYMENT"));
 test("SCRUM-936 historical supplier cost receipt reversal audit inherits cost reader gates", async () => historicalCostAudit("REVERSE_ALLOCATION"));
 
+async function supplierAuditDetail(operation: "full" | "partial" | "commission" | "recovery") {
+  await withFrozenScheduler(async () => {
+    const s = await fixture();
+    const supplierName = "QA TEST Synthetic Supplier";
+    const supplierId = await s.t.run(ctx => ctx.db.insert("suppliers", { orgId: s.orgId,
+      displayName: supplierName, displayNameKey: supplierName.toLowerCase(), status: "ACTIVE", version: 1,
+      origin: "MANUAL", createdBy: s.ownerId, updatedBy: s.ownerId, createdAt: Date.now(), updatedAt: Date.now() }));
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "SOURCED", sourcedSupplierId: supplierId, sourcedFromName: supplierName, sourceCost: 1000 }));
+    const common = { orgId: s.orgId, vehicleId: s.vehicleId, supplierId, supplierSnapshotVersion: 1,
+      sourcedFromName: supplierName, amountDue: 2, currency: "JOD", createdBy: s.ownerId, createdAt: Date.now(), updatedAt: Date.now() };
+    const key = `s936-detail-${operation}`;
+    if (operation === "full" || operation === "partial") {
+      const payableId = await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { ...common, status: "PENDING" }));
+      await expect(s.finance.query(api.sourcingPayables.get, { orgId: s.orgId, payableId })).rejects.toThrow(/permission/i);
+      if (operation === "full") await s.owner.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId, paymentMethod: "CASH", idempotencyKey: key });
+      else await s.owner.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId, amount: 1, paymentMethod: "CASH", idempotencyKey: key });
+      expect(await s.owner.query(api.sourcingPayables.get, { orgId: s.orgId, payableId })).toMatchObject({ paymentMethod: "CASH", sourcedFromName: supplierName });
+    } else if (operation === "commission") {
+      const saleId = await saleFixture(s);
+      const receivableId = await s.t.run(ctx => ctx.db.insert("vehicleSupplierReceivables", { ...common, saleId, status: "OPEN" }));
+      await expect(s.finance.query(api.supplierReceivables.list, { orgId: s.orgId })).rejects.toThrow(/permission/i);
+      await s.owner.mutation(api.supplierReceivables.recordReceipt, { orgId: s.orgId, receivableId, amount: 1, receiptMethod: "CASH", idempotencyKey: key });
+      expect((await s.owner.query(api.supplierReceivables.list, { orgId: s.orgId })).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ _id: receivableId, receiptMethod: "CASH", sourcedFromName: supplierName }),
+      ]));
+    } else {
+      await expect(s.finance.query(api.supplierCostRecoveries.list, { orgId: s.orgId })).rejects.toThrow(/permission/i);
+      await s.owner.mutation(api.expenses.create, { orgId: s.orgId, vehicleId: s.vehicleId, title: "QA TEST synthetic transport",
+        amount: 2, date: Date.now() - 1000, category: "TRANSPORT", status: "PAID", paymentMethod: "CASH",
+        costBearer: "SUPPLIER", vendorSupplierId: supplierId, idempotencyKey: `${key}-expense` });
+      const recovery = await s.t.run(ctx => ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique());
+      if (!recovery) throw new Error("Missing synthetic recovery");
+      await s.owner.mutation(api.supplierCostRecoveries.recordReceipt, { orgId: s.orgId, recoveryId: recovery._id,
+        amountMinor: 1000, method: "CASH", receivedDate: Date.now() - 500, idempotencyKey: key });
+    }
+    const row = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action_idempotency", q =>
+      q.eq("orgId", s.orgId).eq("actionType", "ALLOCATE_PAYMENT").eq("idempotencyKey", key)).unique());
+    if (!row) throw new Error("Missing synthetic supplier audit");
+    expect(row.after).toMatchObject({ paymentMethod: "CASH", supplierName, amountMinor: operation === "full" ? 2000 : 1000 });
+    expect(row.description).not.toMatch(/\d/);
+    expect(row.description).not.toContain(supplierName);
+    await assertAllBranches(s, row, [supplierName, "CASH", operation === "full" ? "2000" : "1000"]);
+  });
+}
+
+test("SCRUM-936 supplier full payment retains authorized structured audit facts", async () => supplierAuditDetail("full"));
+test("SCRUM-936 supplier partial payment retains authorized structured audit facts", async () => supplierAuditDetail("partial"));
+test("SCRUM-936 supplier commission receipt retains authorized structured audit facts", async () => supplierAuditDetail("commission"));
+test("SCRUM-936 supplier cost receipt retains authorized structured audit facts", async () => supplierAuditDetail("recovery"));
+
 test("SCRUM-936 every stored audit action has an explicit reader classification", () => {
   const actions = schema.tables.financialAuditLog.validator.fields.actionType.members.map(m => m.value);
   // Transitional namespace access lets this failing-first test run before the table exists.
