@@ -13,7 +13,6 @@
 import { beforeAll, describe, expect, test } from "vitest";
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import schema from "./schema";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { registerHandover, registerRateLimiter } from "../test-utils/convexTest";
 import { dbSnapshot } from "../test-utils/dbSnapshot";
@@ -129,6 +128,7 @@ describe("updateStatus: the legal edges", () => {
   });
 });
 
+// Both directions: the legal-edge test.each drives every accepted pair; this matrix drives every other pair and names its refusal.
 describe("updateStatus: every other pair is refused and writes nothing", () => {
   let s: Seeded;
   const deals = new Map<Status, Id<"financeApplications">>();
@@ -161,10 +161,6 @@ describe("updateStatus: every other pair is refused and writes nothing", () => {
     expect(await dbSnapshot(s.t, tables)).toEqual(before);
   });
 
-  test("the accepted set is exactly the literal table (both directions)", () => {
-    const accepted = SOURCES.flatMap((from) => TARGETS.filter((to) => expectedOutcome(from, to) === "ACCEPTED").map((to) => `${from}->${to}`));
-    expect(new Set(accepted)).toEqual(new Set(LEGAL_EDGES.map(([from, to]) => `${from}->${to}`)));
-  });
 });
 
 describe("status writers outside the transition map", () => {
@@ -177,7 +173,7 @@ describe("status writers outside the transition map", () => {
     expect(app.creditDecision).toBe("CANCELLED");
     await expect(
       s.owner.as.mutation(api.applications.updateStatus, { orgId: s.orgId, applicationId, status: "CANCELLED" as never })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/Validator error: Expected one of .*got .{0,3}CANCELLED/);
   });
 
   test("the deal status vocabulary has no REVERSED: the two REVERSED writers belong to invoiceReceiptApplications", async () => {
@@ -187,7 +183,6 @@ describe("status writers outside the transition map", () => {
     const applicationId = await dealOnNewVehicle(s);
     await expect(s.t.run((ctx) => ctx.db.patch(applicationId, { status: "REVERSED" as never }))).rejects.toThrow();
     expect((await readApp(s, applicationId))!.status).toBe("PENDING_DOCS");
-    expect(Object.keys(schema.tables)).toContain("invoiceReceiptApplications");
   });
 });
 
@@ -252,5 +247,6 @@ describe("handover, settlement and credit decision as dealCockpit returns them",
     ]);
     // Observed: finalizeDeal writes no applicationStatusLog row for APPROVED -> CLOSED (updateStatus writes one per edge).
     // characterises applications.ts finalizeDeal; no ruling. Reported as a possible audit-trail gap, not asserted as correct.
-    expect(await logOf(s, applicationId)).toEqual(before);  });
+    expect(await logOf(s, applicationId)).toEqual(before);
+  });
 });

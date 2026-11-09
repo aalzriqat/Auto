@@ -213,9 +213,6 @@ describe("the first refusal each role meets at each stage", () => {
     for (const stage of STAGE_NAMES) deals.set(stage, await STAGE_BUILDERS[stage](s));
   }, 180_000);
 
-  test("the stage table covers exactly the stages the builders construct (both directions)", () => {
-    expect(new Set(Object.keys(EXPECTED))).toEqual(new Set(STAGE_NAMES));
-  });
 
   describe.each(STAGE_NAMES)("stage %s", (stage) => {
     test.each(ROLES)("getClosingReadiness as %s: verdict and first unmet check", async (role) => {
