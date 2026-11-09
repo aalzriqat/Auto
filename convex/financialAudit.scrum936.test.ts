@@ -55,6 +55,43 @@ async function fixture() {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
+test.each(["missing", "foreign"] as const)("SCRUM-936 %s draft evidence cannot grant payroll audit access", async state => {
+  const s = await fixture();
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
+  const id = await s.t.run(async ctx => {
+    const foreignOrg = await ctx.db.insert("organizations", { name: "QA TEST Other Tenant", createdAt: Date.now() });
+    // No controls: treating missing/foreign evidence as a readable draft must leak this row.
+    const draftId = await ctx.db.insert("openingBalanceDrafts", { orgId: state === "foreign" ? foreignOrg : s.orgId,
+      status: "POSTED", createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate, lines: [] });
+    if (state === "missing") await ctx.db.delete(draftId);
+    return ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId, actionType: "REQUEST_OPENING_VOID",
+      resourceType: "openingBalanceDrafts", resourceId: draftId, description: "Private draft reason", after: { reason: "Private draft reason" }, occurredAt: Date.now() });
+  });
+  for (const filter of [{}, { actorId: s.ownerId }, { actionType: "REQUEST_OPENING_VOID" }, { fromDate: 1 }]) {
+    const row = (await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter, limit: 200 })).find(item => item._id === id);
+    expect(row).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
+    expect(JSON.stringify(row)).not.toContain("Private draft reason");
+  }
+});
+
+test("SCRUM-936 sales-only commission reader retains SET_COMMISSION_AMOUNT audit details without accounting plan", async () => withFrozenScheduler(async () => {
+  const s = await fixture();
+  const saleId = await saleFixture(s);
+  await s.owner.mutation(api.sales.setCommissionAmount, { orgId: s.orgId, saleId, commissionAmount: 2 });
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:sales"] });
+    const sub = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
+    if (!sub) throw new Error("Missing fixture subscription");
+    await ctx.db.patch(sub._id, { status: "expired" });
+  });
+  expect(await s.finance.query(api.sales.get, { orgId: s.orgId, saleId })).toMatchObject({ commissionAmount: 2 });
+  await expect(s.finance.query(api.dealCommissions.forSale, { orgId: s.orgId, saleId })).rejects.toThrow(/permission/i);
+  const row = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action", q => q.eq("orgId", s.orgId).eq("actionType", "SET_COMMISSION_AMOUNT")).unique());
+  for (const filter of [{}, { actorId: s.ownerId }, { actionType: "SET_COMMISSION_AMOUNT" }, { fromDate: 1 }]) {
+    expect(await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter, limit: 200 })).toContainEqual(row);
+  }
+}));
+
 test.each(["owner", "finance"] as const)("SCRUM-936 %s audit accounting details follow stored plan entitlement and recover on renewal", async viewer => {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
