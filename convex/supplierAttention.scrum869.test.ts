@@ -1,0 +1,229 @@
+/**
+ * SCRUM-869 feature 5 - the supplier "needs attention" view (ADR docs/adr/2026-11-04-supplier-attention-view.md).
+ * Read-only. Evidence boundary: convex-test only, seeded rows. 9,500 JOD is 9_500_000 minor units.
+ */
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { convexTestWithComponents } from "../test-utils/convexTest";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+
+const MODULES = import.meta.glob("./**/*.*s");
+const DAY = 86_400_000;
+const NOW = Date.parse("2026-06-15T09:00:00Z");
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+type SupplierDb = { db: { insert: (table: "suppliers", doc: never) => Promise<Id<"suppliers">> } };
+const insertSupplier = (ctx: SupplierDb, orgId: Id<"organizations">, userId: Id<"users">, displayName: string) =>
+  ctx.db.insert("suppliers", {
+    orgId, displayName, displayNameKey: displayName.toLowerCase(), status: "ACTIVE", origin: "MANUAL", version: 1,
+    createdBy: userId, updatedBy: userId, createdAt: NOW, updatedAt: NOW,
+  } as never);
+
+async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+  const t = convexTestWithComponents(schema, MODULES);
+  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `AT ${tag}`, createdAt: Date.now() }));
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `${tag}_u`, email: `${tag}@e.com`, name: "AT User" }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "Finance", permissions }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  const asUser = t.withIdentity({ subject: `${tag}_u`, clerkId: `${tag}_u` });
+  const customerId = await t.run((ctx) => ctx.db.insert("customers", { orgId, firstName: "Buyer", lastName: tag }));
+  const vehicleId = await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId, vin: `VIN${tag}`, make: "Toyota", model: "Camry", year: 2024, mileage: 10, color: "White",
+      fuelType: "Gas", transmission: "Auto", sellingPrice: 12_500, status: "AVAILABLE", sourceType: "SOURCED",
+      sourcedFromName: "Amman Importer Co", sourceCost: 9_500,
+    })
+  );
+  const supplierId = await t.run((ctx) => insertSupplier(ctx, orgId, userId, "Amman Importer Co"));
+  return { t, orgId, userId, asUser, customerId, vehicleId, supplierId };
+}
+type Seed = Awaited<ReturnType<typeof seed>>;
+
+const addPayable = (s: Seed, fields: Record<string, unknown> = {}) =>
+  s.t.run((ctx) =>
+    ctx.db.insert("vehicleSupplierPayables", {
+      orgId: s.orgId, vehicleId: s.vehicleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", amountDue: 9_500,
+      currency: "JOD", status: "DUE_ON_SALE", paymentDueDate: NOW - 10 * DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+      ...fields,
+    } as never)
+  );
+
+const addReceivable = async (s: Seed, fields: Record<string, unknown> = {}) => {
+  const saleId = await s.t.run((ctx) =>
+    ctx.db.insert("sales", {
+      orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
+      salePrice: 12_500, saleDate: NOW - 40 * DAY, status: "COMPLETED",
+    } as never)
+  );
+  return await s.t.run((ctx) =>
+    ctx.db.insert("vehicleSupplierReceivables", {
+      orgId: s.orgId, vehicleId: s.vehicleId, saleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co",
+      amountDue: 3_000, currency: "JOD", status: "OPEN", agreedDueDate: NOW + 5 * DAY, createdBy: s.userId,
+      createdAt: NOW, updatedAt: NOW, ...fields,
+    } as never)
+  );
+};
+
+const attention = (s: Seed, extra: Partial<{ supplierId: Id<"suppliers">; orgId: Id<"organizations">; kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY"; nowMs: number; paginationOpts: { numItems: number; cursor: string | null; maximumRowsRead?: number; endCursor?: string } }> = {}) =>
+  s.asUser.query(api.supplierStatement.attention, { orgId: s.orgId, supplierId: s.supplierId, kind: "PAYABLE", nowMs: Date.now(), paginationOpts: { numItems: 25, cursor: null }, ...extra });
+
+describe("SCRUM-869 supplier attention port", () => {
+  test("linked payable alerts with its authoritative amount and no aggregate fields", async () => {
+    const s = await seed("linked");
+    const id = await addPayable(s);
+    const result = await attention(s);
+    expect(result?.page).toEqual([{ kind: "PAYABLE", id, currency: "JOD", outstandingMinor: 9_500_000, disputedMinor: 0,
+      dueDate: "2026-06-05", daysOverdue: 10, status: "ALERTING", step: "OVERDUE_7" }]);
+    expect(result).toEqual({ page: result?.page, complete: true, isDone: true, continueCursor: expect.any(String),
+      pageStatus: null, splitCursor: null, asOfDate: "2026-06-15", unlinked: "NONE" });
+    expect(await s.t.run(ctx => ctx.db.query("notifications").collect())).toEqual([]);
+  });
+
+  test("same-name supplier and id-less legacy rows never enter the account", async () => {
+    const s = await seed("identity");
+    const other = await s.t.run(ctx => insertSupplier(ctx, s.orgId, s.userId, "Amman Importer Co"));
+    const linked = await addPayable(s);
+    await addPayable(s, { supplierId: other });
+    await addPayable(s, { supplierId: undefined });
+    const result = await attention(s);
+    expect(result?.page.map(row => row.id)).toEqual([linked]);
+    expect(result?.unlinked).toBe("PRESENT");
+  });
+
+  test.each([
+    ["DISPUTED", NOW - DAY, "DISPUTED", 9_500_000],
+    ["PENDING", undefined, "NO_DUE_DATE", 0],
+  ])("%s obligation is held rather than silently healthy", async (status, paymentDueDate, heldReason, disputedMinor) => {
+    const s = await seed(`held-${status}`);
+    const id = await addPayable(s, { status, paymentDueDate });
+    const result = await attention(s);
+    expect(result?.page).toEqual([{ kind: "PAYABLE", id, currency: "JOD", outstandingMinor: 9_500_000, disputedMinor,
+      dueDate: paymentDueDate ? "2026-06-14" : null, daysOverdue: paymentDueDate ? 1 : null, status: "HELD", heldReason }]);
+  });
+
+  test("supplier receivable is due while a later receivable is not yet eligible", async () => {
+    const s = await seed("ar");
+    const id = await addReceivable(s, { agreedDueDate: NOW + DAY });
+    await addReceivable(s);
+    const result = await attention(s, { kind: "RECEIVABLE" });
+    expect(result?.page).toEqual([{ kind: "RECEIVABLE", id, currency: "JOD", outstandingMinor: 3_000_000,
+      disputedMinor: 0, dueDate: "2026-06-16", daysOverdue: -1, status: "ALERTING", step: "T_MINUS_3" }]);
+  });
+
+  test("cost recovery uses the same reminder decision without fabricating a payable", async () => {
+    const s = await seed("recovery");
+    const expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" } as never));
+    const id = await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", {
+      orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", vehicleId: s.vehicleId,
+      expenseId, sourceEventKey: "RECOVERY_1", amountDueMinor: 200_000, amountRecoveredMinor: 50_000,
+      currency: "JOD", status: "PARTIALLY_RECOVERED", receiptSeq: 1, agreedDueDate: NOW, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+    } as never));
+    expect((await attention(s, { kind: "RECOVERY" }))?.page).toEqual([{ kind: "RECOVERY", id, currency: "JOD",
+      outstandingMinor: 150_000, disputedMinor: 0, dueDate: "2026-06-15", daysOverdue: 0, status: "ALERTING", step: "DUE_DAY" }]);
+    expect((await attention(s))?.page).toEqual([]);
+  });
+
+  test.each([{ permissions: [] }, { permissions: ["view:finance"] }, { permissions: ["view:cost_price"] }])("missing permission pair withholds the whole response: $permissions", async ({ permissions }) => {
+    const s = await seed(`gate-${permissions.join()}`, permissions);
+    await addPayable(s);
+    await addPayable(s, { supplierId: undefined });
+    expect(await attention(s)).toEqual(null);
+  });
+
+  test("foreign supplier and foreign organisation refuse without data", async () => {
+    const s = await seed("tenant");
+    const foreign = await s.t.run(async ctx => {
+      const orgId = await ctx.db.insert("organizations", { name: "Other", createdAt: NOW });
+      return { orgId, supplierId: await insertSupplier(ctx, orgId, s.userId, "Amman Importer Co") };
+    });
+    await expect(attention(s, { supplierId: foreign.supplierId })).rejects.toThrow(/SUPPLIER_ATTENTION_UNAVAILABLE/);
+    await expect(attention(s, foreign)).rejects.toThrow(/FORBIDDEN/);
+  });
+
+  test("page boundary is incomplete with no partial count and continuation reaches remaining rows", async () => {
+    const s = await seed("page");
+    const first = await addPayable(s);
+    const second = await addPayable(s);
+    const result = await attention(s, { paginationOpts: { numItems: 1, cursor: null } });
+    expect(result?.complete).toBe(false);
+    expect(result?.isDone).toBe(false);
+    expect(result?.page.map(row => row.id)).toEqual([first]);
+    const next = await attention(s, { paginationOpts: { numItems: 1, cursor: result?.continueCursor ?? null } });
+    expect(next?.page.map(row => row.id)).toEqual([second]);
+    expect(next?.complete).toBe(false);
+    expect(next?.isDone).toBe(true);
+  });
+
+  test("settled-only filtered page stays incomplete until the linked open row is reached", async () => {
+    const s = await seed("history");
+    await addPayable(s, { status: "CANCELLED" });
+    const id = await addPayable(s);
+    const first = await attention(s, { paginationOpts: { numItems: 1, cursor: null } });
+    expect(first?.page).toEqual([]);
+    expect(first?.complete).toBe(false);
+    const next = await attention(s, { paginationOpts: { numItems: 1, cursor: first?.continueCursor ?? null } });
+    expect(next?.page.map(row => row.id)).toEqual([id]);
+  });
+
+  test("Amman midnight changes overdue day using server time despite a skewed refresh key", async () => {
+    const s = await seed("midnight");
+    const due = Date.parse("2026-06-14T21:00:00Z");
+    await addPayable(s, { paymentDueDate: due });
+    vi.setSystemTime(Date.parse("2026-06-15T20:59:59Z"));
+    expect((await attention(s, { nowMs: NOW }))?.page[0]).toMatchObject({ daysOverdue: 0, step: "DUE_DAY" });
+    vi.setSystemTime(Date.parse("2026-06-15T21:00:00Z"));
+    expect((await attention(s, { nowMs: NOW }))?.page[0]).toMatchObject({ daysOverdue: 1, step: "DUE_DAY" });
+    expect((await attention(s))?.asOfDate).toBe("2026-06-16");
+  });
+
+  test("ordinary id-less opening creditors are excluded from unresolved supplier warnings", async () => {
+    const s = await seed("creditor");
+    await s.t.run(async ctx => {
+      const openingBalanceDraftId = await ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "PENDING_APPROVAL", lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW });
+      await ctx.db.insert("vehicleSupplierPayables", { orgId: s.orgId, sourcedFromName: "Ordinary creditor", amountDue: 20, currency: "JOD",
+        status: "PENDING", origin: "OPENING", openingBalanceDraftId, openingRowKey: "OTHER_1", openingKind: "OTHER_PAYABLE", title: "Historical creditor", createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    });
+    expect((await attention(s))?.unlinked).toBe("NONE");
+  });
+
+  test("unreadable stored due fact is a coded generic error rather than a silent omission", async () => {
+    const s = await seed("bad-fact");
+    await addPayable(s, { paymentDueDate: Number.NaN });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(attention(s)).rejects.toThrow(/SUPPLIER_ATTENTION_UNAVAILABLE/);
+      expect(log).toHaveBeenCalled();
+    } finally { log.mockRestore(); }
+  });
+
+  test("caller cannot widen the fifty-document page bound", async () => {
+    const s = await seed("hard-bound");
+    for (let i = 0; i < 51; i += 1) await addPayable(s);
+    const result = await attention(s, { paginationOpts: { numItems: 1000000, maximumRowsRead: 1000000, cursor: null } });
+    expect(result?.page).toHaveLength(50);
+    expect(result?.complete).toBe(false);
+    expect(result?.isDone).toBe(false);
+  });
+
+  test("accounting plan denial refuses before reading obligation figures", async () => {
+    const s = await seed("plan");
+    await addPayable(s);
+    await s.t.run(async ctx => {
+      const subscription = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
+      if (!subscription) throw new Error("Fixture subscription missing");
+      await ctx.db.patch(subscription._id, { plan: "starter" });
+    });
+    await expect(attention(s)).rejects.toThrow();
+  });
+});
+
+
