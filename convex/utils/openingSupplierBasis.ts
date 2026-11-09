@@ -92,7 +92,10 @@ export async function openingRecoveryBasis(
     row.amountDueMinor !== basis.amountMinor ||
     row.currency !== basis.currency ||
     row.title !== basis.allocation.title.trim() ||
-    !sameOpeningSupplier(row, basis.allocation) ||
+    !sameOpeningSupplier(
+      { supplierId: row.supplierId, name: row.sourcedFromName },
+      { supplierId: basis.allocation.supplierId, name: basis.allocation.counterpartyName.trim() },
+    ) ||
     row.purpose !== basis.allocation.purpose
   )
     throw refuse();
@@ -126,7 +129,10 @@ export async function openingPayableBasis(
     row.orgId !== orgId ||
     row.currency !== basis.currency ||
     row.title !== basis.allocation.title.trim() ||
-    !sameOpeningSupplier(row, basis.allocation)
+    !sameOpeningSupplier(
+      { supplierId: row.supplierId, name: row.sourcedFromName },
+      { supplierId: basis.allocation.supplierId, name: basis.allocation.counterpartyName.trim() },
+    )
   )
     throw refuse();
   if (
@@ -142,14 +148,16 @@ export async function openingPayableBasis(
   return basis;
 }
 
-/** Snapshot-name proof is retained only for replay of pre-identity openings.
+/** The one supplier identity rule for opening basis and posting checks.
+ * Snapshot-name proof is retained only for replay of pre-identity openings.
  * One-sided identity is a contradiction, never permission to fall back. */
-function sameOpeningSupplier(
-  row: { supplierId?: Id<"suppliers">; sourcedFromName: string },
-  allocation: { supplierId?: Id<"suppliers">; counterpartyName: string },
+export function sameOpeningSupplier(
+  // Posting payloads are untyped records, so both sides compare by strict equality.
+  a: { supplierId?: unknown; name: unknown },
+  b: { supplierId?: unknown; name: unknown },
 ): boolean {
-  if (row.supplierId !== undefined || allocation.supplierId !== undefined) {
-    return row.supplierId === allocation.supplierId;
+  if (a.supplierId !== undefined || b.supplierId !== undefined) {
+    return a.supplierId === b.supplierId;
   }
-  return row.sourcedFromName === allocation.counterpartyName.trim();
+  return a.name === b.name;
 }

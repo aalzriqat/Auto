@@ -6,6 +6,7 @@ import type { PostCommand } from "../accounting/postingEngine";
 import {
   openingRecoveryBasis,
   openingPayableBasis,
+  sameOpeningSupplier,
 } from "./openingSupplierBasis";
 const fail = () =>
   new ConvexError(
@@ -196,8 +197,8 @@ function postingSupplierMatches(
   payload: PostCommand["payload"],
   row: { supplierId?: string; sourcedFromName: string },
 ): boolean {
-  if (payload.supplierId !== undefined || row.supplierId !== undefined) {
-    return payload.supplierId === row.supplierId;
-  }
-  return payload.sourcedFromName === row.sourcedFromName;
+  return sameOpeningSupplier(
+    { supplierId: payload.supplierId, name: payload.sourcedFromName },
+    { supplierId: row.supplierId, name: row.sourcedFromName },
+  );
 }
