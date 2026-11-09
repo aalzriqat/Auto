@@ -109,7 +109,8 @@ function collectPins(sourceFile) {
         const onSize = ts.isPropertyAccessExpression(measured) && SIZE_PROPERTIES.has(measured.name.text);
         if (matcher === "toHaveLength" || (VALUE_MATCHERS.has(matcher) && onSize)) {
           const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-          pins.push({ line: line + 1, matcher, value });
+          const { line: endLine } = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
+          pins.push({ line: line + 1, endLine: endLine + 1, matcher, value });
         }
       }
     }
@@ -120,8 +121,9 @@ function collectPins(sourceFile) {
 }
 
 /**
- * Pair each marker that has a reason with the one pin it exempts: a pin on the
- * marker's own line first, then a pin on the next line. A marker without a
+ * Pair each marker that has a reason with the one pin it exempts: a pin whose
+ * line span (start line to end line of the assertion) holds the marker's line
+ * first, then a pin that starts on the next line. A marker without a
  * reason exempts nothing (it is reported by markerProblems).
  */
 function pairMarkers(pins, markers) {
@@ -129,9 +131,10 @@ function pairMarkers(pins, markers) {
   const unused = [];
   for (const marker of markers) {
     if (marker.reason === "") continue;
-    const hit = [marker.line, marker.line + 1]
-      .map((line) => pins.find((pin) => pin.line === line && !exempt.has(pin)))
-      .find(Boolean);
+    const free = pins.filter((pin) => !exempt.has(pin));
+    const hit =
+      free.find((pin) => pin.line <= marker.line && marker.line <= pin.endLine) ??
+      free.find((pin) => pin.line === marker.line + 1);
     if (hit) exempt.add(hit);
     else unused.push(marker);
   }
@@ -146,9 +149,8 @@ export function findCountPins(filePath, text) {
   if (!PREFILTER.test(text)) return [];
   const sourceFile = parseSource(filePath, text);
   const pins = collectPins(sourceFile);
-  if (!text.includes(MARKER_PREFILTER)) return pins;
-  const { exempt } = pairMarkers(pins, findMarkers(sourceFile, text));
-  return pins.filter((pin) => !exempt.has(pin));
+  const { exempt } = text.includes(MARKER_PREFILTER) ? pairMarkers(pins, findMarkers(sourceFile, text)) : { exempt: new Set() };
+  return pins.filter((pin) => !exempt.has(pin)).map(({ line, matcher, value }) => ({ line, matcher, value }));
 }
 
 /**
