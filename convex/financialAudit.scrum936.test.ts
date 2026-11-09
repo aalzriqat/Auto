@@ -55,6 +55,86 @@ async function fixture() {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
+test.each(["owner", "finance"] as const)("SCRUM-936 %s audit accounting details follow stored plan entitlement and recover on renewal", async viewer => {
+  const s = await fixture();
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
+  const journalEntryId = await s.t.run(ctx => ctx.db.insert("journalEntries", { orgId: s.orgId,
+    accountingDate: s.asOfDate, journalNumber: "QA-PLAN", category: "MANUAL", sourceType: "MANUAL", sourceId: "synthetic-plan",
+    memo: "Private manual memo", status: "POSTED", currency: "JOD", createdAt: Date.now(), postedAt: Date.now(), postedBy: s.ownerId }));
+  const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+    actionType: "POST_MANUAL_JOURNAL", resourceType: "journalEntries", resourceId: journalEntryId,
+    description: "Approved Private manual memo", after: { totalDebits: 40, lines: 2 }, occurredAt: Date.now() }));
+  const row = await s.t.run(ctx => ctx.db.get(id));
+  const subscription = await s.t.run(ctx => ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique());
+  if (!subscription) throw new Error("Missing fixture subscription");
+  const reader = s[viewer];
+  // Active state with an old period end still grants access: getOrgPlan uses stored status.
+  await s.t.run(ctx => ctx.db.patch(subscription._id, { currentPeriodEnd: 1 }));
+  expect(await reader.query(api.accountingLedger.getJournalEntry, { orgId: s.orgId, journalEntryId })).toMatchObject({ entry: { memo: "Private manual memo" } });
+  expect(await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 })).toContainEqual(row);
+  for (const state of ["expired", "cancelled", "past_due", "free", "missing"] as const) {
+    if (state === "missing") await s.t.run(ctx => ctx.db.delete(subscription._id));
+    else await s.t.run(ctx => ctx.db.patch(subscription._id, { plan: state === "free" ? "free" : "professional", status: state === "free" ? "active" : state }));
+    await expect(reader.query(api.accountingLedger.getJournalEntry, { orgId: s.orgId, journalEntryId })).rejects.toThrow(/Upgrade required/);
+    for (const filter of [{}, { actorId: s.ownerId }, { actionType: "POST_MANUAL_JOURNAL" }, { fromDate: 1 }]) {
+      const audit = await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter, limit: 200 });
+      const restricted = audit.find(item => item._id === id);
+      expect(restricted).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD", lineCount: 2,
+        actionType: "POST_MANUAL_JOURNAL", actorId: s.ownerId });
+      expect(JSON.stringify(restricted)).not.toMatch(/Private manual memo|totalDebits/);
+    }
+  }
+  await s.t.run(ctx => ctx.db.insert("subscriptions", { orgId: s.orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() }));
+  expect(await reader.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 })).toContainEqual(row);
+  expect(await reader.query(api.accountingLedger.getJournalEntry, { orgId: s.orgId, journalEntryId })).toMatchObject({ entry: { memo: "Private manual memo" } });
+  expect(await s.t.run(ctx => ctx.db.get(id))).toEqual(row);
+});
+
+test("SCRUM-936 expired plan withholds accounting families while independent readers retain their audit facts", async () => {
+  const s = await fixture();
+  const rows = await s.t.run(async ctx => {
+    const subscription = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
+    if (!subscription) throw new Error("Missing fixture subscription");
+    await ctx.db.patch(subscription._id, { status: "expired" });
+    const openingJournal = await ctx.db.insert("journalEntries", { orgId: s.orgId, accountingDate: s.asOfDate,
+      journalNumber: "QA-OPENING-PLAN", category: "OPENING_BALANCE", sourceType: "OPENING_BALANCE", sourceId: "synthetic-opening-plan",
+      memo: "Opening evidence", status: "POSTED", createdAt: Date.now(), postedAt: Date.now(), postedBy: s.ownerId });
+    const ids = [];
+    // Literal reader census, independent of the production action policy.
+    for (const [actionType, resourceType, resourceId, withheld] of [
+      ["POST_EVENT", "journalEntries", "legacy-post", true], ["REVERSE_EVENT", "journalEntries", "legacy-reversal", true],
+      ["MIGRATE_TRANSACTION", "sales", "legacy-sale", true], ["MIGRATE_TRANSACTION", "expenses", "expenses", true],
+      ["CREATE_PERIOD", "accountingPeriods", "legacy-period", true], ["OPEN_PERIOD", "accountingPeriods", "legacy-period", true],
+      ["CLOSE_PERIOD", "accountingPeriods", "legacy-period", true], ["LOCK_PERIOD", "accountingPeriods", "legacy-period", true],
+      ["REOPEN_PERIOD", "accountingPeriods", "legacy-period", true], ["ACKNOWLEDGE_CLOSE_WARNINGS", "accountingPeriods", "legacy-period", true],
+      ["INIT_CHART", "chartOfAccounts", "legacy-account", true], ["UPDATE_ACCOUNT", "chartOfAccounts", "legacy-account", true],
+      ["RESOLVE_SYSTEM_ACCOUNT_ADOPTION", "chartOfAccounts", "legacy-account", true], ["REPAIR_MISSING_SYSTEM_ACCOUNTS", "chartOfAccounts", "legacy-account", true],
+      ["CORRECT_PREPAID_SCHEDULE", "prepaidExpenseSchedules", "legacy-prepaid", true], ["REQUEST_PREPAID_CORRECTION", "prepaidExpenseSchedules", "legacy-prepaid", true],
+      ["APPROVE_PREPAID_CORRECTION", "prepaidExpenseSchedules", "legacy-prepaid", true], ["REJECT_PREPAID_CORRECTION", "prepaidExpenseSchedules", "legacy-prepaid", true],
+      ["POST_MANUAL_JOURNAL", "journalEntries", openingJournal, false],
+      ["POST_EVENT", "accountingCutoverSignOffs", "legacy-signoff", false],
+      ["CREATE_MANUAL_JOURNAL_DRAFT", "manualJournalDrafts", "legacy-manual", false], ["REJECT_MANUAL_JOURNAL", "manualJournalDrafts", "legacy-manual", false],
+      ["EDIT_OPENING_DRAFT", "openingBalanceDrafts", "legacy-opening", false],
+      ["ALLOCATE_PAYMENT", "vehicleSupplierPayables", "legacy-supplier", false],
+      ["SET_COMMISSION_AMOUNT", "sales", "legacy-sale", false], ["ALLOCATE_DEPOSIT", "sales", "legacy-sale", false],
+      ["ADD_DEAL_COMMISSION_LINE", "dealCommissionLines", "legacy-commission", false],
+      ["CONFIRM_SUPPLIER_DISBURSEMENT", "applications", "legacy-application", false],
+      ["IGNORE_BANK_STATEMENT_LINE", "bankStatementLines", "legacy-bank", false],
+    ] as const) ids.push({ withheld, id: await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+      actionType, resourceType, resourceId, description: "Synthetic reader census", after: { totalDebits: 40 }, occurredAt: Date.now() }) });
+    return Promise.all(ids.map(async ({ id, withheld }) => ({ row: await ctx.db.get(id), withheld })));
+  });
+  await expect(s.owner.query(api.accountingPeriods.list, { orgId: s.orgId })).rejects.toThrow(/Upgrade required/);
+  await expect(s.owner.query(api.chartOfAccounts.list, { orgId: s.orgId })).rejects.toThrow(/Upgrade required/);
+  expect(await s.owner.query(api.financialAudit.listPendingManualJournals, { orgId: s.orgId })).toEqual([]);
+  expect(await s.owner.query(api.accountingCutover.listSignOffs, { orgId: s.orgId })).toEqual([]);
+  const audit = await s.owner.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
+  for (const { row, withheld } of rows) {
+    if (withheld) expect(audit.find(item => item._id === row?._id)).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
+    else expect(audit).toContainEqual(row);
+  }
+});
+
 test.each([
   ["EMPLOYEE_ADVANCES", true], ["EMPLOYEE_ADVANCES", false],
   ["COMMISSION_PAYABLE", true], ["COMMISSION_PAYABLE", false],
