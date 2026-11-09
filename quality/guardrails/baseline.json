@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "95ffa13e91e9c619336ac9d4274c560d3b132121",
+  "sourceCommit": "0498711b0cd642631a4b5c85a1b60fca01c7257f",
   "sizeCeilings": {
     "app/(dashboard)/[orgId]/commissions/page.tsx": 1204,
     "app/(dashboard)/[orgId]/dashboard/page.tsx": 950,
@@ -49,9 +49,9 @@
     "components/accounting/PrepaidExpensesTab.tsx": 1402,
     "components/accounting/collections/CashDrawerPanel.tsx": 647,
     "components/accounting/collections/PaymentLinksPanel.tsx": 731,
-    "components/accounting/setup/OpeningAllocationEditor.tsx": 940,
-    "components/accounting/setup/OpeningBalanceApprovalPanel.tsx": 863,
-    "components/accounting/setup/OpeningBalanceCard.tsx": 879,
+    "components/accounting/setup/OpeningAllocationEditor.tsx": 942,
+    "components/accounting/setup/OpeningBalanceApprovalPanel.tsx": 870,
+    "components/accounting/setup/OpeningBalanceCard.tsx": 1024,
     "components/applications/cockpit/DealCockpit.tsx": 9300,
     "components/applications/cockpit/DealCustodyDialogs.tsx": 956,
     "components/applications/cockpit/DealCustodyPanel.tsx": 1146,
@@ -81,7 +81,7 @@
     "components/vehicles/VehicleDetailsDialog.tsx": 1909,
     "components/vehicles/VehicleDialog.tsx": 1690,
     "components/vehicles/VehicleImportDialog.tsx": 1235,
-    "convex/accounting/accountSnapshots.ts": 923,
+    "convex/accounting/accountSnapshots.ts": 937,
     "convex/accounting/invoiceReceiptActivation.ts": 692,
     "convex/accounting/openingAllocations.ts": 1168,
     "convex/accounting/postingEngine.ts": 843,
@@ -89,10 +89,10 @@
     "convex/accounting/receiptMovement.ts": 650,
     "convex/accounting/receiptOccurrence.ts": 883,
     "convex/accounting/workflowHooks.ts": 4204,
-    "convex/accountingCutover.ts": 2356,
+    "convex/accountingCutover.ts": 2505,
     "convex/accountingOutbox.ts": 2538,
     "convex/accountingPeriods.ts": 1043,
-    "convex/accountingReports.ts": 4616,
+    "convex/accountingReports.ts": 4664,
     "convex/adminOrgs.ts": 1444,
     "convex/aggregates.ts": 1060,
     "convex/applications.ts": 6640,
@@ -112,7 +112,7 @@
     "convex/facebookIntegrations.ts": 823,
     "convex/financeCompanyForward.ts": 766,
     "convex/financeDealCosts.ts": 5318,
-    "convex/financialAudit.ts": 682,
+    "convex/financialAudit.ts": 685,
     "convex/financingEconomics.ts": 3856,
     "convex/fixedAssets.ts": 872,
     "convex/http.ts": 2050,
@@ -271,6 +271,11 @@
     {
       "rule": "components-no-convex-utils",
       "from": "components/accounting/setup/OpeningBalanceCard.tsx",
+      "to": "convex/utils/money"
+    },
+    {
+      "rule": "components-no-convex-utils",
+      "from": "components/accounting/setup/openingAllocationForm.ts",
       "to": "convex/utils/money"
     },
     {
@@ -1132,6 +1137,16 @@
       "rule": "no-door-import",
       "from": "convex/notificationPreferences.ts",
       "to": "convex/subscriptions"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/openingBalanceMaintenance.ts",
+      "to": "convex/accountingPeriods"
+    },
+    {
+      "rule": "no-door-import",
+      "from": "convex/openingBalanceMaintenance.ts",
+      "to": "convex/financialAudit"
     },
     {
       "rule": "no-door-import",
