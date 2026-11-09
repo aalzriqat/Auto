@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
-import { verifySupplierLaunchEvidence } from "./supplierLaunchGate";
+import { runSupplierLaunchEvidencePhase, verifySupplierLaunchEvidence } from "./releaseGuard";
 
 const TABLES = ["vehicleSupplierPayables", "vehicleSupplierReceivables", "supplierCostRecoveries",
   "supplierCostRecoveryReceipts", "openingPayablePayments", "vehicles", "vehicleOwnershipConversions",
@@ -39,7 +39,7 @@ describe("supplier launch release gate", () => {
       status: "MORE", cursor: `page${page += 1}` } }), now: () => 0, startedAt: 0, timeoutMs: 1000, maxPages: 2 })).toEqual(unavailable);
   });
   test("failed CLI, thrown I/O and deadline never become zero", () => {
-    for (const runPage of [() => ({ ok: false, reason: "PRIVATE" }), () => { throw new Error("PRIVATE"); }]) {
+    for (const runPage of [() => ({ ok: false as const, reason: "PRIVATE" }), () => { throw new Error("PRIVATE"); }]) {
       expect(verifySupplierLaunchEvidence({ runPage, now: () => 0, startedAt: 0, timeoutMs: 1000, maxPages: 3 })).toEqual(unavailable);
     }
     expect(verifySupplierLaunchEvidence({ runPage: () => ({ ok: true, value: ready }), now: () => 1001,
@@ -60,6 +60,25 @@ describe("supplier launch release gate", () => {
     });
     expect(result.ok).toBe(true);
     expect(calls).toEqual(new Map([["vehicles", 5], ["expenses", 20]]));
+  });
+  test("deadline equality and a terminal call returning late both refuse", () => {
+    let now = 0;
+    for (const expired of [false, true]) {
+      now = expired ? 1000 : 0;
+      expect(verifySupplierLaunchEvidence({ runPage: () => { now = 1000; return { ok: true, value: ready }; },
+        now: () => now, startedAt: 0, timeoutMs: 1000, maxPages: 3 })).toEqual(unavailable);
+    }
+  });
+  test("a cursor cycle refuses without leaking partial counts", () => {
+    let calls = 0;
+    expect(verifySupplierLaunchEvidence({ runPage: () => ({ ok: true, value: { ...ready, status: "MORE", cursor: ++calls % 2 ? "A" : "B" } }),
+      now: () => 0, startedAt: 0, timeoutMs: 1000, maxPages: 20 })).toEqual(unavailable);
+    expect(calls).toBe(3);
+  });
+  test("phase refuses with a fixed code and never emits backend text", () => {
+    expect(() => runSupplierLaunchEvidencePhase({ convex: () => ({ ok: false as const, reason: "PRIVATE" }),
+      now: () => 0, startedAt: 0, timeoutMs: 1000, fail: reason => { throw new Error(reason); } }))
+      .toThrow("Production is DEPLOYED, but INCOMPLETE: supplier launch evidence SUPPLIER_EVIDENCE_UNAVAILABLE.");
   });
   test("one shared success helper owns the launch phase for both exits", () => {
     const source = readFileSync("scripts/rolloutRelease.mjs", "utf8");

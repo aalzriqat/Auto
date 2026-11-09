@@ -19,9 +19,9 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { runSupplierLaunchEvidencePhase } from "./supplierLaunchGate.ts";
 import {
   assertDeploymentIdentity,
+  runSupplierLaunchEvidencePhase,
   captureRunBaseline,
   classifyMaterializationReport,
   decideEmptyRollout,

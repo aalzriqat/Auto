@@ -3,6 +3,7 @@ import { makeFunctionReference } from "convex/server";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import { seedSupplier } from "../test-utils/supplierFixture";
 import schema from "./schema";
+import { scanSupplierLaunchPage } from "./supplierLaunchEvidence";
 import { api } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
@@ -75,7 +76,7 @@ async function assertMissingIdentity(table: typeof TABLES[number]) {
 }
 
 describe("supplier launch evidence", () => {
-  test.each(["missing", "foreign", "deleted"])("dead pending %s edit is exempt and approval refuses without writes", async mode => {
+  async function assertDeadEdit(mode: "missing" | "foreign" | "deleted") {
     const w = await fixture(true);
     await w.t.run(async ctx => {
       const roleId = await ctx.db.insert("roles", { orgId: w.orgId, name: "OWNER", permissions: ALL_PERMISSIONS });
@@ -94,6 +95,50 @@ describe("supplier launch evidence", () => {
       { orgId: w.orgId, requestId: w.editId, status: "APPROVED" })).rejects.toThrow("Vehicle not found.");
     expect(await w.t.run(async ctx => Promise.all(TABLES.map(table => ctx.db.query(table).collect())))).toEqual(before);
     expect(await w.t.query(scan, { table: "vehicleEdits", cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1, counts: ZERO });
+  }
+  test("dead pending missing edit is exempt and approval refuses without writes", async () => { await assertDeadEdit("missing"); });
+  test("dead pending foreign edit is exempt and approval refuses without writes", async () => { await assertDeadEdit("foreign"); });
+  test("dead pending deleted edit is exempt and approval refuses without writes", async () => { await assertDeadEdit("deleted"); });
+
+  test("launch counts historical bases and held concessions while P3 keeps its in-flight scope", async () => {
+    const w = await fixture(false);
+    const count = makeFunctionReference<"query">("supplierIdentityRepair:countPage");
+    const app = await w.t.run(ctx => ctx.db.query("financeApplications").first());
+    if (!app) throw new Error("Fixture missing");
+    expect(await w.t.query(scan, { table: "financeApplications", cursor: null })).toMatchObject({ counts: { ...ZERO, MISSING_SUPPLIER_ID: 1 } });
+    expect(await w.t.query(count, { orgId: w.orgId, phase: "CONCESSIONS", cursor: null })).toMatchObject({ unresolved: 0 });
+    await w.t.run(ctx => ctx.db.patch(app._id, { status: "APPROVED", supplierGapShareMinor: 100 }));
+    for (const supplierGapBasis of [app.supplierGapBasis, undefined]) {
+      await w.t.run(ctx => ctx.db.patch(app._id, { supplierGapBasis }));
+      expect(await w.t.query(scan, { table: "financeApplications", cursor: null })).toMatchObject({ counts: { ...ZERO, MISSING_SUPPLIER_ID: 1 } });
+      expect(await w.t.query(count, { orgId: w.orgId, phase: "CONCESSIONS", cursor: null })).toMatchObject({ unresolved: 1 });
+    }
+    await w.t.run(ctx => ctx.db.patch(app._id, { status: "CLOSED", supplierGapShareMinor: 0 }));
+    expect(await w.t.query(scan, { table: "financeApplications", cursor: null })).toMatchObject({ counts: ZERO });
+  });
+
+  test("receipt and ordinary creditor payment parent reads are cached once per page", async () => {
+    const w = await fixture(true);
+    await w.t.run(async ctx => {
+      const receipt = await ctx.db.get(w.receiptId);
+      const payment = await ctx.db.query("openingPayablePayments").first();
+      if (!receipt || !payment) throw new Error("Fixture missing");
+      const { _id: receiptId, _creationTime: receiptTime, ...receiptFields } = receipt;
+      const { _id: paymentId, _creationTime: paymentTime, ...paymentFields } = payment;
+      void receiptId; void receiptTime; void paymentId; void paymentTime;
+      await ctx.db.insert("supplierCostRecoveryReceipts", { ...receiptFields, seq: 2 });
+      await ctx.db.insert("openingPayablePayments", { ...paymentFields, seq: 2 });
+      await ctx.db.patch(w.payableId, { supplierId: undefined, openingKind: "OTHER_PAYABLE" });
+    });
+    for (const table of ["supplierCostRecoveryReceipts", "openingPayablePayments"] as const) {
+      await w.t.run(async ctx => {
+        const get = vi.spyOn(ctx.db, "get");
+        try {
+          expect(await scanSupplierLaunchPage(ctx, { table, cursor: null })).toEqual({ status: "READY", cursor: null, examined: 2, counts: ZERO });
+          expect(get).toHaveBeenCalledTimes(1);
+        } finally { get.mockRestore(); }
+      });
+    }
   });
 
   // SCRUM-761 requires one literal, non-parameterized registration per scenario.

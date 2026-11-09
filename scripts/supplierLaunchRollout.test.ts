@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { runSupplierLaunchEvidencePhase } from "./supplierLaunchGate";
+import { runSupplierLaunchEvidencePhase } from "./releaseGuard";
 
 const source = readFileSync("scripts/rolloutRelease.mjs", "utf8").replaceAll("\r\n", "\n");
 
 // Execute both actual success branches and their shared helper; only CLI/exit are replaced.
-test.each(["empty", "verified"])("%s rollout success requires complete supplier evidence", mode => {
+function assertRolloutSuccess(mode: "empty" | "verified") {
   const helperStart = source.indexOf("function finishSuccessfulRollout(");
   expect(helperStart).toBeGreaterThan(0);
   const helper = source.slice(helperStart, source.indexOf("\n}\n", helperStart) + 2);
@@ -39,7 +39,10 @@ test.each(["empty", "verified"])("%s rollout success requires complete supplier 
       execute();
       expect(scope.summaries).toBe(1);
       expect(scope.exits).toBe(1);
-      expect(calls).toHaveLength(11);
+      expect(calls.map(args => JSON.parse(args[2]).table)).toEqual([
+        "vehicleSupplierPayables", "vehicleSupplierReceivables", "supplierCostRecoveries", "supplierCostRecoveryReceipts",
+        "openingPayablePayments", "vehicles", "vehicleOwnershipConversions", "financeApplications", "expenses", "vehicleEdits", "openingBalanceDrafts",
+      ]);
     } else {
       expect(execute).toThrow(/DEPLOYED, but INCOMPLETE: supplier launch evidence/);
       expect(scope.lastOutcome).toBe("failed");
@@ -47,4 +50,6 @@ test.each(["empty", "verified"])("%s rollout success requires complete supplier 
       expect(scope.exits).toBe(0);
     }
   }
-});
+}
+test("empty rollout success requires complete supplier evidence", () => { assertRolloutSuccess("empty"); });
+test("verified rollout success requires complete supplier evidence", () => { assertRolloutSuccess("verified"); });
