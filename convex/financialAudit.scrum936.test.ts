@@ -6,6 +6,7 @@ import { api } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import schema from "./schema";
 import * as financialAudit from "./financialAudit";
+import { newApplication, seedFinancedDealership } from "../test-utils/financedDealFixture";
 
 type OpeningInput = FunctionArgs<typeof api.accountingCutover.draftOpeningBalance>;
 type AuditRow = Doc<"financialAuditLog">;
@@ -66,11 +67,21 @@ async function assertAllBranches(s: Seed, row: AuditRow, forbidden: readonly str
     const restricted = rows.find(r => r._id === row._id);
     expect(restricted).toBeDefined();
     expect(restricted).toMatchObject({ actorId: row.actorId, actionType: row.actionType,
-      resourceType: row.resourceType, resourceId: row.resourceId, occurredAt: row.occurredAt });
+      resourceType: row.resourceType, resourceId: "WITHHELD", occurredAt: row.occurredAt });
     const text = JSON.stringify(restricted);
     for (const secret of forbidden) expect(text).not.toContain(secret);
     expect(await s.owner.query(api.financialAudit.listAuditLog, args)).toContainEqual(row);
   }
+  // An explicit grant on a non-owner is a separate positive control.
+  const role = await s.t.run(ctx => ctx.db.get(s.financeRole));
+  if (!role) throw new Error("Missing fixture role");
+  const grants = row.actionType === "ADD_DEAL_COMMISSION_LINE" || row.actionType === "REMOVE_DEAL_COMMISSION_LINE" || row.actionType === "SET_COMMISSION_AMOUNT"
+    ? ["view:commissions"] : ["view:cost_price", "view:payroll", "manage:payroll"];
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: [...role.permissions, ...grants] }));
+  for (const filter of [{}, { actorId: row.actorId }, { actionType: row.actionType }, { fromDate: 1 }]) {
+    expect(await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter, limit: 200 })).toContainEqual(row);
+  }
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: role.permissions }));
   // Read-time projection does not erase or rewrite the retained evidence.
   expect(await s.t.run(ctx => ctx.db.get(row._id))).toEqual(row);
 }
@@ -111,6 +122,23 @@ async function postedOpening(kind: "VEHICLE_INVENTORY" | "EMPLOYEE_ADVANCE", doo
     // Authorized positive control has the actual structured total.
     expect(row.after).toMatchObject({ totalDebits: amountMinor, lines: 2 });
     await assertAllBranches(s, row, [String(amountMinor), String(kind === "EMPLOYEE_ADVANCE" ? s.employeeId : stock!._id)]);
+    await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
+    const readback = await s.finance.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId });
+    if (kind === "EMPLOYEE_ADVANCE") {
+      expect(readback?.rows).toEqual([{ kind, restricted: true }]);
+      await assertAllBranches(s, row, [String(amountMinor), String(s.employeeId)]);
+      await s.owner.mutation(api.openingBalanceMaintenance.requestVoid, { orgId: s.orgId, draftId: readback!.draftId,
+        reason: "private payroll void 110003" });
+      await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price", "view:payroll"] }));
+      expect(await s.finance.query(api.openingBalanceMaintenance.status, { orgId: s.orgId })).toMatchObject({ voidReason: null });
+      const voidRow = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action", q =>
+        q.eq("orgId", s.orgId).eq("actionType", "REQUEST_OPENING_VOID")).unique());
+      if (!voidRow) throw new Error("Missing void audit");
+      await assertAllBranches(s, voidRow, ["private payroll void", "110003"]);
+    } else {
+      expect(readback?.rows[0]).toMatchObject({ amountMinor: 1_000_000, restricted: false });
+      expect(await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId })).toContainEqual(row);
+    }
     expect(row.description).not.toContain(String(amountMinor));
   });
 }
@@ -133,6 +161,19 @@ test("SCRUM-936 legacy opening edit draft and total copies are projected in ever
     if (!row) throw new Error("Missing legacy edit");
     await assertAllBranches(s, row, ["1000000", "110003", String(s.vehicleId), String(s.employeeId), "private opening"]);
   }
+  const draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId,
+    status: "PENDING_APPROVAL", createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate, currency: "JOD",
+    lines: [{ accountId: s.account("CASH_ON_HAND"), debitMinor: 200_003, creditMinor: 0 },
+      { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 200_003 }] }));
+  const legacyId = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+    actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts", resourceId: draftId,
+    description: "Old employee removed", before: { allocations: [{ kind: "EMPLOYEE_ADVANCE", userId: s.employeeId, amountMinor: 110_003 }], totalDebits: 110_003 },
+    after: { version: 1, lineCount: 2 }, occurredAt: Date.now() }));
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["view:finance", "manage:finance", "view:cost_price"] }));
+  expect(await s.finance.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: s.orgId })).toHaveLength(1);
+  const legacyRow = await s.t.run(ctx => ctx.db.get(legacyId));
+  if (!legacyRow) throw new Error("Missing historical employee edit");
+  await assertAllBranches(s, legacyRow, ["110003", String(s.employeeId)]);
 });
 
 test("SCRUM-936 legacy posted manual journal totals and memo are withheld while pilot posting stays blocked", async () => {
@@ -142,6 +183,20 @@ test("SCRUM-936 legacy posted manual journal totals and memo are withheld while 
     lines: [{ accountId: s.account("CASH_ON_HAND"), debitMinor: 1_000_000, creditMinor: 0 },
       { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000_000 }],
     accountingDate: s.asOfDate, idempotencyKey: "legacy-control" })).rejects.toThrow(/pilot/i);
+  // A pending manual draft has a broader existing audience than a posted journal.
+  const pendingId = await s.t.run(ctx => ctx.db.insert("manualJournalDrafts", { orgId: s.orgId,
+    status: "PENDING_APPROVAL", memo: "Pending manual 1000000", lines: [
+      { accountId: s.account("CASH_ON_HAND"), debitMinor: 1_000_000, creditMinor: 0 },
+      { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 1_000_000 },
+    ], accountingDate: s.asOfDate, idempotencyKey: "legacy-pending", createdBy: s.ownerId, createdAt: Date.now() }));
+  const pendingAuditId = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId,
+    actorId: s.ownerId, actionType: "CREATE_MANUAL_JOURNAL_DRAFT", resourceType: "manualJournalDrafts", resourceId: pendingId,
+    description: "Manual journal draft submitted for approval: Pending manual 1000000", after: { lines: 2 }, occurredAt: Date.now() }));
+  expect(await s.finance.query(api.financialAudit.listPendingManualJournals, { orgId: s.orgId })).toEqual([
+    expect.objectContaining({ _id: pendingId, memo: "Pending manual 1000000" }),
+  ]);
+  expect(await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId })).toContainEqual(
+    await s.t.run(ctx => ctx.db.get(pendingAuditId)));
   const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
     actionType: "POST_MANUAL_JOURNAL", resourceType: "journalEntries", resourceId: "legacy-journal",
     description: "Manual journal posted: private 1000000", after: { totalDebits: 1_000_000, lines: 2, draftId: "private-draft" }, occurredAt: Date.now() }));
@@ -171,7 +226,7 @@ async function commissionLineAudit(actionType: "ADD_DEAL_COMMISSION_LINE" | "REM
   await s.owner.mutation(api.dealCommissions.removeLine, { orgId: s.orgId, lineId });
     const row = await s.t.run(ctx => ctx.db.query("financialAuditLog").withIndex("by_org_action", q => q.eq("orgId", s.orgId).eq("actionType", actionType)).unique());
     if (!row) throw new Error("Missing commission audit");
-    await assertAllBranches(s, row, ["110003", String(s.employeeId), "private commission note"]);
+    await assertAllBranches(s, row, ["110003", String(s.employeeId), String(lineId), "private commission note"]);
   });
 }
 test("SCRUM-936 adding a deal commission audit inherits the commission reader gate", async () => commissionLineAudit("ADD_DEAL_COMMISSION_LINE"), 30_000);
@@ -194,9 +249,9 @@ async function historicalCostAudit(actionType: "MIGRATE_TRANSACTION" | "ALLOCATE
   await expectCostReaderRefusals(s);
   await expect(s.finance.query(api.supplierCostRecoveries.list, { orgId: s.orgId })).rejects.toThrow(/permission/i);
     const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId, actionType,
-      resourceType: actionType === "MIGRATE_TRANSACTION" ? "sales" : "supplierCostRecoveryReceipts", resourceId: "legacy-resource",
-      description: "Historical cost 1000000", before: { costMinor: 1_000_000 },
-      after: { amountMinor: 1_000_000, vehicleId: s.vehicleId }, occurredAt: Date.now() }));
+      resourceType: actionType === "MIGRATE_TRANSACTION" ? "sales" : actionType === "ALLOCATE_PAYMENT" ? "supplierCostRecoveries" : "supplierCostRecoveryReceipts", resourceId: "legacy-resource",
+      description: "Historical cost 1000000", before: { cogsMinor: 1_000_000, amountRecoveredMinor: 0 },
+      after: { amountRecoveredMinor: 1_000_000, vehicleId: s.vehicleId }, occurredAt: Date.now() }));
     const row = await s.t.run(ctx => ctx.db.get(id));
     if (!row) throw new Error("Missing legacy cost row");
     await assertAllBranches(s, row, ["1000000", String(s.vehicleId)]);
@@ -212,3 +267,41 @@ test("SCRUM-936 every stored audit action has an explicit reader classification"
   expect(policy).toBeDefined();
   expect(Object.keys(policy ?? {}).sort()).toEqual([...actions].sort());
 });
+
+test("SCRUM-936 restricted posted events retain their line count without source text", async () => {
+  const s = await fixture();
+  await expectCostReaderRefusals(s);
+  const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+    actionType: "POST_EVENT", resourceType: "journalEntries", resourceId: "legacy-post",
+    description: "Posted protected-source-1000000", after: { lineCount: 2, journalNumber: "private journal" }, occurredAt: Date.now() }));
+  for (const filter of [{}, { actorId: s.ownerId }, { actionType: "POST_EVENT" }, { fromDate: 1 }]) {
+    const row = (await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter })).find(r => r._id === id);
+    expect(row).toMatchObject({ lineCount: 2, resourceId: "WITHHELD" });
+    expect(JSON.stringify(row)).not.toContain("protected-source");
+  }
+});
+
+test("SCRUM-936 unwind actors retain permitted remittance amounts while finance text stays withheld", async () => withFrozenScheduler(async () => {
+  const s = await seedFinancedDealership("s936-unwind", { modules: import.meta.glob("./**/*.*s"),
+    ownerPerms: [], actors: { operator: ["manage:finance", "view:sales", "cancel:closed_deal", "confirm:finance_disbursement"] },
+    label: "QA TEST SCRUM-936", vinPrefix: "S936" });
+  registerRateLimiter(s.t);
+  const { applicationId } = await newApplication(s);
+  const saleId = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId,
+    customerId: s.customerId, salespersonId: s.owner.userId, salePrice: 12500, saleDate: Date.now(), status: "CANCELLED", financingType: "FINANCED" }));
+  await s.t.run(ctx => ctx.db.insert("dealUnwinds", { orgId: s.orgId, applicationId, saleId,
+    status: "ABANDONED", reason: "private finance reason", startedBy: s.owner.userId, startedAt: Date.now(),
+    remittanceVersion: 1, remittanceMinor: 12_500_000, remittanceMethod: "CASH", forwardDueMinor: 1_575_000,
+    createdAt: Date.now(), updatedAt: Date.now() }));
+  const view = await s.actors.operator.as.query(api.dealUnwind.unwindStatus, { orgId: s.orgId, applicationId });
+  expect(view.evidence).toMatchObject({ remittanceMinor: 12_500_000, reason: null, forwardDueMinor: null });
+  const id = await s.t.run(ctx => ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.owner.userId,
+    actionType: "DEAL_UNWIND_STARTED", resourceType: "financeApplications", resourceId: applicationId,
+    description: "Deal unwind started: private finance reason", after: { remittanceMinor: 12_500_000, remittanceMethod: "CASH", forwardDueMinor: 1_575_000 }, occurredAt: Date.now() }));
+  for (const filter of [{}, { actorId: s.owner.userId }, { actionType: "DEAL_UNWIND_STARTED" }, { fromDate: 1 }]) {
+    const row = (await s.actors.operator.as.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter })).find(r => r._id === id);
+    expect(row?.after).toEqual({ remittanceMinor: 12_500_000, remittanceMethod: "CASH" });
+    expect(JSON.stringify(row)).not.toContain("private finance reason");
+    expect(JSON.stringify(row)).not.toContain("1575000");
+  }
+}), 30_000);
