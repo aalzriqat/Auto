@@ -6,7 +6,7 @@ AutoFlow runs a car dealership. It sells vehicles for cash or through financing 
 
 The nine business domains. The decision in `docs/adr/2026-11-08-domain-modules-and-golden-rules.md` plans one folder and one interface for each. A folder exists only once a step moves real code into it.
 
-- **Deal**: quotes, finance applications, sales and handover.
+- **Deal**: quotes, financing, sales and handover.
 - **Inventory**: vehicles and consignment intake.
 - **Accounting**: the ledger, postings, periods and the accounting outbox.
 - **Collections**: receipts, payments and cheques.
@@ -23,17 +23,14 @@ The whole process of selling one or more vehicles to a customer, cash or finance
 _Avoid_: Unified Deal (in user-facing text), order, transaction (for a deal)
 
 **Sale**:
-The completed result of a Deal for one vehicle. A deal with several vehicles has several sales but stays one deal.
+The completed result of a deal for one vehicle, made by the completion step, which the UI calls closing the deal for a financed deal. A deal with several vehicles has several sales.
+_Avoid_: finalize (in user-facing text)
 
 **Cash deal**:
-A deal in which the customer pays the dealership directly and nobody finances it.
+A deal that no finance company pays for. The customer pays the dealership or, for a sourced vehicle sold on the direct route, the supplier.
 
 **Financed deal**:
-A deal paid for through financing. Either an outside finance company pays for the vehicle, or the dealership finances the customer itself on instalments.
-
-**Finance application**:
-The request that carries the financing of a deal, prepared by the dealership. It names only the finance part, never the whole deal.
-_Avoid_: application (alone, when the deal is meant), financing request
+A deal in which an outside finance company pays for the vehicle. Lease and in-house instalment deals are retired.
 
 **Quote**:
 The offer made to a customer for a vehicle and payment method, from which a deal can be created.
@@ -43,16 +40,16 @@ The amount the dealership asks the finance company to pay for the vehicle.
 _Avoid_: quote (that is the customer offer)
 
 **Appraisal**:
-A valuation of the vehicle, from the finance company or an independent appraiser. It is a deal stage between the credit decision and the approved purchase amount.
+A valuation of the vehicle, from the finance company or an independent appraiser.
 
 **Credit decision**:
-The finance company's decision to approve or reject the finance application, recorded on the deal.
+The finance company's decision to approve or reject the financing, recorded on the deal.
 
 **Approved purchase amount**:
 The amount the finance company agrees to pay for the vehicle.
 
 **Shortfall**:
-The difference between the submitted quotation and the approved purchase amount, together with the agreement on who covers it. The customer, the dealership, the supplier or a split can cover it.
+The amount a financed deal comes up short against its quotation once the finance company has approved its price and terms. It is the net amount under the approved terms, not the gross price difference, except for a finance company without configured terms, where it is the gross difference. Who covers it (the customer, the dealership, a split, or the supplier of a sourced vehicle) is a separate agreement recorded on the deal.
 _Avoid_: gap, appraisal gap
 
 **Delivery actions**:
@@ -65,17 +62,12 @@ _Avoid_: delivery
 
 **Settlement**:
 The deal stage that is complete when every money obligation on the deal is finished. The obligations are the customer's, the finance company's and the supplier's, and one that never existed counts as finished.
-_Avoid_: settlement (for the supplier settlement route)
 
 **Expected payment**:
-The method and date on which the payment for a financed deal is expected. The dealership registers it after the vehicle handover.
+The method and date on which the payment for a deal is expected.
 
 **Disbursement**:
-The payment an outside finance company makes for a financed deal, either to the dealership or directly to the supplier. The dealership confirms it after the deal is closed.
-
-**Completion**:
-The step that turns an agreed deal into completed sales. For a financed deal the UI calls it closing the deal.
-_Avoid_: finalize (in user-facing text)
+The payment an outside finance company makes for a financed deal, either to the dealership or directly to the supplier.
 
 **Cancellation**:
 Voiding a deal. Cancelling a completed sale makes the vehicle available for sale again.
@@ -85,7 +77,7 @@ Undoing a deal after the finance company has already paid.
 _Avoid_: cancellation (for this case)
 
 **Next action**:
-The command the server says the current user can take next on a deal, whether it is enabled, and the first reason it is refused.
+The command the server names as the current user's next move on a deal, with whether it is enabled and the first reason it is refused. The deal read model will carry it after migration step 5.
 _Avoid_: next step (wizard label only)
 
 **Deal number**:
@@ -101,15 +93,15 @@ A vehicle the dealership owns.
 _Avoid_: owned stock, inventory car
 
 **Sourced vehicle**:
-A vehicle held on consignment. The dealership sells it as the supplier's agent and does not own it, so its profit is never the sale price minus a cost.
+A vehicle the dealership sells as the supplier's agent without owning it. The dealership earns a margin over what the supplier is entitled to, and the vehicle has no cost basis.
 _Avoid_: special order, drop-ship, consigned stock
 
 **Cost basis**:
-What a stock vehicle cost the dealership before the deal, made of the purchase price, landed costs and capitalized costs. A sourced vehicle has no cost basis, because the supplier entitlement takes its place.
+What a stock vehicle cost the dealership, including the reconditioning costs it capitalizes.
 _Avoid_: cost price (for a sourced vehicle)
 
 **Capitalized cost**:
-A paid reconditioning cost on a stock vehicle that the dealership adds to the vehicle's value instead of expensing in the period.
+A paid reconditioning cost on an unsold stock vehicle that the dealership adds to the vehicle's value instead of expensing.
 
 ## Suppliers
 
@@ -127,6 +119,7 @@ What a supplier owes the dealership, such as its margin on a sale paid directly 
 
 **Supplier settlement route**:
 Where the money for a sourced vehicle goes. It goes either through the dealership, which then owes the supplier its entitlement, or directly to the supplier, who then owes the dealership its margin.
+_Avoid_: settlement (alone, because Settlement is a deal stage)
 
 ## Accounting
 
@@ -140,7 +133,7 @@ Turning a business event into its journal entry, exactly once.
 The definition of which accounts a given kind of business event debits and credits.
 
 **Reversal**:
-A new journal entry that cancels an earlier one. It takes a date in an open period, so reversing an entry in a closed period uses a date in the current period.
+A new journal entry that cancels an earlier one. It takes a date in a period that still accepts postings.
 
 **General ledger**:
 The set of all posted journal entries, by account.
@@ -156,19 +149,16 @@ A span of dates that the books are kept in. A period is future, open, closing, c
 An accounting period that the dealership has closed. Its balances stay fixed unless the dealership reopens it.
 
 **Locked period**:
-An accounting period that has been locked. The normal reopen action refuses it, and only the break-glass process can reopen it.
+An accounting period that has been locked. AutoFlow cannot reopen it.
 
 **Snapshot**:
-The stored running debit and credit totals of one account for one accounting period. They let reports avoid adding up every journal line.
+The stored running debit and credit totals of one account in one currency for one accounting period.
 
 **Opening balance**:
 A starting balance entered when a dealership begins using AutoFlow.
 
 **Opening suspense**:
 The account that holds the difference when the entered opening balances do not balance, until it is cleared.
-
-**Pending posting event**:
-A business event that has not yet posted. AutoFlow holds it for retry or review.
 
 ## Collections
 
@@ -177,7 +167,7 @@ Money the dealership receives from a customer, a supplier or a finance company.
 _Avoid_: payment (without a direction)
 
 **Refund**:
-Money paid back to a customer.
+Money paid back to the customer or the finance company that paid it.
 
 **Customer deposit**:
 Money a customer pays to reserve a vehicle or as security. The dealership holds it as owed to the customer until it applies, refunds or forfeits it.
@@ -193,12 +183,12 @@ A cheque that the dealership receives from a customer or a finance company and t
 An amount that a customer or a finance company owes the dealership. A supplier receivable is a separate term.
 
 **Sale invoice**:
-The invoice that records what the customer owes for a sale. A sale invoice is a receivable document.
+The invoice that records what the customer owes the dealership for a sale. A sale invoice is a receivable document.
 
 ## Expenses
 
 **Expense**:
-A business cost the dealership incurs.
+A cost that the dealership pays or owes to a payee. Who ultimately bears it is the cost bearer.
 
 **Payee**:
 The garage or service provider the dealership pays an expense to.
@@ -207,22 +197,19 @@ _Avoid_: vendor (when the payee is meant)
 **Cost bearer**:
 Who ultimately bears an expense, either the dealership or the supplier of a sourced vehicle. The cost bearer is decided separately from the payee.
 
-**Period expense**:
-An expense the dealership charges to the period it falls in, instead of adding it to a vehicle's value.
-
 ## Commissions and payroll
 
 **Commission**:
 An employee's pay earned on a deal, for selling, buying or executing it.
 
 **Commission mode**:
-The dealership's setting for how sale commissions are decided. They are decided automatically by dealership tiers, automatically per member, or manually by a manager for each sale.
+The dealership's setting for how sale commissions are decided. They are decided automatically by dealership tiers, automatically per member, or manually for each sale.
 
 **Payroll**:
-The monthly payment of salaries, commissions and salary advances to staff.
+The monthly run that pays staff their salaries and unpaid commissions, less any outstanding salary advances.
 
 **Salary advance**:
-Part of an employee's salary paid before payday and recovered from later pay.
+Money paid to an employee ahead of pay. Payroll deducts what is outstanding from later pay, unless the employee repays it directly or the dealership writes it off.
 
 ## Customers
 
@@ -292,12 +279,9 @@ What callers gain from depth. They get more capability for less interface learne
 **Locality**:
 What maintainers gain from depth. Changes, bugs and knowledge sit in one place.
 
-**Domain**:
-One of the nine business areas in the Domains section.
-
 **Door**:
 A public backend function whose path and contract the apps call.
-_Avoid_: endpoint, handler
+_Avoid_: endpoint, handler, entry-point module
 
 **Deletion test**:
 Imagining a module deleted. If nothing is lost except a pass-through, the module was not worth having.
