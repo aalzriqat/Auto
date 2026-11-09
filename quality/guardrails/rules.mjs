@@ -426,7 +426,8 @@ export function buildBaseline(sourceCommit, config, measured, trustedBaseline) {
  *             checked for completeness against disk and may only tighten.
  *  measured — {inventory: string[], counts: Map, violations: [...]} of the PR tree,
  *             plus targetInventory (paths on the target) and unchangedFromTarget
- *             (files whose text equals the target's).
+ *             (files whose text equals the target's), and targetCounts (Map of
+ *             formatted line counts on the target for the grandfathered files).
  *  bootstrapPolicy — the pinned first-PR policy (defaults to BOOTSTRAP_POLICY).
  */
 export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy = BOOTSTRAP_POLICY }) {
@@ -446,7 +447,12 @@ export function evaluate({ trusted, proposed, measured, bootstrap, bootstrapPoli
     const trustedProduction = classify(filePath, trusted.config) === "production";
     if (!trustedProduction && classify(filePath, scope) !== "production" &&
       classify(filePath, proposed.config) !== "production") continue;
-    const ceiling = trusted.baseline.sizeCeilings[filePath];
+    const baselineCeiling = trusted.baseline.sizeCeilings[filePath];
+    // The cap lowers itself: a file that already shrank on the target may not grow back.
+    const onTarget = measured.targetCounts?.get(filePath);
+    const ceiling = baselineCeiling === undefined || onTarget === undefined
+      ? baselineCeiling
+      : Math.min(baselineCeiling, onTarget);
     if (ceiling !== undefined) {
       if (lines > ceiling) {
         errors.push(`SIZE-GROWN ${filePath}: ${lines} lines > grandfathered ceiling ${ceiling}`);

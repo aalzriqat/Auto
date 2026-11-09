@@ -153,6 +153,35 @@ function prettierOptionsFrom(text, label) {
   return options;
 }
 
+/** Formatted line count of one file, formatted once per (path, content) per cache. */
+async function cachedLines(filePath, text, prettierOptions, prettier, lineCache) {
+  const key = createHash("sha256").update(filePath).update("\0").update(text.replaceAll("\r\n", "\n")).digest("hex");
+  let measured = lineCache.get(key);
+  if (!measured) {
+    measured = await measureLines(filePath, text, prettierOptions, prettier);
+    lineCache.set(key, measured);
+  }
+  return measured;
+}
+
+/**
+ * Formatted line counts, on the TARGET tree, of the grandfathered files only
+ * (the size guardrail's effective ceiling is the lower of the baseline ceiling
+ * and this count). Shares the run's lineCache, so a file the PR left unchanged
+ * is not formatted a second time.
+ */
+async function measureTargetCounts(cwd, targetBlobs, paths, prettierOptions, lineCache) {
+  const prettier = (await import("prettier")).default;
+  const present = [...new Set(paths)].filter((p) => targetBlobs.has(p)).sort(compareCodeUnits);
+  const texts = readBlobs(cwd, present.map((p) => targetBlobs.get(p)));
+  const counts = new Map();
+  for (const filePath of present) {
+    const measured = await cachedLines(filePath, texts.get(targetBlobs.get(filePath)), prettierOptions, prettier, lineCache);
+    counts.set(filePath, measured.lines);
+  }
+  return counts;
+}
+
 /**
  * Measure a set of files: formatted line counts for every file that is
  * production under ANY of the given configs, and import violations.
@@ -174,13 +203,7 @@ async function measure({ files, readText, configs, prettierOptions, lineCache = 
     const chunk = wanted.slice(i, i + BATCH);
     const results = await Promise.all(
       chunk.map(async (filePath) => {
-        const text = readText(filePath);
-        const key = createHash("sha256").update(filePath).update("\0").update(text.replaceAll("\r\n", "\n")).digest("hex");
-        let measured = lineCache.get(key);
-        if (!measured) {
-          measured = await measureLines(filePath, text, prettierOptions, prettier);
-          lineCache.set(key, measured);
-        }
+        const measured = await cachedLines(filePath, readText(filePath), prettierOptions, prettier, lineCache);
         return { filePath, measured };
       }),
     );
@@ -343,6 +366,10 @@ export async function runGuardrails({ cwd, env = process.env, base, log = () => 
     ? JUSTIFIED_LISTS.flatMap((name) => proposed.config[name].map((entry) => entry.path)).filter((p) => onDisk.has(p))
     : [];
   measured.unchangedFromTarget = unchangedFromTarget(cwd, [...newlyScoped, ...excluded], targetBlobs, readDisk);
+  // Not on bootstrap: there the proposed baseline is verified by recomputation instead.
+  measured.targetCounts = bootstrap
+    ? new Map()
+    : await measureTargetCounts(cwd, targetBlobs, Object.keys(trusted.baseline.sizeCeilings), prettierOptions, lineCache);
   const { errors, notices } = evaluate({ trusted, proposed, measured, bootstrap, bootstrapPolicy });
   const ratchets = measureRatchets({ cwd, inventory, readDisk, targetBlobs, scope: enforcementScope(trusted.config, proposed.config) });
   errors.push(...ratchets.errors);

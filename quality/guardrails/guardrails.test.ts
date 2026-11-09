@@ -113,6 +113,25 @@ describe("file size", () => {
     expect(result.notices).toContain("ceiling can ratchet down: convex/big.ts 700 -> 650");
   }, TIMEOUT);
 
+  test("the cap lowers itself: a file that shrank on the target may not grow back to the old ceiling", async () => {
+    const root = fixtureRepo();
+    // Target: big.ts is 1000 lines with a baseline ceiling of 1000.
+    write(root, "convex/big.ts", lines(1000));
+    writeBaselineDoc(root, { ...baseBaseline(), sizeCeilings: { "convex/big.ts": 1000 } });
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "big at 1000");
+    // PR A shrinks it to 700 and leaves the baseline ceiling alone: passes.
+    write(root, "convex/big.ts", lines(700));
+    const prA = await check(root);
+    expect(prA.errors).toEqual([]);
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "PR A: shrink to 700");
+    // PR B: the target now has 700 lines but the baseline ceiling is still 1000.
+    write(root, "convex/big.ts", lines(1000));
+    const prB = await check(root);
+    expectFailure(prB.errors, /^SIZE-GROWN convex\/big\.ts: 1000 lines > grandfathered ceiling 700/);
+  }, TIMEOUT);
+
   test("tests, exemptions and listed migrations are not production files", async () => {
     const root = fixtureRepo();
     write(root, "convex/big.test.ts", lines(900));
