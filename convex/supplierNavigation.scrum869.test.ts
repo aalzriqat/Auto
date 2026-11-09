@@ -11,10 +11,10 @@ const NOW = Date.parse("2026-11-10T09:00:00Z");
 const vehicles = makeFunctionReference<"query">("supplierRelationships:vehicles");
 afterEach(() => vi.useRealTimers());
 
-async function seed(permissions = ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "manage:finance"]) {
+async function seed(permissions = ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "manage:finance"], transactionLimits = false) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
-  const t = convexTestWithComponents(schema, modules);
+  const t = convexTestWithComponents(schema, modules, { transactionLimits });
   const orgId = await t.run(ctx => ctx.db.insert("organizations", { name: "Synthetic dealer", createdAt: NOW }));
   const foreignOrg = await t.run(ctx => ctx.db.insert("organizations", { name: "Other dealer", createdAt: NOW }));
   const userId = await t.run(ctx => ctx.db.insert("users", { clerkId: "navigation", email: "synthetic@example.test", name: "Operator" }));
@@ -43,6 +43,37 @@ const related = (s: Seed, kind = "SOURCED", paginationOpts = { numItems: 25, cur
   s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.supplierId, kind, paginationOpts });
 
 describe("supplier navigation by canonical id", () => {
+  test("two purchase obligations for one vehicle retain distinct stable relationship ids across pages", async () => {
+    const s = await seed();
+    await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK" }));
+    const firstId = await payable(s, { status: "PAID", amountPaid: 9500 });
+    const secondId = await payable(s);
+    const first = await related(s, "OWNED", { numItems: 1, cursor: null });
+    expect(first.isDone).toBe(false);
+    const second = await related(s, "OWNED", { numItems: 1, cursor: first.continueCursor });
+    expect(second.isDone).toBe(true);
+    const rows = [...first.page, ...second.page];
+    expect(rows.map((row: { vehicleId: string }) => row.vehicleId)).toEqual([s.vehicleId, s.vehicleId]);
+    expect(new Set(rows.map((row: { id: string }) => row.id))).toEqual(new Set([firstId, secondId]));
+  });
+
+  test("decoration exhaustion preserves every computed payable row and complete money totals", async () => {
+    const s = await seed(undefined, true);
+    const id = await payable(s);
+    const withoutHeavyLinks = await outstanding(s);
+    const draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "POSTED", lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW }));
+    for (let index = 0; index < 20; index += 1) {
+      await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic", amountDueMinor: 1000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, createdBy: s.userId, createdAt: NOW, updatedAt: NOW, origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: `row-${index}`, title: "n".repeat(900_000), purpose: "CLAIM" }));
+    }
+    const exhausted = await outstanding(s);
+    expect(exhausted.receivable.incompleteReason).toBe("READ_BUDGET");
+    expect(exhausted.payable.rows.map(row => row.id)).toEqual([id]);
+    expect(exhausted.payable.totals).toEqual(withoutHeavyLinks.payable.totals);
+    expect(exhausted.payable.totals).toEqual([{ currency: "JOD", grossMinor: 9_500_000, disputedMinor: 0, overdueMinor: 0 }]);
+    expect(exhausted.payable.complete).toBe(true);
+    expect(exhausted.payable.rows[0].context).toMatchObject({ source: null, vehicleSource: null });
+  });
+
   test("statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows", async () => {
     const s = await seed();
     const id = await payable(s);

@@ -10,12 +10,15 @@ import { SupplierRelationshipsSection } from "./SupplierRelationshipsSection";
 import { SupplierRowDetails } from "./SupplierRowDetails";
 
 const world = vi.hoisted(() => ({ locale: "en" as "en" | "ar", permissions: [] as string[],
-  loading: false, error: false, incomplete: false, empty: false, loadMore: vi.fn(), calls: [] as unknown[] }));
+  loading: false, error: false, incomplete: false, empty: false, loadMore: vi.fn(), permissionLookup: vi.fn(), calls: [] as unknown[] }));
 vi.mock("@/components/providers/LanguageProvider", async () => {
   const { dictionaries: messages } = await import("@/lib/i18n/dictionaries");
   return { useLanguage: () => ({ locale: world.locale, dir: world.locale === "ar" ? "rtl" : "ltr", isRtl: world.locale === "ar", t: (key: string) => messages[world.locale][key as keyof typeof messages.en] ?? key }) };
 });
-vi.mock("@/hooks/use-permissions", () => ({ usePermissions: () => ({ isLoading: false, hasPermission: (key: string) => world.permissions.includes(key) }) }));
+vi.mock("@/hooks/use-permissions", () => ({ usePermissions: () => {
+  world.permissionLookup();
+  return { isLoading: false, hasPermission: (key: string) => world.permissions.includes(key) };
+} }));
 const context = { role: "AP", occurredAt: 1794301200000, counterparty: "Synthetic supplier", source: { kind: "VEHICLE", id: "vehicle1", label: "2024 Toyota Camry", href: "/org1/vehicles?supplierVehicleId=vehicle1" } };
 const openRow = { kind: "PAYABLE", id: "pay1", currency: "JOD", outstandingMinor: 9500000, disputedMinor: 0, dueAt: null, dueDate: null, rule: "NO_AGREED_DATE", explanation: "", daysOverdue: null, bucket: "NO_DUE_DATE", context };
 const section = { rows: [openRow], totals: [], complete: true };
@@ -29,7 +32,7 @@ vi.mock("convex/react", async importOriginal => {
       const name = getFunctionName(query);
       if (name === "subscriptions.getOrgSubscription") return { planDetails: { gates: { accounting: true } } };
       if (world.loading) return undefined;
-      if (name === "supplierStatement:outstanding" || name === "supplierStatement.outstanding") return { supplierId: "sup1", payable: section, receivable: { rows: [], totals: [], complete: true } };
+      if (name === "supplierStatement:outstanding" || name === "supplierStatement.outstanding") return { supplierId: "sup1", payable: { ...section, rows: [{ ...openRow, context: { ...context, source: { ...context.source, href: world.permissions.includes(PERMISSIONS.VIEW_VEHICLES) ? context.source.href : null } } }] }, receivable: { rows: [], totals: [], complete: true } };
       if (name === "supplierStatement:settled" || name === "supplierStatement.settled") return { supplierId: "sup1", payable: { rows: [{ kind: "PAYABLE", id: "pay1", currency: "JOD", status: "PAID", dueMinor: 9500000, settledMinor: 9500000, settlement: "COMPLETE", lastChangedAt: 1794301200000, basis: "RECORDED", context }], totals: [], complete: true, unverifiedCount: 0 }, receivable: { rows: [], totals: [], complete: true, unverifiedCount: 0 } };
       if (name.includes("getMySubscription")) return { planDetails: { gates: { accounting: true } } };
       return undefined;
@@ -42,7 +45,7 @@ vi.mock("convex/react", async importOriginal => {
       else if (world.incomplete) status = "CanLoadMore";
       const owned = typeof args === "object" && args !== null && "kind" in args && args.kind === "OWNED";
       const row = owned ? { vehicleId: "vehicle2", label: "2023 Kia Sportage", model: "OWNED_ON_ACCOUNT", status: "SOLD", href: "/org1/vehicles?supplierVehicleId=vehicle2" } : { vehicleId: "vehicle1", label: "2024 Toyota Camry", model: "SOURCED", status: "AVAILABLE", href: "/org1/vehicles?supplierVehicleId=vehicle1" };
-      return { results: world.empty ? [] : [row], status, loadMore: world.loadMore };
+      return { results: world.empty ? [] : [{ ...row, id: row.vehicleId, href: world.permissions.includes(PERMISSIONS.VIEW_VEHICLES) ? row.href : null }], status, loadMore: world.loadMore };
     },
   };
 });
@@ -57,12 +60,22 @@ function resetWorld() {
   world.locale = "en";
   world.permissions = [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE, PERMISSIONS.VIEW_VEHICLES];
   world.loading = false; world.error = false; world.incomplete = false; world.empty = false;
-  world.calls = []; world.loadMore.mockClear();
+  world.calls = []; world.loadMore.mockClear(); world.permissionLookup.mockClear();
 }
 beforeEach(resetWorld);
 afterEach(cleanup);
 
 describe("supplier navigation", () => {
+  test("source href alone controls links without a client permission lookup", () => {
+    world.permissions = [];
+    const source = { kind: "EXPENSE" as const, id: "expense1", label: "Synthetic invoice", href: "/server-authorized-target" };
+    const view = render(<SupplierRowDetails context={{ role: "AR", occurredAt: null, counterparty: "Supplier", source }} />);
+    expect(screen.getByRole("link", { name: source.label }).getAttribute("href")).toBe(source.href);
+    view.rerender(<SupplierRowDetails context={{ role: "AR", occurredAt: null, counterparty: "Supplier", source: { ...source, href: null } }} />);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByText(source.label)).not.toBeNull();
+    expect(world.permissionLookup).not.toHaveBeenCalled();
+  });
   test("outstanding and settled rows show source links, role, timestamp and payee", () => {
     for (const locale of ["en", "ar"] as const) {
       resetWorld();
@@ -154,7 +167,7 @@ describe("supplier navigation", () => {
       resetWorld();
       const text = dictionaries[locale];
       world.locale = locale;
-      const view = render(<SupplierRowDetails context={{ role: "AR", occurredAt: null, counterparty: "Synthetic payer", source: { kind: "OPENING", id: "draft1", label: "Opening claim", href: "/org1/accounting?section=settings" } }} />);
+      const view = render(<SupplierRowDetails context={{ role: "AR", occurredAt: null, counterparty: "Synthetic payer", source: { kind: "OPENING", id: "draft1", label: "Opening claim", href: null } }} />);
       expect(screen.getByText(text.SuppliersRowAR)).not.toBeNull();
       expect(view.container.textContent).toContain(text.SuppliersRowPayer);
       expect(view.container.textContent).toContain(text.SuppliersRowUnknownTime);
