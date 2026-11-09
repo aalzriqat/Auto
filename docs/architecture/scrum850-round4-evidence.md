@@ -102,11 +102,13 @@ that part of the census. References below use fixed-code line numbers.
 | `convex/financialAudit.ts:247-248` | Manual per-journal line admission | Reachable from opening but BigInt exact/safe-total preflight at cutover `:584-585` precedes it; void verifies/copies exact lines. No wrong stored result through this lifecycle; unchanged. Other manual admission is a separate pre-existing class. |
 | `convex/accounting/postingRules.ts:3617-3618` | Event-rule per-journal admission | Opening/void insert direct journals and do not call it. No PR-lifecycle reachability; unchanged. |
 | `convex/accountingCutover.ts:1759,1825-1851` | Build snapshot, insert sign-off, return snapshot, pass `after: snapshot` to auditLog | Shared checked sum precedes writes; no storage shape change. |
-| `convex/financialAudit.ts:99-116` | `auditLog` inserts its supplied `after` into financialAuditLog | Copy only, no arithmetic; ordinary persisted copy and refusal preservation tested. |
+| `convex/financialAudit.ts:109` | `auditLog` inserts its supplied `after` into financialAuditLog | Copy only, no arithmetic; ordinary persisted copy and refusal preservation tested. |
+| `convex/financialAudit.ts:143-208` | `listAuditLog` returns filtered stored audit rows | Copy only, no numeric transformation. Tracked client census found ManualJournalTab using the separate manual-journal commands, no client calling this financial audit reader. |
 | `convex/accountingCutover.ts:1855-1866` | `listSignOffs` reads stored snapshots | Unchanged, public persistence assertions. |
 | `convex/openingBalanceMaintenance.ts:55` | Sign-off existence blocks void | Existence only, no totals consumed; unchanged. |
 | `convex/schema.ts:5956-5981` | Snapshot Float64 schema and org index | Unchanged; schema is not an exact-integer proof. |
 | `scripts/orgDeletionCoverage.test.ts:74` | Table name in deletion registry | No numeric consumer; unchanged. |
+| `convex/adminOrgs.ts:95`; `convex/orgFinancialReset.ts:88,450` | Export/delete registry for financial audit rows | Table handling only, no snapshot arithmetic; unchanged. The separate adminAudit reader uses its own audit table. |
 | Tracked app/components/apps/dealer-worker source | Snapshot/UI consumer census | No `listSignOffs`/`trialBalanceByCurrency` UI reference found in this scoped enumeration. No rendered UI claim. |
 
 ## Five predicted failures and tests
@@ -124,10 +126,198 @@ that part of the census. References below use fixed-code line numbers.
 
 ## Verification record
 
-Initial fixed-code new suite: 12 passed. All measured commands name test files
-and use `--maxWorkers=1`. Final check and mutation results will be appended after
-the implementation commit, with restored-source verification. No unavailable
-property is represented as passing.
+Initial and restored fixed-code new suites: 12 passed. All measured commands
+name test files and use `--maxWorkers=1`. No unavailable property is represented
+as passing. Completed positive runs cover 77 distinct named files and 2407
+tests, counting the new R4 suite once and excluding red/mutant runs and repeats.
+
+### Named existing cutover tests
+
+Enumeration command: `git grep -l -E 'accountingCutover|signOffCutover|listSignOffs|compareLegacyToGL' -- 'convex/*.test.ts'`.
+It finds the new R4 file plus these 32 existing files. Batches 01-07 execute
+every existing file in full, with no name filters: 824 tests passed.
+
+```text
+convex/accountingPhase17.test.ts
+convex/accountingPhase18.test.ts
+convex/adminOrgs.test.ts
+convex/chartOfAccounts.management.test.ts
+convex/costDisclosure.scrum902f.test.ts
+convex/costReaders.scrum902d.test.ts
+convex/manualJournalsPilotOff.scrum795.test.ts
+convex/openingAllocatedAdvances.test.ts
+convex/openingAllocatedPartners.test.ts
+convex/openingAllocatedPrepaids.test.ts
+convex/openingAllocatedReceivables.test.ts
+convex/openingBalanceBankIdentity.test.ts
+convex/openingBalanceIndexReads.test.ts
+convex/openingBalanceMaintenance.scrum850.test.ts
+convex/openingBankReconciliation.scrum858.test.ts
+convex/openingClosureReaders.scrum858.test.ts
+convex/openingCommissionPayroll.test.ts
+convex/openingCommissionReadBudget.test.ts
+convex/openingInventoryCap.scrum858.test.ts
+convex/openingManagementSettlement.test.ts
+convex/openingNamedDeposits.scrum858.test.ts
+convex/openingPrepaidConsumerReports.test.ts
+convex/openingPrepaidRounding.scrum858.test.ts
+convex/openingRehearsalPublicComposite.test.ts
+convex/openingRemainingFamilies.test.ts
+convex/openingReversalDoors.scrum858.test.ts
+convex/openingStockCashBankReplay.test.ts
+convex/openingSupplierLiabilityReplay.test.ts
+convex/openingSuspense.scrum858.test.ts
+convex/supplierPayablesReconciliation.scrum876.opening.test.ts
+convex/supplierReceivables.test.ts
+convex/supplierReceivablesReconciliation.scrum869.test.ts
+```
+
+There is no dedicated `convex/accounting/accountSnapshots*.test.ts` in tracked
+source. The direct-import census (`git grep -l 'accounting/accountSnapshots' -- '*test.ts'`)
+has 14 files, all run in batches 01, 04, 07-10: Phase14, Phase5, Phase18,
+OutboxAtomicity, ReversalBankIdentity, bankAccounts, financedConsignedSettlement,
+openingBankReconciliation, openingClosureReaders, reconciliationOrgReferences,
+supplierPayablesReconciliation SCRUM-651, SCRUM-876, SCRUM-876 opening and
+supplierReceivablesReconciliation SCRUM-869. This is the stated snapshot-test scope.
+
+### Completed batches and exact named file manifests
+
+Each batch runs `pnpm exec vitest run --maxWorkers=1` followed by the paths below.
+Logs are `%TEMP%/s850-r4-suiteNN.log`. A passed batch means every named file
+completed, not an inferred pass from partial output.
+
+| Batch | Files | Tests | Result |
+| --- | ---: | ---: | --- |
+| 01 | 4 | 115 | Passed |
+| 02 | 5 | 82 | Passed |
+| 03 | 5 | 144 | Passed |
+| 04 | 4 | 152 | Passed, including complete 88-test closure-reader file |
+| 05 | 5 | 112 | Passed |
+| 06 | 5 | 75 | Passed |
+| 07 | 4 | 144 | Passed |
+| 08 | 5 | 90 | Passed |
+| 09 | 5 | 310 | Passed |
+| 10 | 6 | 159 | Passed |
+| 11 | 12 | 520 | Passed, including tenant write guard and both contract suites |
+| 12 | 9 | 113 | Passed |
+| Regression validators | 7 | 379 | Passed |
+
+```text
+01: convex/accountingPhase17.test.ts convex/accountingPhase18.test.ts convex/openingBalanceIndexReads.test.ts convex/openingBalanceMaintenance.scrum850.test.ts
+02: convex/adminOrgs.test.ts convex/chartOfAccounts.management.test.ts convex/costDisclosure.scrum902f.test.ts convex/costReaders.scrum902d.test.ts convex/manualJournalsPilotOff.scrum795.test.ts
+03: convex/openingAllocatedAdvances.test.ts convex/openingAllocatedPartners.test.ts convex/openingAllocatedPrepaids.test.ts convex/openingAllocatedReceivables.test.ts convex/openingBalanceBankIdentity.test.ts
+04: convex/openingBankReconciliation.scrum858.test.ts convex/openingClosureReaders.scrum858.test.ts convex/openingCommissionPayroll.test.ts convex/openingCommissionReadBudget.test.ts
+05: convex/openingInventoryCap.scrum858.test.ts convex/openingManagementSettlement.test.ts convex/openingNamedDeposits.scrum858.test.ts convex/openingPrepaidConsumerReports.test.ts convex/openingPrepaidRounding.scrum858.test.ts
+06: convex/openingRehearsalPublicComposite.test.ts convex/openingRemainingFamilies.test.ts convex/openingReversalDoors.scrum858.test.ts convex/openingStockCashBankReplay.test.ts convex/openingSupplierLiabilityReplay.test.ts
+07: convex/openingSuspense.scrum858.test.ts convex/supplierPayablesReconciliation.scrum876.opening.test.ts convex/supplierReceivables.test.ts convex/supplierReceivablesReconciliation.scrum869.test.ts
+08: convex/manualJournalsPilotOffControl.scrum795.test.ts convex/accountingOutboxAtomicity.test.ts convex/accountingReversalBankIdentity.test.ts convex/orgFinancialReset.test.ts convex/orgFinancialResetNarrow.scrum565.test.ts
+09: convex/accountingPhase14.test.ts convex/accountingPhase5.test.ts convex/financedConsignedSettlement.test.ts convex/accountingGenericReversalAuthority.test.ts convex/accountingPhase2.test.ts
+10: convex/supplierPayablesReconciliation.scrum651.test.ts convex/supplierPayablesReconciliation.scrum876.test.ts convex/reconciliationOrgReferences.scrum889.test.ts convex/bankAccounts.test.ts convex/generalLedgerPagination.test.ts convex/vatReport.test.ts
+11: scripts/tenantWriteGuard.test.ts scripts/contractSkew/census.test.ts scripts/contractSkew/clientPaths.test.ts lib/errors.test.ts lib/i18n/appraisalAttribution.test.ts lib/i18n/closingReadinessReasons.test.ts lib/i18n/collectionsIncompleteWording.scrum265.test.ts lib/i18n/deployedStageLabels.test.ts lib/i18n/keyCoverage.test.ts lib/i18n/minimumPriceUpliftCopy.test.ts lib/i18n/vehicleCostCorrectionCopy.test.ts lib/i18n/whoActsGroups.test.ts
+12: components/accounting/setup/OpeningAllocationEditor.test.tsx components/accounting/setup/OpeningAllocationVisualFixture.test.tsx components/accounting/setup/OpeningBalanceApprovalContainer.test.tsx components/accounting/setup/OpeningBalanceApprovalPanel.test.tsx components/accounting/setup/OpeningBalanceMaintenance.scrum850.test.tsx components/accounting/setup/OpeningDepositUi.scrum858.test.tsx components/accounting/setup/openingRehydration.scrum850.test.ts components/accounting/setup/openingAllocationForm.test.ts lib/financeFeeTemplateForm.test.ts
+Regression: scripts/regression/scenarioRecord.test.ts scripts/regression/localExecution.test.ts scripts/regression/pilotDoorAnalysis.test.ts scripts/regression/pilotDoorInventory.test.ts scripts/regression/prRunner.test.ts scripts/regression/refreshRulings.test.ts scripts/regression/implFixture.test.ts
+```
+
+The supplied local `refreshRulings.test.ts` edit was exercised as supplied,
+never edited or staged. No scenario validator or ruling digest was changed.
+
+### TypeScript, lint and contract evidence
+
+Both `pnpm typecheck` and `pnpm typecheck:convex` exited zero without diagnostics.
+Root application roots exclude `convex`, `test-utils`, `apps`, `packages` and
+`dealer-worker`. The Convex config includes `convex/**` and `test-utils/**` and
+excludes generated files as roots. Both compilers still follow imports.
+Logs: `%TEMP%/s850-r4-type-root.log`, `%TEMP%/s850-r4-type-convex.log`.
+
+`pnpm exec eslint convex/accountingCutover.ts convex/accountingCutoverExactness.scrum850.test.ts convex/utils/errors.ts lib/i18n/domains/common.ts`
+exited zero, with no errors or warnings. No adapter/config change was needed.
+Self-review applied engineering-principles, clean-code-guard and test-guard.
+Explicit literal test registrations are retained for scenario source binding;
+shared test bodies avoid duplicated setup. This is not an independent seat.
+
+`node scripts/contractSkew/checkBaselineIdentity.mjs` matched all 945 identities
+before and after the implementation commit. Backend finding identity was not
+measured by that check. No client call moved, so relocation was unnecessary;
+using main or another base to rewrite unmoved calls would add no evidence.
+
+The first renewal check correctly refused uncommitted backend changes. After
+implementation commit `0c8c943a8f9e159722bbffd9fa75c9159c03bdc1`, the required
+check found exactly four stale entries: approve/reject draftId in
+OpeningBalanceApprovalPanel and direct/draft lines in OpeningBalanceCard.
+Each unchanged client call and opening export's argument validators was reviewed
+against `9b2003b2ac294fe66d1d5a878406de21efb27c25`, the last recorded true source.
+Only each entry's renewal string was appended with current evidence blobs.
+No fingerprint, expiry, multiplicity, identity, rationale or extractor changed.
+No renewal tool write mode was used. Notes were committed as
+`f38c73f708f3f20001338585800f715b9926dddf`.
+
+```text
+node scripts/contractSkew/renewBaselineReviewed.mjs --reviewed c82890bd --check-evidence --pr-base 95ffa13e91e9c619336ac9d4274c560d3b132121
+renewal evidence: 945 renewed entries checked, 0 unrenewed, 0 stale, 0 malformed, 0 missing
+```
+
+### Mutation and persisted-reproduction controls
+
+All mutants start after the fix and baseline commits, with clean source at
+`f38c73f708f3f20001338585800f715b9926dddf`. Only
+`convex/accountingCutover.ts` changes during each of the five mutants. Each runs
+the complete twelve-test R4 file, and each restores with
+`git checkout HEAD -- convex/accountingCutover.ts` in a finally block. Each
+restoration checks `git status --porcelain -- convex/accountingCutover.ts` and
+asserts the output is empty. No broad suite overlaps these source mutations.
+
+| Mutant | Target function | Result |
+| --- | --- | --- |
+| Uncheck sign-off debit addition | `sumAllPostedJournalLinesByCurrency` | Killed by unsafe debit history arithmetic-code test; 1 failed, 11 passed, exit 1. |
+| Uncheck sign-off credit addition | `sumAllPostedJournalLinesByCurrency` | Killed by unsafe credit history arithmetic-code test; 1 failed, 11 passed, exit 1. |
+| Uncheck comparison debit addition | `compareLegacyToGL` | Killed by legacy unsafe gross debit test; 1 failed, 11 passed, exit 1. |
+| Uncheck comparison credit addition | `compareLegacyToGL` | Killed by legacy unsafe gross credit test; 1 failed, 11 passed, exit 1. |
+| Replace shared checked call with unchecked `total + minor` | `addCutoverMinor` | Both public boundary routes and four isolated-side tests fail; 6 failed, 6 passed, exit 1. |
+
+Logs: `%TEMP%/s850-r4-mutant-signoff-debit.log`,
+`s850-r4-mutant-signoff-credit.log`, `s850-r4-mutant-legacy-debit.log`,
+`s850-r4-mutant-legacy-credit.log`, `s850-r4-mutant-checked-helper.log`.
+
+An additional diagnostic restores the starting `accountingCutover.ts` from
+`9b2003b2ac294fe66d1d5a878406de21efb27c25`, and temporarily instruments only
+the new test's assertion boundary to call `listSignOffs` after successful
+sign-off. This independently measures persistence, not just the mutation's
+response. The stored snapshot matches the response, and the exact assertion
+fails as follows:
+
+```text
+R4_PERSISTED_GROSS: JOD, isBalanced true,
+  totalDebitsMinor 18014398509481984, totalCreditsMinor 18014398509481984
+AssertionError: expected 18014398509481984n to be 18014398509481983n
+Tests 1 failed | 11 skipped (12)
+REPRODUCTION_EXIT=1
+```
+
+The eleven skipped tests are unrelated cases filtered for this diagnostic;
+none is skipped in the full red or green run. Both source and test are restored
+with `git checkout HEAD --` their exact paths, and scoped Git status is empty.
+Log: `%TEMP%/s850-r4-persisted-reproduction.log`. This temporary diagnostic is
+not substituted for the committed failing-first evidence.
+
+After every mutant and diagnostic is restored, the complete R4 file passes:
+`Test Files 1 passed (1); Tests 12 passed (12)`, exit zero. Log:
+`%TEMP%/s850-r4-restored-green.log`. The final evidence-only commit does not
+change production code, tests, scenario records or baseline entries.
+
+### Commit and file record
+
+| Commit | Files changed |
+| --- | --- |
+| `a1918002ef42fe9fd8ad0fdf5518fbb1a7468765` | New `convex/accountingCutoverExactness.scrum850.test.ts` only; failing-first. |
+| `0c8c943a8f9e159722bbffd9fa75c9159c03bdc1` | `convex/accountingCutover.ts`, `convex/utils/errors.ts`, `lib/i18n/domains/common.ts`, ADR, SCRUM-486 matrix, round-3 evidence pointer, this round-4 evidence file, twelve new money scenario records. |
+| `f38c73f708f3f20001338585800f715b9926dddf` | Only four individual renewal strings in the OpeningBalanceCard and OpeningBalanceApprovalPanel baseline shards. |
+
+The final evidence-only commit completes this record. Every subject ends
+`(SCRUM-850)` and every commit carries
+`Co-Authored-By: Codex gpt-6.1-sol <noreply@openai.com>`. No push was performed.
+The complete change is 22 paths, including the twelve scenario records. Their
+names and bindings are listed in the certification matrix. Personal memory was
+updated in the existing gross-exactness lesson and index, outside the repository.
 
 ## Official sources and limitations
 
