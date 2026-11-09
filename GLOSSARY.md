@@ -1,12 +1,12 @@
 # AutoFlow
 
-AutoFlow runs a car dealership. It sells vehicles for cash or through financing and keeps the dealership's books. It also tracks the money that customers, suppliers and staff owe and are owed. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. The architecture vocabulary follows the `codebase-design` skill. Decisions live in `docs/adr/`. Owner rulings in Jira take precedence over both.
+AutoFlow runs a car dealership. It sells vehicles for cash or through financing and keeps the dealership's books. It also tracks the money that customers, suppliers and staff owe and are owed. This glossary holds the business terms and the architecture vocabulary that code, tickets and reviews use. The architecture vocabulary follows the `codebase-design` skill. Decisions live in `docs/adr/`, and the ADR says which source wins when they disagree.
 
 ## Domains
 
 The nine business domains. The decision in `docs/adr/2026-11-08-domain-modules-and-golden-rules.md` plans one folder and one interface for each. A folder exists only once a step moves real code into it.
 
-- **Deal**: quotes, financing, sales and handover.
+- **Deal**: quotes, finance applications, sales and handover.
 - **Inventory**: vehicles and consignment intake.
 - **Accounting**: the ledger, postings, periods and the accounting outbox.
 - **Collections**: receipts, payments and cheques.
@@ -23,7 +23,7 @@ The whole process of selling one or more vehicles to a customer, cash or finance
 _Avoid_: Unified Deal (in user-facing text), order, transaction (for a deal)
 
 **Sale**:
-The completed result of a deal for one vehicle, made by the completion step, which the UI calls closing the deal for a financed deal. A deal with several vehicles has several sales.
+The completed result of a deal for one vehicle, made by the completion step. A deal with several vehicles has several sales.
 _Avoid_: finalize (in user-facing text)
 
 **Cash deal**:
@@ -31,6 +31,10 @@ A deal that no finance company pays for. The customer pays the dealership or, fo
 
 **Financed deal**:
 A deal in which an outside finance company pays for the vehicle. Lease and in-house instalment deals are retired.
+
+**Finance application**:
+The part of a deal that an outside finance company decides and pays for.
+_Avoid_: finance application (for the whole deal)
 
 **Quote**:
 The offer made to a customer for a vehicle and payment method, from which a deal can be created.
@@ -49,7 +53,7 @@ The finance company's decision to approve or reject the financing, recorded on t
 The amount the finance company agrees to pay for the vehicle.
 
 **Shortfall**:
-The amount a financed deal comes up short against its quotation once the finance company has approved its price and terms. It is the net amount under the approved terms, not the gross price difference, except for a finance company without configured terms, where it is the gross difference. Who covers it (the customer, the dealership, a split, or the supplier of a sourced vehicle) is a separate agreement recorded on the deal.
+The amount a financed deal comes up short once the finance company has approved, which is the net amount under the approved terms against the submitted quotation, or the sale price minus the approved purchase amount for a manual-letter finance company. Who covers it (the customer, the dealership, a split, or the supplier of a sourced vehicle) is a separate agreement recorded on the deal.
 _Avoid_: gap, appraisal gap
 
 **Delivery actions**:
@@ -64,7 +68,7 @@ _Avoid_: delivery
 The deal stage that is complete when every money obligation on the deal is finished. The obligations are the customer's, the finance company's and the supplier's, and one that never existed counts as finished.
 
 **Expected payment**:
-The method and date on which the payment for a deal is expected.
+The method and date on which the dealership expects to receive the money for a deal.
 
 **Disbursement**:
 The payment an outside finance company makes for a financed deal, either to the dealership or directly to the supplier.
@@ -77,7 +81,7 @@ Undoing a deal after the finance company has already paid.
 _Avoid_: cancellation (for this case)
 
 **Next action**:
-The command the server names as the current user's next move on a deal, with whether it is enabled and the first reason it is refused. The deal read model will carry it after migration step 5.
+The command the server names as the current user's next move on a deal, with whether it is enabled and the first reason it is refused.
 _Avoid_: next step (wizard label only)
 
 **Deal number**:
@@ -97,11 +101,11 @@ A vehicle the dealership sells as the supplier's agent without owning it. The de
 _Avoid_: special order, drop-ship, consigned stock
 
 **Cost basis**:
-What a stock vehicle cost the dealership, including the reconditioning costs it capitalizes.
+What a stock vehicle cost the dealership, including the costs of getting it ready for sale that the dealership capitalizes.
 _Avoid_: cost price (for a sourced vehicle)
 
 **Capitalized cost**:
-A paid reconditioning cost on an unsold stock vehicle that the dealership adds to the vehicle's value instead of expensing.
+A paid cost of getting an unsold stock vehicle ready for sale, such as repair, maintenance, detailing or transport, that the dealership adds to the vehicle's value instead of expensing.
 
 ## Suppliers
 
@@ -109,16 +113,16 @@ A paid reconditioning cost on an unsold stock vehicle that the dealership adds t
 A party in the dealership's supplier registry. It includes vehicle suppliers, consignors and the service providers that expenses are paid to.
 
 **Supplier entitlement**:
-What the supplier of a sourced vehicle is owed from its sale, less any concession the supplier agreed.
+What the supplier of a sourced vehicle is owed from the sale of that vehicle, less any concession the supplier agreed.
 
 **Supplier payable**:
 What the dealership owes a supplier.
 
 **Supplier receivable**:
-What a supplier owes the dealership, such as its margin on a sale paid directly to the supplier or a vehicle cost the supplier bears. It is separate from a Receivable.
+What a supplier owes the dealership, such as the dealership's margin on a sale paid directly to the supplier or a vehicle cost the supplier bears. It is separate from a Receivable.
 
 **Supplier settlement route**:
-Where the money for a sourced vehicle goes. It goes either through the dealership, which then owes the supplier its entitlement, or directly to the supplier, who then owes the dealership its margin.
+Where the money for a sourced vehicle goes. It goes either through the dealership, which then owes the supplier the supplier's entitlement, or directly to the supplier, who then owes the dealership the dealership's margin.
 _Avoid_: settlement (alone, because Settlement is a deal stage)
 
 ## Accounting
@@ -170,7 +174,7 @@ _Avoid_: payment (without a direction)
 Money paid back to the customer or the finance company that paid it.
 
 **Customer deposit**:
-Money a customer pays to reserve a vehicle or as security. The dealership holds it as owed to the customer until it applies, refunds or forfeits it.
+Money a customer pays to reserve a vehicle or as security. The dealership holds it as owed to the customer until it applies, refunds or forfeits it, or voids it because it was recorded in error.
 _Avoid_: deposit (alone)
 
 **Bank deposit**:
@@ -217,8 +221,8 @@ Money paid to an employee ahead of pay. Payroll deducts what is outstanding from
 A person or company that buys from the dealership.
 
 **Lead**:
-A prospective customer who has not bought yet.
-_Avoid_: customer (before a deal)
+A sales opportunity with a prospective customer, tracked from first contact until it is won or lost.
+_Avoid_: customer (for a lead that has not yet bought)
 
 ## Organization and access
 
@@ -246,7 +250,7 @@ A deal's headline profit after dealership-borne vehicle expenses and commissions
 _Avoid_: net profit (in reports, where it may mean something else)
 
 **Accounting margin**:
-A deal's margin as the general ledger records it.
+A deal's margin taken from the posted journal entries. Until they exist, the deal shows an estimate instead.
 
 ## Architecture vocabulary
 
