@@ -1,6 +1,6 @@
 # Navigate supplier statements and vehicle relationships by id
 
-Status: proposed implementation, SCRUM-869 feature 1 and SCRUM-887 slice B.
+Status: implemented for local verification, SCRUM-869 feature 1 and SCRUM-887 slice B.
 Base: `68be2346d9e2441e9d5bcf88cb980d9ad9189cd6`.
 Extends the supplier identity design and the P4a, P4b and P5 ADRs.
 Rulings: SCRUM-869 c24419/c24460/c24511, SCRUM-887 c24237,
@@ -21,10 +21,16 @@ decide whether a source label is a link. Backend target readers retain authority
 | --- | --- | --- | --- |
 | supplierStatement.outstanding | Three obligation tables, by_org_and_supplierId_and_status; existing 100 rows per family, status sentinels and shared transaction headroom | view:finance, view:cost_price, accounting plan, requireOwnedRow supplier | Existing separate A/P and A/R rows, amounts in minor units, currency, due facts and complete totals; source context added |
 | supplierStatement.settled | Same supplier/status indexes and existing 100 rows per family; existing bounded receipt journal provenance | Same as outstanding | Existing status, actual settled cash, due amount, settlement basis, timestamps and completeness; source context added |
-| Statement context enrichment | Each displayed obligation reread by typed id; at most 300 obligations per query, sequential headroom check before each get; at most four related gets per row | Inherits statement gate; verify org and supplier on obligation, org on each source | Economic role, created timestamp, snapshot payer/payee, source kind/id/label and permission-filtered href. Deleted, missing or foreign targets have no link. Budget exhaustion removes unfinished rows and withholds totals |
+| Statement context enrichment | Each displayed obligation reread by typed id; at most 300 obligations per query, sequential headroom check before each get; at most four related gets per row | Inherits statement gate; verify org and supplier on obligation, org on each source | Economic role, created timestamp, snapshot payer/payee, source kind/id/label and permission-filtered href; expense sources also carry a separate vehicleSource. Deleted, missing or foreign targets have no link. Budget exhaustion removes unfinished rows and withholds totals |
 | supplierRelationships.vehicles, SOURCED | vehicles.by_org_and_sourcedSupplierId; one paginate, default 25, maximum 50 documents read and 1 MiB page bytes | view:finance, requireOwnedRow supplier | Vehicle id, stock label, SOURCED model, vehicle status, permission-filtered vehicle href |
 | supplierRelationships.vehicles, OWNED | vehicleSupplierPayables.by_org_and_supplierId_and_status prefix; same pagination bounds, at most one headroom-checked vehicle get per payable | Same; no costs returned | Native purchase payables without saleId whose live vehicle is owned; vehicle id, stock label, OWNED_ON_ACCOUNT model, status and permission-filtered href |
 | supplierStatement.paymentsReconciliation | Existing supplier/status and journal indexes, unchanged read budgets | Existing statement gate | Unchanged reconciliation contract |
+| Existing vehicles.get (new direct navigation caller) | Direct vehicle get, existing author/image/pending-request reads; no inventory-list page walk. Existing pending-request query uses by_vehicle then a status filter, without a new scan bound | view:vehicles, existing tenant check; existing cost redaction requires view:cost_price | Existing vehicle detail contract, unchanged; new caller opens the existing dialog |
+
+The settled reader invokes its optional A/P projection callback before reading
+the A/R family, so heavy claims cannot erase a complete payable section's source
+metadata. Pure settled row builders move unchanged to supplierSettledRows to stay
+inside the file ceiling. No callback is added to any opening reader.
 
 Each relationship invocation performs one paginated query. Independent cursors
 keep the two families separate. Preserve split-cursor metadata and never spread
@@ -34,15 +40,24 @@ The existing indexes fit both access paths, so no index or schema change is need
 Legacy id-less money rows stay outside the statement. This slice omits their
 count because proving an organization-wide count would require another scan.
 
+The existing vehicles route gains a supplierVehicleId query parameter. Its
+existing vehicles.get reader validates the id, tenant and cost redaction before
+the existing detail dialog opens. This avoids the existing highlight hook's
+20-page search cap without changing that cap or adding a route.
+
 ## Existing link targets
 
 | Source | Existing route | Required target permission |
 | --- | --- | --- |
-| Vehicle | /[orgId]/vehicles?highlightId=[vehicleId] | view:vehicles; existing list highlights the record and exposes its detail action |
+| Vehicle | /[orgId]/vehicles?supplierVehicleId=[vehicleId] | view:vehicles; existing vehicles route opens its existing detail dialog through vehicles.get, independent of list pagination |
 | Cash sale | /[orgId]/sales/[saleId]/deal | view:sales |
 | Financed sale with application | /[orgId]/applications/[applicationId]/deal | view:sales; org-matched application |
 | Opening obligation | /[orgId]/accounting?section=settings | view:finance, view:cost_price and manage:finance; existing opening readback is in Settings |
-| Expense-origin recovery | Vehicle target above | view:vehicles; expense id remains a source label because no individual expense route exists |
+| Expense-origin recovery | Expense label, plus the vehicle route above | No individual expense screen exists; preserve its document id/title and link the recorded vehicle with view:vehicles |
+
+Route census scope: recursive page.tsx enumeration under
+app/(dashboard)/[orgId]/expenses returned only expenses/page.tsx. This is why
+an expense keeps a plain source label rather than an invented detail route.
 
 Opening provenance takes precedence over native vehicle/sale provenance. A
 statement's immutable supplier name snapshot identifies the payer for A/R or
@@ -52,7 +67,7 @@ service provider. Timestamp labels distinguish creation from last change.
 ## Impact and alternatives
 
 The public statement projections and supplier detail screen consume this change.
-The shared due/aging, alert and balance algorithms remain unchanged. Existing
+The shared due/aging, alert and balance algorithms keep their existing formulas. Existing
 money writers, transitions, cancellation, reversal, retry/idempotency, ledger and
 audit records are unchanged because these are reads. Historical rows remain
 readable without repair; missing links never infer identity. Repeated queries

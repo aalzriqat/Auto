@@ -174,6 +174,8 @@ import type * as supplierDueAlerts from "../supplierDueAlerts.js";
 import type * as supplierIdentityRepair from "../supplierIdentityRepair.js";
 import type * as supplierReceivables from "../supplierReceivables.js";
 import type * as supplierStatement from "../supplierStatement.js";
+import type * as supplierRelationships from "../supplierRelationships.js";
+import type * as utils_supplierNavigation from "../utils/supplierNavigation.js";
 import type * as suppliers from "../suppliers.js";
 import type * as support from "../support.js";
 import type * as supportAgentAuth from "../supportAgentAuth.js";
@@ -344,6 +346,7 @@ import type * as utils_supplierObligationDue from "../utils/supplierObligationDu
 import type * as utils_supplierPaymentAmounts from "../utils/supplierPaymentAmounts.js";
 import type * as utils_supplierPaymentsReconciliation from "../utils/supplierPaymentsReconciliation.js";
 import type * as utils_supplierRegistry from "../utils/supplierRegistry.js";
+import type * as utils_supplierSettledRows from "../utils/supplierSettledRows.js";
 import type * as utils_supplierSettlement from "../utils/supplierSettlement.js";
 import type * as utils_supplierSettlementContainment from "../utils/supplierSettlementContainment.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
@@ -553,6 +556,8 @@ declare const fullApi: ApiFromModules<{
   supplierIdentityRepair: typeof supplierIdentityRepair;
   supplierReceivables: typeof supplierReceivables;
   supplierStatement: typeof supplierStatement;
+  supplierRelationships: typeof supplierRelationships;
+  "utils/supplierNavigation": typeof utils_supplierNavigation;
   suppliers: typeof suppliers;
   support: typeof support;
   supportAgentAuth: typeof supportAgentAuth;
@@ -723,6 +728,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierPaymentAmounts": typeof utils_supplierPaymentAmounts;
   "utils/supplierPaymentsReconciliation": typeof utils_supplierPaymentsReconciliation;
   "utils/supplierRegistry": typeof utils_supplierRegistry;
+  "utils/supplierSettledRows": typeof utils_supplierSettledRows;
   "utils/supplierSettlement": typeof utils_supplierSettlement;
   "utils/supplierSettlementContainment": typeof utils_supplierSettlementContainment;
   "utils/tenancy": typeof utils_tenancy;

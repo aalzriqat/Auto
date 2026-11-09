@@ -16,9 +16,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { ammanDateString } from "@/convex/utils/supplierDueDates";
-import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatExactMinorAmount, moneyDisplayLabel } from "@/lib/moneyDisplay";
+import { Money } from "./SupplierStatementMoney";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +25,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+import { SupplierRowDetails } from "./SupplierRowDetails";
 
 export type SupplierStatementData = FunctionReturnType<typeof api.supplierStatement.outstanding>;
 type StatementSectionData = SupplierStatementData["payable"];
@@ -39,20 +39,12 @@ const KIND_KEY: Record<StatementRow["kind"], string> = {
   RECOVERY: "SuppliersStmtKindRecovery",
 };
 
-function Money({ minor, currency }: Readonly<{ minor: number; currency: string }>) {
-  const { locale } = useLanguage();
-  return (
-    <bdi className="tabular-nums">
-      {formatExactMinorAmount(minor, currency)} {moneyDisplayLabel(currency, locale === "ar" ? "ar" : "en")}
-    </bdi>
-  );
-}
 
 function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Translate }>) {
   const due = row.dueDate ?? translate("SuppliersStmtNoDueDate");
   return (
     <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
-      <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}</TableCell>
+      <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}<SupplierRowDetails context={row.context} /></TableCell>
       <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
         {translate("SuppliersStmtDue")}: <bdi>{due}</bdi>
         {row.daysOverdue !== null && row.daysOverdue > 0 && (
@@ -200,6 +192,7 @@ function SettledItem({ row, translate }: Readonly<{ row: SettledRowData; transla
     <TableRow className="mb-3 block rounded-lg border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:p-0">
       <TableCell className="block p-1 sm:table-cell sm:p-3">
       <span className="font-medium">{translate(KIND_KEY[row.kind])}</span>
+      <SupplierRowDetails context={row.context} />
       <Badge variant="secondary" className="ms-2">{translate(inFull ? "SuppliersStmtHistorySettled" : "SuppliersStmtHistoryPartly")}</Badge>
       </TableCell>
       <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">

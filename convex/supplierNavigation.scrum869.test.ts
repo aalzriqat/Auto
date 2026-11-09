@@ -32,7 +32,7 @@ async function seed(permissions = ["view:finance", "view:cost_price", "view:vehi
   return { t, orgId, foreignOrg, foreignSupplier, userId, roleId, supplierId, otherId, vehicleId, asUser };
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
-async function payable(s: Seed, patch: Partial<Doc<"vehicleSupplierPayables">> = {}) {
+async function payable(s: Seed, patch: Partial<Extract<Doc<"vehicleSupplierPayables">, { vehicleId: unknown }>> = {}) {
   return s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
     orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, sourcedFromName: "Original supplier snapshot",
     amountDue: 9500, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: NOW, updatedAt: NOW, ...patch,
@@ -53,7 +53,7 @@ describe("supplier navigation by canonical id", () => {
     expect(result.payable.rows[0]).toMatchObject({
       outstandingMinor: 9_500_000, currency: "JOD",
       context: { role: "AP", occurredAt: NOW, counterparty: "Original supplier snapshot", source: {
-        kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href: `/${s.orgId}/vehicles?highlightId=${s.vehicleId}`,
+        kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}`,
       } },
     });
   });
@@ -89,7 +89,7 @@ describe("supplier navigation by canonical id", () => {
     const result = await outstanding(s);
     expect(result.receivable.rows).toEqual(expect.arrayContaining([
       expect.objectContaining({ context: expect.objectContaining({ role: "AR", counterparty: "Supplier payer", source: expect.objectContaining({ kind: "SALE", id: saleId, href: `/${s.orgId}/sales/${saleId}/deal` }) }) }),
-      expect.objectContaining({ context: expect.objectContaining({ counterparty: "Supplier bearer", source: expect.objectContaining({ kind: "EXPENSE", label: "Transport invoice" }) }) }),
+      expect.objectContaining({ context: expect.objectContaining({ counterparty: "Supplier bearer", source: expect.objectContaining({ kind: "EXPENSE", label: "Transport invoice", href: null }), vehicleSource: expect.objectContaining({ kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` }) }) }),
     ]));
   });
 
@@ -128,7 +128,7 @@ describe("supplier navigation by canonical id", () => {
     await payable(s); // A SOURCED vehicle's payable must not become an owned relationship.
     expect((await related(s, "OWNED")).page).toEqual([]);
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { sourceType: "STOCK", sourcedSupplierId: undefined, status: "SOLD" }));
-    expect((await related(s, "OWNED")).page).toEqual([{ vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "OWNED_ON_ACCOUNT", status: "SOLD", href: `/${s.orgId}/vehicles?highlightId=${s.vehicleId}` }]);
+    expect((await related(s, "OWNED")).page).toEqual([{ vehicleId: s.vehicleId, label: "2024 Toyota Camry", model: "OWNED_ON_ACCOUNT", status: "SOLD", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` }]);
   });
 
   test("relationship bound returns an incomplete page and continuation reaches the remaining vehicle", async () => {
@@ -150,10 +150,37 @@ describe("supplier navigation by canonical id", () => {
 
   test("public readers refuse foreign suppliers, foreign organizations and callers without finance", async () => {
     const s = await seed();
-    await expect(s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.foreignSupplier, kind: "SOURCED", paginationOpts: { numItems: 25, cursor: null } })).rejects.toThrow(/SUPPLIER_NOT_FOUND/);
-    await expect(s.asUser.query(vehicles, { orgId: s.foreignOrg, supplierId: s.foreignSupplier, kind: "SOURCED", paginationOpts: { numItems: 25, cursor: null } })).rejects.toThrow(/FORBIDDEN/);
-    await expect(s.asUser.query(api.supplierStatement.outstanding, { orgId: s.orgId, supplierId: s.foreignSupplier, nowMs: NOW })).rejects.toThrow(/SUPPLIER_NOT_FOUND/);
+    await expect(s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.foreignSupplier, kind: "SOURCED", paginationOpts: { numItems: 25, cursor: null } })).rejects.toThrow("Supplier not found.");
+    await expect(s.asUser.query(vehicles, { orgId: s.foreignOrg, supplierId: s.foreignSupplier, kind: "SOURCED", paginationOpts: { numItems: 25, cursor: null } })).rejects.toThrow(/UNAUTHORIZED/);
+    await expect(s.asUser.query(api.supplierStatement.outstanding, { orgId: s.orgId, supplierId: s.foreignSupplier, nowMs: NOW })).rejects.toThrow("Supplier not found.");
     await s.t.run(ctx => ctx.db.patch(s.roleId, { permissions: [] }));
     await expect(related(s)).rejects.toThrow(/FORBIDDEN/);
+  });
+
+  test("a distant endCursor cannot widen the relationship read bound", async () => {
+    const s = await seed();
+    await s.t.run(async ctx => {
+      const vehicle = await ctx.db.get(s.vehicleId);
+      if (!vehicle) throw new Error("fixture missing");
+      const { _id, _creationTime, ...fields } = vehicle;
+      for (let index = 0; index < 51; index += 1) await ctx.db.insert("vehicles", { ...fields, model: `Stock ${index}` });
+    });
+    const first = await related(s, "SOURCED", { numItems: 50, cursor: null });
+    const last = await related(s, "SOURCED", { numItems: 25, cursor: first.continueCursor });
+    const wide = await s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.supplierId, kind: "SOURCED", paginationOpts: { numItems: 1, cursor: null, endCursor: last.continueCursor, maximumRowsRead: 1000000 } });
+    expect(wide.page.length).toBeLessThanOrEqual(50);
+    expect(wide.pageStatus).toBe("SplitRequired");
+    expect(wide.splitCursor).toEqual(expect.any(String));
+    expect(wide.isDone).toBe(false);
+  });
+
+  test("invalid stored money returns a coded generic error without exposing technical detail", async () => {
+    const s = await seed();
+    await payable(s, { amountDue: Number.NaN });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(outstanding(s)).rejects.toThrow(/SUPPLIER_NAVIGATION_UNAVAILABLE/);
+      expect(log).toHaveBeenCalled();
+    } finally { log.mockRestore(); }
   });
 });

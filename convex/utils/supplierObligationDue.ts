@@ -1,3 +1,4 @@
+import { settledPayableRows, settledRecoveryRows, settledClaimRow, type DatedSettledRow } from "./supplierSettledRows";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -690,6 +691,7 @@ async function readSettledFamily<S extends string, D>(
 export async function readSupplierSettled(
   ctx: Reader & HeadroomCtx,
   args: { orgId: Id<"organizations">; supplierId: Id<"suppliers"> },
+  onPayableRead?: (section: SettledSection) => Promise<void>,
 ): Promise<{ payable: SettledSection; receivable: SettledSection }> {
   const { orgId, supplierId } = args;
   // Read in turn, not together: each document's headroom check must see what the reads before it spent.
@@ -701,6 +703,11 @@ export async function readSupplierSettled(
       )
       .order("desc"),
   );
+  const payableDocs = payables.docs;
+  const payableRows = settledPayableRows(newest(payableDocs));
+  const payable = settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT, 0, payables.cut);
+  // Finish a complete A/P projection before a later, large A/R family spends the shared read budget.
+  await onPayableRead?.(payable);
   const claimsRead = await readSettledFamily(ctx, SETTLED_RECEIVABLE_STATUSES, (status) =>
     ctx.db
       .query("vehicleSupplierReceivables")
@@ -717,10 +724,8 @@ export async function readSupplierSettled(
       )
       .order("desc"),
   );
-  const payableDocs = payables.docs;
   const receivableDocs = claimsRead.docs;
   const recoveryDocs = recoveries.docs;
-  const payableRows = settledPayableRows(newest(payableDocs));
 
   // When the claims family itself was cut short by the budget the transaction has no room left for ledger reads either; the
   // section is already incomplete, so provenance is not attempted and no claim is miscounted as an unconfirmed receipt.
@@ -731,7 +736,7 @@ export async function readSupplierSettled(
   receivableRows.sort((a, b) => b.createdAt - a.createdAt);
   const { unverifiedCount, budgetSpent } = provenance;
   return {
-    payable: settledSection(payableRows, !payables.cut && payableDocs.length <= STATEMENT_FAMILY_LIMIT, 0, payables.cut),
+    payable,
     receivable: settledSection(
       receivableRows.map((entry) => entry.row),
       !claimsRead.cut && !recoveries.cut && receivableDocs.length <= STATEMENT_FAMILY_LIMIT && recoveryDocs.length <= STATEMENT_FAMILY_LIMIT,
@@ -741,71 +746,6 @@ export async function readSupplierSettled(
   };
 }
 
-type DatedSettledRow = { createdAt: number; row: SettledRow };
-
-function settledPayableRows(docs: Doc<"vehicleSupplierPayables">[]): SettledRow[] {
-  const rows: SettledRow[] = [];
-  for (const row of docs) {
-    // The same view every other reader uses: a PAID row with no recorded payments was paid in full before `amountPaid` existed.
-    const settledMinor = toMinorUnits(settlementView(row).amountPaid, row.currency);
-    if (settledMinor <= 0) continue;
-    const dueMinor = toMinorUnits(row.amountDue, row.currency);
-    rows.push({
-      kind: "PAYABLE",
-      id: row._id,
-      currency: row.currency,
-      status: row.status,
-      dueMinor,
-      settledMinor,
-      // Payments are the whole of what settles a payable, so here cash against the obligation is the completion.
-      settlement: settledMinor >= dueMinor ? "COMPLETE" : "PARTIAL",
-      lastChangedAt: row.updatedAt,
-      basis: row.status === "PAID" && (row.amountPaid ?? 0) === 0 ? "INFERRED_FROM_PAID_STATUS" : "RECORDED",
-    });
-  }
-  return rows;
-}
-
-function settledRecoveryRows(docs: Doc<"supplierCostRecoveries">[]): DatedSettledRow[] {
-  const rows: DatedSettledRow[] = [];
-  for (const row of docs) {
-    if (row.amountRecoveredMinor <= 0) continue;
-    rows.push({
-      createdAt: row._creationTime,
-      row: {
-        kind: "RECOVERY",
-        id: row._id,
-        currency: row.currency,
-        status: row.status,
-        dueMinor: row.amountDueMinor,
-        settledMinor: row.amountRecoveredMinor,
-        settlement: row.amountRecoveredMinor >= row.amountDueMinor ? "COMPLETE" : "PARTIAL",
-        lastChangedAt: row.updatedAt,
-        basis: "RECORDED",
-      },
-    });
-  }
-  return rows;
-}
-
-function settledClaimRow(claim: Doc<"vehicleSupplierReceivables">, receipts: { minor: number; reversed: boolean }): DatedSettledRow {
-  return {
-    createdAt: claim._creationTime,
-    row: {
-      kind: "RECEIVABLE",
-      id: claim._id,
-      currency: claim.currency,
-      status: claim.status,
-      dueMinor: toMinorUnits(claim.amountDue, claim.currency),
-      settledMinor: receipts.minor,
-      // The claim's own record decides (`recordReceipt` sets PAID when deposit + receipts reach the claim), not the cash figure,
-      // which leaves the deposit out. A reversed receipt means that record overstates what was collected, so it is not "in full".
-      settlement: claim.status === "PAID" && !receipts.reversed ? "COMPLETE" : "PARTIAL",
-      lastChangedAt: claim.updatedAt,
-      basis: "RECORDED",
-    },
-  };
-}
 
 interface ClaimProvenance {
   rows: DatedSettledRow[];
