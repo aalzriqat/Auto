@@ -78,7 +78,30 @@ export const AUDIT_READ_POLICY = {
 type AuditRow = Doc<"financialAuditLog">;
 type AuditReadRow = AuditRow & { detailsWithheld?: true; lineCount?: number };
 
-async function mayReadOpeningAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+type DraftPayrollReader = (draftId: Id<"openingBalanceDrafts">) => Promise<boolean>;
+
+/** One request owns both caches, including in-flight reads during Promise.all. */
+function draftPayrollReader(ctx: QueryCtx, orgId: Id<"organizations">): DraftPayrollReader {
+  let controls: Promise<ReadonlySet<Id<"chartOfAccounts">>> | undefined;
+  const decisions = new Map<Id<"openingBalanceDrafts">, Promise<boolean>>();
+  return draftId => {
+    const cached = decisions.get(draftId);
+    if (cached) return cached;
+    const decision = (async () => {
+      const draft = await ctx.db.get(draftId);
+      // Missing/foreign evidence never grants access.
+      if (!draft || draft.orgId !== orgId) return true;
+      controls ??= Promise.all([SYSTEM_KEYS.EMPLOYEE_ADVANCES, SYSTEM_KEYS.COMMISSION_PAYABLE].map(systemKey =>
+        ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", q => q.eq("orgId", orgId).eq("systemKey", systemKey)).unique()
+      )).then(accounts => new Set(accounts.flatMap(account => account ? [account._id] : [])));
+      return containsEmployeeAdvanceControl(ctx, orgId, draft, await controls);
+    })();
+    decisions.set(draftId, decision);
+    return decision;
+  };
+}
+
+async function mayReadOpeningAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<boolean> {
   if (!canReadVehicleCost(role)) return false;
   const voidAction = AUDIT_READ_POLICY[row.actionType] === "OPENING_VOID";
   if (voidAction ? canManageOpeningPayroll(role) : canReadOpeningPayroll(role)) return true;
@@ -87,11 +110,10 @@ async function mayReadOpeningAudit(ctx: QueryCtx, role: Doc<"roles">, row: Audit
   if (row.actionType === "EDIT_OPENING_DRAFT" &&
       (!isOpeningAuditSummary(row.before) || !isOpeningAuditSummary(row.after))) return false;
   const draftId = ctx.db.normalizeId("openingBalanceDrafts", row.resourceId);
-  const draft = draftId ? await ctx.db.get(draftId) : null;
-  return draft?.orgId === row.orgId && !(await containsEmployeeAdvanceControl(ctx, row.orgId, draft));
+  return draftId !== null && !(await needsPayroll(draftId));
 }
 
-async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<boolean> {
   if (!mayReadFinanceEconomics(role) || !canReadVehicleCost(role)) return false;
   if (canReadOpeningPayroll(role)) return true;
   const journalId = ctx.db.normalizeId("journalEntries", row.resourceId);
@@ -100,18 +122,18 @@ async function mayReadJournalAudit(ctx: QueryCtx, role: Doc<"roles">, row: Audit
   if (journal.category !== "OPENING_BALANCE") return true;
   const draft = await ctx.db.query("openingBalanceDrafts")
     .withIndex("by_org_journal", q => q.eq("orgId", row.orgId).eq("journalEntryId", journal._id)).unique();
-  return draft !== null && !(await containsEmployeeAdvanceControl(ctx, row.orgId, draft));
+  return draft !== null && !(await needsPayroll(draft._id));
 }
 
-async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<boolean> {
+async function mayReadAuditDetails(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<boolean> {
   if (isSystemOwnerRole(role)) return true;
   const policy = AUDIT_READ_POLICY[row.actionType];
   switch (policy) {
-    case "OPENING": return mayReadOpeningAudit(ctx, role, row);
-    case "OPENING_VOID": return mayReadOpeningAudit(ctx, role, row);
-    case "JOURNAL": return mayReadJournalAudit(ctx, role, row);
+    case "OPENING": return mayReadOpeningAudit(ctx, role, row, needsPayroll);
+    case "OPENING_VOID": return mayReadOpeningAudit(ctx, role, row, needsPayroll);
+    case "JOURNAL": return mayReadJournalAudit(ctx, role, row, needsPayroll);
     case "MANUAL_DRAFT":
-      if (row.resourceType === "openingBalanceDrafts") return mayReadOpeningAudit(ctx, role, row);
+      if (row.resourceType === "openingBalanceDrafts") return mayReadOpeningAudit(ctx, role, row, needsPayroll);
       // listPendingManualJournals intentionally requires manage:finance alone.
       return row.resourceType === "manualJournalDrafts";
     case "POST_EVENT":
@@ -198,8 +220,8 @@ function expectedPaymentAuditSummary(ctx: QueryCtx, role: Doc<"roles">, raw: unk
   return Object.keys(summary).length ? summary : undefined;
 }
 
-async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow): Promise<AuditReadRow> {
-  if (await mayReadAuditDetails(ctx, role, row)) return row;
+async function projectAuditRow(ctx: QueryCtx, role: Doc<"roles">, row: AuditRow, needsPayroll: DraftPayrollReader): Promise<AuditReadRow> {
+  if (await mayReadAuditDetails(ctx, role, row, needsPayroll)) return row;
   // Explicit allowlist: never spread a restricted row, even when the schema grows.
   const projected: AuditReadRow = {
     _id: row._id, _creationTime: row._creationTime, orgId: row.orgId,
@@ -340,7 +362,8 @@ export const listAuditLog = query({
       });
     }
 
-    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry)));
+    const needsPayroll = draftPayrollReader(ctx, args.orgId);
+    return Promise.all(entries.slice(0, limit).map(entry => projectAuditRow(ctx, role, entry, needsPayroll)));
   },
 });
 
