@@ -55,6 +55,50 @@ async function fixture() {
 }
 type Seed = Awaited<ReturnType<typeof fixture>>;
 
+test.each([
+  ["EMPLOYEE_ADVANCES", true], ["EMPLOYEE_ADVANCES", false],
+  ["COMMISSION_PAYABLE", true], ["COMMISSION_PAYABLE", false],
+] as const)("SCRUM-936 legacy duplicate %s active=%s withholds its draft without failing the audit page", async (key, active) => {
+  const s = await fixture();
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
+  const rows = await s.t.run(async ctx => {
+    const canonical = await ctx.db.get(s.account(key));
+    if (!canonical) throw new Error("Missing fixture control");
+    const { _id, _creationTime, ...fields } = canonical;
+    const duplicate = await ctx.db.insert("chartOfAccounts", { ...fields, active, name: "Synthetic legacy duplicate" });
+    expect(duplicate).not.toBe(_id);
+    const journalEntryId = await ctx.db.insert("journalEntries", { orgId: s.orgId, accountingDate: s.asOfDate,
+      journalNumber: "QA-LEGACY", category: "OPENING_BALANCE", sourceType: "OPENING_BALANCE", sourceId: "synthetic-legacy",
+      memo: "Private legacy control", status: "POSTED", currency: "JOD", createdAt: Date.now(), postedAt: Date.now(), postedBy: s.ownerId });
+    const protectedDraft = await ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "PENDING_APPROVAL",
+      createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate, currency: "JOD", journalEntryId,
+      lines: [{ accountId: duplicate, debitMinor: 40, creditMinor: 0 }] });
+    const ordinaryDraft = await ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId, status: "POSTED",
+      createdBy: s.ownerId, createdAt: Date.now(), asOfDate: s.asOfDate,
+      lines: [{ accountId: s.account("CASH_ON_HAND"), debitMinor: 40, creditMinor: 0 }] });
+    const ids = [];
+    for (const [actionType, resourceType, resourceId] of [
+      ["REQUEST_OPENING_VOID", "openingBalanceDrafts", protectedDraft],
+      ["POST_MANUAL_JOURNAL", "journalEntries", journalEntryId],
+      ["REQUEST_OPENING_VOID", "openingBalanceDrafts", ordinaryDraft],
+    ] as const) ids.push(await ctx.db.insert("financialAuditLog", { orgId: s.orgId, actorId: s.ownerId,
+      actionType, resourceType, resourceId, description: "Private legacy evidence", after: { totalDebits: 40 }, occurredAt: Date.now() }));
+    return Promise.all(ids.map(id => ctx.db.get(id)));
+  });
+  // The dedicated opening reader already tolerates either kind of duplicate.
+  expect(await s.finance.query(api.accountingCutover.listPendingOpeningBalanceDrafts, { orgId: s.orgId })).toEqual([]);
+  for (const filter of [{}, { actorId: s.ownerId }, { fromDate: 1 }]) {
+    const audit = await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, ...filter, limit: 200 });
+    for (const row of rows.slice(0, 2)) {
+      expect(audit.find(item => item._id === row?._id)).toMatchObject({ detailsWithheld: true, resourceId: "WITHHELD" });
+    }
+    expect(audit).toContainEqual(rows[2]);
+  }
+  await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price", "manage:payroll"] }));
+  const authorized = await s.finance.query(api.financialAudit.listAuditLog, { orgId: s.orgId, limit: 200 });
+  for (const row of rows) expect(authorized).toContainEqual(row);
+});
+
 test("SCRUM-936 audit pages reuse payroll controls and decisions per draft and request", async () => {
   const s = await fixture();
   await s.t.run(ctx => ctx.db.patch(s.financeRole, { permissions: ["manage:finance", "view:finance", "view:cost_price"] }));
