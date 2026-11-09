@@ -81,7 +81,7 @@ async function post(s: Setup) {
   return s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, s.payload);
 }
 
-test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE", "OTHER_PAYABLE"] as const)("direct opening stores the master snapshot for %s", async kind => {
+async function assertDirectSnapshot(kind: Kind) {
   const s = await fixture(kind);
   await post(s);
   const stored = await rows(s);
@@ -91,7 +91,10 @@ test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE", "OTHER_PAYABLE"] as const
   expect(stored.drafts[0]?.allocations).toEqual([{ ...s.allocation, counterpartyName: "Canonical supplier", supplierSnapshotVersion: 3 }]);
   expect(await s.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId }))
     .toMatchObject({ rows: [{ recordAvailable: true, amountMinor: 100_003 }] });
-});
+}
+test("direct opening stores the master snapshot for SUPPLIER_PAYABLE", () => assertDirectSnapshot("SUPPLIER_PAYABLE"));
+test("direct opening stores the master snapshot for SUPPLIER_RECOVERABLE", () => assertDirectSnapshot("SUPPLIER_RECOVERABLE"));
+test("direct opening stores the master snapshot for OTHER_PAYABLE", () => assertDirectSnapshot("OTHER_PAYABLE"));
 
 test("approval captures one current master snapshot after a rename", async () => {
   const s = await fixture("SUPPLIER_RECOVERABLE");
@@ -107,8 +110,8 @@ test("approval captures one current master snapshot after a rename", async () =>
   expect(stored.drafts[0]?.allocations).toEqual([{ ...s.allocation, counterpartyName: "Renamed supplier", supplierSnapshotVersion: 4 }]);
 });
 
-const invalidIdentities = ["missing", "name-only", "foreign", "deleted", "inactive"] as const;
-async function refusesPreparation(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "draft" | "direct", invalid: typeof invalidIdentities[number]) {
+type InvalidIdentity = "missing" | "name-only" | "foreign" | "deleted" | "inactive";
+async function refusesPreparation(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "draft" | "direct", invalid: InvalidIdentity) {
       const s = await fixture(kind);
       if (invalid === "foreign") await s.t.run(async ctx => {
         const orgId = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
@@ -126,10 +129,26 @@ async function refusesPreparation(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERAB
       await refuse(s, () => s.owner.mutation(door === "draft" ? api.accountingCutover.draftOpeningBalance : api.accountingCutover.postOpeningBalanceDirect,
         { ...s.payload, allocations: [allocation] }), invalid === "missing" || invalid === "name-only" ? "SUPPLIER_IDENTITY_REQUIRED" : code);
 }
-test.each(invalidIdentities)("draft SUPPLIER_PAYABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_PAYABLE", "draft", invalid));
-test.each(invalidIdentities)("direct SUPPLIER_PAYABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_PAYABLE", "direct", invalid));
-test.each(invalidIdentities)("draft SUPPLIER_RECOVERABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", invalid));
-test.each(invalidIdentities)("direct SUPPLIER_RECOVERABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", invalid));
+test("draft SUPPLIER_PAYABLE refuses missing identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "draft", "missing"));
+test("draft SUPPLIER_PAYABLE refuses name-only identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "draft", "name-only"));
+test("draft SUPPLIER_PAYABLE refuses foreign identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "draft", "foreign"));
+test("draft SUPPLIER_PAYABLE refuses deleted identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "draft", "deleted"));
+test("draft SUPPLIER_PAYABLE refuses inactive identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "draft", "inactive"));
+test("direct SUPPLIER_PAYABLE refuses missing identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "direct", "missing"));
+test("direct SUPPLIER_PAYABLE refuses name-only identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "direct", "name-only"));
+test("direct SUPPLIER_PAYABLE refuses foreign identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "direct", "foreign"));
+test("direct SUPPLIER_PAYABLE refuses deleted identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "direct", "deleted"));
+test("direct SUPPLIER_PAYABLE refuses inactive identity atomically", () => refusesPreparation("SUPPLIER_PAYABLE", "direct", "inactive"));
+test("draft SUPPLIER_RECOVERABLE refuses missing identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", "missing"));
+test("draft SUPPLIER_RECOVERABLE refuses name-only identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", "name-only"));
+test("draft SUPPLIER_RECOVERABLE refuses foreign identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", "foreign"));
+test("draft SUPPLIER_RECOVERABLE refuses deleted identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", "deleted"));
+test("draft SUPPLIER_RECOVERABLE refuses inactive identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", "inactive"));
+test("direct SUPPLIER_RECOVERABLE refuses missing identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", "missing"));
+test("direct SUPPLIER_RECOVERABLE refuses name-only identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", "name-only"));
+test("direct SUPPLIER_RECOVERABLE refuses foreign identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", "foreign"));
+test("direct SUPPLIER_RECOVERABLE refuses deleted identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", "deleted"));
+test("direct SUPPLIER_RECOVERABLE refuses inactive identity atomically", () => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", "inactive"));
 
 test("ordinary OTHER_PAYABLE without a supplier posts and settles", async () => {
   const s = await fixture("OTHER_PAYABLE");
@@ -143,7 +162,7 @@ test("ordinary OTHER_PAYABLE without a supplier posts and settles", async () => 
   expect((await rows(s)).payables[0]).toMatchObject({ status: "PAID", amountPaid: 100.003, sourcedFromName: "Ordinary creditor" });
 });
 
-test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("identified inactive %s settles once and keeps its snapshot on retry", async kind => {
+async function assertInactiveRetry(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE") {
   const s = await fixture(kind);
   await post(s);
   await s.owner.mutation(api.suppliers.deactivate, { orgId: s.orgId, supplierId: s.supplierId, reason: "Synthetic" });
@@ -158,9 +177,11 @@ test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("identified ina
   expect(await dbSnapshot(s.t, tables)).toEqual(beforeRetry);
   const after = await rows(s);
   expect([...after.payables, ...after.recoveries][0]).toMatchObject({ supplierId: s.supplierId, sourcedFromName: "Canonical supplier", supplierSnapshotVersion: 3 });
-});
+}
+test("identified inactive SUPPLIER_PAYABLE settles once and keeps its snapshot on retry", () => assertInactiveRetry("SUPPLIER_PAYABLE"));
+test("identified inactive SUPPLIER_RECOVERABLE settles once and keeps its snapshot on retry", () => assertInactiveRetry("SUPPLIER_RECOVERABLE"));
 
-test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("%s basis rejects a same-name different supplier and one-sided identity", async kind => {
+async function assertBasisIdentity(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE") {
   const s = await fixture(kind);
   await post(s);
   const otherId = await seedSupplier(s.t, { orgId: s.orgId, userId: s.userId, displayName: "Canonical supplier", version: 3 });
@@ -174,9 +195,11 @@ test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("%s basis rejec
   await s.t.run(ctx => ctx.db.patch(obligation._id, { supplierId: s.supplierId, sourcedFromName: "Another display snapshot" }));
   expect(await s.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId }))
     .toMatchObject({ rows: [{ recordAvailable: true }] });
-});
+}
+test("SUPPLIER_PAYABLE basis rejects a same-name different supplier and one-sided identity", () => assertBasisIdentity("SUPPLIER_PAYABLE"));
+test("SUPPLIER_RECOVERABLE basis rejects a same-name different supplier and one-sided identity", () => assertBasisIdentity("SUPPLIER_RECOVERABLE"));
 
-test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("legacy id-less %s remains readable but refuses new settlement", async kind => {
+async function assertLegacySettlement(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE") {
   const s = await fixture(kind);
   await post(s);
   const stored = await rows(s);
@@ -200,7 +223,9 @@ test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("legacy id-less
     ? s.owner.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId: stored.payables[0]._id, paymentMethod: "CASH", idempotencyKey: "legacy" })
     : s.owner.mutation(api.supplierCostRecoveries.recordReceipt, { orgId: s.orgId, recoveryId: stored.recoveries[0]._id, amountMinor: 40_001,
       method: "CASH", receivedDate: Date.now() - 1, idempotencyKey: "legacy" }), "SUPPLIER_IDENTITY_UNRESOLVED");
-});
+}
+test("legacy id-less SUPPLIER_PAYABLE remains readable but refuses new settlement", () => assertLegacySettlement("SUPPLIER_PAYABLE"));
+test("legacy id-less SUPPLIER_RECOVERABLE remains readable but refuses new settlement", () => assertLegacySettlement("SUPPLIER_RECOVERABLE"));
 
 test("pending legacy draft can acquire a supplier through edit and stale approval refuses", async () => {
   const s = await fixture();
@@ -227,8 +252,7 @@ test("repeating direct posting cannot add another opening", async () => {
   expect(await dbSnapshot(s.t, tables)).toEqual(before);
 });
 
-const invalidReviewedIdentities = ["missing", "foreign", "deleted", "inactive"] as const;
-async function refusesReviewed(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "edit" | "approve", invalid: typeof invalidReviewedIdentities[number]) {
+async function refusesReviewed(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "edit" | "approve", invalid: Exclude<InvalidIdentity, "name-only">) {
       const s = await fixture(kind);
       await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
       const draft = (await rows(s)).drafts[0];
@@ -251,10 +275,22 @@ async function refusesReviewed(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE"
         ? s.owner.mutation(api.accountingCutover.editOpeningBalanceDraft, { ...s.payload, draftId: draft._id, allocations: [allocation] })
         : s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id, expectedVersion: 0 }), code);
 }
-test.each(invalidReviewedIdentities)("edit SUPPLIER_PAYABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_PAYABLE", "edit", invalid));
-test.each(invalidReviewedIdentities)("approve SUPPLIER_PAYABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_PAYABLE", "approve", invalid));
-test.each(invalidReviewedIdentities)("edit SUPPLIER_RECOVERABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", invalid));
-test.each(invalidReviewedIdentities)("approve SUPPLIER_RECOVERABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", invalid));
+test("edit SUPPLIER_PAYABLE revalidates missing supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "edit", "missing"));
+test("edit SUPPLIER_PAYABLE revalidates foreign supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "edit", "foreign"));
+test("edit SUPPLIER_PAYABLE revalidates deleted supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "edit", "deleted"));
+test("edit SUPPLIER_PAYABLE revalidates inactive supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "edit", "inactive"));
+test("approve SUPPLIER_PAYABLE revalidates missing supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "approve", "missing"));
+test("approve SUPPLIER_PAYABLE revalidates foreign supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "approve", "foreign"));
+test("approve SUPPLIER_PAYABLE revalidates deleted supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "approve", "deleted"));
+test("approve SUPPLIER_PAYABLE revalidates inactive supplier before any write", () => refusesReviewed("SUPPLIER_PAYABLE", "approve", "inactive"));
+test("edit SUPPLIER_RECOVERABLE revalidates missing supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", "missing"));
+test("edit SUPPLIER_RECOVERABLE revalidates foreign supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", "foreign"));
+test("edit SUPPLIER_RECOVERABLE revalidates deleted supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", "deleted"));
+test("edit SUPPLIER_RECOVERABLE revalidates inactive supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", "inactive"));
+test("approve SUPPLIER_RECOVERABLE revalidates missing supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", "missing"));
+test("approve SUPPLIER_RECOVERABLE revalidates foreign supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", "foreign"));
+test("approve SUPPLIER_RECOVERABLE revalidates deleted supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", "deleted"));
+test("approve SUPPLIER_RECOVERABLE revalidates inactive supplier before any write", () => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", "inactive"));
 
 test("identified opening payable supports partial payment and dispute; legacy supplier does neither", async () => {
   const s = await fixture();

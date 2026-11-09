@@ -1,0 +1,68 @@
+{
+  "id": "opening-supplier-p5-ordinary-other-payable-without-a-supplier-posts-06cbd15a",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "OTHER_PAYABLE",
+        "amountMinor": 100003,
+        "counterpartyName": "Ordinary_creditor",
+        "supplierSnapshotVersion": 999
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "payableId": "OPENING_OTHER_CREDITOR",
+        "paymentMethod": "CASH",
+        "idempotencyKey": "p5-other"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payable.status",
+      "value": "PAID"
+    },
+    {
+      "observable": "payable.amountPaid",
+      "value": 100.003
+    },
+    {
+      "observable": "payable.hasSupplierId",
+      "value": false
+    },
+    {
+      "observable": "payable.hasSupplierSnapshotVersion",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "ordinary OTHER_PAYABLE without a supplier posts and settles"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "c3a4477c984d7da3724056d45973bc8484c2d197430338cbfba8dea252c2eaa4"
+}

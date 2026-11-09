@@ -1,0 +1,106 @@
+{
+  "id": "opening-supplier-p5-pending-legacy-draft-can-acquire-a-supplier-thr-e971704f",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.listPendingOpeningBalanceDrafts",
+      "input": {
+        "draftIdentity": "LEGACY_NAME_ONLY"
+      }
+    },
+    {
+      "actor": {
+        "role": "SECOND_FINANCE_ACTOR",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draftId": "LEGACY_PENDING_A",
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.editOpeningBalanceDraft",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "draftId": "LEGACY_PENDING_A"
+      }
+    },
+    {
+      "actor": {
+        "role": "SECOND_FINANCE_ACTOR",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draftId": "LEGACY_PENDING_A",
+        "expectedVersion": 0
+      }
+    },
+    {
+      "actor": {
+        "role": "SECOND_FINANCE_ACTOR",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draftId": "LEGACY_PENDING_A",
+        "expectedVersion": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unboundApproval.refusal.code",
+      "value": "SUPPLIER_IDENTITY_REQUIRED"
+    },
+    {
+      "observable": "staleApproval.refusal.code",
+      "value": "OPENING_DRAFT_CHANGED"
+    },
+    {
+      "observable": "postedPayable.supplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "postedPayable.supplierSnapshotVersion",
+      "value": 3
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "pending legacy draft can acquire a supplier through edit and stale approval refuses"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "bugRef": {
+    "key": "SCRUM-868",
+    "failingFirst": "16d16280cbe2c02cacc5605fc67077b03b6257de"
+  },
+  "fingerprint": "57b571022a84d3e343c3f37963b5f86789c75fce18175553ee9bd4ec0084a9eb"
+}

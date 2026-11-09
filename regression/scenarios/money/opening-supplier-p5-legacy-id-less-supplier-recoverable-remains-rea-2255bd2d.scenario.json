@@ -1,0 +1,68 @@
+{
+  "id": "opening-supplier-p5-legacy-id-less-supplier-recoverable-remains-rea-2255bd2d",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postedOpeningAllocationReadback",
+      "input": {
+        "openingIdentity": "LEGACY_WITHOUT_ID",
+        "kind": "SUPPLIER_RECOVERABLE",
+        "purpose": "CLAIM"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "recoveryId": "LEGACY_OPENING_A",
+        "amountMinor": 40001,
+        "method": "CASH",
+        "idempotencyKey": "legacy"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "readback.recordAvailable",
+      "value": true
+    },
+    {
+      "observable": "readback.applicationState.changed",
+      "value": false
+    },
+    {
+      "observable": "settlement.refusal.code",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "settlement.applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "legacy id-less SUPPLIER_RECOVERABLE remains readable but refuses new settlement"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "8243be2beccc81b4e470a65bf704a225f757ea7675a441d27819e420e9e6baf3"
+}

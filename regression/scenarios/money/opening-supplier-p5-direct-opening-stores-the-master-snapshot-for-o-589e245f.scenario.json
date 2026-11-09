@@ -1,0 +1,66 @@
+{
+  "id": "opening-supplier-p5-direct-opening-stores-the-master-snapshot-for-o-589e245f",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "OTHER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postedOpeningAllocationReadback",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "obligation.supplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "obligation.sourcedFromName",
+      "value": "Canonical_supplier"
+    },
+    {
+      "observable": "obligation.supplierSnapshotVersion",
+      "value": 3
+    },
+    {
+      "observable": "readback.amountMinor",
+      "value": 100003
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "direct opening stores the master snapshot for OTHER_PAYABLE"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "f771f6a65bfb300f887469e18732b809a48a7568dc149961e6fda861b021c9cf"
+}

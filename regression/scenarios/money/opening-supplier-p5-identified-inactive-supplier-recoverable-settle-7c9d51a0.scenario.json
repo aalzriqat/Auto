@@ -1,0 +1,96 @@
+{
+  "id": "opening-supplier-p5-identified-inactive-supplier-recoverable-settle-7c9d51a0",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.postOpeningBalanceDirect",
+      "input": {
+        "kind": "SUPPLIER_RECOVERABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "purpose": "CLAIM"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.deactivate",
+      "input": {
+        "supplierId": "MASTER_A",
+        "reason": "Synthetic"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "recoveryId": "OPENING_A",
+        "amountMinor": 40001,
+        "method": "CASH",
+        "idempotencyKey": "p5-receipt"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "recoveryId": "OPENING_A",
+        "amountMinor": 40001,
+        "method": "CASH",
+        "idempotencyKey": "p5-receipt"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "retry.applicationState.changed",
+      "value": false
+    },
+    {
+      "observable": "obligation.supplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "obligation.sourcedFromName",
+      "value": "Canonical_supplier"
+    },
+    {
+      "observable": "obligation.supplierSnapshotVersion",
+      "value": 3
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "identified inactive SUPPLIER_RECOVERABLE settles once and keeps its snapshot on retry"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "87297b033a37eefd7c7ebd33c89df2556d05aae56d2597980013c12969fb8395"
+}

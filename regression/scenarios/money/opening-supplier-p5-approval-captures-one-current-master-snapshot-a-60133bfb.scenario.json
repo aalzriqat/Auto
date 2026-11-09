@@ -1,0 +1,83 @@
+{
+  "id": "opening-supplier-p5-approval-captures-one-current-master-snapshot-a-60133bfb",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_RECOVERABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999,
+        "purpose": "CLAIM"
+      }
+    },
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "suppliers.update",
+      "input": {
+        "supplierId": "MASTER_A",
+        "expectedVersion": 3,
+        "displayName": "Renamed_supplier",
+        "reason": "Synthetic_rename"
+      }
+    },
+    {
+      "actor": {
+        "role": "SECOND_FINANCE_ACTOR",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draftId": "PENDING_OPENING_A",
+        "expectedVersion": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "recovery.supplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "recovery.sourcedFromName",
+      "value": "Renamed_supplier"
+    },
+    {
+      "observable": "recovery.supplierSnapshotVersion",
+      "value": 4
+    },
+    {
+      "observable": "recovery.amountDueMinor",
+      "value": 100003
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "approval captures one current master snapshot after a rename"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "cfe4998a4e5c37bd42a061bf56c58e1419e7d9aadea2225a1ee5ea12a21f4b98"
+}
