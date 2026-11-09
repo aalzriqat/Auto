@@ -23,6 +23,69 @@ vi.mock("./rateLimit", () => ({
 
 const MODULES = import.meta.glob("./**/*.*s");
 
+/**
+ * SCRUM-426 guardrail 4. Every table in convex/schema.ts is either reset or
+ * retained, and each retained table is listed here under the reason it stays.
+ * The schema is the independent discovery: a NEW table fails the partition test
+ * until it is put on one side on purpose, and a table moved between sides fails
+ * it too. Never regenerate this list from RESET_TABLES_FOR_TEST.
+ */
+const SIGNED_OFF_SCOPE =
+  "Identity, CRM, Social Inbox and configuration remain (orgFinancialReset.ts header, reset ADR 2026-11-07)";
+const RETAINED_BY_RESET: Record<string, string[]> = {
+  [`${SIGNED_OFF_SCOPE}: the dealership and its people`]: [
+    "users", "organizations", "organizationDeletionRequests", "roles", "memberships",
+    "membershipOffboardingJobs", "userOffboardingReviews", "invitations", "subscriptions", "branches", "orgSettings",
+  ],
+  "Pinned as forbidden by 'the signed-off scope removes inventory and keeps CRM, people and org config'": [
+    "customers", "financeCompanies", "bankAccounts", "orgValuationCompanies",
+  ],
+  "Retained survivor: holds references into reset tables, so the reset measures it and refuses on unsafe rows (RESET_SURVIVOR_INDEX in utils/orgResetSurvivorPreflight.ts)": [
+    "applicationDocuments", "bankStatementLines", "cashMovements", "claims", "collectionReminders",
+    "dealerProductDeferrals", "dealUnwinds", "customerFinanceCompanyPayments", "employeeAdvanceRecoveries",
+    "fixedAssetEvents", "manualJournalDrafts", "openingBalanceDrafts", "partnerEquityTransactions",
+    "paymentIntents", "prepaidExpenseSchedules", "marketplaceWhatsAppFlows",
+  ],
+  "Retained with vehicle references cleared before the vehicles go (RESET_KEPT_REFERENCE_INDEX in utils/orgResetSurvivorPreflight.ts)": [
+    "leads", "tasks", "instagramEvents", "facebookEvents", "socialConversations",
+    "marketplaceRequestMatches", "marketplaceResponses", "orgCustomFieldValues",
+  ],
+  "Held provider money and open cash drawers are evidence the reset must not erase; their rows make it refuse (isRiskyFamilyRow, SCRUM-571 D-8)": [
+    "unmatchedProviderFunds", "cashDrawerSessions",
+  ],
+  [`${SIGNED_OFF_SCOPE}: CRM, tasks, notifications and per-org configuration`]: [
+    "leadActivities", "taskAlarmDeliveries", "taskHistory", "notifications", "notificationPreferences",
+    "pushSubscriptions", "notificationBroadcasts", "mobilePushTokens", "wizardDrafts", "leadAssignmentCursors",
+    "orgCustomFields", "orgLeadSources", "orgPipelineStages", "orgImportMappings", "orgCustomerStatuses",
+    "feedback", "companyDocumentRules",
+  ],
+  [`${SIGNED_OFF_SCOPE}: website and Social Inbox`]: [
+    "websiteSettings", "websiteDomains", "websitePublishedSections", "websiteLeadRouting",
+    "websiteLeadAbuseEvents", "siteVisitorEvents", "siteVisitors", "websiteLeadBlocklist",
+    "websitePublishSnapshots", "domainSearchLogs", "oauthStates", "facebookRevocations", "socialContacts",
+    "socialMaterializationState", "facebookMessages",
+  ],
+  "Platform, support and audit tables that are not the dealership's financial records": [
+    "adminAuditLog", "cronHeartbeats", "webhookLogs", "supportThreads", "supportMessages", "supportAgents",
+    "liveChatThreads", "liveChatPresence", "liveChatMessages", "supportOrgAccessGrants", "dmConversations",
+    "dmMessages", "dmParticipantState", "impersonationGrants", "siteConfig", "changelogEntries",
+    "mobileAppReleases", "e2ePreviewBootstrap",
+  ],
+  "Marketplace buyer and seller records outside the dealership books; the reset list names none of them": [
+    "marketplaceDealerProfiles", "marketplaceRequests", "marketplaceEvents", "marketplaceBuyerPushTokens",
+    "marketplaceWeeklyReportSends", "marketplaceWeeklyReportRuns", "marketplaceWeeklyReportDeliveries",
+    "marketplaceTradeInRequests", "marketplaceListings", "marketplaceIndividualSellerProfiles",
+    "marketplaceListingImageUploads",
+  ],
+  "Not in the signed-off reset list; retained as current behaviour with no per-table rationale recorded yet (SCRUM-426 follow-up: owner to confirm or move to the reset list)": [
+    "commandIdempotency", "accountingPeriods", "journalReportEligibility", "supplierVatHoldMigration",
+    "roleMigrationRuns", "prepaidAmortizationFailures", "prepaidScheduleCorrections", "prepaidCorrectionRequests",
+    "dealNumberCounters", "accountingCutoverSignOffs", "exchangeRates", "fixedAssets", "partnerEquity",
+    "employeeAdvances", "guarantors", "financeCompanyRuleVersions", "suppliers", "supplierAliases",
+    "supplierRegistryState",
+  ],
+};
+
 function setup() {
   return convexTestWithComponents(schema, MODULES);
 }
@@ -639,8 +702,24 @@ describe("resetOrgFinancialData", () => {
     // Their approved reset lifecycle clears the new obligations and invalidates
     // exact new result references; this does not add legacy supplier AP or change
     // inventory/CRM/people/config retention. payrollItems moved, not duplicated.
-    expect(RESET_TABLES_FOR_TEST).toHaveLength(73);
-    expect(new Set(RESET_TABLES_FOR_TEST).size).toBe(73);
+    // SCRUM-426 guardrail 4: set equality against the schema, not a count.
+    const schemaTables = new Set(Object.keys(schema.tables));
+    const reset = new Set<string>(RESET_TABLES_FOR_TEST);
+    const retainedEntries = Object.entries(RETAINED_BY_RESET).flatMap(([reason, tables]) =>
+      tables.map((table) => ({ table, reason })),
+    );
+    const retained = new Set(retainedEntries.map((entry) => entry.table));
+    expect(reset.size, "RESET_TABLES has a duplicate entry").toBe(RESET_TABLES_FOR_TEST.length);
+    expect(retained.size, "a table is retained twice").toBe(retainedEntries.length);
+    expect(retainedEntries.filter((entry) => entry.reason.trim().length < 20), "retained table without a reason").toEqual([]);
+    expect([...reset].filter((table) => retained.has(table)).sort(), "listed as both reset and retained").toEqual([]);
+    expect([...reset].filter((table) => !schemaTables.has(table)).sort(), "reset but not a schema table").toEqual([]);
+    expect([...retained].filter((table) => !schemaTables.has(table)).sort(), "retained but not a schema table").toEqual([]);
+    expect(
+      [...schemaTables].filter((table) => !reset.has(table) && !retained.has(table)).sort(),
+      "schema table that is neither reset nor retained: decide on purpose and list it",
+    ).toEqual([]);
+    expect(reset.size, "an empty reset list must not pass").toBeGreaterThan(0);
     expect(RESET_TABLES_FOR_TEST).toContain("openingCommissionLiabilities");
     expect(RESET_TABLES_FOR_TEST).toContain("openingPayablePayments");
     expect(RESET_TABLES_FOR_TEST).toContain("openingManagementSettlementPlans");
