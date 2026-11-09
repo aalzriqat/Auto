@@ -283,6 +283,7 @@ import type * as utils_openingMaintenanceErrors from "../utils/openingMaintenanc
 import type * as utils_openingManagementBasis from "../utils/openingManagementBasis.js";
 import type * as utils_openingManagementSchedule from "../utils/openingManagementSchedule.js";
 import type * as utils_openingPartnerBasis from "../utils/openingPartnerBasis.js";
+import type * as utils_openingPayrollVisibility from "../utils/openingPayrollVisibility.js";
 import type * as utils_openingPostingProof from "../utils/openingPostingProof.js";
 import type * as utils_openingPrepaidBasis from "../utils/openingPrepaidBasis.js";
 import type * as utils_openingReceivableBasis from "../utils/openingReceivableBasis.js";
@@ -658,6 +659,7 @@ declare const fullApi: ApiFromModules<{
   "utils/openingManagementBasis": typeof utils_openingManagementBasis;
   "utils/openingManagementSchedule": typeof utils_openingManagementSchedule;
   "utils/openingPartnerBasis": typeof utils_openingPartnerBasis;
+  "utils/openingPayrollVisibility": typeof utils_openingPayrollVisibility;
   "utils/openingPostingProof": typeof utils_openingPostingProof;
   "utils/openingPrepaidBasis": typeof utils_openingPrepaidBasis;
   "utils/openingReceivableBasis": typeof utils_openingReceivableBasis;
