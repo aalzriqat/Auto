@@ -1,0 +1,56 @@
+{
+  "id": "supplier-p7-p4a-receipt",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierCostRecoveries.recordReceipt",
+      "input": {
+        "amountMinor": 80000,
+        "method": "CASH",
+        "idempotencyKey": "KEY_1",
+        "supplier": "ABSENT_OR_FOREIGN"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "code",
+      "value": "SUPPLIER_IDENTITY_UNRESOLVED"
+    },
+    {
+      "observable": "databaseChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierRecoveryIdentity.scrum868.test.ts",
+    "testName": "receipt advancement refuses an id-less recovery and a foreign stored supplier"
+  },
+  "matrixRow": "SCRUM868-P4a-recovery-identity",
+  "fingerprint": "d720bb1325af68129394d12dbd6245cd495aa427ac6719b45492ebfe98ef6927"
+}

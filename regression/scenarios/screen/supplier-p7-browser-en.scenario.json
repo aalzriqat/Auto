@@ -1,0 +1,80 @@
+{
+  "id": "supplier-p7-browser-en",
+  "domain": "screen",
+  "level": "browser",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "supplierIdentity.operatorJourney",
+      "input": {
+        "locale": "en",
+        "dir": "ltr",
+        "backend": "RUNNER_LOCAL",
+        "openingMinor": 100003,
+        "consignmentSourceCost": 80,
+        "sellingPrice": 100
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "openingSupplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "vehicleSupplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "paymentSupplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "amountPaid",
+      "value": 100.003
+    },
+    {
+      "observable": "consignmentJournalDelta",
+      "value": 0
+    },
+    {
+      "observable": "reloadPreservesIdentity",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "playwright/tests/supplier-identity.spec.ts",
+    "testName": "supplier identity survives opening, consignment and payable payment in en"
+  },
+  "sourceGlobs": [
+    "components/suppliers/**",
+    "components/vehicles/**",
+    "components/sourcing/**",
+    "components/accounting/setup/**",
+    "app/**/sourcing/**"
+  ],
+  "fingerprint": "5c9a1b896c4df4915342b16ed67f4137fd3b5e5406a45f557fc4a6f39f7ef5c3"
+}

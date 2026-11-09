@@ -65,13 +65,26 @@ async function fixture(identified: boolean) {
   return { t, orgId, userId, supplierId, vehicleId, payableId, receivableId, expenseId, recoveryId, receiptId, editId, draftId };
 }
 
-describe("supplier launch evidence", () => {
-  test.each(TABLES)("counts missing canonical identity in %s with no private output", async table => {
+async function assertMissingIdentity(table: typeof TABLES[number]) {
     const w = await fixture(false);
     const counts = { ...ZERO, MISSING_SUPPLIER_ID: 1 };
     if (table === "expenses") Object.assign(counts, { MISSING_SUPPLIER_ID: 0, MISSING_PAYEE_ID: 1, MISSING_BEARER_ID: 1 });
     expect(await w.t.query(scan, { table, cursor: null })).toEqual({ status: "READY", cursor: null, examined: 1, counts });
-  });
+}
+
+describe("supplier launch evidence", () => {
+  // SCRUM-761 requires one literal, non-parameterized registration per scenario.
+  test("launch payable without identity counts one", async () => { await assertMissingIdentity("vehicleSupplierPayables"); });
+  test("launch receivable without identity counts one", async () => { await assertMissingIdentity("vehicleSupplierReceivables"); });
+  test("launch recovery without identity counts one", async () => { await assertMissingIdentity("supplierCostRecoveries"); });
+  test("launch recovery receipt without parent identity counts one", async () => { await assertMissingIdentity("supplierCostRecoveryReceipts"); });
+  test("launch opening payment without parent identity counts one", async () => { await assertMissingIdentity("openingPayablePayments"); });
+  test("launch consignment without identity counts one", async () => { await assertMissingIdentity("vehicles"); });
+  test("launch conversion without identity counts one", async () => { await assertMissingIdentity("vehicleOwnershipConversions"); });
+  test("launch concession basis without identity counts one", async () => { await assertMissingIdentity("financeApplications"); });
+  test("launch supplier expense without payee and bearer counts both", async () => { await assertMissingIdentity("expenses"); });
+  test("launch pending on-account intake without identity counts one", async () => { await assertMissingIdentity("vehicleEdits"); });
+  test("launch supplier opening allocation without identity counts one", async () => { await assertMissingIdentity("openingBalanceDrafts"); });
 
   test("fully identified tenant returns exact zero evidence for all eleven tables without writes", async () => {
     const w = await fixture(true);

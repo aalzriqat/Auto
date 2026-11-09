@@ -1951,3 +1951,37 @@ The pending-legacy-draft scenario cites failing-first commit
 instead of refusing. Other new records are preventive controls and have no
 bugRef. Rulings: SCRUM-868 c23871/c23873, OQ-4, and SCRUM-850 c24749.
 This is harness evidence, not real-backend, OCC, production or pilot certification.
+
+### SCRUM868-P7-launch-evidence
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Missing identity | One missing row counts 1 for each of eleven tables; supplier expense missing payee and bearer counts 1 in each independent reason | `convex/supplierLaunchEvidence.test.ts`, eleven literal table cases |
+| Complete identified data | All eleven tables report 0; full before/after document arrays equal | Same suite, fully identified tenant |
+| Exemptions | Ordinary OPENING OTHER_PAYABLE and SHOWROOM vendor text count 0; supplier opening counts 1; metadata-only pending update inherits id | Same suite, ordinary creditor and partial-edit cases |
+| Partial and unreadable evidence | Nine conversion rows require two pages, missing counts 7 then 1; native byte split, unreadable cursor and missing UPDATE source return UNAVAILABLE without counts | Same suite, paging, split, cursor and pending-edit cases |
+| Release refusal | Any count 1 refuses with SUPPLIER_IDENTITY_UNRESOLVED; failed call, malformed response, deadline and page cap return SUPPLIER_EVIDENCE_UNAVAILABLE | `scripts/supplierLaunchGate.test.ts`; actual rollout phase executed with failing CLI responses |
+| Browser identity | EN and AR/RTL: opening 100003 JOD minor units selects MASTER_A, consigned vehicle cost 80 and selling price 100 selects the same party with zero journal change, payment 100.003 retains MASTER_A after reload | `playwright/tests/supplier-identity.spec.ts`, both literal journeys |
+
+The eleven-table census adds openingPayablePayments to design section 4.1.
+Recovery receipts and opening payments prove identity through their same-org
+parents. OWNED ON_ACCOUNT creditor identity remains on the acquisition payable.
+The query is internal and read-only; no amount, posting, settlement, opening or
+correction behavior changes. Counts are complete or UNAVAILABLE. See
+`docs/adr/2026-11-10-supplier-launch-evidence.md` for limits and exclusions.
+
+P7 also registers thirteen previously unbound P2-P4b controls against the existing
+matrix rows: P2 update-by-id, unchanged-name echo, role conflict and on-account
+creditor; P3 concession basis; P4a inactive completion and receipt refusal; P4b
+bearer spoofing, legacy notes-only edit, SHOWROOM free text, pending bearer
+switch, inactive/stale parties and shared economic confirmation. P5's 52 literal
+backend controls already have registrations. These are preventive controls
+without bugRef. Scenario records use the repository fingerprint function.
+
+Local harness and script results do not certify the browser rows. The journeys
+require the disposable runner-local backend, block cloud Convex HTTP and
+nonlocal WebSockets, and preserve existing authentication. Docker and QA auth
+state were unavailable in the implementing worktree, so browser execution,
+phone/desktop screen audit, explorer hunters, hosted Sonar, independent seats,
+real-platform certification and production counts remain UNAVAILABLE here.
+The trusted exact-SHA accounting release verdict remains a separate gate.
