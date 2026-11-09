@@ -44,6 +44,41 @@
       "input": {
         "positiveControl": "cost"
       }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.requestVoid",
+      "input": {
+        "reasonMarker": "private-payroll-void",
+        "amountMinor": 110003
+      }
+    },
+    {
+      "actor": {
+        "role": "cost-payroll-view-no-manage",
+        "org": "A"
+      },
+      "action": "openingBalanceMaintenance.status",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "cost-payroll-view-no-manage",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "actionType": "REQUEST_OPENING_VOID",
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
     }
   ],
   "expected": [
@@ -58,12 +93,24 @@
     {
       "observable": "authorizedAudit.fullStoredRowVisible",
       "value": true
+    },
+    {
+      "observable": "maintenance.voidReason",
+      "value": null
+    },
+    {
+      "observable": "audit.privateReasonAndAmount.visible",
+      "value": false
     }
   ],
   "rulings": [
     {
       "id": "SCRUM-902#c24475",
       "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-850#c24749",
+      "digest": "269051a83f857d74538b7fdcdf2eb609e9c40256190e38cbd6200916e9a7fe61"
     }
   ],
   "impl": {
@@ -73,7 +120,7 @@
   "matrixRow": "SCRUM-936-audit-reader-confidentiality",
   "bugRef": {
     "key": "SCRUM-936",
-    "failingFirst": "e5813b68f46b63546c3b448900efec0efa0241e9"
+    "failingFirst": "18992de610caea44ce5503f2362bfc27b36f5225"
   },
-  "fingerprint": "df29dd11d53f7fd3c3cc270b745aa939c9585c9426b1f27e76aa3018671d84c0"
+  "fingerprint": "744a6afbf8dd958bb283876eb3e28342fb318ad787583c520c6bf53f2a2f0172"
 }

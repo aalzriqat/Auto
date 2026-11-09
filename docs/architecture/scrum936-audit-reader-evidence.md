@@ -128,9 +128,251 @@ where its dedicated reader already serves it.
 
 ## Validation
 
-Final commands, results and mutation evidence are appended after execution.
+Production source is frozen at `371a647993f9f4e02becddfdb459614bdf78bf93`.
+Baseline source notes are committed at `715e1a47e`.
+
+| Check | Result |
+| --- | --- |
+| First failing-first checkpoint | 13 failed tests at e5813b68f; intended disclosure/classification failures |
+| Supplemental checkpoint against its committed production sources | 15 failed tests at 18992de61 |
+| Named affected backend suites | 67 completed suites, 1,920 tests green after the Phase 10 recheck |
+| Additional broad openingClosureReaders.scrum858 suite | INCOMPLETE / failed local verification; interrupted for the machine CPU bound, no threshold or test change |
+| Regression validators and required guards | Initial nine-file run: seven passed; tenant guard hook timed out; refreshRulings failed before collection |
+| Tenant write guard recheck | 13 passed on unchanged source |
+| economicCommandCensus | Passed in the nine-file run |
+| refreshRulings recheck | FAIL, zero tests; Rolldown prepends imports before the existing hashbang in refreshRulings.mjs |
+| pnpm typecheck | Exit 0 |
+| pnpm typecheck:convex | Exit 0 |
+| ESLint, all 16 touched TS files | Exit 0, zero errors, one existing unused `user` warning at sales.ts:1408 |
+| ESLint, final financialAudit/test/Phase 10 edits | Exit 0, no diagnostics |
+| Contract call identity | Exit 0, 945 entries matched; backend finding identity was not measured |
+| Contract renewal source freshness after notes commit | Exit 0, 945 checked, zero stale/malformed/missing |
+| Source restoration after mutants | 18/18 clean checks after `git checkout HEAD -- <file>` |
+
+The root typecheck excludes convex, apps, packages, dealer-worker and test-utils
+as compiler roots. The separate Convex config includes convex and test-utils,
+excluding _generated as roots; imported generated declarations remain dependencies.
+Neither command is a mobile, shared-package or worker standalone typecheck.
+
+The refreshRulings test/module and their dependency/config pins are unchanged
+from the base. The protected test file remains unmodified and unstaged. This
+failure is not waived or relabeled as passing. No live Jira refresh was attempted.
+The broad SCRUM-858 file is outside the required filename suites selected for
+this fix; it entered the broader caller sweep. Its large synthetic journal
+fixtures exceeded the thermal budget. Partial execution is not a passed check.
+
+The original Phase 10 assertion expected a protected journal id before a cost
+grant. It now requires withholding, then grants cost access and retains the
+original id assertion plus a public ledger read of the balanced 3,000/3,000
+journal. No financial assertion, permission gate, timeout or threshold was weakened.
+
+### Named suite inventory
+
+Scope: tracked convex test filenames beginning with financialAudit,
+accountingCutover, dealCommissions, sales, supplierCostRecoveries,
+migrateConsignedSaleBasis, sourcingPayables or supplierReceivables; the SCRUM-850
+files; and the broader financialAudit/accountingCutover caller sweep. This is a
+local source inventory, not the full repository suite or CI.
+
+| Named file | Result |
+| --- | --- |
+| `convex/accountingCutoverExactness.scrum850.test.ts` | PASS |
+| `convex/accountingCutoverLegacyExactness.scrum850.test.ts` | PASS |
+| `convex/accountingGenericReversalAuthority.test.ts` | PASS |
+| `convex/accountingMigrationRetirement.test.ts` | PASS |
+| `convex/accountingPhase10.test.ts` | PASS after strengthened contract recheck (10 tests) |
+| `convex/accountingPhase17.test.ts` | PASS |
+| `convex/accountingPhase18.test.ts` | PASS |
+| `convex/accountingPhase7.test.ts` | PASS |
+| `convex/accountingPhase9.test.ts` | PASS |
+| `convex/accountingReleaseRehearsal.test.ts` | PASS |
+| `convex/accountingSourceFamilyRetired.test.ts` | PASS |
+| `convex/adminOrgs.test.ts` | PASS |
+| `convex/applications.test.ts` | PASS |
+| `convex/bankReconciliation.test.ts` | PASS |
+| `convex/chartOfAccounts.management.test.ts` | PASS |
+| `convex/claimsRetirement.test.ts` | PASS |
+| `convex/commitmentRestorationSpine.test.ts` | PASS |
+| `convex/consignedSaleCostAccessRule.scrum886.test.ts` | PASS |
+| `convex/costDisclosure.scrum902f.test.ts` | PASS |
+| `convex/costReaders.scrum902d.test.ts` | PASS |
+| `convex/dealCommissions.test.ts` | PASS |
+| `convex/dealCommissionsPilot.test.ts` | PASS |
+| `convex/dealUnwind.test.ts` | PASS |
+| `convex/financeDisbursementChequeReturn.test.ts` | PASS |
+| `convex/financedConsignedSettlement.test.ts` | PASS |
+| `convex/financialAudit.scrum936.test.ts` | PASS |
+| `convex/manualJournalAccountingDate.test.ts` | PASS |
+| `convex/manualJournalsPilotOff.scrum795.test.ts` | PASS |
+| `convex/manualJournalsPilotOffControl.scrum795.test.ts` | PASS |
+| `convex/migrateConsignedSaleBasis.test.ts` | PASS |
+| `convex/migrateConsignedSaleBasisProdShape.test.ts` | PASS |
+| `convex/multiVehicleDepositAllocation.test.ts` | PASS |
+| `convex/openingAllocatedAdvances.test.ts` | PASS |
+| `convex/openingAllocatedPartners.test.ts` | PASS |
+| `convex/openingAllocatedPrepaids.test.ts` | PASS |
+| `convex/openingAllocatedReceivables.test.ts` | PASS |
+| `convex/openingBalanceBankIdentity.test.ts` | PASS |
+| `convex/openingBalanceIndexReads.test.ts` | PASS |
+| `convex/openingBalanceMaintenance.scrum850.test.ts` | PASS |
+| `convex/openingBankReconciliation.scrum858.test.ts` | PASS |
+| `convex/openingClosureReaders.scrum858.test.ts` | INCOMPLETE (CPU bound) |
+| `convex/openingCommissionPayroll.test.ts` | PASS |
+| `convex/openingCommissionReadBudget.test.ts` | PASS |
+| `convex/openingInventoryCap.scrum858.test.ts` | PASS |
+| `convex/openingManagementSettlement.test.ts` | PASS |
+| `convex/openingNamedDeposits.scrum858.test.ts` | PASS |
+| `convex/openingPrepaidConsumerReports.test.ts` | PASS |
+| `convex/openingPrepaidRounding.scrum858.test.ts` | PASS |
+| `convex/openingRehearsalPublicComposite.test.ts` | PASS |
+| `convex/openingRemainingFamilies.test.ts` | PASS |
+| `convex/openingReversalDoors.scrum858.test.ts` | PASS |
+| `convex/openingStockCashBankReplay.test.ts` | PASS |
+| `convex/openingSupplierLiabilityReplay.test.ts` | PASS |
+| `convex/openingSuspense.scrum858.test.ts` | PASS |
+| `convex/orgDeletionManifestRatchet.scrum563.test.ts` | PASS |
+| `convex/prepaidExpenses.test.ts` | PASS |
+| `convex/sales.test.ts` | PASS |
+| `convex/salesCommissionEntry.test.ts` | PASS |
+| `convex/salesListPagination.test.ts` | PASS |
+| `convex/salesTemplateMoneyDoors.test.ts` | PASS |
+| `convex/scrum486Certification.test.ts` | PASS |
+| `convex/sourcingPayables.test.ts` | PASS |
+| `convex/supplierCostRecoveries.test.ts` | PASS |
+| `convex/supplierPayablesReconciliation.scrum876.opening.test.ts` | PASS |
+| `convex/supplierReceivables.test.ts` | PASS |
+| `convex/supplierReceivablesReconciliation.scrum869.test.ts` | PASS |
+| `convex/supplierSettlementAudit.test.ts` | PASS |
+| `convex/validations/sales.test.ts` | PASS |
 All Vitest commands name files and use `--maxWorkers=1`. No Playwright, watchers,
 Convex deploy, production write or review-evidence JSON is used.
 
 Sources and the rejected writer-only alternative are in the
 [ADR](../adr/2026-11-09-financial-audit-reader-permissions.md).
+
+
+### Regression validators
+
+All commands used named files and `--maxWorkers=1`.
+
+| File | Result |
+| --- | --- |
+| scripts/regression/scenarioRecord.test.ts | PASS; final new-record recheck recorded below |
+| scripts/regression/implFixture.test.ts | PASS; final new-record recheck recorded below |
+| scripts/regression/localExecution.test.ts | PASS |
+| scripts/regression/pilotDoorAnalysis.test.ts | PASS |
+| scripts/regression/pilotDoorInventory.test.ts | PASS |
+| scripts/regression/prRunner.test.ts | PASS |
+| scripts/regression/refreshRulings.test.ts | FAIL before collection; repeated unchanged |
+| scripts/tenantWriteGuard.test.ts | PASS, 13 tests on unchanged rerun |
+| scripts/economicCommandCensus.test.ts | PASS |
+
+### Mutation results
+
+The four branch mutants bypassed the shared projection only for that branch.
+Every mutation ran a named suite with one worker. Every source was restored with
+`git checkout HEAD -- <file>`, followed by `git status --porcelain <file>` with
+empty output. Every mutant produced failed tests rather than a worker startup or
+parse failure. The opening-summary mutation used the SCRUM-850 maintenance suite;
+the others used financialAudit.scrum936.test.ts.
+
+| Mutant | Failed tests | Restored clean |
+| --- | --- | --- |
+| `branch:actor` (branch-actor) | 14 | Yes |
+| `branch:action` (branch-action) | 14 | Yes |
+| `branch:date` (branch-date) | 14 | Yes |
+| `branch:default` (branch-default) | 14 | Yes |
+| `classification` (missing-post-journal-classification) | 6 | Yes |
+| `new-action` (new-unclassified-action) | 1 | Yes |
+| `mayReadOpeningAudit` (opening-policy-bypass) | 3 | Yes |
+| `mayReadJournalAudit` (journal-policy-bypass) | 5 | Yes |
+| `mayReadAuditDetails` (all-details-bypass) | 14 | Yes |
+| `auditObject` (object-projection-missing) | 7 | Yes |
+| `openingAuditSummary` (opening-summary-missing) | 4 | Yes |
+| `isOpeningAuditSummary` (historical-summary-trust) | 1 | Yes |
+| `unwindActorAuditAmounts` (unwind-amounts-missing) | 1 | Yes |
+| `projectAuditRow` (row-projection-bypass) | 14 | Yes |
+| `canReadOpeningPayroll` (payroll-read-grant-denied) | 4 | Yes |
+| `canManageOpeningPayroll` (payroll-maintenance-overgrant) | 2 | Yes |
+| `containsEmployeeAdvanceControl` (payroll-source-missed) | 2 | Yes |
+| `mayReadUnwindActorEvidence` (unwind-actor-grant-denied) | 1 | Yes |
+
+
+Twelve helper functions were mutated explicitly: mayReadOpeningAudit,
+mayReadJournalAudit, mayReadAuditDetails, auditObject, openingAuditSummary,
+isOpeningAuditSummary, unwindActorAuditAmounts, projectAuditRow,
+canReadOpeningPayroll, canManageOpeningPayroll, containsEmployeeAdvanceControl,
+and mayReadUnwindActorEvidence. The other six mutations cover branch admission,
+missing posted-journal classification and a newly unclassified schema action.
+There are no surviving mutants in this set.
+
+### Baseline review and evidence limits
+
+The first renewal check refused 62 stale entries. Their 22 referenced exports
+retain identical argument and explicit return validators at the PR base and the
+implementation head, after line-ending normalization. Eighteen exported
+declarations are unchanged. The four changed declarations are
+sourcingPayables.markPaid, dealUnwind.recordDealUnwindForwardReturn,
+dealCommissions.addLine and supplierCostRecoveries.recordReceipt. Their changes
+are amount-free audit descriptions or the equivalent shared permission predicate.
+
+Only those 62 entries received appended renewal notes in 15 shards. Comparing
+parsed entries before and after confirms that all other fields and prior renewal
+text are unchanged. No write mode, expiry change, fingerprint change, extractor
+change, issue change or UNKNOWN-to-PASS conversion was used. The normal read-only
+command then checked all 945 entries with zero stale evidence. This measures
+source/blob attribution, not live contract compatibility or runtime correctness.
+
+Fourteen SCRUM-761 records cover fourteen behavioral tests, plus the separate
+classification test, under `SCRUM-936-audit-reader-confidentiality` in the SCRUM-486 matrix. The existing legacy-edit and direct-employee records also name the mutable
+historical employee snapshot and payroll-view-without-maintenance-authority
+void controls. Their literal tests are present at the
+supplemental failing-first checkpoint.
+
+No Playwright, screen rendering, explorer swarm, real-backend rehearsal, platform
+OCC/limits test, live function-spec comparison, production-data prevalence query,
+Jira/GitHub/Slack update, formal seat, CI, deployment, push or merge was performed.
+The two scoped advisory reviewers ran no tests and issued no certification. The
+coordinator owns the remaining review and runtime gates. The existing large
+DealCockpit baseline shard exceeded the commit hook's secret-scan size cap; no
+full secret-scan coverage is claimed.
+
+Graft generated .gitignore/.ignore changes. They remain unstaged, along with
+local .s936-* logs and proof helpers. The generated API declaration, protected
+refreshRulings test and test-results tree were never staged.
+
+
+A restored proof run initially passed all 63 backend tests and the implementation
+fixture check, but the record validator rejected two additional records that
+reused an existing test registration and contained prose tokens. Their controls
+were consolidated into the original legacy-edit and direct-employee records,
+with short tokens and the supplemental failing-first SHA. The validator was not
+changed or weakened. Final restored results are recorded after the rerun.
+
+
+### Final restored proof and scenario inventory
+
+After source restoration, both backend files passed all 63 tests. The corrected
+record and implementation-fixture validators then passed all 71 tests. The
+initial combined run had one record-format failure, which was corrected by
+consolidating duplicate registrations, not by weakening the validator. A final
+AST recount over 371 tracked production TypeScript files in convex, excluding
+_generated and test/spec files, confirms 51 auditLog calls and 41 used action
+types. The schema/table test covers all 44 declared action types.
+
+| Scenario record | Literal test | Failing-first commit |
+| --- | --- | --- |
+| `scrum936-commission-add` | SCRUM-936 adding a deal commission audit inherits the commission reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-commission-remove` | SCRUM-936 removing a deal commission audit inherits the commission reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-commission-set` | SCRUM-936 setting a sale commission audit inherits its dedicated reader gate | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-event-line-count` | SCRUM-936 restricted posted events retain their line count without source text | `18992de610caea44ce5503f2362bfc27b36f5225` |
+| `scrum936-legacy-cost-receipt` | SCRUM-936 historical supplier cost receipt audit inherits cost reader gates | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-legacy-cost-reversal` | SCRUM-936 historical supplier cost receipt reversal audit inherits cost reader gates | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-legacy-manual-post` | SCRUM-936 legacy posted manual journal totals and memo are withheld while pilot posting stays blocked | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-legacy-migration-cogs` | SCRUM-936 historical consigned migration COGS audit inherits cost reader gates | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-legacy-opening-edit` | SCRUM-936 legacy opening edit draft and total copies are projected in every branch | `18992de610caea44ce5503f2362bfc27b36f5225` |
+| `scrum936-post-opening-approve-employee` | SCRUM-936 approved singleton employee posting audit inherits payroll withholding | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-post-opening-approve-vehicle` | SCRUM-936 approved singleton vehicle posting audit inherits cost withholding | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-post-opening-direct-employee` | SCRUM-936 owner-direct singleton employee posting audit inherits payroll withholding | `18992de610caea44ce5503f2362bfc27b36f5225` |
+| `scrum936-post-opening-direct-vehicle` | SCRUM-936 owner-direct singleton vehicle posting audit inherits cost withholding | `e5813b68f46b63546c3b448900efec0efa0241e9` |
+| `scrum936-unwind-actor-parity` | SCRUM-936 unwind actors retain permitted remittance amounts while finance text stays withheld | `18992de610caea44ce5503f2362bfc27b36f5225` |

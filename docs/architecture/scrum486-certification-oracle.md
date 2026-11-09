@@ -1858,3 +1858,11 @@ checkpoint's production sources. Two additional records cover posted-event line
 counts and unwind-actor remittance parity. The primary tests also cover protected
 source ids, mutable-draft payroll history and the stricter maintenance payroll
 predicate. Restricted resource types remain visible; source ids are `WITHHELD`.
+
+
+The completed SCRUM-936 library contains fourteen records for fourteen behavioral
+tests. The legacy-edit and direct-employee records include the historical-employee and
+void-reason controls from the supplemental checkpoint. All eighteen source mutants produced failed tests
+and were restored clean. Both typechecks and the source-freshness check passed.
+The unrelated refreshRulings parse failure and thermally interrupted broad
+SCRUM-858 read-budget suite remain failed/incomplete verification, not waivers.
