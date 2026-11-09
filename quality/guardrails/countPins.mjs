@@ -159,7 +159,10 @@ export function analyzePins(files, fileCache = new Map()) {
   for (const [filePath, text] of files) {
     const key = `${filePath}\0${createHash("sha256").update(text).digest("hex")}`;
     let pins = fileCache.get(key);
-    if (!pins) fileCache.set(key, (pins = findCountPins(filePath, text)));
+    if (!pins) {
+      pins = findCountPins(filePath, text);
+      fileCache.set(key, pins);
+    }
     if (pins.length > 0) result.set(filePath, pins);
   }
   return result;

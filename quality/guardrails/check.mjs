@@ -336,7 +336,7 @@ function renamedFrom(cwd, baseCommit) {
       renames.set(normalizeRepoPath(fields[i + 2]), normalizeRepoPath(fields[i + 1]));
       i += 2;
     } else if (/^[CADMTUXB]\d*$/u.test(fields[i])) {
-      i += /^C/u.test(fields[i]) ? 2 : 1;
+      i += fields[i].startsWith("C") ? 2 : 1;
     }
   }
   return renames;
