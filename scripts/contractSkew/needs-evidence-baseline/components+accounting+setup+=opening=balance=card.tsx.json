@@ -5,6 +5,21 @@
     {
       "surface": "web",
       "file": "components/accounting/setup/OpeningBalanceCard.tsx",
+      "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:394:15",
+      "functionId": "accountingCutover:editOpeningBalanceDraft",
+      "contractPath": "lines",
+      "kind": "SHAPE_UNKNOWN",
+      "cause": "value is \u0007ny where the backend declares array: undeclared keys could hide inside it",
+      "fingerprint": "5d833814894446bc",
+      "multiplicity": 1,
+      "rationale": "Pending-draft edit sends the same explicitly mapped account/debit/credit lines (conditional bankAccountId) as the baselined postOpeningBalanceDirect call two lines below, spread from one payload object with draftId added. The backend validator checks the array shape and editOpeningBalanceDraft re-validates the lines. Nested namespaces and amount/business validity remain UNKNOWN; this is not accounting certification.",
+      "issue": "SCRUM-850",
+      "expires": "2026-12-01",
+      "renewal": "New identity from PR #792 (SCRUM-850), merged as 0498711b0; it surfaced only in the post-deploy production run 42566531008 because PR-mode CI compares against the backend deployed before the PR, which lacked this argument. Reviewed at 0498711b0 against both files below; none has changed since. evidence-blobs [[\"components/accounting/setup/OpeningBalanceCard.tsx\",\"ca9988e5f6682cf003a462e41fb72a7b39b96002\"],[\"convex/accountingCutover.ts\",\"64065c5e9e8ae3fc6a5fe222d75f9fe1fd0a7371\"]]"
+    },
+    {
+      "surface": "web",
+      "file": "components/accounting/setup/OpeningBalanceCard.tsx",
       "callSiteId": "components/accounting/setup/OpeningBalanceCard.tsx:397:15",
       "functionId": "accountingCutover:postOpeningBalanceDirect",
       "contractPath": "lines",
