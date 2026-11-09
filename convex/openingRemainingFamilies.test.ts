@@ -16,6 +16,7 @@ import { seedOrgWithMember } from "../test-utils/seedOrg";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 
 // SCRUM-869#c23881: historical receipt-reversal mechanics with the pilot door explicitly open.
 // The shipped-state refusal lives in supplierSettlementContainment.test.ts.
@@ -191,7 +192,7 @@ async function assertReadbackSourceIsolation(
 
 async function replayRemainingOpeningFamily({
   type,
-  allocation,
+  allocation: requestedAllocation,
 }: (typeof families)[number]) {
   const t = convexTestWithComponents(schema, import.meta.glob("./**/*.ts"));
   const ownerRole = DEFAULT_ROLE_TEMPLATES.find(
@@ -207,6 +208,9 @@ async function replayRemainingOpeningFamily({
     roleName: "OWNER",
     permissions: [...ownerRole.permissions],
   });
+  const allocation = requestedAllocation.kind === "SUPPLIER_PAYABLE" || requestedAllocation.kind === "SUPPLIER_RECOVERABLE"
+    ? { ...requestedAllocation, supplierId: await supplierIdFor(t, orgId, requestedAllocation.counterpartyName) }
+    : requestedAllocation;
   await t.run(async (ctx) => {
     const membership = await ctx.db
       .query("memberships")

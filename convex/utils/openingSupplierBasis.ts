@@ -92,7 +92,7 @@ export async function openingRecoveryBasis(
     row.amountDueMinor !== basis.amountMinor ||
     row.currency !== basis.currency ||
     row.title !== basis.allocation.title.trim() ||
-    row.sourcedFromName !== basis.allocation.counterpartyName.trim() ||
+    !sameOpeningSupplier(row, basis.allocation) ||
     row.purpose !== basis.allocation.purpose
   )
     throw refuse();
@@ -126,7 +126,7 @@ export async function openingPayableBasis(
     row.orgId !== orgId ||
     row.currency !== basis.currency ||
     row.title !== basis.allocation.title.trim() ||
-    row.sourcedFromName !== basis.allocation.counterpartyName.trim()
+    !sameOpeningSupplier(row, basis.allocation)
   )
     throw refuse();
   if (
@@ -140,4 +140,16 @@ export async function openingPayableBasis(
   const scale = toMinorUnits(row.amountDue, row.currency);
   if (scale !== basis.amountMinor) throw refuse();
   return basis;
+}
+
+/** Snapshot-name proof is retained only for replay of pre-identity openings.
+ * One-sided identity is a contradiction, never permission to fall back. */
+function sameOpeningSupplier(
+  row: { supplierId?: Id<"suppliers">; sourcedFromName: string },
+  allocation: { supplierId?: Id<"suppliers">; counterpartyName: string },
+): boolean {
+  if (row.supplierId !== undefined || allocation.supplierId !== undefined) {
+    return row.supplierId === allocation.supplierId;
+  }
+  return row.sourcedFromName === allocation.counterpartyName.trim();
 }

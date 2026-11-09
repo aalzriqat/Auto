@@ -1,6 +1,7 @@
 "use client";
 
 import { CostAccessNote } from "../CostAccessNote";
+import { OpeningSupplierFields } from "./OpeningSupplierFields";
 import { useState } from "react";
 import { usePaginatedQuery, useQuery } from "convex/react";
 import { Plus, Trash2 } from "lucide-react";
@@ -175,7 +176,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
       </div>
       {selectionError && <p role="alert" className="text-xs text-amber-700">{selectionError}</p>}
       {needsVehicles && !canReadOpeningStockCost && (
-        <CostAccessNote className="text-xs text-amber-700">{t("OpeningAllocationStockCostAccessNeeded" as any)}</CostAccessNote>
+        <CostAccessNote className="text-xs text-amber-700">{t("OpeningAllocationStockCostAccessNeeded")}</CostAccessNote>
       )}
       {groups.map((group) => {
         const groupRows = rows.filter((row) => row.accountId === group.accountId);
@@ -201,7 +202,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                     onChange={(event) => {
                       const kind = group.allowedKinds?.find(kind => kind === event.target.value && canEditKind(kind));
                       if (!kind) { setSelectionError(t("OpeningAllocationPartyUnavailable")); return; }
-                      replaceRow(emptyParty({ ...row, partyLabel: "", counterpartyName: "", title: "", purpose: undefined,
+                      replaceRow(emptyParty({ ...row, partyLabel: "", supplierId: undefined, counterpartyName: "", title: "", purpose: undefined,
                         depositKind: undefined, depositVehicleId: undefined, depositVehicleLabel: undefined }, kind));
                     }}
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
@@ -271,11 +272,7 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
                       onChange={(event) => updateRow(row.rowKey, { amount: event.target.value })}
                       readOnly={row.kind === "VEHICLE_INVENTORY"} />
                   </div>
-                  {(row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") && <div className="space-y-1">
-                    <Label htmlFor={`${row.rowKey}-counterparty`}>{t("OpeningAllocationCounterpartySnapshot")}</Label>
-                    <Input id={`${row.rowKey}-counterparty`} value={row.counterpartyName ?? ""}
-                      onChange={(event) => updateRow(row.rowKey, { counterpartyName: event.target.value })} />
-                  </div>}
+                  <OpeningSupplierFields orgId={orgId} row={row} onChange={(patch) => updateRow(row.rowKey, patch)} />
                   {(row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" ||
                     row.kind === "OTHER_PAYABLE" || row.kind === "UNALLOCATED_LIABILITY" ||
                     row.kind === "CUSTOMER_DEPOSIT") && <div className="space-y-1">

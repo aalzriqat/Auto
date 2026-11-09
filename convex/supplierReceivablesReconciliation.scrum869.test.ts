@@ -33,7 +33,7 @@ import {
 import { DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 import { getControlAccountBalancesAsOf, getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { resetOrgToCompletion } from "../test-utils/orgResetFixtures";
-import { supplierIdInCtx } from "../test-utils/supplierFixture";
+import { supplierIdInCtx, supplierIdFor } from "../test-utils/supplierFixture";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -937,7 +937,7 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
         { accountId: capitalAccountId, debitMinor: 0, creditMinor: OPENING_MINOR },
       ],
       allocations: [
-        { kind: "SUPPLIER_RECOVERABLE", counterpartyName, title: "Synthetic opening claim", purpose: "CLAIM",
+        { kind: "SUPPLIER_RECOVERABLE", counterpartyName, supplierId: await supplierIdFor(s.t, s.orgId, counterpartyName), title: "Synthetic opening claim", purpose: "CLAIM",
           rowKey: "open-1", accountId, amountMinor: OPENING_MINOR },
         ...(partnerId ? [{ kind: "PARTNER_CAPITAL" as const, partnerId, accountId: capitalAccountId, rowKey: "capital-1", amountMinor: OPENING_MINOR }] : []),
       ],
@@ -954,9 +954,20 @@ describe("SCRUM-858 F3 - opening cost recoveries", () => {
 
   test.each(["Unknown supplier", "Synthetic supplier"])("P4a opening recovery without supplierId keeps name classification: %s", async name => {
     const s = await seed("p4aopening");
-    // The public opening door still creates id-less rows until P5. No direct insert needed.
+    // P5 new openings carry ids. Remove both identities to model retained
+    // pre-P5 history and keep this legacy name-classification control intact.
     const { row } = await openingRecovery(s, Date.now() - 1000, false, name);
-    expect(row.supplierId).toBeUndefined();
+    const legacy = await s.t.run(async ctx => {
+      const draft = await ctx.db.get(row.openingBalanceDraftId);
+      if (!draft) throw new Error("Missing opening source");
+      await ctx.db.patch(row._id, { supplierId: undefined, supplierSnapshotVersion: undefined });
+      await ctx.db.patch(draft._id, { allocations: draft.allocations?.map(allocation => {
+        if (!("supplierId" in allocation)) return allocation;
+        const copy = { ...allocation }; delete copy.supplierId; delete copy.supplierSnapshotVersion; return copy;
+      }) });
+      return ctx.db.get(row._id);
+    });
+    expect(legacy?.supplierId).toBeUndefined();
     const r = await recon(s);
     expect(r).toMatchObject({ status: "AVAILABLE", complete: true, isReconciled: true });
     expect(r.byCurrency.JOD).toEqual({

@@ -68,12 +68,12 @@ test("remaining opening families serialize only their supported identity and pur
   const base = { accountId: "account", partyId: "", partyLabel: "", amount: "4.001",
     title: "Historical source", dueDate: "", note: "" };
   const cases = [
-    { row: { ...base, rowKey: "claim", kind: "SUPPLIER_RECOVERABLE", counterpartyName: "Synthetic supplier",
+    { row: { ...base, rowKey: "claim", kind: "SUPPLIER_RECOVERABLE", supplierId: "supplier", counterpartyName: "Synthetic supplier",
       purpose: "CLAIM" }, expected: { kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId: "account",
-      amountMinor: 4001, counterpartyName: "Synthetic supplier", title: "Historical source", purpose: "CLAIM" } },
-    { row: { ...base, rowKey: "supplier", kind: "SUPPLIER_PAYABLE", counterpartyName: "Synthetic supplier" },
+      amountMinor: 4001, supplierId: "supplier", counterpartyName: "Synthetic supplier", title: "Historical source", purpose: "CLAIM" } },
+    { row: { ...base, rowKey: "supplier", kind: "SUPPLIER_PAYABLE", supplierId: "supplier", counterpartyName: "Synthetic supplier" },
       expected: { kind: "SUPPLIER_PAYABLE", rowKey: "supplier", accountId: "account", amountMinor: 4001,
-        counterpartyName: "Synthetic supplier", title: "Historical source" } },
+        supplierId: "supplier", counterpartyName: "Synthetic supplier", title: "Historical source" } },
     { row: { ...base, rowKey: "other", kind: "OTHER_PAYABLE", counterpartyName: "Synthetic creditor" },
       expected: { kind: "OTHER_PAYABLE", rowKey: "other", accountId: "account", amountMinor: 4001,
         counterpartyName: "Synthetic creditor", title: "Historical source" } },
@@ -91,7 +91,7 @@ test("remaining opening families serialize only their supported identity and pur
     expect(buildOpeningAllocationPayload([row as OpeningAllocationDraft], "JOD")).toEqual([expected]);
   }
   for (const invalid of [
-    { ...cases[0].row, counterpartyName: "" },
+    { ...cases[0].row, supplierId: undefined, counterpartyName: "" },
     { ...cases[1].row, title: "" },
     { ...cases[3].row, partyId: "" },
     { ...cases[4].row, purpose: "CLAIM" },

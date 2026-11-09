@@ -35,8 +35,8 @@ afterEach(() => { cleanup(); world.manageFinance = false; world.creates = []; })
 const accountId = "account-one" as Id<"chartOfAccounts">;
 const base = { rowKey: "opening-one", accountId, partyId: "" as const, partyLabel: "", amount: "100.003",
   title: "Synthetic opening", dueDate: "", note: "", counterpartyName: "Legacy name" };
-function mount(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE" | "OTHER_PAYABLE") {
-  const row: OpeningAllocationDraft = { ...base, kind, ...(kind === "SUPPLIER_RECOVERABLE" ? { purpose: "CLAIM" as const } : {}) };
+function mount(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE" | "OTHER_PAYABLE", supplierId?: Id<"suppliers">) {
+  const row: OpeningAllocationDraft = { ...base, kind, ...(supplierId ? { supplierId } : {}), ...(kind === "SUPPLIER_RECOVERABLE" ? { purpose: "CLAIM" as const } : {}) };
   const group: OpeningAllocationGroup = { accountId, kind, journalMinor: 100_003, label: "Opening control" };
   const changed = vi.fn();
   render(<OpeningAllocationEditor orgId={"org-one" as Id<"organizations">} currency="JOD" groups={[group]} rows={[row]}
@@ -75,6 +75,15 @@ for (const locale of ["en", "ar"] as const) {
     expect(changed).toHaveBeenCalledWith([{ ...row, counterpartyName: "Ordinary creditor" }]);
     expect(buildOpeningAllocationPayload([row], "JOD")).toEqual([{ kind: "OTHER_PAYABLE", rowKey: base.rowKey, accountId,
       amountMinor: 100_003, counterpartyName: "Legacy name", title: base.title }]);
+  });
+  test(`${locale} optional supplier creditor can return to an ordinary creditor explicitly`, () => {
+    world.locale = locale;
+    const { row, changed } = mount("OTHER_PAYABLE", "supplier-one" as Id<"suppliers">);
+    const copy = dictionaries[locale] as Record<string, string>;
+    const name = screen.getByRole("textbox", { name: copy.OpeningAllocationCounterpartySnapshot }) as HTMLInputElement;
+    expect(name.readOnly).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: copy.OpeningAllocationOrdinaryCreditor }));
+    expect(changed).toHaveBeenCalledWith([{ ...row, supplierId: undefined, counterpartyName: "" }]);
   });
 }
 

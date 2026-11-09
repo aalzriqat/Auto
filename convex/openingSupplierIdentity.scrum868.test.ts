@@ -9,7 +9,7 @@ import type { Id } from "./_generated/dataModel";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
 type Input = FunctionArgs<typeof api.accountingCutover.draftOpeningBalance>;
-type Allocation = NonNullable<Input["allocations"]>[number] & {
+type Allocation = Extract<NonNullable<Input["allocations"]>[number], { kind: Kind }> & {
   supplierId?: Id<"suppliers">; supplierSnapshotVersion?: number;
 };
 type Kind = "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE" | "OTHER_PAYABLE";
@@ -51,9 +51,11 @@ async function fixture(kind: Kind = "SUPPLIER_PAYABLE") {
     ? await owner.mutation(api.chartOfAccounts.create, { orgId: ids.orgId, code: "P5-OTHER", name: "Other creditor", type: "LIABILITY", normalBalance: "CREDIT" })
     : account(kind === "SUPPLIER_RECOVERABLE" ? "RECEIVABLE_FROM_SUPPLIERS" : "ACCOUNTS_PAYABLE_SUPPLIERS");
   const supplierId = await seedSupplier(t, { ...ids, displayName: "Canonical supplier", version: 3 });
-  const allocation: Allocation = { kind, rowKey: "supplier", accountId, amountMinor: 100_003,
+  const allocationBase = { rowKey: "supplier", accountId, amountMinor: 100_003,
     counterpartyName: "Forged client name", title: "Synthetic opening balance", supplierId,
-    supplierSnapshotVersion: 999, ...(kind === "SUPPLIER_RECOVERABLE" ? { purpose: "CLAIM" as const } : {}) };
+    supplierSnapshotVersion: 999 };
+  const allocation: Allocation = kind === "SUPPLIER_RECOVERABLE"
+    ? { ...allocationBase, kind, purpose: "CLAIM" } : { ...allocationBase, kind };
   const recovery = kind === "SUPPLIER_RECOVERABLE";
   const payload: Input = { orgId: ids.orgId, expectedCurrency: "JOD", asOfDate, allocations: [allocation], lines: [
     { accountId, debitMinor: recovery ? 100_003 : 0, creditMinor: recovery ? 0 : 100_003 },
@@ -75,13 +77,8 @@ async function refuse(s: Setup, call: () => Promise<unknown>, code: string) {
   await expect(call()).rejects.toMatchObject({ data: { code } });
   expect(await dbSnapshot(s.t, tables)).toEqual(before);
 }
-async function post(s: Setup, approval = false) {
-  if (!approval) return s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, s.payload);
-  const { draftId } = await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
-  const normalized = await s.t.run(ctx => ctx.db.normalizeId("openingBalanceDrafts", draftId));
-  if (!normalized) throw new Error("Missing draft id");
-  await s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: normalized, expectedVersion: 0 });
-  return { draftId };
+async function post(s: Setup) {
+  return s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, s.payload);
 }
 
 test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE", "OTHER_PAYABLE"] as const)("direct opening stores the master snapshot for %s", async kind => {
@@ -110,9 +107,8 @@ test("approval captures one current master snapshot after a rename", async () =>
   expect(stored.drafts[0]?.allocations).toEqual([{ ...s.allocation, counterpartyName: "Renamed supplier", supplierSnapshotVersion: 4 }]);
 });
 
-for (const kind of ["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const) {
-  for (const door of ["draft", "direct"] as const) {
-    test.each(["missing", "name-only", "foreign", "deleted", "inactive"] as const)(`${door} ${kind} refuses %s identity atomically`, async invalid => {
+const invalidIdentities = ["missing", "name-only", "foreign", "deleted", "inactive"] as const;
+async function refusesPreparation(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "draft" | "direct", invalid: typeof invalidIdentities[number]) {
       const s = await fixture(kind);
       if (invalid === "foreign") await s.t.run(async ctx => {
         const orgId = await ctx.db.insert("organizations", { name: "Foreign", createdAt: Date.now() });
@@ -129,17 +125,20 @@ for (const kind of ["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const) {
       const code = invalid === "inactive" ? "SUPPLIER_INACTIVE" : "SUPPLIER_NOT_FOUND";
       await refuse(s, () => s.owner.mutation(door === "draft" ? api.accountingCutover.draftOpeningBalance : api.accountingCutover.postOpeningBalanceDirect,
         { ...s.payload, allocations: [allocation] }), invalid === "missing" || invalid === "name-only" ? "SUPPLIER_IDENTITY_REQUIRED" : code);
-    });
-  }
 }
+test.each(invalidIdentities)("draft SUPPLIER_PAYABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_PAYABLE", "draft", invalid));
+test.each(invalidIdentities)("direct SUPPLIER_PAYABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_PAYABLE", "direct", invalid));
+test.each(invalidIdentities)("draft SUPPLIER_RECOVERABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_RECOVERABLE", "draft", invalid));
+test.each(invalidIdentities)("direct SUPPLIER_RECOVERABLE refuses %s identity atomically", invalid => refusesPreparation("SUPPLIER_RECOVERABLE", "direct", invalid));
 
 test("ordinary OTHER_PAYABLE without a supplier posts and settles", async () => {
   const s = await fixture("OTHER_PAYABLE");
-  const allocation = { ...s.allocation, supplierId: undefined, supplierSnapshotVersion: undefined, counterpartyName: "Ordinary creditor" };
+  const allocation = { ...s.allocation, supplierId: undefined, supplierSnapshotVersion: 999, counterpartyName: "Ordinary creditor" };
   s.payload.allocations = [allocation];
   await post(s);
   const payable = (await rows(s)).payables[0];
   expect(payable?.supplierId).toBeUndefined();
+  expect(payable?.supplierSnapshotVersion).toBeUndefined();
   await s.owner.mutation(api.sourcingPayables.markPaid, { orgId: s.orgId, payableId: payable._id, paymentMethod: "CASH", idempotencyKey: "p5-other" });
   expect((await rows(s)).payables[0]).toMatchObject({ status: "PAID", amountPaid: 100.003, sourcedFromName: "Ordinary creditor" });
 });
@@ -172,6 +171,9 @@ test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("%s basis rejec
     const result = await s.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId });
     expect(result).toMatchObject({ rows: [{ recordAvailable: false }] });
   }
+  await s.t.run(ctx => ctx.db.patch(obligation._id, { supplierId: s.supplierId, sourcedFromName: "Another display snapshot" }));
+  expect(await s.owner.query(api.accountingCutover.postedOpeningAllocationReadback, { orgId: s.orgId }))
+    .toMatchObject({ rows: [{ recordAvailable: true }] });
 });
 
 test.each(["SUPPLIER_PAYABLE", "SUPPLIER_RECOVERABLE"] as const)("legacy id-less %s remains readable but refuses new settlement", async kind => {
@@ -222,5 +224,89 @@ test("repeating direct posting cannot add another opening", async () => {
   await post(s);
   const before = await dbSnapshot(s.t, tables);
   await expect(post(s)).rejects.toThrow(/already been posted/);
+  expect(await dbSnapshot(s.t, tables)).toEqual(before);
+});
+
+const invalidReviewedIdentities = ["missing", "foreign", "deleted", "inactive"] as const;
+async function refusesReviewed(kind: "SUPPLIER_PAYABLE" | "SUPPLIER_RECOVERABLE", door: "edit" | "approve", invalid: typeof invalidReviewedIdentities[number]) {
+      const s = await fixture(kind);
+      await s.owner.mutation(api.accountingCutover.draftOpeningBalance, s.payload);
+      const draft = (await rows(s)).drafts[0];
+      const allocation = { ...s.allocation };
+      if (invalid === "missing") {
+        delete allocation.supplierId;
+        delete allocation.supplierSnapshotVersion;
+        if (door === "approve") await s.t.run(ctx => ctx.db.patch(draft._id, { allocations: [allocation] }));
+      }
+      if (invalid === "foreign") await s.t.run(async ctx => {
+        const orgId = await ctx.db.insert("organizations", { name: "Other", createdAt: Date.now() });
+        await ctx.db.patch(s.supplierId, { orgId });
+      });
+      if (invalid === "deleted") await s.t.run(ctx => ctx.db.delete(s.supplierId));
+      if (invalid === "inactive") await s.owner.mutation(api.suppliers.deactivate, { orgId: s.orgId, supplierId: s.supplierId, reason: "Synthetic" });
+      let code = "SUPPLIER_NOT_FOUND";
+      if (invalid === "missing") code = "SUPPLIER_IDENTITY_REQUIRED";
+      if (invalid === "inactive") code = "SUPPLIER_INACTIVE";
+      await refuse(s, () => door === "edit"
+        ? s.owner.mutation(api.accountingCutover.editOpeningBalanceDraft, { ...s.payload, draftId: draft._id, allocations: [allocation] })
+        : s.reviewer.mutation(api.accountingCutover.approveOpeningBalance, { orgId: s.orgId, draftId: draft._id, expectedVersion: 0 }), code);
+}
+test.each(invalidReviewedIdentities)("edit SUPPLIER_PAYABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_PAYABLE", "edit", invalid));
+test.each(invalidReviewedIdentities)("approve SUPPLIER_PAYABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_PAYABLE", "approve", invalid));
+test.each(invalidReviewedIdentities)("edit SUPPLIER_RECOVERABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_RECOVERABLE", "edit", invalid));
+test.each(invalidReviewedIdentities)("approve SUPPLIER_RECOVERABLE revalidates %s supplier before any write", invalid => refusesReviewed("SUPPLIER_RECOVERABLE", "approve", invalid));
+
+test("identified opening payable supports partial payment and dispute; legacy supplier does neither", async () => {
+  const s = await fixture();
+  await post(s);
+  const payable = (await rows(s)).payables[0];
+  await s.owner.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId: payable._id,
+    amount: 40.001, paymentMethod: "CASH", idempotencyKey: "p5-partial" });
+  expect((await rows(s)).payables[0]).toMatchObject({ amountDue: 100.003, amountPaid: 40.001, supplierId: s.supplierId });
+  await s.owner.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId: payable._id, disputed: true, reason: "Synthetic", idempotencyKey: "p5-dispute" });
+  const stored = await rows(s);
+  await s.t.run(async ctx => {
+    await ctx.db.patch(payable._id, { supplierId: undefined, supplierSnapshotVersion: undefined });
+    await ctx.db.patch(stored.drafts[0]._id, { allocations: stored.drafts[0].allocations?.map(row => {
+      if (!("supplierId" in row)) return row;
+      const legacy = { ...row }; delete legacy.supplierId; delete legacy.supplierSnapshotVersion; return legacy;
+    }) });
+  });
+  await refuse(s, () => s.owner.mutation(api.sourcingPayables.recordPartialPayment, { orgId: s.orgId, payableId: payable._id,
+    amount: 10.001, paymentMethod: "CASH", idempotencyKey: "p5-legacy-partial" }), "SUPPLIER_IDENTITY_UNRESOLVED");
+  await refuse(s, () => s.owner.mutation(api.sourcingPayables.setDisputed, { orgId: s.orgId, payableId: payable._id,
+    disputed: false, idempotencyKey: "p5-legacy-dispute" }), "SUPPLIER_IDENTITY_UNRESOLVED");
+});
+
+test("unrelated employee opening allocations still post without supplier metadata", async () => {
+  const s = await fixture();
+  const accountId = s.account("EMPLOYEE_ADVANCES");
+  await s.owner.mutation(api.accountingCutover.postOpeningBalanceDirect, { ...s.payload, lines: [
+    { accountId, debitMinor: 100_003, creditMinor: 0 },
+    { accountId: s.account("RETAINED_EARNINGS"), debitMinor: 0, creditMinor: 100_003 },
+  ], allocations: [{ kind: "EMPLOYEE_ADVANCE", rowKey: "employee", accountId, amountMinor: 100_003, userId: s.userId }] });
+  expect((await rows(s)).payables).toEqual([]);
+  expect(await s.t.run(async ctx => (await ctx.db.query("employeeAdvances").collect()).map(row => row.amountMinor))).toEqual([100_003]);
+});
+
+test("unexpected snapshot runtime failure logs privately and rolls back with a generic error", async () => {
+  const s = await fixture();
+  const before = await dbSnapshot(s.t, tables);
+  const originalFreeze = Object.freeze;
+  const fault = new Error("Synthetic private snapshot runtime failure");
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  // Fault the runtime primitive used to freeze a master snapshot, not a
+  // business helper. The public mutation still executes the real resolver.
+  const freeze = vi.spyOn(Object, "freeze").mockImplementation(<T>(value: T): Readonly<T> => {
+    if (value && typeof value === "object" && "supplierId" in value && value.supplierId === s.supplierId) throw fault;
+    return originalFreeze(value);
+  });
+  try {
+    await expect(post(s)).rejects.toMatchObject({ data: "An unexpected error occurred. Please try again later." });
+    expect(log).toHaveBeenCalledWith(fault);
+  } finally {
+    freeze.mockRestore();
+    log.mockRestore();
+  }
   expect(await dbSnapshot(s.t, tables)).toEqual(before);
 });

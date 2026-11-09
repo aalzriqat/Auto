@@ -464,8 +464,7 @@ export const markPaid = mutation({
           updatedAt: now,
         });
 
-        // Use the currency snapshotted at sale time — not the current org
-        // currency — so settlement always matches the original AP posting scale.
+        // Settle in the obligation's snapshotted currency.
         const currency = payable.currency;
         // A payable with a linked sale was created at SALE time for a sourced
         // vehicle (AP credited against COST_OF_VEHICLES_SOLD — sourced vehicles
@@ -488,6 +487,7 @@ export const markPaid = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
+          supplierId: payable.supplierId,
           amountMinor: settlementAmountMinor,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
@@ -668,6 +668,7 @@ export const recordPartialPayment = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
+          supplierId: payable.supplierId,
           amountMinor: toMinorUnits(args.amount, payable.currency),
           currency: payable.currency,
           paymentMethod,
@@ -678,7 +679,6 @@ export const recordPartialPayment = mutation({
           occurredAt: now,
         });
 
-        // SCRUM-869 S1: who paid how much of which supplier entitlement, in what state it was.
         await auditLog(ctx, {
           orgId: args.orgId,
           actorId: user._id,

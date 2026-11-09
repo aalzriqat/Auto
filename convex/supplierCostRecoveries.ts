@@ -348,7 +348,6 @@ export const recordReceipt = mutation({
         economic: true,
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        // Every persisted caller input.
         fingerprint: JSON.stringify({
           recoveryId: args.recoveryId,
           amountMinor: args.amountMinor,
@@ -438,6 +437,7 @@ export const recordReceipt = mutation({
           vehicleId: recovery.origin === "OPENING" ? undefined : recovery.vehicleId,
           openingSource: opening ? {draftId:opening.draftId,rowKey:opening.rowKey} : undefined,
           sourcedFromName: recovery.sourcedFromName,
+          supplierId: recovery.supplierId,
           amountMinor: args.amountMinor,
           currency: recovery.currency,
           paymentMethod: args.method,

@@ -374,8 +374,6 @@ export const draftOpeningBalance = mutation({
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
-    // Preflight only: don't knowingly create a draft that approval must refuse.
-    // Activity that lands after this point is still caught at posting time.
     if (await hasPostedLedgerActivity(ctx, args.orgId)) {
       refuseOpeningAfterLedgerActivity();
     }
@@ -406,7 +404,7 @@ export const draftOpeningBalance = mutation({
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
 
-    await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
+    const allocationPlan = await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -415,7 +413,7 @@ export const draftOpeningBalance = mutation({
       lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
-      allocations: args.allocations,
+      allocations: [...allocationPlan.rows],
       createdBy: user._id,
       createdAt: now,
       // Snapshot the denomination and the preparer's identity at draft time.
@@ -477,14 +475,15 @@ export const editOpeningBalanceDraft = mutation({
     await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
     const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
     const replacement = { ...draft, lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency };
-    try { await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
+    let preflight: Awaited<ReturnType<typeof inspectOpeningPreflight>>;
+    try { preflight = await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
     catch (error) {
       if (error instanceof OpeningPreflightError) throw error.original;
       throw error;
     }
     const version = (draft.version ?? 0) + 1;
     if (!Number.isSafeInteger(version) || version <= 0) refuseOpeningChange("OPENING_DRAFT_CHANGED");
-    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency, version });
+    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: [...preflight.allocationPlan.rows], currency: args.expectedCurrency, version });
     await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
       resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
       before: openingDraftAuditSummary(draft),
@@ -707,6 +706,7 @@ async function postOpeningBalanceDraft(
     journalEntryId: journalId,
     autoApproved,
     allocationResults,
+    allocations: [...allocationPlan.rows],
   });
 
   await auditLog(ctx, {
@@ -807,7 +807,7 @@ export const postOpeningBalanceDirect = mutation({
     // at the boundary. (The shared poster re-checks vouchability independently
     // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
-    await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
+    const allocationPlan = await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -826,7 +826,7 @@ export const postOpeningBalanceDirect = mutation({
       // an identically-shaped record. Vouched for immediately above, so the row
       // cannot be created carrying a denomination the poster would refuse.
       currency: orgDenomination,
-      allocations: args.allocations,
+      allocations: [...allocationPlan.rows],
       preparedByName: user.name || user.email || undefined,
     });
 

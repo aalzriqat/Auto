@@ -15,8 +15,8 @@ function allocations(amountMinor: number): Allocation[] {
     { ...base, kind: "VEHICLE_INVENTORY", vehicleId: "vehicle" as Id<"vehicles"> },
     { ...base, kind: "PARTNER_CAPITAL", partnerId: "partner" as Id<"partnerEquity"> },
     { ...base, kind: "PREPAID_EXPENSE", title: "Historical source", startYearMonth: "2026-01", termMonths: 12, expenseSystemKey: "RENT_EXPENSE", attestedUnexpiredBenefit: true },
-    { ...base, kind: "SUPPLIER_RECOVERABLE", title: "Historical source", counterpartyName: "Supplier", purpose: "CLAIM" },
-    { ...base, kind: "SUPPLIER_PAYABLE", title: "Historical source", counterpartyName: "Supplier" },
+    { ...base, kind: "SUPPLIER_RECOVERABLE", title: "Historical source", counterpartyName: "Supplier", supplierId: "supplier" as Id<"suppliers">, purpose: "CLAIM" },
+    { ...base, kind: "SUPPLIER_PAYABLE", title: "Historical source", counterpartyName: "Supplier", supplierId: "supplier" as Id<"suppliers"> },
     { ...base, kind: "OTHER_PAYABLE", title: "Historical source", counterpartyName: "Creditor" },
     { ...base, kind: "UNALLOCATED_LIABILITY", title: "Historical source", purpose: "UNIDENTIFIED_RECEIPT" },
   ];

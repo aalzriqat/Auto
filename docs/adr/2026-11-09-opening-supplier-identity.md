@@ -48,6 +48,7 @@ not a certification of unrelated financial workflows.
 | Re-entry after approved void | Fresh draft/direct route revalidates active supplier; no reuse of removed snapshots |
 | orgFinancialReset / adminOrgs destructive cleanup | Existing reset/admin gates; supplier fields add no new table or survivor and no repair operation |
 | SupplierSelect / openingAllocationForm / OpeningAllocationEditor | Existing search/select/create UI, EN/AR and RTL; inline create remains MANAGE_FINANCE on server and client; optional supplier choice for OTHER_PAYABLE |
+| accountingOpeningRehearsal native public caller | Creates its synthetic supplier through suppliers.create and supplies that id to all three supplier allocations; original money, role and containment assertions stay |
 | Mobile, reversal, unwind, correction | Existing server refusals stay; no new door or caller |
 
 Historical supplier ids and snapshot versions remain optional in storage.
@@ -67,6 +68,15 @@ so repeat requests cannot duplicate an opening. No amount, currency, account,
 status policy, due date, ledger dimension or monetary formula changes here.
 Opening preparation uses direct awaited database reads, including supplier
 resolution, so contract-skew can retain allocation provenance.
+
+The pre-code advisory design check found no blocking issue and required the
+narrow OTHER_PAYABLE exemption, rejection of one-sided ids, and persistence of
+the posting snapshot on both allocation and obligation. The implementation
+keeps supplier resolution/materialization in openingSupplierAllocations and
+the editor fields in OpeningSupplierFields to respect existing file ceilings.
+Ordinary creditors discard a client-sent supplier version without an id.
+The advisory diff inspection found no production blocker; it is not a review
+seat or runtime certification.
 
 ## Two designs and choice
 

@@ -11,6 +11,7 @@ import {
 } from "../utils/openingAccountPolicy";
 export { openingPolicyForAccount } from "../utils/openingAccountPolicy";
 import { assertOrgEconomicallyActive } from "../utils/orgLifecycle";
+import { materializeOpeningSupplier, resolveOpeningSuppliers } from "./openingSupplierAllocations";
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../_generated/server";
@@ -998,46 +999,8 @@ async function materializeOpeningRow(
     });
     return { kind: row.kind, rowKey: row.rowKey, depositId };
   }
-  if (row.kind === "SUPPLIER_RECOVERABLE") {
-    const recoveryId = await ctx.db.insert("supplierCostRecoveries", {
-      origin: "OPENING",
-      orgId: plan.orgId,
-      openingBalanceDraftId: draftId,
-      openingRowKey: row.rowKey,
-      title: row.title.trim(),
-      purpose: row.purpose,
-      sourcedFromName: row.counterpartyName.trim(),
-      amountDueMinor: row.amountMinor,
-      amountRecoveredMinor: 0,
-      currency: plan.currency,
-      receiptSeq: 0,
-      status: "OPEN",
-      createdBy: actorId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return { kind: row.kind, rowKey: row.rowKey, recoveryId };
-  }
-  if (row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE") {
-    const payableId = await ctx.db.insert("vehicleSupplierPayables", {
-      origin: "OPENING",
-      orgId: plan.orgId,
-      openingBalanceDraftId: draftId,
-      openingRowKey: row.rowKey,
-      openingKind: row.kind,
-      title: row.title.trim(),
-      sourcedFromName: row.counterpartyName.trim(),
-      amountDue: fromMinorUnits(row.amountMinor, plan.currency),
-      amountPaid: 0,
-      currency: plan.currency,
-      paymentSeq: 0,
-      status: "PENDING",
-      createdBy: actorId,
-      createdAt: now,
-      updatedAt: now,
-    });
-    return { kind: row.kind, rowKey: row.rowKey, payableId };
-  }
+  if (row.kind === "SUPPLIER_RECOVERABLE" || row.kind === "SUPPLIER_PAYABLE" || row.kind === "OTHER_PAYABLE")
+    return await materializeOpeningSupplier(ctx, { plan, draftId, actorId, row, now });
   if (row.kind === "PARTNER_CAPITAL") {
     return { kind: row.kind, rowKey: row.rowKey, partnerId: row.partnerId };
   }
@@ -1135,7 +1098,7 @@ export async function prepareOpeningAllocations(
   }
   if (!validDate(args.asOfDate))
     throw new ConvexError("The opening date is invalid.");
-  const rows = args.allocations ?? [];
+  const rows = await resolveOpeningSuppliers(ctx, args.orgId, args.allocations ?? []);
   const controls = await prepareOpeningControls(ctx, args, rows);
   const allocated: AllocatedTotals = {
     allocatedMinor: 0,

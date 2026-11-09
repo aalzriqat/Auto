@@ -90,7 +90,7 @@ async function assertOpeningPayablePosting(ctx: MutationCtx, cmd: PostCommand,
       ref.rowKey !== basis.rowKey ||
       cmd.sourceType !== "vehicleSupplierPayables" ||
       p.payableId !== row._id ||
-      p.sourcedFromName !== row.sourcedFromName ||
+      !postingSupplierMatches(p, row) ||
       occurrence.currency !== cmd.currency ||
       p.currency !== cmd.currency ||
       occurrence.amountMinor !== p.amountMinor ||
@@ -172,7 +172,7 @@ async function assertOpeningRecoveryPosting(ctx: MutationCtx, cmd: PostCommand,
       cmd.sourceType !== "supplierCostRecoveryReceipts" ||
       p.receiptId !== receipt._id ||
       p.recoveryId !== row._id ||
-      p.sourcedFromName !== row.sourcedFromName ||
+      !postingSupplierMatches(p, row) ||
       p.vehicleId !== undefined ||
       receipt.currency !== cmd.currency ||
       p.currency !== cmd.currency ||
@@ -191,3 +191,13 @@ async function assertOpeningRecoveryPosting(ctx: MutationCtx, cmd: PostCommand,
     )
       throw fail();
   }
+
+function postingSupplierMatches(
+  payload: PostCommand["payload"],
+  row: { supplierId?: string; sourcedFromName: string },
+): boolean {
+  if (payload.supplierId !== undefined || row.supplierId !== undefined) {
+    return payload.supplierId === row.supplierId;
+  }
+  return payload.sourcedFromName === row.sourcedFromName;
+}
