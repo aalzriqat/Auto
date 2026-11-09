@@ -333,3 +333,118 @@ regenerated or staged. Protected initial local edits and unrelated untracked
 files remain outside this lane's commits. Independent seats, all three bug
 hunters, authenticated phone/desktop EN/AR rendering, live historical data and
 exact-head CI remain with the coordinator; none is inferred from local checks.
+
+## Review round 5: S850-R4-1 legacy cashflow exactness
+
+This section supersedes round 4's decision to leave the legacy IN/OUT totals
+unchecked. Starting HEAD was `158690502674f1bd10257286ce0defba45179e84` on
+`claude/scrum850-opening-correction`, in `E:/tmp/auto-850`. Fetched origin/main
+was `95ffa13e91e9c619336ac9d4274c560d3b132121`, zero behind. The coordinator
+owns Jira, GitHub and independent seats. This lane performs no external posts,
+push, browser tests, deployment or production reads.
+
+### Invariant, reproduction and reviewer differences
+
+A financial comparison returns exact monetary totals or refuses with a coded
+error. A rounded total must not be returned as complete. Both review reports
+were read first. Seat 1 LOW-A and Seat 2 S850-R4-1 identify the same lines.
+
+The independent new file is
+`convex/accountingCutoverLegacyExactness.scrum850.test.ts`. It calls the registered
+public query with an authorized same-org identity, JOD configuration and three
+retained synthetic rows. All IN, and separately all OUT, use major amounts
+`4503599627370.496`, `4503599627370.496`, `0.001`. The safe converted minor
+operands are `4503599627370496`, `4503599627370496`, `1`. Their exact mathematical
+total is `9007199254740993`; the red query resolves with `9007199254740992`.
+No GL event is seeded, so GL overflow cannot accidentally satisfy the refusal.
+Fixture setup is outside the rejection assertion.
+
+Failing-first commit `79260cee658a894ab55eec20f6143839af93df01` contains all twelve
+literal named tests and no production fix. Its full-file run is recorded in
+`%TEMP%/s850-r5-red-79260cee6.log`:
+
+```text
+pnpm exec vitest run --maxWorkers=1 convex/accountingCutoverLegacyExactness.scrum850.test.ts
+Test Files 1 failed (1)
+Tests 2 failed | 10 passed (12)
+exit 1
+```
+
+The failures are IN and OUT coded-refusal expectations resolving with rounded
+values. The ten controls pass: ordinary exact `3003`, safe-boundary exact
+`9007199254740990`, and independently a large row before the start, after the
+end, or soft-deleted, for each direction. The exclusion fixtures include both
+date endpoints and would overflow if the excluded row participated. Both totals,
+transaction count and unmigrated count are checked.
+
+I agree with the reviewer's minimal fix. Both legacy totals reuse
+`addCutoverMinor`; the existing code `CUTOVER_UNSAFE_TOTAL` truthfully identifies
+the failed cutover aggregate. No helper, error code, schema or API shape is added.
+The existing error's journal-oriented follow-up advice is retained. My proof
+adds separate lower-date, upper-date and deletion controls for both directions,
+with a retained safe boundary rather than only ordinary filtered amounts. The
+legacy public writer is retired, so fixtures explicitly seed retained history;
+this does not claim an enabled current writer or production prevalence.
+
+`engineering-principles` changed the scope decision: the complete module was
+swept rather than treating safe row conversion as proof of safe aggregation.
+`correct` applies to the repeated unchecked gross-total class: round 4's journal
+consumer and round 5's distinct legacy cashflow consumer. Shared checked
+arithmetic and public regression tests are the scoped prevention. A new storage
+representation or repository-wide lint is outside this authorized module repair.
+
+### Module arithmetic census
+
+Scope is the whole tracked `convex/accountingCutover.ts` at fixed-code line
+numbers, not a ranked subset. Literal searches covered `+=`, `-=`, `reduce(`,
+`+ `, ` - ` and `addCutoverMinor`; a TypeScript AST walk enumerated every binary
+addition/subtraction/compound addition/subtraction and every reduce call. Graft
+located the query but cannot resolve registered-export caller edges. Literal
+tracked-source enumeration supplements it.
+
+| File:line | What is computed | Exactness verdict and change |
+| --- | --- | --- |
+| `convex/accountingCutover.ts:159-166` | Shared cutover addition wrapper | Delegates to `addBalanceMinor`, checking both operands and result with Number.isSafeInteger; translates only its known error. Unchanged. |
+| `convex/accountingCutover.ts:206-207` | Per-currency retained POSTED/REVERSED journal gross debit and credit | Both checked by `addCutoverMinor`. Unchanged; R4 suite rerun. |
+| `convex/accountingCutover.ts:287-288` | Entered opening debit and credit totals | BigInt accumulation of individually safe operands. Exact; unchanged. |
+| `convex/accountingCutover.ts:336` | Opening suspense difference | BigInt subtraction, then Number conversion after gross cap. Valid nonnegative admitted sides fit the safe range; invalid negative lines still fail journal admission. No cumulative Number sum; unchanged. |
+| `convex/accountingCutover.ts:1672` | Legacy IN cashflow total | Reproduced unsafe cumulative Number addition; changed to `addCutoverMinor(legacyInMinor, minor)`. |
+| `convex/accountingCutover.ts:1673` | Legacy OUT cashflow total | Reproduced unsafe cumulative Number addition; changed to `addCutoverMinor(legacyOutMinor, minor)`. |
+| `convex/accountingCutover.ts:1694-1695` | Migrated transaction GL gross debit and credit | Both checked by `addCutoverMinor`. Unchanged; R4 suite rerun. |
+| `convex/accountingCutover.ts:470,664,1603,1761` | Draft version, line ordinal, result multiplicity, unmigrated row count | Counters rather than money. Unchanged. |
+| `convex/accountingCutover.ts:1802-1805` | Refusal explanation | String concatenation rather than money. Unchanged. |
+
+The AST census finds no reduce call or other Number addition/subtraction in this
+module beyond the rows above. Unary signs on the suspense difference select a
+single amount; they do not aggregate money. No unchecked cumulative Number money
+total remains in this module under this enumeration.
+
+Observed siblings outside scope, unchanged and not claimed as newly reproduced
+bugs: `convex/financialAudit.ts:247-248` manual-journal reduce totals;
+`convex/accounting/postingRules.ts:431` contra accumulation, `:2635` net delta,
+and `:3617-3618` journal gross totals. Those call paths and their upstream bounds
+need their own investigation by the coordinator. This is not a repo-wide census.
+
+### Impact and self-attack
+
+| Area | Disposition |
+| --- | --- |
+| Writers and historical data | Query only. Retained rows are read, not rewritten. No historical repair. |
+| Readers | Only legacy comparison totals change on unsafe histories. Successful shape and currency warning remain. |
+| State transitions, reversal and idempotency | No transition, spend, schedule or reversal door is introduced. Repeated reads remain reads. |
+| Authorization and tenant isolation | Existing MANAGE_FINANCE check and transactions.by_org scope retained. No supplied document id or permission change. Tenant guard rerun. |
+| Ledger and audit | No GL, snapshot or audit writer is edited. Existing sign-off/listSignOffs and opening/void tests rerun. |
+| UI and E2E | No UI edit. Serial public-query harness evidence only; no browser verification. |
+| Runtime and release | No deployment, cloud/OCC, real-data or pilot-certification claim. Independent seats and exact-head CI remain with the coordinator. |
+
+Five predicted failure modes are checked: a missing IN guard; a missing OUT
+guard; over-refusal of ordinary/safe-boundary totals; aggregation before date
+filtering; aggregation before deletion filtering. Each has a named public-query
+test. The first two also receive source mutants after committing the fix.
+
+### Execution record
+
+The first fixed-file run passed all twelve tests (exit 0), log
+`%TEMP%/s850-r5-first-green.log`. Required complete named-file batches, final-HEAD
+green, mutants, typechecks, lint, validators and contract renewal results are
+recorded below after execution. No pending measurement is counted as passed.

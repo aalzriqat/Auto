@@ -1770,3 +1770,28 @@ The legacy decision rows bind the actual approve/reject expansions from that SHA
 | `opening-maintenance-stale-rejection-refuses` | `SCRUM-850 F2 stale rejection refuses without writes and current reviewed version rejects` |
 | `opening-maintenance-legacy-decision-refuses` | `SCRUM-850 F2 legacy approve client without reviewed version refuses after edit before writing` |
 | `opening-maintenance-legacy-rejection-refuses` | `SCRUM-850 F2 legacy reject client without reviewed version refuses after edit before writing` |
+
+## SCRUM-850-cutover-legacy-reader-exactness
+
+Round-5 local serial harness coverage for S850-R4-1. A public legacy comparison
+returns exact monetary totals or refuses with `CUTOVER_UNSAFE_TOTAL`. The two
+unsafe cases fail at `79260cee658a894ab55eec20f6143839af93df01`; ten preventive
+controls pass there and have no `bugRef`. Literal tests are registered in
+`convex/accountingCutoverLegacyExactness.scrum850.test.ts`. Fixtures seed retained
+transactions directly because the legacy writer is retired. Date endpoints are
+inclusive; excluded rows must not participate in aggregation or unmigrated counts.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `cutover-legacy-in-unsafe-total` | `SCRUM-850 R5 unsafe legacy IN total refuses with CUTOVER_UNSAFE_TOTAL` |
+| `cutover-legacy-in-ordinary-total` | `SCRUM-850 R5 ordinary legacy IN total returns exact 3003` |
+| `cutover-legacy-in-boundary-total` | `SCRUM-850 R5 safe boundary legacy IN total returns exact 9007199254740990` |
+| `cutover-legacy-in-before-total` | `SCRUM-850 R5 legacy IN excludes large row before date range` |
+| `cutover-legacy-in-after-total` | `SCRUM-850 R5 legacy IN excludes large row after date range` |
+| `cutover-legacy-in-deleted-total` | `SCRUM-850 R5 legacy IN excludes large deleted row` |
+| `cutover-legacy-out-unsafe-total` | `SCRUM-850 R5 unsafe legacy OUT total refuses with CUTOVER_UNSAFE_TOTAL` |
+| `cutover-legacy-out-ordinary-total` | `SCRUM-850 R5 ordinary legacy OUT total returns exact 3003` |
+| `cutover-legacy-out-boundary-total` | `SCRUM-850 R5 safe boundary legacy OUT total returns exact 9007199254740990` |
+| `cutover-legacy-out-before-total` | `SCRUM-850 R5 legacy OUT excludes large row before date range` |
+| `cutover-legacy-out-after-total` | `SCRUM-850 R5 legacy OUT excludes large row after date range` |
+| `cutover-legacy-out-deleted-total` | `SCRUM-850 R5 legacy OUT excludes large deleted row` |

@@ -1669,8 +1669,8 @@ export const compareLegacyToGL = query({
     let legacyOutMinor = 0;
     for (const tx of legacyTxns) {
       const minor = toMinorUnits(tx.amount, currency);
-      if (tx.type === "IN") legacyInMinor += minor;
-      else legacyOutMinor += minor;
+      if (tx.type === "IN") legacyInMinor = addCutoverMinor(legacyInMinor, minor);
+      else legacyOutMinor = addCutoverMinor(legacyOutMinor, minor);
     }
 
     const glEvents = (

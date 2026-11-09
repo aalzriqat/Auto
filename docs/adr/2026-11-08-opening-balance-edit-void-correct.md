@@ -115,6 +115,40 @@ The pre-implementation advisory design review inspected the sources and identifi
 
 ## Sources and verification boundary
 
+### Review round 5: legacy comparison exactness
+
+S850-R4-1 reproduces an independent consumer of retained legacy cashflow.
+Individually safe JOD rows can sum beyond the safe Number range. Both IN and
+OUT totals in the public `compareLegacyToGL` query now use `addCutoverMinor`.
+An unsafe sum propagates the existing `CUTOVER_UNSAFE_TOTAL` error. The query
+returns exact totals or refuses; it does not return a rounded comparison.
+No row is netted, dropped, rewritten or persisted by this arithmetic repair.
+Date and deletion filters run before conversion and accumulation as before.
+
+This chooses checked Number containment over a versioned BigInt response.
+The existing response remains compatible for safe totals. A representation
+change would need separate API planning and could not recover already-lost
+precision in retained source rows. No new helper, code, schema, permission,
+currency behavior, read or write is introduced. The journal-oriented advice
+in the existing error text remains generic cutover guidance; the code denotes
+the failed cutover total, including legacy cashflow.
+
+The independent failing-first suite is
+`convex/accountingCutoverLegacyExactness.scrum850.test.ts` at
+`79260cee658a894ab55eec20f6143839af93df01`. Both unsafe cases fail there;
+ordinary, below-limit and excluded-row controls pass. Tests call the registered
+public query with real memberships and retained synthetic transaction rows.
+Separate IN and OUT mutants must each fail. Module census and execution logs
+are recorded in the round-5 section of
+`docs/architecture/scrum850-round4-evidence.md`.
+
+Checked on 2026-11-09: [ECMAScript Number.isSafeInteger](https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-number.issafeinteger)
+defines the exact integer boundary. [Convex data types](https://docs.convex.dev/database/types)
+distinguishes Float64 Number from Int64 BigInt, so `v.number()` alone does not
+prove aggregate exactness. [Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors)
+supports a coded `ConvexError` propagated to the caller. These sources support
+the design; serial convex-test runs measure the application behavior only.
+
 ### Review round 2 decisions
 
 Loading and saving a pending opening without changing money must preserve every
