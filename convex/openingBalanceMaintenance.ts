@@ -16,23 +16,13 @@ import { assertNoOpeningVoidReferences } from "./utils/openingVoidReferences";
 import { inTurn } from "./utils/transactionReadHeadroom";
 import { openingAllocationValidator } from "./utils/openingAllocationValidators";
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
-import { canManageOpeningPayroll } from "./utils/openingPayrollVisibility";
+import { canManageOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
 
 type Opening = Doc<"openingBalanceDrafts">;
 
-async function openingNeedsPayroll(ctx: QueryCtx, draft: Opening): Promise<boolean> {
-  if ((draft.allocations ?? []).some(row => row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION")) return true;
-  let sensitive = false;
-  await inTurn(draft.lines, async line => {
-    const account = await ctx.db.get(line.accountId);
-    if (account?.orgId === draft.orgId && (account.systemKey === "EMPLOYEE_ADVANCES" || account.systemKey === "COMMISSION_PAYABLE")) sensitive = true;
-  });
-  return sensitive;
-}
-
 async function requireOpeningMaintenanceAuthority(ctx: QueryCtx, draft: Opening) {
   const required: Permission[] = [PERMISSIONS.MANAGE_FINANCE];
-  if (await openingNeedsPayroll(ctx, draft)) required.push(PERMISSIONS.MANAGE_PAYROLL);
+  if (await containsEmployeeAdvanceControl(ctx, draft.orgId, draft)) required.push(PERMISSIONS.MANAGE_PAYROLL);
   return requireTenantAuth(ctx, draft.orgId, required);
 }
 
@@ -134,14 +124,14 @@ type OpeningVisibility = { userId: Id<"users">; canViewCosts: boolean; canManage
 
 async function editableOpening(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
   if (draft?.createdBy !== visibility.userId || !visibility.canViewCosts) return null;
-  if (!visibility.canManagePayroll && await openingNeedsPayroll(ctx, draft)) return null;
+  if (!visibility.canManagePayroll && await containsEmployeeAdvanceControl(ctx, draft.orgId, draft)) return null;
   return { _id: draft._id, version: draft.version ?? 0, lines: draft.lines, asOfDate: draft.asOfDate, memo: draft.memo, allocations: draft.allocations, currency: draft.currency };
 }
 
 async function openingVoidCapability(ctx: QueryCtx, draft: Opening | null, visibility: OpeningVisibility) {
   const withheld = { postedDraftId: null, canRequestVoid: false, canApproveVoid: false, voidReason: null };
   if (!draft || !visibility.canViewCosts) return withheld;
-  if (!visibility.canManagePayroll && await openingNeedsPayroll(ctx, draft)) return withheld;
+  if (!visibility.canManagePayroll && await containsEmployeeAdvanceControl(ctx, draft.orgId, draft)) return withheld;
   let allowed = false;
   try { await inspectVoid(ctx, draft); allowed = true; }
   catch (error) {
