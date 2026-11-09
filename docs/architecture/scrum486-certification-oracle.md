@@ -1456,6 +1456,37 @@ approve expansion registered at `72f92b1d9`; the companion
 at that same red commit. Each record contains only its own decision's step and
 expected refusal/database comparison. The tamper control claims no red commit.
 
+## SCRUM-850-cutover-attestation-exactness
+
+SCRUM-850 c24749 and SCRUM-858 c23884: retained opening/reversal history must
+produce exact reviewed per-currency attestation totals or refuse before any
+sign-off/audit write. Round-4 local serial harness evidence only.
+Tests are literal registrations in `convex/accountingCutoverExactness.scrum850.test.ts`.
+
+| Scenario | Bound named test |
+| --- | --- |
+| `opening-cutover-reviewed-unsafe-gross` | `SCRUM-850 R4 reviewed opening unsafe gross sign-off refuses without writes` |
+| `opening-cutover-direct-unsafe-gross` | `SCRUM-850 R4 direct opening unsafe gross sign-off refuses without writes` |
+| `opening-cutover-reviewed-ordinary` | `SCRUM-850 R4 reviewed ordinary sign-off persists exact gross history` |
+| `opening-cutover-direct-ordinary` | `SCRUM-850 R4 direct ordinary sign-off persists exact gross history` |
+| `opening-cutover-reviewed-safe-boundary` | `SCRUM-850 R4 reviewed safe boundary sign-off remains exact` |
+| `opening-cutover-direct-safe-boundary` | `SCRUM-850 R4 direct safe boundary sign-off remains exact` |
+| `opening-cutover-reviewed-currency-separation` | `SCRUM-850 R4 reviewed sign-off keeps historical currencies separate` |
+| `opening-cutover-direct-currency-separation` | `SCRUM-850 R4 direct sign-off keeps historical currencies separate` |
+| `opening-cutover-unsafe-debit-history` | `SCRUM-850 R4 unsafe debit history refuses with the arithmetic code` |
+| `opening-cutover-unsafe-credit-history` | `SCRUM-850 R4 unsafe credit history refuses with the arithmetic code` |
+| `cutover-legacy-unsafe-gross-debit` | `SCRUM-850 R4 legacy comparison refuses unsafe gross debit` |
+| `cutover-legacy-unsafe-gross-credit` | `SCRUM-850 R4 legacy comparison refuses unsafe gross credit` |
+
+Six defect cases fail at `a1918002ef42fe9fd8ad0fdf5518fbb1a7468765`.
+Six positive controls pass there and claim no failing-first evidence.
+The per-currency fixture represents retained historical currencies by changing
+test data after the public opening lifecycle. The one-sided and legacy fixtures
+also seed retained data explicitly; they do not claim an enabled corrupt writer.
+Ordinary sign-off checks both `listSignOffs` persistence and the financial audit
+copy. Unsafe sign-off checks the empty sign-off table and unchanged full audit
+rows, including the legitimate earlier opening/void audits.
+
 ## SCRUM-850-opening-maintenance-permission
 
 | Scenario | Bound named test |

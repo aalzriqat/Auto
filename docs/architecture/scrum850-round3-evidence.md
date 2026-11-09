@@ -1,5 +1,9 @@
 # SCRUM-850 round 3 implementation evidence
 
+Round 4 follow-up for S850-R3-1 is recorded in
+[`scrum850-round4-evidence.md`](scrum850-round4-evidence.md), including the
+independent reproduction, journal-attestation census and failing-first commit.
+
 Worktree `E:/tmp/auto-850`, branch `claude/scrum850-opening-correction`.
 Starting head `25ccde56cbf913c16eaceb6767a07b3abc4a0c73`; supplied PR base
 `8909b88892292a99d055be8b8fe5b23a437b6a21`. The fresh fetch found origin/main

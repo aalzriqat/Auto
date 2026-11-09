@@ -43,6 +43,25 @@ OCC, limits or production prevalence.
 
 An edited pending draft remains pending, retains its preparer, and can be edited by that preparer alone. It passes the same currency, date, account, bank, allocation, payroll, and exact-money validation as a new draft. Approval revalidates the latest stored content. An owner has no single-person void exception.
 
+### Round 4: exact cutover attestations
+
+A cutover sign-off stores exact reviewed gross debit and credit totals per
+currency, or refuses before inserting the sign-off or its financial audit copy.
+Retain both the original opening and its linked reversal in gross history.
+Safe account snapshots and a safe net position do not establish safe historical
+gross totals. Use the shared checked addition on both journal-line sides,
+including the adjacent legacy-to-GL comparison reader.
+
+`CUTOVER_UNSAFE_TOTAL` identifies this journal aggregation refusal. Reusing
+`ACCOUNT_SNAPSHOT_UNSAFE_TOTAL` would misidentify a journal-history attestation
+as an account snapshot failure. The error has EN/AR messages and escapes the
+mutation. Existing attestations remain immutable; this change neither repairs
+previously rounded values nor changes schema, permissions, pilot flags or reads.
+An exact representation above the safe Number range requires a separately
+reviewed schema/API migration. These decisions follow the ECMAScript and Convex
+sources above, checked again on 2026-11-09. Local registered-function tests prove
+serial refusal and persisted readback, not cloud OCC or historical prevalence.
+
 ## Evidence and impact map
 
 The enumeration starts with `postOpeningBalanceDraft`, follows `materializeOpeningAllocations` and every arm of `materializeOpeningRow`, and follows the called writers `materializeOpeningCommission`, `insertOpeningDeposit`, and `ensureReceivableDocument`/`createReceivableDocument`. `graft callers` in both directions and `graft grep openingBalanceDraftId` supplied the cross-reference inventory. Source files, rather than the index, were inspected. Scope is current repository source at the baseline, not production rows written by deleted historical code.

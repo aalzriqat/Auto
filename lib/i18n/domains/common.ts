@@ -1,6 +1,10 @@
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 const workspaceMessages = defineBilingualMessages({
+  ServerError_CUTOVER_UNSAFE_TOTAL: [
+    "Cutover totals cannot be represented exactly. Ask finance to review the journal totals.",
+    "لا يمكن تمثيل إجماليات التحول المحاسبي بدقة. اطلب من قسم المالية مراجعة إجماليات القيود.",
+  ],
   ServerError_ACCOUNT_SNAPSHOT_UNSAFE_TOTAL: [
     "This balance cannot be represented exactly. Ask finance to review the account totals.",
     "لا يمكن عرض هذا الرصيد بدقة. اطلب من قسم المالية مراجعة إجماليات الحساب.",

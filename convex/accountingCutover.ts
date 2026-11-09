@@ -35,7 +35,7 @@ import { isSystemOwnerRole, PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
-import { toMinorUnits, denominationOf } from "./utils/money";
+import { addBalanceMinor, isUnsafeBalanceError, toMinorUnits, denominationOf } from "./utils/money";
 import { Doc, Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
@@ -156,6 +156,16 @@ function unvouchableDenominationMessage(recorded: string | undefined): string {
   return `This opening balance is denominated "${recorded}", which is not a currency AutoFlow can price — the minor-unit scale would have to be guessed, and a wrong guess misstates the organization's entire starting position by a factor of ten. Reject it and submit it again in a supported currency.`;
 }
 
+function addCutoverMinor(total: number, minor: number): number {
+  try {
+    return addBalanceMinor(total, minor);
+  } catch (error) {
+    if (!isUnsafeBalanceError(error)) throw error;
+    throwAppError(AppErrorCode.CUTOVER_UNSAFE_TOTAL,
+      "Cutover totals cannot be represented exactly. Ask finance to review the journal totals.");
+  }
+}
+
 /**
  * A deliberately minimal, sign-off-scoped total — not a substitute for
  * accountingReports.trialBalance (which is per-currency and drives the real
@@ -193,8 +203,8 @@ async function sumAllPostedJournalLinesByCurrency(
       .collect();
     for (const line of lines) {
       const bucket = byCurrency.get(line.currency) ?? { totalDebitsMinor: 0, totalCreditsMinor: 0 };
-      bucket.totalDebitsMinor += line.debitMinor;
-      bucket.totalCreditsMinor += line.creditMinor;
+      bucket.totalDebitsMinor = addCutoverMinor(bucket.totalDebitsMinor, line.debitMinor);
+      bucket.totalCreditsMinor = addCutoverMinor(bucket.totalCreditsMinor, line.creditMinor);
       byCurrency.set(line.currency, bucket);
     }
   }
@@ -1681,8 +1691,8 @@ export const compareLegacyToGL = query({
         .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event.journalEntryId!))
         .collect();
       for (const line of lines) {
-        glTotalDebitMinor += line.debitMinor;
-        glTotalCreditMinor += line.creditMinor;
+        glTotalDebitMinor = addCutoverMinor(glTotalDebitMinor, line.debitMinor);
+        glTotalCreditMinor = addCutoverMinor(glTotalCreditMinor, line.creditMinor);
         glCurrencies.add(line.currency);
       }
     }
