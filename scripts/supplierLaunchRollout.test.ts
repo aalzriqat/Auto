@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { verifySupplierLaunchEvidence } from "./supplierLaunchGate";
+import { runSupplierLaunchEvidencePhase } from "./supplierLaunchGate";
 
 const source = readFileSync("scripts/rolloutRelease.mjs", "utf8").replaceAll("\r\n", "\n");
 
@@ -16,9 +16,8 @@ test.each(["empty", "verified"])("%s rollout success requires complete supplier 
   for (const kind of ["zero", "unresolved", "unreadable"]) {
     const calls: string[][] = [];
     const scope = {
-      verifySupplierLaunchEvidence,
-      // Updated to the real releaseGuard phase in the refactor commit.
-      runSupplierLaunchEvidencePhase: undefined,
+      runSupplierLaunchEvidencePhase,
+
       convex: (args: string[]) => {
         calls.push(args);
         return kind === "unreadable" ? { ok: false, reason: "PRIVATE" } : { ok: true, value: {

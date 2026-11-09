@@ -25,7 +25,7 @@ describe("supplier launch release gate", () => {
       code: "SUPPLIER_IDENTITY_UNRESOLVED", counts: Object.fromEntries(TABLES.map(table => [table, { ...ZERO, MISSING_SUPPLIER_ID: 1 }])) });
   });
   test.each([null, {}, { status: "UNAVAILABLE", code: "SUPPLIER_EVIDENCE_UNAVAILABLE" },
-    { ...ready, examined: 9 }, { ...ready, examined: -1 }, { ...ready, cursor: "unexpected" },
+    { ...ready, examined: 1001 }, { ...ready, examined: -1 }, { ...ready, cursor: "unexpected" },
     { ...ready, counts: { ...ZERO, privateName: "SECRET" } }, { ...ready, privateId: "SECRET" },
     { ...ready, counts: { ...ZERO, MISSING_SUPPLIER_ID: Number.NaN } },
     { ...ready, counts: { ...ZERO, MISSING_PAYEE_ID: 1 } },

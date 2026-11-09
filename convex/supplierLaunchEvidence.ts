@@ -2,6 +2,7 @@
 import { v } from "convex/values";
 import { internalQuery, type QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
+import { SUPPLIER_LAUNCH_PAGE_SIZE as PAGE_SIZE } from "./utils/supplierLaunchRegistry";
 
 const tableValidator = v.union(
   v.literal("vehicleSupplierPayables"), v.literal("vehicleSupplierReceivables"),
@@ -14,7 +15,6 @@ const countsValidator = v.object({ MISSING_SUPPLIER_ID: v.number(), MISSING_PAYE
 const emptyCounts = () => ({ MISSING_SUPPLIER_ID: 0, MISSING_PAYEE_ID: 0, MISSING_BEARER_ID: 0, MISSING_SOURCE: 0 });
 type Counts = ReturnType<typeof emptyCounts>;
 const UNAVAILABLE = { status: "UNAVAILABLE", code: "SUPPLIER_EVIDENCE_UNAVAILABLE" } as const;
-const PAGE_SIZE = 8;
 const MAX_BYTES = 4 * 1024 * 1024;
 
 function ordinaryCreditor(row: Doc<"vehicleSupplierPayables">): boolean {
@@ -29,7 +29,7 @@ async function editMissing(ctx: QueryCtx, row: Doc<"vehicleEdits">): Promise<boo
       (payload.sourceType === "STOCK" && payload.purchasePaymentMethod === "ON_ACCOUNT" && !payload.purchaseSupplierId);
   }
   const vehicle = row.vehicleId ? await ctx.db.get("vehicles", row.vehicleId) : null;
-  if (!vehicle || vehicle.orgId !== row.orgId || vehicle.isDeleted === true) throw new Error("Supplier edit source unavailable");
+  if (!vehicle || vehicle.orgId !== row.orgId || vehicle.isDeleted === true) return false;
   const sourced = (payload.sourceType ?? vehicle.sourceType) === "SOURCED";
   const changedName = Boolean(payload.sourcedFromName?.trim()) && payload.sourcedFromName?.trim() !== vehicle.sourcedFromName?.trim();
   return (sourced && !payload.sourcedSupplierId && (changedName || !vehicle.sourcedSupplierId)) ||
@@ -46,7 +46,7 @@ export const scanPage = internalQuery({
     try {
       // Native creation-time index includes orphan-org rows. Never sample/filter before paging.
       const page = await ctx.db.query(table).withIndex("by_creation_time").paginate({ cursor,
-        numItems: PAGE_SIZE, maximumRowsRead: 64, maximumBytesRead: MAX_BYTES });
+        numItems: PAGE_SIZE, maximumRowsRead: PAGE_SIZE + 1, maximumBytesRead: MAX_BYTES });
       if (page.pageStatus === "SplitRequired" || page.page.length > PAGE_SIZE ||
         (!page.isDone && (!page.continueCursor || page.continueCursor === cursor))) return UNAVAILABLE;
       const counts: Counts = emptyCounts();

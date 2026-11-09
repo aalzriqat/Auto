@@ -1,5 +1,6 @@
 /** Counts-only P7 release phase. I/O stays in the existing credential-bound CLI adapter. */
 import { z } from "zod";
+import { SUPPLIER_LAUNCH_PAGE_SIZE } from "../convex/utils/supplierLaunchRegistry.ts";
 
 const TABLES = ["vehicleSupplierPayables", "vehicleSupplierReceivables", "supplierCostRecoveries",
   "supplierCostRecoveryReceipts", "openingPayablePayments", "vehicles", "vehicleOwnershipConversions",
@@ -8,7 +9,7 @@ const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const countsSchema = z.object({ MISSING_SUPPLIER_ID: count, MISSING_PAYEE_ID: count,
   MISSING_BEARER_ID: count, MISSING_SOURCE: count }).strict();
 const pageSchema = z.object({ status: z.enum(["MORE", "READY"]), cursor: z.string().min(1).nullable(),
-  examined: count.max(8), counts: countsSchema }).strict();
+  examined: count.max(SUPPLIER_LAUNCH_PAGE_SIZE), counts: countsSchema }).strict();
 type Counts = z.infer<typeof countsSchema>;
 type Table = typeof TABLES[number];
 type Input = {
@@ -71,4 +72,17 @@ export function verifySupplierLaunchEvidence(input: Input): Result {
   } catch {
     return unavailable;
   }
+}
+
+/** P7 uses the same phase interface as the other release phases. */
+export function runSupplierLaunchEvidencePhase(input: {
+  convex: (args: string[]) => { ok: boolean; value?: unknown };
+  now: () => number; startedAt: number; timeoutMs: number;
+  fail: (reason: string) => never;
+}): string {
+  const evidence = verifySupplierLaunchEvidence({ ...input, maxPages: 100_000,
+    runPage: args => input.convex(["run", "supplierLaunchEvidence:scanPage", JSON.stringify(args)]),
+  });
+  if (!evidence.ok) input.fail(`Production is DEPLOYED, but INCOMPLETE: supplier launch evidence ${evidence.code}.`);
+  return `P7 launch census: ${JSON.stringify(evidence.counts)}`;
 }
