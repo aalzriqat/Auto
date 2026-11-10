@@ -2138,3 +2138,16 @@ The trusted exact-SHA accounting release verdict remains a separate gate.
 | Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
 
 These are local harness/driver controls, not production counts or pilot certification.
+
+### SCRUM942-supplier-stored-id-readers
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Receivable stored vehicle, foreign and deleted | "Vehicle" label; no planted VIN or make; claim amount preserved | convex/supplierStoredIdReaders.scrum942.test.ts, two receivables list cases |
+| Recovery stored vehicle, foreign and deleted | null vehicleLabel; expense title and recovery amounts preserved | Same suite, two recoveries vehicle cases |
+| Recovery stored expense, foreign and deleted | null expenseTitle; vehicle label and recovery amount preserved | Same suite, two recoveries expense cases |
+| Receipt reversal stored SOURCED vehicle, foreign and deleted | Existing source refusal; receipt, recovery, journal, events and idempotency commands unchanged | Same suite, two public reverseReceipt cases with historical test-only pilot switch mock |
+| Repair stored vehicle, foreign and deleted | repaired 0, unresolved 1, supplierId absent | Same suite, internal repairPage cases; no public caller exists |
+| Alert membership role, foreign and deleted | alerted 0 and no notification for the member | Same suite, internal worker cases; no public caller exists |
+
+All twelve literal registrations have separate SCRUM-761 records. Ten cases failed before the fix; the two foreign repair/role controls already passed. Harness evidence only. No Convex cloud, production, concurrency or pilot certification is claimed.

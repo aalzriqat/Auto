@@ -1,3 +1,4 @@
+import { ownedSupplierDocument } from "./utils/supplierDocumentOwnership";
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -104,8 +105,8 @@ async function eligibleRecipients(
     if (membership.offboardingStatus || membership.impersonationGrantId) continue;
     let standing = roleStanding.get(membership.roleId);
     if (standing === undefined) {
-      const role = await ctx.db.get(membership.roleId);
-      const sameOrg = !!role && role.orgId === orgId;
+      const role = ownedSupplierDocument(await ctx.db.get(membership.roleId), orgId);
+      const sameOrg = !!role;
       const isOwner = sameOrg && isSystemOwnerRole(role);
       standing = {
         recipient:

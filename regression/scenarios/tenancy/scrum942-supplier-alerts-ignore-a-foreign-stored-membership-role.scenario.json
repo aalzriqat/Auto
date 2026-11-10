@@ -1,0 +1,65 @@
+{
+  "id": "scrum942-supplier-alerts-ignore-a-foreign-stored-membership-role",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum942-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "fixture.seedStoredId",
+      "input": {
+        "edge": "memberships.roleId",
+        "targetOrg": "B",
+        "isDeleted": false,
+        "sourceType": "ROLE",
+        "receiptPostedBeforeCorruption": false
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "org": "A",
+        "registeredVisibility": "internal",
+        "historicalPilotSwitchMock": false
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerted",
+      "value": 0
+    },
+    {
+      "observable": "notifications",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierStoredIdReaders.scrum942.test.ts",
+    "testName": "supplier alerts ignore a foreign stored membership role"
+  },
+  "matrixRow": "SCRUM942-supplier-stored-id-readers",
+  "fingerprint": "661e82eabdad7fd45fbf6b3eea92efd133327f1bb06bb49c81f0bd5d9f4a6efb"
+}

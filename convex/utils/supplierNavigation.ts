@@ -1,3 +1,4 @@
+import { ownedSupplierDocument } from "./supplierDocumentOwnership";
 import { ConvexError, v, type Infer } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
@@ -25,9 +26,7 @@ type NavigationArgs = { orgId: Id<"organizations">; permissions: readonly string
 /** Every enrichment get spends the statement transaction's existing byte/document/range budget. */
 async function owned<T extends CachedTable>(ctx: QueryCtx, orgId: Id<"organizations">, cache: Map<Id<T>, Doc<T> | null>, id: Id<T>): Promise<Doc<T> | null> {
   const doc = await readCached(ctx, cache, id);
-  if (!doc || !("orgId" in doc) || doc.orgId !== orgId) return null;
-  if ("isDeleted" in doc && doc.isDeleted) return null;
-  return doc;
+  return ownedSupplierDocument(doc, orgId);
 }
 
 export function supplierVehicleLabel(vehicle: Pick<Doc<"vehicles">, "year" | "make" | "model">): string {
