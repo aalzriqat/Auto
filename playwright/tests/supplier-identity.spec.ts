@@ -33,6 +33,18 @@ async function selectSupplier(page: Page, trigger: Locator, name: string) {
   await expect(trigger.locator("bdi")).toHaveText(name);
 }
 
+/**
+ * A submit that closes its dialog can detach the button before Playwright finishes the click's
+ * actionability checks. The click then retries until the test times out, although the submission
+ * landed (see createVehicle in ../utils.ts). Fire the click with a short cap and judge the outcome
+ * by the dialog closing. The backend reads that follow still fail a submission that never happened.
+ */
+async function submitAndExpectClosed(dialog: Locator, button: Locator) {
+  const click = button.click({ timeout: 5_000 }).catch(() => undefined);
+  await expect(dialog).not.toBeVisible();
+  await click;
+}
+
 async function supplierJourney(page: Page, baseURL: string | undefined, locale: "en" | "ar") {
     test.setTimeout(180_000);
     const guard = await containLocalJourney(page, baseURL);
@@ -102,8 +114,7 @@ async function supplierJourney(page: Page, baseURL: string | undefined, locale: 
     await vehicleDialog.getByLabel(`${t.SellingPrice} (JOD)`, { exact: true }).fill("100");
     await vehicleDialog.getByRole("button", { name: t.WizardContinue, exact: true }).click();
     await vehicleDialog.getByRole("button", { name: t.WizardContinue, exact: true }).click();
-    await vehicleDialog.getByRole("button", { name: t.AddVehicle, exact: true }).click();
-    await expect(vehicleDialog).not.toBeVisible();
+    await submitAndExpectClosed(vehicleDialog, vehicleDialog.getByRole("button", { name: t.AddVehicle, exact: true }));
     const inventory = await client.query(api.vehicles.list, { orgId, paginationOpts: { cursor: null, numItems: 10 } });
     expect(inventory.isDone).toBe(true); expect(inventory.page).toHaveLength(1);
     expect(inventory.page[0].sourcedSupplierId).toBe(supplierId);
@@ -119,8 +130,7 @@ async function supplierJourney(page: Page, baseURL: string | undefined, locale: 
     const payment = page.getByRole("dialog");
     await expect(payment.getByText(supplierName, { exact: false })).toBeVisible();
     await expect(payment.getByTestId("supplier-payment-amount")).toHaveAttribute("dir", "ltr");
-    await payment.getByRole("button", { name: t.ConfirmPayment, exact: true }).click();
-    await expect(payment).not.toBeVisible();
+    await submitAndExpectClosed(payment, payment.getByRole("button", { name: t.ConfirmPayment, exact: true }));
     await page.reload();
     const paid = await client.query(api.sourcingPayables.get, { orgId, payableId: payable._id });
     expect(paid?.supplierId).toBe(supplierId); expect(paid?.sourcedFromName).toBe(supplierName);
