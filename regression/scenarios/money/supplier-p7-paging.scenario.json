@@ -17,14 +17,14 @@
       "action": "supplierLaunchEvidence.scanPage",
       "input": {
         "identifiedRows": 1,
-        "unidentifiedRows": 8
+        "unidentifiedRows": 1000
       }
     }
   ],
   "expected": [
     {
       "observable": "firstPageMissing",
-      "value": 7
+      "value": 999
     },
     {
       "observable": "lastPageMissing",
@@ -50,7 +50,7 @@
     "testName": "walks beyond the first bounded page instead of declaring a truncated zero"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "502973e622d0ee744dc75ba2e90c5948b4a6495e106436e75f7121e77514aa53",
+  "fingerprint": "a858cfbc1a1d0c92e4e8fdfaf9749dec3059227481492fa53a7542ffd0bf1e5e",
   "bugRef": {
     "key": "SCRUM-868",
     "failingFirst": "2de1a4f1f44f5783fd96203d1c9ca9423196a808"
