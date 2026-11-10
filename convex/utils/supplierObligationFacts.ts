@@ -72,7 +72,7 @@ interface Outstanding {
   agreedDueAt: number | undefined;
   model: DueTriggerKey;
   deliveredAt?: number;
-  financierFunding?: DueFacts["financierFunding"];
+  financierFunding?: Exclude<DueFacts["financierFunding"], undefined>;
 }
 
 type Reader = Pick<QueryCtx, "db">;

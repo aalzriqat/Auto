@@ -336,7 +336,7 @@ export function loadErrorMessage(error: unknown, translate: Translate): string {
 /** The same overdue condition and wording in statements and attention rows. */
 export function SupplierDaysOverdue({ days, badge = false }: Readonly<{ days: number | null; badge?: boolean }>) {
   const translate = useTranslate();
-  if (days === null || !(days > 0)) return null;
+  if (days === null || days <= 0 || Number.isNaN(days)) return null;
   const label = interpolate(translate("SuppliersStmtDaysOverdue"), { days: String(days) });
   if (badge) return <> · <Badge variant="outline" className="border-money-out/30 text-money-out">{label}</Badge></>;
   return <span className="ms-2">{label}</span>;

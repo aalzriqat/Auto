@@ -2,7 +2,7 @@ import { ConvexError, v } from "convex/values";
 import { query, type QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
 import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
@@ -10,7 +10,6 @@ import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 import { addSupplierRowContext, supplierNavigationFailure, supplierRowContextValidator } from "./utils/supplierNavigation";
 import { createSupplierReadCache } from "./utils/supplierReadCache";
 import { paginationOptsValidator } from "convex/server";
-import { isSystemOwnerRole } from "./utils/permissions";
 import { ammanDateString } from "./utils/supplierDueDates";
 import { attentionKind, attentionPage, readAttention, unlinkedPresence, unlinkedStatus } from "./utils/supplierAttention";
 

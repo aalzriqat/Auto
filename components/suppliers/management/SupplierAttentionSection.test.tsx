@@ -51,6 +51,11 @@ beforeEach(() => { world.locale = "en"; world.permissions = ["view:finance", "vi
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("supplier needs attention", () => {
+  test.each([null, 0, -2, Number.NaN])("hides the overdue label for %s days", daysOverdue => {
+    const { container } = render(<SupplierAttentionView data={page([{ ...baseRow, daysOverdue }]) as never} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
+    expect(container.textContent).not.toContain("days overdue");
+    expect(container.textContent).not.toContain("NaN");
+  });
   function showsAlerts(locale: "en" | "ar") {
     world.locale = locale;
     const text = locale === "ar" ? ar : en;

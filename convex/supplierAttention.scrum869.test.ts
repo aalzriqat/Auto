@@ -7,7 +7,9 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id, Doc } from "./_generated/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { unlinkedPresence } from "./utils/supplierAttention";
+import { attention as attentionQuery } from "./supplierStatement";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const DAY = 86_400_000;
@@ -82,6 +84,28 @@ const attention = async (s: Seed, extra: Partial<{ supplierId: Id<"suppliers">; 
 };
 
 describe("SCRUM-869 supplier attention port", () => {
+  test("page order reuses each completed sale read before starting the next row", async () => {
+    const s = await seed("sequential-cache", undefined, true);
+    const sale = () => s.t.run(ctx => ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId,
+      customerId: s.customerId, salespersonId: s.userId, salePrice: 12500, saleDate: NOW, status: "COMPLETED" }));
+    const firstSale = await sale();
+    const nextSale = await sale();
+    const first = await addPayable(s, { saleId: firstSale });
+    const second = await addPayable(s, { saleId: firstSale });
+    const third = await addPayable(s, { saleId: nextSale });
+    const registered: unknown = attentionQuery;
+    if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
+    const handler = registered._handler;
+    await s.asUser.run(async ctx => {
+      const reads = vi.spyOn(ctx.db, "get"); // Call-through: the public handler still performs every harness database read.
+      try {
+        const response: FunctionReturnType<typeof api.supplierStatement.attention> = await handler(ctx, { orgId: s.orgId, supplierId: s.supplierId, kind: "PAYABLE", nowMs: NOW, paginationOpts: { numItems: 25, cursor: null } });
+        expect(response?.page.map(row => row.id)).toEqual([first, second, third]);
+        expect(reads.mock.calls.map(([id]) => id).filter(id => id === firstSale || id === nextSale)).toEqual([firstSale, nextSale]);
+      } finally { reads.mockRestore(); }
+    });
+  });
+
   test("linked payable alerts with its authoritative amount and no aggregate fields", async () => {
     const s = await seed("linked");
     const id = await addPayable(s);
@@ -141,7 +165,7 @@ describe("SCRUM-869 supplier attention port", () => {
     const s = await seed(`gate-${permissions.join()}`, permissions);
     await addPayable(s);
     await addPayable(s, { supplierId: undefined });
-    expect(await attention(s)).toEqual(null);
+    expect(await attention(s)).toBeNull();
   }
   test("no finance or cost permission withholds the whole response", () => permissionWithheld({ permissions: [] }));
   test("finance-only access withholds the whole response", () => permissionWithheld({ permissions: ["view:finance"] }));
@@ -306,7 +330,7 @@ describe("organisation-wide unlinked attention access", () => {
   async function presenceWithheld(permissions: string[]) {
     const s = await seed("presence-denied", permissions);
     await addPayable(s, { supplierId: undefined });
-    expect(await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).toEqual(null);
+    expect(await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).toBeNull();
   }
   test("withholds presence without finance", () => presenceWithheld(["view:cost_price"]));
   test("withholds presence without cost", () => presenceWithheld(["view:finance"]));

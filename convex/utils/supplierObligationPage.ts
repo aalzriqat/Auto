@@ -2,6 +2,7 @@ import type { IndexRangeBuilder, PaginationOptions, PaginationResult } from "con
 import type { DataModel, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { createSupplierReadCache, type SupplierReadCache } from "./supplierReadCache";
+import { inTurn } from "./transactionReadHeadroom";
 import { readRow, payableFacts, receivableFacts, recoveryFacts, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationFacts";
 
 type Table = "vehicleSupplierPayables" | "vehicleSupplierReceivables" | "supplierCostRecoveries";
@@ -35,11 +36,11 @@ function family<T extends Table>(source: {
     const cache = args.supplierId ? createSupplierReadCache() : undefined;
     const page = await source.readPage(ctx, args);
     const rows: ObligationRow[] = [];
-    for (const doc of page.page) {
+    await inTurn(page.page, async doc => {
       const row = await readRow(args.kind, doc._id, doc.currency, args.nowMs,
         () => source.facts(ctx, args.orgId, doc, cache), args.onUnreadableRow);
       if (row) rows.push(row);
-    }
+    });
     return { rows, complete: page.isDone, continueCursor: page.continueCursor,
       pageStatus: page.pageStatus ?? null, splitCursor: page.splitCursor ?? null };
   };
