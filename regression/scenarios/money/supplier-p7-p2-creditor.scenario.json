@@ -1,0 +1,54 @@
+{
+  "id": "supplier-p7-p2-creditor",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "purchasePaymentMethod": "ON_ACCOUNT",
+        "purchaseSupplierId": "MASTER_A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "payableSupplierId",
+      "value": "MASTER_A"
+    },
+    {
+      "observable": "nameSource",
+      "value": "MASTER"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "needs the creditor's id; the payable carries it and the server name"
+  },
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "fingerprint": "421a9a6282a6a8d830213c4a81c2e11172c073f09c2235d04aea533c7e1be472"
+}
