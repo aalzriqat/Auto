@@ -152,6 +152,10 @@ function financierFundingFact(
 }
 
 export async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
+  if (row.status === "CANCELLED") return null;
+  // Validate gross operands before settlementView subtracts them: a safe remainder cannot vouch for unsafe inputs.
+  toMinorUnits(row.amountDue, row.currency);
+  toMinorUnits(row.amountPaid ?? 0, row.currency);
   const view = settlementView(row);
   // Settled rows drop out through a zero remainder, not through the stored status: a status that
   // disagrees with the amounts must not hide open money.
@@ -189,7 +193,11 @@ export async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, r
 
 export function recoveryFacts(row: Doc<"supplierCostRecoveries">): Outstanding | null {
   if (row.status === "REVERSED") return null;
+  if (!Number.isSafeInteger(row.amountDueMinor) || !Number.isSafeInteger(row.amountRecoveredMinor)) {
+    throw new ConvexError("Unusable supplier recovery money");
+  }
   const outstandingMinor = Math.max(0, row.amountDueMinor - row.amountRecoveredMinor);
+  if (!Number.isSafeInteger(outstandingMinor)) throw new ConvexError("Unusable supplier recovery remainder");
   if (outstandingMinor <= 0) return null;
   return { outstandingMinor, disputed: false, agreedDueAt: renderableDate("agreedDueDate", row.agreedDueDate), model: "COST_RECOVERY" };
 }

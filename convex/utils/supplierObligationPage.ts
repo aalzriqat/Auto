@@ -1,7 +1,6 @@
 import type { PaginationOptions, PaginationResult } from "convex/server";
 import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import type { Doc } from "../_generated/dataModel";
 import { createSupplierReadCache } from "./supplierReadCache";
 import { OBLIGATION_PAGE_MAX, readRow, payableFacts, receivableFacts, recoveryFacts, totalsOf, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationDue";
 
@@ -14,13 +13,6 @@ async function projectPage<D>(page: PaginationResult<D>, read: (doc: D) => Promi
   const result = { rows, totals: totalsOf(rows), complete: page.isDone, continueCursor: page.continueCursor };
   if (!supplierId) return result;
   return { ...result, pageStatus: page.pageStatus ?? null, splitCursor: page.splitCursor ?? null };
-}
-
-function scopedRecoveryFacts(row: Doc<"supplierCostRecoveries">, supplierId: Id<"suppliers"> | undefined) {
-  if (supplierId && (!Number.isSafeInteger(row.amountDueMinor) || !Number.isSafeInteger(row.amountRecoveredMinor))) {
-    throw new Error("Unusable supplier recovery money");
-  }
-  return recoveryFacts(row);
 }
 
 export async function readObligationPage(
@@ -62,7 +54,7 @@ export async function readObligationPage(
       ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", args.supplierId))
       : source.withIndex("by_org", q => q.eq("orgId", orgId));
     const page = await query.paginate(options);
-    return projectPage(page, row => readRow(kind, row._id, row.currency, nowMs, () => scopedRecoveryFacts(row, args.supplierId), onUnreadableRow), args.supplierId);
+    return projectPage(page, row => readRow(kind, row._id, row.currency, nowMs, () => recoveryFacts(row), onUnreadableRow), args.supplierId);
   }
 
 }
