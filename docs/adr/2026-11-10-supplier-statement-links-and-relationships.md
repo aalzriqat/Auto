@@ -67,6 +67,12 @@ the existing detail dialog opens. This avoids the existing highlight hook's
 | Opening obligation | /[orgId]/accounting?section=settings | view:finance, view:cost_price and manage:finance; existing opening readback is in Settings |
 | Expense-origin recovery | Expense label, plus the vehicle route above | No individual expense screen exists; preserve its document id/title and link the recorded vehicle with view:vehicles |
 
+A financed sale whose application is foreign or deleted falls back to kind
+SALE with a null link, including for viewers without view:sales. A foreign sale,
+expense or opening draft, or a soft-deleted sale or expense, yields no source.
+Public-query harness tests cover these rows; openingBalanceDrafts has no
+isDeleted field, so no soft-deleted opening-draft behaviour is claimed.
+
 Route census scope: recursive page.tsx enumeration under
 app/(dashboard)/[orgId]/expenses returned only expenses/page.tsx. This is why
 an expense keeps a plain source label rather than an invented detail route.

@@ -282,6 +282,100 @@ describe("supplier navigation by canonical id", () => {
     expect(JSON.stringify(result)).not.toContain(applicationId);
   });
 
+  test("financed supplier sale with a foreign application exposes only the local sale for a viewer without sales", async () => {
+    const s = await seed(["view:finance", "view:cost_price"]);
+    const { saleId, applicationId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: s.foreignOrg }));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(applicationId);
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("financed supplier sale with a deleted application exposes only the local sale for a viewer without sales", async () => {
+    const s = await seed(["view:finance", "view:cost_price"]);
+    const { saleId, applicationId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.delete(applicationId));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(applicationId);
+  });
+
+  test("foreign sale enrichment discloses no source, sale id or deal number", async () => {
+    const s = await seed();
+    const { saleId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(saleId, { orgId: s.foreignOrg, applicationId: undefined, dealNumber: 941701 }));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+      role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier payer", source: null, vehicleSource: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(saleId);
+    expect(JSON.stringify(result)).not.toContain("941701");
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("deleted sale enrichment discloses no source, sale id or deal number", async () => {
+    const s = await seed();
+    const { saleId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(saleId, { isDeleted: true, applicationId: undefined, dealNumber: 941702 }));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+      role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier payer", source: null, vehicleSource: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(saleId);
+    expect(JSON.stringify(result)).not.toContain("941702");
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("foreign expense enrichment discloses no source, expense id or title", async () => {
+    const s = await seed();
+    const expenseId = await s.t.run(async ctx => {
+      const id = await ctx.db.insert("expenses", { orgId: s.foreignOrg, vehicleId: s.vehicleId, title: "Synthetic foreign transport 941", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" });
+      await ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId: id, sourceEventKey: "foreign-expense", sourcedFromName: "Synthetic supplier bearer", amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+      return id;
+    });
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+      role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier bearer", source: null, vehicleSource: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(expenseId);
+    expect(JSON.stringify(result)).not.toContain("Synthetic foreign transport 941");
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("deleted expense enrichment discloses no source, expense id or title", async () => {
+    const s = await seed();
+    const expenseId = await s.t.run(async ctx => {
+      const id = await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic deleted transport 941", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID", isDeleted: true });
+      await ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId: id, sourceEventKey: "deleted-expense", sourcedFromName: "Synthetic supplier bearer", amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+      return id;
+    });
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+      role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier bearer", source: null, vehicleSource: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(expenseId);
+    expect(JSON.stringify(result)).not.toContain("Synthetic deleted transport 941");
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("foreign opening draft enrichment discloses no source or draft id", async () => {
+    const s = await seed();
+    const draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.foreignOrg, status: "POSTED", lines: [], asOfDate: NOW, memo: "Synthetic foreign opening 941", createdBy: s.userId, createdAt: NOW }));
+    await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic opening supplier", amountDue: 10, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: NOW, updatedAt: NOW, origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "AP1", openingKind: "SUPPLIER_PAYABLE", title: "Synthetic local opening invoice" }));
+    const result = await outstanding(s);
+    expect(result.payable.rows.map(row => row.context)).toStrictEqual([{
+      role: "AP", occurredAt: NOW, counterparty: "Synthetic opening supplier", source: null, vehicleSource: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(draftId);
+    expect(JSON.stringify(result)).not.toContain("Synthetic foreign opening 941");
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
   test("missing target permissions preserve labels without links and foreign or deleted targets disclose no label", async () => {
     const s = await seed(["view:finance", "view:cost_price"]);
     await payable(s);
