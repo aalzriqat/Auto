@@ -178,6 +178,7 @@ export async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, r
     0,
     toMinorUnits(row.amountDue, row.currency) - toMinorUnits(row.amountReceived ?? 0, row.currency)
   );
+  if (!Number.isSafeInteger(outstandingMinor)) throw new ConvexError("Unusable supplier receivable remainder");
   if (outstandingMinor <= 0) return null;
   const sale = await ownedSale(ctx, orgId, row.saleId, cache);
   return {
