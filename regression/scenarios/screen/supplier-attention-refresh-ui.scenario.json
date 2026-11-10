@@ -1,0 +1,54 @@
+{
+  "id": "supplier-attention-refresh-ui",
+  "fingerprint": "0fdb7c3a5ad3c361543a3f15f2992283394431c34bf64d72b83e0c9f94da34a8",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "SupplierAttentionSection",
+      "input": {
+        "mountedAt": "2026-06-15T20:59:59Z",
+        "advanceMs": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "refreshKey",
+      "value": "2026-06-15T21:00:00Z"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "components/suppliers/management/SupplierAttentionSection.test.tsx",
+    "testName": "an open tab refreshes at Amman midnight"
+  },
+  "matrixRow": "SCRUM869-attention-screen",
+  "sourceGlobs": [
+    "components/suppliers/management/SupplierAttentionSection.tsx",
+    "lib/i18n/domains/supplierAttention.ts"
+  ]
+}

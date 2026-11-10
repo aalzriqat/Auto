@@ -32,6 +32,21 @@ export function alertStepFor(daysOverdue: number | null): AlertPlan | null {
   if (sinceFirst < REPEAT_EVERY_DAYS) return { step: "OVERDUE_7", occurrence: 0 };
   return { step: "OVERDUE_WEEKLY", occurrence: Math.floor(sinceFirst / REPEAT_EVERY_DAYS) };
 }
+export type AlertStatus =
+  | { status: "ALERTING"; step: AlertStep; occurrence: number }
+  | { status: "HELD"; reason: "NO_DUE_DATE" | "DISPUTED" }
+  | { status: "NOT_YET" };
+
+/**
+ * The one decision the alert sweep and the supplier "needs attention" view share (SCRUM-869 ADR
+ * 2026-11-10-supplier-attention-port.md). A row with no due date can never alert, and a disputed row is held back.
+ */
+export function alertStatusFor(row: { dueAt: number | null; disputedMinor: number; daysOverdue: number | null }): AlertStatus {
+  if (row.dueAt === null) return { status: "HELD", reason: "NO_DUE_DATE" };
+  if (row.disputedMinor > 0) return { status: "HELD", reason: "DISPUTED" };
+  const plan = alertStepFor(row.daysOverdue);
+  return plan ? { status: "ALERTING", ...plan } : { status: "NOT_YET" };
+}
 /** Steps on or before the due date use the "due" wording; later steps use the "overdue" wording. */
 export function alertTypeFor(step: AlertStep): "accounting.supplierObligationDue" | "accounting.supplierObligationOverdue" {
   return step === "T_MINUS_3" || step === "DUE_DAY" ? "accounting.supplierObligationDue" : "accounting.supplierObligationOverdue";

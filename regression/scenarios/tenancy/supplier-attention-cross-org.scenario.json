@@ -1,0 +1,62 @@
+{
+  "id": "supplier-attention-cross-org",
+  "fingerprint": "6f51e3b537c952f8ac45f27deb1fd143afa29aa26ed91705af412a475fe75767",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "supplierOrg": "B",
+        "requestedOrgs": [
+          "A",
+          "B"
+        ],
+        "membershipOrg": "A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "foreignSupplierError",
+      "value": "SUPPLIER_ATTENTION_UNAVAILABLE"
+    },
+    {
+      "observable": "foreignOrgError",
+      "value": "UNAUTHORIZED"
+    },
+    {
+      "observable": "dataReturned",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "foreign supplier and foreign organisation refuse without data"
+  },
+  "matrixRow": "SCRUM869-attention-permissions"
+}

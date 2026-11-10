@@ -1,0 +1,59 @@
+{
+  "id": "supplier-attention-recovery-due",
+  "fingerprint": "76c3a3ee2066c4e3e99767571b1e31a8038779d966cd091f3e227e19d3156f10",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "kind": "RECOVERY",
+        "dueMinor": 200000,
+        "recoveredMinor": 50000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "outstandingMinor",
+      "value": 150000
+    },
+    {
+      "observable": "step",
+      "value": "DUE_DAY"
+    },
+    {
+      "observable": "payableRows",
+      "value": []
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "cost recovery uses the same reminder decision without fabricating a payable"
+  },
+  "matrixRow": "SCRUM869-attention-read"
+}
