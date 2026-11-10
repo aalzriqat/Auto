@@ -71,7 +71,7 @@ A financed sale whose application is foreign or deleted falls back to kind
 SALE with a null link, including for viewers without view:sales. A foreign sale,
 expense or opening draft, or a soft-deleted sale or expense, yields no source.
 The covered public-query test rows are declared in
-`scripts/intelligence/supplierNavigationDoors.ts`. The adjacent census test binds
+`scripts/intelligence/supplierNavigationDoors.test.ts`. Its census test binds
 those rows to literal test titles and counts ownership lookups and permission gates.
 A missing document needs no separate ownership row: `readCached` returns null with
 or without `owned`, so a removed ownership check cannot separate the outcomes.
