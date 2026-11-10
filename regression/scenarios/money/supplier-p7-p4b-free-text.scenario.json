@@ -1,0 +1,54 @@
+{
+  "id": "supplier-p7-p4b-free-text",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "expenses.create",
+      "input": {
+        "costBearer": "SHOWROOM",
+        "vendor": "Garage"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "vendor",
+      "value": "Garage"
+    },
+    {
+      "observable": "canonicalIdentityRequired",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/expenseParties.scrum868.test.ts",
+    "testName": "showroom expense keeps its existing free-text payee"
+  },
+  "matrixRow": "SCRUM868-P4b-expense-parties",
+  "fingerprint": "7fc116bcec913a310a81b57b0b76847464024c3dceb5dc53a8e7877ec5ca13a5"
+}

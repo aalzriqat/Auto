@@ -1,0 +1,54 @@
+{
+  "id": "supplier-p7-p2-role",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "vehicles.update",
+      "input": {
+        "sourceType": "STOCK",
+        "sourcedSupplierId": "MASTER_A"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "code",
+      "value": "SUPPLIER_ROLE_CONFLICT"
+    },
+    {
+      "observable": "databaseChanged",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "convex/vehicleSupplierIdentity.test.ts",
+    "testName": "a consignment id sent for an owned car is a role conflict"
+  },
+  "matrixRow": "SCRUM868-P2-supplier-identity",
+  "fingerprint": "7506c0e22499b5e5f367765c50303ddfd4e8d31d8abf7dbcbbf62e16ad9f8efc"
+}
