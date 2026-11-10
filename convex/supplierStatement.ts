@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
@@ -27,6 +28,12 @@ const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
  * server for the rows and the totals alike. The screen asks for the same pair before it queries.
  */
 export const STATEMENT_PERMISSIONS = [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
+
+/** Permission denial withholds cost-derived reads; tenant and impersonation failures still throw. */
+async function mayReadStatement(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const { role } = await requireTenantAuth(ctx, orgId);
+  return isSystemOwnerRole(role) || STATEMENT_PERMISSIONS.every(permission => role.permissions.includes(permission));
+}
 
 const row = v.object({
   context: supplierRowContextValidator,
@@ -181,8 +188,7 @@ export const attention = query({
   returns: v.union(v.null(), attentionPage),
   handler: async (ctx, args) => {
     try {
-      const { role } = await requireTenantAuth(ctx, args.orgId);
-      if (!isSystemOwnerRole(role) && !STATEMENT_PERMISSIONS.every(permission => role.permissions.includes(permission))) return null;
+      if (!(await mayReadStatement(ctx, args.orgId))) return null;
       await requireFeature(ctx, args.orgId, "accounting");
       await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
       // A clock read in a cached query does not itself refresh the subscription. Validate and use the caller's time, as outstanding does.
