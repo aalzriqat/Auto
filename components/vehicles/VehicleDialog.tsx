@@ -405,9 +405,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   };
 
   const onSubmit = async (values: VehicleFormValues) => {
-    if (!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1) return;
-    if (!activeOrgId) return;
-    if (!validateOwnership(values)) return;
+    if (!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1) return; // SCRUM-939: only the last wizard step saves.
+    if (!activeOrgId || !validateOwnership(values)) return;
 
     setIsSubmitting(true);
     try {
@@ -540,8 +539,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       ["imageIds"],
     ];
     const fields = fieldsByStep[wizardStep] ?? [];
-    const stepIsValid = await form.trigger(fields);
-    if (!stepIsValid) return;
+    if (!(await form.trigger(fields))) return;
 
     if (wizardStep === 2 && !validateOwnership(form.getValues())) return;
 
@@ -1233,7 +1231,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   {t("Cancel")}
                 </Button>
                 {!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1 ? (
-                  <Button key="wizard-continue" type="button" onClick={() => void handleNextStep()}>
+                  <Button type="button" onClick={() => void handleNextStep()}>
                     {t("WizardContinue")}<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
                   </Button>
                 ) : (

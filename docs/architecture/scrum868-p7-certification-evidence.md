@@ -33,6 +33,13 @@ made the creator and requester early-submit assertions fail (two failed, two
 passed). Both protections were restored. No existing VehicleDialog assertion
 was changed. Test UUIDs are fixed low-entropy fixture values.
 
+The coordinator's size-fit commit on top of `c8971afc5` keeps one key, on the
+submit button. A keyed element and an unkeyed element in one position are
+different identities to React, so the submit is still a new DOM node. Both
+mutants were rerun against that shape with the same results: removing the key
+failed the DOM identity assertion (one failed, three passed), and removing the
+guard failed both early-submit assertions (two failed, two passed).
+
 Strict-spec commit `4cf715540fdfcf0b25d2d0c9c5675a3a73280c70` removes swallowed
 submit clicks. The supplier journey checks Availability and a complete empty
 inventory read before the enabled Add Vehicle button is clicked. Confirm Payment
@@ -57,7 +64,7 @@ The final class census parsed 646 tracked JS/TS files under `components/` and `a
 3,834 conditional expressions, 2,463 if statements and 580 JSX type attributes.
 It compared both button/submit orders across multiline branches and checked
 dynamic type attributes. The sole candidate was VehicleDialog's footer at
-line 1235. No if/else candidate was found. The five dynamic attributes belong
+line 1233. No if/else candidate was found. The five dynamic attributes belong
 to input fields (`listingFields`, `CreateAccountingPeriodDialog`,
 `CustomFieldsSection`, `ui/input`) or the `MovementDialog` domain prop in
 `PartnerEquityTab`, not a swapped submit control. This is a source census, not
@@ -75,10 +82,17 @@ financial certification.
 Root `pnpm typecheck` passed, including Playwright and the new fixture; it
 excludes `convex/`. Separate `pnpm typecheck:convex` passed. Touched-file ESLint
 exited zero with zero errors and 83 warnings in the existing VehicleDialog.
-Playwright discovery passed with 70 tests in 20 files. Guardrails FAILED:
-VehicleDialog measures 1,696 formatted nonblank lines against the existing
-1,690 ceiling (`SIZE-GROWN` and `CEILING-BELOW-CURRENT`). No ceiling was raised
-and no unrelated refactor was made. This remains a merge blocker.
+Playwright discovery passed with 70 tests in 20 files. Guardrails FAILED at
+`c8971afc5`: VehicleDialog measured 1,696 formatted nonblank lines against the
+existing 1,690 ceiling (`SIZE-GROWN` and `CEILING-BELOW-CURRENT`). No ceiling
+was raised.
+
+The size-fit commit brings the file back to 1,690 lines, and
+`node quality/guardrails/check.mjs` exits zero with the ceiling unchanged. It
+drops the Continue button's key, which had pushed that tag past 80 columns. It
+joins the two early returns in `onSubmit` into one condition with the same
+short-circuit order, and it inlines the `stepIsValid` constant in
+`handleNextStep`. The named-file Vitest run still passes 142 tests in 11 files.
 
 Baseline identity initially refused eight entries shifted by the one inserted
 guard line. The relocation tool compared each call expression to `a9f48638`,
@@ -87,6 +101,10 @@ only those eight callSiteId positions. No finding or reviewed metadata was
 removed or renewed. The post-relocation check passed: 948 baseline entries
 matched by surface, file, callSiteId and functionId. Backend finding identity
 was not checked by that command.
+
+After the size-fit commit, the eight call sites are on their `a9f48638` lines
+again, so the baseline file is restored to its `a9f48638` content and this PR
+no longer changes it. The identity check passes with 948 entries.
 
 The small offline markup bridge `VehicleDialogVisualFixture.test.tsx` renders
 the real create wizard with synthetic data. Chromium painted it with compiled
