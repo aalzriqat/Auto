@@ -1,0 +1,82 @@
+{
+  "id": "supplier-navigation-foreign-expense-vehicle-without-vehicles",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round3-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "expense-vehicle-lookup",
+        "state": "foreign",
+        "viewer": "without-vehicles",
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source.kind",
+      "value": "EXPENSE"
+    },
+    {
+      "observable": "context.source.labelPreserved",
+      "value": true
+    },
+    {
+      "observable": "context.source.href",
+      "value": null
+    },
+    {
+      "observable": "context.vehicleSource",
+      "value": null
+    },
+    {
+      "observable": "response.vehicleIdDisclosed",
+      "value": false
+    },
+    {
+      "observable": "response.vehicleYearMakeModelDisclosed",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense keeps its source but hides a foreign vehicle for a viewer without vehicles"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "a1ac7c882e50dee56ae4adf3401c1c84321aaea4e67f12058c6e05cac74ed09d"
+}

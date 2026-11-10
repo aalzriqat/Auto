@@ -1,0 +1,74 @@
+{
+  "id": "supplier-navigation-expense-vehicle-without-vehicles",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round3-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "vehicle-link-gate",
+        "state": "local-expense-vehicle",
+        "viewer": "without-vehicles",
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "context.source.kind",
+      "value": "EXPENSE"
+    },
+    {
+      "observable": "context.vehicleSource.kind",
+      "value": "VEHICLE"
+    },
+    {
+      "observable": "context.vehicleSource.href",
+      "value": null
+    },
+    {
+      "observable": "context.vehicleSource.labelPreserved",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense vehicle keeps its label without a link for a viewer without vehicles"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "256cfd5f1149e443d134c8b90469c8a684d3c1358e5ad72545a7ce014517dfc1"
+}

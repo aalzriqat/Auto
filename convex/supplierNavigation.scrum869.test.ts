@@ -57,6 +57,103 @@ async function financedSale(s: Seed) {
   });
 }
 
+
+// SCRUM-941 round 3: each literal test below binds one declared navigation door row.
+type TargetPermission = "view:sales" | "view:vehicles" | "manage:finance";
+type HiddenState = "foreign" | "deleted";
+const seedViewer = (permission: TargetPermission, allowed: boolean) =>
+  seed(["view:finance", "view:cost_price", ...(allowed ? [permission] : [])]);
+
+async function hideVehicle(s: Seed, state: HiddenState) {
+  await s.t.run(ctx => ctx.db.patch(s.vehicleId, {
+    year: 2037, make: "NAV941-MAKE", model: "NAV941-MODEL",
+    ...(state === "foreign" ? { orgId: s.foreignOrg } : { isDeleted: true }),
+  }));
+}
+
+function expectNoVehicleLabel(result: Awaited<ReturnType<typeof outstanding>>) {
+  const serialized = JSON.stringify(result);
+  expect(serialized).not.toContain("2037");
+  expect(serialized).not.toContain("NAV941-MAKE");
+  expect(serialized).not.toContain("NAV941-MODEL");
+}
+
+function expectNoVehicle(result: Awaited<ReturnType<typeof outstanding>>, s: Seed) {
+  expect(JSON.stringify(result)).not.toContain(s.vehicleId);
+  expectNoVehicleLabel(result);
+}
+
+async function expectHiddenSale(state: HiddenState, financed: boolean, sales: boolean) {
+  const s = await seedViewer("view:sales", sales);
+  const { saleId, applicationId } = await financedSale(s);
+  await s.t.run(ctx => ctx.db.patch(saleId, {
+    ...(state === "foreign" ? { orgId: s.foreignOrg } : { isDeleted: true }),
+    ...(!financed ? { applicationId: undefined } : {}), dealNumber: 941703,
+  }));
+  const result = await outstanding(s);
+  expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+    role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier payer", source: null, vehicleSource: null,
+  }]);
+  expect(JSON.stringify(result)).not.toContain(financed ? applicationId : saleId);
+  expect(JSON.stringify(result)).not.toContain("941703");
+}
+
+async function openingFixture(state: "foreign" | "pending" | "posted", finance: boolean) {
+  const s = await seedViewer("manage:finance", finance);
+  const draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", {
+    orgId: state === "foreign" ? s.foreignOrg : s.orgId, status: state === "pending" ? "PENDING_APPROVAL" : "POSTED",
+    lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW,
+  }));
+  await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", {
+    orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic opening supplier", amountDue: 10,
+    currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
+    origin: "OPENING", openingBalanceDraftId: draftId, openingRowKey: "AP1", openingKind: "SUPPLIER_PAYABLE", title: "Synthetic local opening invoice",
+  }));
+  return { s, draftId };
+}
+
+async function expenseVehicleFixture(vehicles: boolean) {
+  const s = await seedViewer("view:vehicles", vehicles);
+  const expenseId = await s.t.run(async ctx => {
+    const id = await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic vehicle transport", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" });
+    await ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId: id, sourceEventKey: "vehicle-door", sourcedFromName: "Synthetic supplier bearer", amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    return id;
+  });
+  return { s, expenseId };
+}
+
+async function expectHiddenExpenseVehicle(state: HiddenState, vehicles: boolean) {
+  const { s, expenseId } = await expenseVehicleFixture(vehicles);
+  await hideVehicle(s, state);
+  const result = await outstanding(s);
+  expect(result.receivable.rows.map(row => row.context)).toStrictEqual([{
+    role: "AR", occurredAt: NOW, counterparty: "Synthetic supplier bearer",
+    source: { kind: "EXPENSE", id: expenseId, label: "Synthetic vehicle transport", href: null }, vehicleSource: null,
+  }]);
+  expectNoVehicle(result, s);
+}
+
+async function expectHiddenNativeVehicle(state: HiddenState) {
+  const s = await seedViewer("view:vehicles", true);
+  await payable(s);
+  await hideVehicle(s, state);
+  const result = await outstanding(s);
+  expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([null]);
+  expectNoVehicle(result, s);
+}
+
+async function expectHiddenSaleVehicle(state: HiddenState, vehicles: boolean) {
+  const s = await seed(["view:finance", "view:cost_price", "view:sales", ...(vehicles ? ["view:vehicles"] : [])]);
+  const { saleId } = await financedSale(s);
+  await s.t.run(ctx => ctx.db.patch(saleId, { applicationId: undefined }));
+  await hideVehicle(s, state);
+  const result = await outstanding(s);
+  expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+    kind: "SALE", id: saleId, label: `#941 · ${saleId}`, href: `/${s.orgId}/sales/${saleId}/deal`,
+  }]);
+  expectNoVehicleLabel(result);
+}
+
 async function measureHandler(s: Seed, registered: unknown, args: unknown) {
   if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
   const handler = registered._handler;
@@ -386,6 +483,110 @@ describe("supplier navigation by canonical id", () => {
     expect(JSON.stringify(foreign)).not.toContain("FOREIGN SECRET");
     await s.t.run(ctx => ctx.db.patch(s.vehicleId, { orgId: s.orgId, isDeleted: true }));
     expect((await outstanding(s)).payable.rows[0]).toMatchObject({ context: { source: null } });
+  });
+
+
+  // SCRUM-941 declared doors: literal registrations are required by the scenario library.
+  test("foreign cash sale enrichment discloses no source for a viewer without sales", async () => {
+    await expectHiddenSale("foreign", false, false);
+  });
+
+  test("deleted cash sale enrichment discloses no source for a viewer without sales", async () => {
+    await expectHiddenSale("deleted", false, false);
+  });
+
+  test("foreign financed sale enrichment discloses no source for a viewer without sales", async () => {
+    await expectHiddenSale("foreign", true, false);
+  });
+
+  test("foreign financed sale enrichment discloses no source for a viewer with sales", async () => {
+    await expectHiddenSale("foreign", true, true);
+  });
+
+  test("deleted financed sale enrichment discloses no source for a viewer without sales", async () => {
+    await expectHiddenSale("deleted", true, false);
+  });
+
+  test("deleted financed sale enrichment discloses no source for a viewer with sales", async () => {
+    await expectHiddenSale("deleted", true, true);
+  });
+
+  test("cash supplier sale keeps its label without a link for a viewer without sales", async () => {
+    const s = await seedViewer("view:sales", false);
+    const { saleId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(saleId, { applicationId: undefined }));
+    expect((await outstanding(s)).receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+  });
+
+  test("foreign opening draft discloses no source for a viewer without finance management", async () => {
+    const { s, draftId } = await openingFixture("foreign", false);
+    const result = await outstanding(s);
+    expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([null]);
+    expect(JSON.stringify(result)).not.toContain(draftId);
+  });
+
+  test("pending opening draft yields no source even for a finance manager", async () => {
+    const { s, draftId } = await openingFixture("pending", true);
+    const result = await outstanding(s);
+    expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([null]);
+    expect(JSON.stringify(result)).not.toContain(draftId);
+  });
+
+  test("posted opening keeps its label without a link for a viewer without finance management", async () => {
+    const { s, draftId } = await openingFixture("posted", false);
+    expect((await outstanding(s)).payable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "OPENING", id: draftId, label: "Synthetic local opening invoice", href: null,
+    }]);
+  });
+
+  test("expense keeps its source but hides a foreign vehicle for a viewer without vehicles", async () => {
+    await expectHiddenExpenseVehicle("foreign", false);
+  });
+
+  test("expense keeps its source but hides a foreign vehicle for a viewer with vehicles", async () => {
+    await expectHiddenExpenseVehicle("foreign", true);
+  });
+
+  test("expense keeps its source but hides a deleted vehicle for a viewer without vehicles", async () => {
+    await expectHiddenExpenseVehicle("deleted", false);
+  });
+
+  test("expense keeps its source but hides a deleted vehicle for a viewer with vehicles", async () => {
+    await expectHiddenExpenseVehicle("deleted", true);
+  });
+
+  test("foreign native vehicle yields no source for a vehicle viewer", async () => {
+    await expectHiddenNativeVehicle("foreign");
+  });
+
+  test("local sale label hides its foreign vehicle for a viewer without vehicles", async () => {
+    await expectHiddenSaleVehicle("foreign", false);
+  });
+
+  test("local sale label hides its foreign vehicle for a viewer with vehicles", async () => {
+    await expectHiddenSaleVehicle("foreign", true);
+  });
+
+  test("deleted native vehicle yields no source for a vehicle viewer", async () => {
+    await expectHiddenNativeVehicle("deleted");
+  });
+
+  test("local sale label hides its deleted vehicle for a viewer without vehicles", async () => {
+    await expectHiddenSaleVehicle("deleted", false);
+  });
+
+  test("local sale label hides its deleted vehicle for a viewer with vehicles", async () => {
+    await expectHiddenSaleVehicle("deleted", true);
+  });
+
+  test("expense vehicle keeps its label without a link for a viewer without vehicles", async () => {
+    const { s, expenseId } = await expenseVehicleFixture(false);
+    expect((await outstanding(s)).receivable.rows.map(row => ({ source: row.context.source, vehicleSource: row.context.vehicleSource }))).toStrictEqual([{
+      source: { kind: "EXPENSE", id: expenseId, label: "Synthetic vehicle transport", href: null },
+      vehicleSource: { kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href: null },
+    }]);
   });
 
   test("finance without cost gets exactly stock metadata and cannot read statement costs", async () => {

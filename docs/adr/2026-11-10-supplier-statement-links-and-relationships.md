@@ -70,8 +70,13 @@ the existing detail dialog opens. This avoids the existing highlight hook's
 A financed sale whose application is foreign or deleted falls back to kind
 SALE with a null link, including for viewers without view:sales. A foreign sale,
 expense or opening draft, or a soft-deleted sale or expense, yields no source.
-Public-query harness tests cover these rows; openingBalanceDrafts has no
-isDeleted field, so no soft-deleted opening-draft behaviour is claimed.
+The covered public-query test rows are declared in
+`scripts/intelligence/supplierNavigationDoors.ts`. The adjacent census test binds
+those rows to literal test titles and counts ownership lookups and permission gates.
+A missing document needs no separate ownership row: `readCached` returns null with
+or without `owned`, so a removed ownership check cannot separate the outcomes.
+Existing financed-application missing rows remain listed. openingBalanceDrafts has
+no isDeleted field, so no soft-deleted opening-draft behaviour is claimed.
 
 Route census scope: recursive page.tsx enumeration under
 app/(dashboard)/[orgId]/expenses returned only expenses/page.tsx. This is why
