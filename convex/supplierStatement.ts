@@ -201,9 +201,7 @@ export const attention = query({
       const unlinked = await unlinkedPresence(ctx, args.orgId, args.kind);
       return { ...result, asOfDate: ammanDateString(nowMs), unlinked };
     } catch (error) {
-      if (error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data) throw error;
-      console.error("Supplier attention read failed", error);
-      throw new ConvexError({ code: "SUPPLIER_ATTENTION_UNAVAILABLE", message: "Supplier attention could not be loaded. Please try again." });
+      return supplierNavigationFailure(error, "SUPPLIER_ATTENTION_UNAVAILABLE");
     }
   },
 });
