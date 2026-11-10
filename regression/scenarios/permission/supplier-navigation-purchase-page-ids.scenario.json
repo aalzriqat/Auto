@@ -1,0 +1,55 @@
+{
+  "id": "supplier-navigation-purchase-page-ids",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-round2",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "purchaseObligations": 2,
+        "vehicles": 1,
+        "numItems": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "distinctRelationshipIds",
+      "value": 2
+    },
+    {
+      "observable": "repeatedVehicleIds",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "two purchase obligations for one vehicle retain distinct stable relationship ids across pages"
+  },
+  "matrixRow": "SCRUM869-navigation-identity",
+  "fingerprint": "3dadfdc10543f342c6e82b8a9f3f5b578e9fe0ba293fddc4060ee0722413ce5d",
+  "bugRef": {
+    "key": "SCRUM-869",
+    "failingFirst": "25126c1da382aa0beda1489711160c24ede4e56e"
+  }
+}

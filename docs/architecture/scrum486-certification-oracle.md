@@ -1958,6 +1958,59 @@ instead of refusing. Other new records are preventive controls and have no
 bugRef. Rulings: SCRUM-868 c23871/c23873, OQ-4, and SCRUM-850 c24749.
 This is harness evidence, not real-backend, OCC, production or pilot certification.
 
+### SCRUM869-navigation-identity
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Canonical statement source | One linked payable: 9500000 JOD minor units, A/P, original supplier snapshot and creation timestamp. Same-name different-id and id-less records are absent | `convex/supplierNavigation.scrum869.test.ts`, authoritative statement source case |
+| Settled and opening source | Paid amount is 9500000 minor units. Posted opening payable and recovery link to opening Settings, with A/P and A/R roles | Same suite, settled and P5 opening cases |
+| Sale and expense source | A/R sale uses its deal route. Expense retains Transport invoice label without an invented record route, plus its recorded vehicle link | Same suite, sale/expense case |
+| Relationship identity | SOURCED uses sourcedSupplierId; native owned purchase payable uses supplierId. SOLD owned stock remains included; deleted, same-name and id-less controls do not enter | Same suite, sourced/owned relationship case |
+| Repeated purchase relationship | Two native purchase obligations for one vehicle, on two pages, retain their distinct payable ids as keys. No purchase relationship is hidden | Same suite, `two purchase obligations for one vehicle retain distinct stable relationship ids across pages` |
+
+### SCRUM869-navigation-permissions
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Cost boundary | Finance-only response equals the complete vehicle metadata allowlist: id, vehicleId, label, model, status and href. No cost fields; outstanding and settled statement queries refuse | Backend finance-without-cost case, whole-shape `toEqual` |
+| Target boundary | Without view:vehicles, the server returns a plain label and null href. Foreign/deleted source has no label. The UI follows href alone with no per-row permission lookup; its statement gate remains | Backend missing-target case and EN/AR component permission cases; `source href alone controls links without a client permission lookup` |
+| Tenancy | Supplier from org B supplied to org A refuses; querying org B without membership refuses; finance permission absent refuses | Backend public-reader refusal case |
+| Safe error | Stored NaN retains the money reader's existing refusal in both views. Only unexpected navigation enrichment errors become SUPPLIER_NAVIGATION_UNAVAILABLE. UI errors remain localized, without raw technical text | Backend `invalid stored money keeps the money reader error contract` and component error cases |
+| Direct vehicle opening | Missing id or vehicle permission produces no direct record query. A supplier id outside loaded inventory opens the actual detail dialog using vehicles.get, without inventory-list queries | `components/suppliers/management/SupplierVehicleTarget.test.tsx` |
+
+### SCRUM869-navigation-bounds
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Continuation | Two synthetic linked vehicles, page size 1: first page is incomplete; continuation returns the different remaining vehicle and is done | Backend continuation case |
+| Distant end cursor | 52 linked vehicles; numItems 1 and caller maximumRowsRead 1000000 cannot widen server cap: at most 50 returned, SplitRequired, split cursor present, isDone false | Backend distant-endCursor case |
+| Honest notice | Nonterminal relationship list has EN/AR incomplete notice and load-more 25; no partial monetary total | `components/suppliers/management/SupplierNavigation.test.tsx` |
+| Decoration budget | A/R exhausts the shared budget after the payable reader computed 9500000 JOD minor units. The payable row, exact total and complete flag remain. Both link sources become null | Backend `decoration exhaustion preserves every computed payable row and complete money totals` |
+| Distinct target gets | At 100 rows in each family: 803 actual gets for outstanding and 803 for settled, with complete literal totals and three auth/supplier gets included | Backend distinct outstanding and settled read-count cases |
+| Cache gets | At the same bound with shared targets: 7 outstanding gets. Fifty native purchase relationships sharing one vehicle: 4 gets, with native capped-page incompleteness retained | Backend shared outstanding and relationship read-count cases |
+
+### SCRUM869-navigation-screen
+
+The component checks use the real supplier components and dictionaries, with SDK
+and auth boundaries supplied synthetic records. They cover EN and AR source
+links, A/P and A/R, payer/payee, currency and minor-unit formatting, timestamps,
+plain opening labels when manage:finance is absent, ownership/status, RTL,
+loading, empty, error and incomplete states. The direct vehicle check renders
+the actual existing detail dialog. Local Chromium fixture renders at 375 and
+1440 pixels use application CSS and blocked network access; they are not
+cloud-backed screen-audit or mobile certification.
+
+Twenty-seven permanent records are stored as
+`regression/scenarios/{money,permission,tenancy,screen}/supplier-navigation-*.scenario.json`.
+Their exact executable registrations are the 17 backend cases, seven EN/AR
+component cases and three direct-vehicle cases (27 literal test registrations;
+localized cases execute a bounded EN/AR loop). Every stored fingerprint comes from the expected value printed by
+`scripts/regression/scenarioRecord.test.ts` and is checked again by that file.
+Run those three named test files and the regression library with one worker.
+These are read-only harness and synthetic screen controls. They neither certify
+OCC/platform read limits nor fulfill SCRUM-760's independent real-backend
+hunters, exact-SHA release rehearsal or P7 launch evidence.
+
 ### SCRUM868-P7-launch-evidence
 
 | Cell | Literal expected result | Bound check |
@@ -1965,7 +2018,7 @@ This is harness evidence, not real-backend, OCC, production or pilot certificati
 | Missing identity | One missing row counts 1 for each of eleven tables; supplier expense missing payee and bearer counts 1 in each independent reason | `convex/supplierLaunchEvidence.test.ts`, eleven literal table cases |
 | Complete identified data | All eleven tables report 0; full before/after document arrays equal | Same suite, fully identified tenant |
 | Exemptions | Ordinary OPENING OTHER_PAYABLE and SHOWROOM vendor text count 0; supplier opening counts 1; metadata-only pending update inherits id | Same suite, ordinary creditor and partial-edit cases |
-| Partial and unreadable evidence | Nine conversion rows require two pages, missing counts 7 then 1; native byte split, unreadable cursor and missing UPDATE source return UNAVAILABLE without counts | Same suite, paging, split, cursor and pending-edit cases |
+| Partial and unreadable evidence | 1,001 conversion rows (1 identified) require two pages, missing counts 999 then 1. A native byte split and an unreadable cursor return UNAVAILABLE without counts. A pending UPDATE whose vehicle was deleted counts 0, because approval refuses it without writes | Same suite, paging, split, cursor and pending-edit cases |
 | Release refusal | Any count 1 refuses with SUPPLIER_IDENTITY_UNRESOLVED; failed call, malformed response, deadline and page cap return SUPPLIER_EVIDENCE_UNAVAILABLE | `scripts/releaseGuard.supplierLaunch.test.ts`; actual rollout phase executed with failing CLI responses |
 | Browser identity | EN and AR/RTL: opening 100003 JOD minor units selects MASTER_A, consigned vehicle cost 80 and selling price 100 selects the same party with zero journal change, payment 100.003 retains MASTER_A after reload | `playwright/tests/supplier-identity.spec.ts`, both literal journeys |
 

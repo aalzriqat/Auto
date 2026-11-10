@@ -10,7 +10,8 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorBoundary, useTranslate } from "./shared";
-import { SupplierMoney, SupplierNet, type SupplierBalanceData } from "./SupplierBalancesScreen";
+import { SupplierNet, type SupplierBalanceData } from "./SupplierBalancesScreen";
+import { Money as SupplierMoney } from "./SupplierStatementMoney";
 
 function Tile({ label, icon: Icon, className, children }: Readonly<{ label: string; icon: LucideIcon; className: string; children: ReactNode }>) {
   return <Card className="min-w-0 shadow-sm"><CardContent className="space-y-3 p-4">

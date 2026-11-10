@@ -1,0 +1,53 @@
+{
+  "id": "supplier-navigation-coded-money-error",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "storedAmount": "NaN",
+        "views": [
+          "outstanding",
+          "settled"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "moneyReaderErrorPreserved",
+      "value": true
+    },
+    {
+      "observable": "navigationErrorReplacement",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "invalid stored money keeps the money reader error contract"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "d609bcc64d5cac660db55e0c98771de9e9e41027ead3530327251d588f73982a"
+}

@@ -9,6 +9,32 @@ import { defineBilingualMessages } from "../defineBilingualMessages";
  * slice does not touch a file the supplier-identity PR also edits.
  */
 const suppliersMessages = defineBilingualMessages({
+  SuppliersRowAP: ["A/P to supplier", "ذمم دائنة للمورّد"],
+  SuppliersRowAR: ["A/R from supplier", "ذمم مدينة على المورّد"],
+  SuppliersRowPayee: ["Payee", "المستفيد"],
+  SuppliersRowPayer: ["Payer", "الدافع"],
+  SuppliersRowCreated: ["Recorded", "تاريخ التسجيل"],
+  SuppliersRowUnknownTime: ["Date unavailable", "التاريخ غير متاح"],
+  SuppliersRowUnknownParty: ["Supplier snapshot unavailable", "بيانات المورّد المحفوظة غير متاحة"],
+  SuppliersRowSourceUnavailable: ["Source record unavailable", "المستند المصدر غير متاح"],
+  SuppliersRowSourceVEHICLE: ["Vehicle", "المركبة"],
+  SuppliersRowSourceSALE: ["Sale", "البيع"],
+  SuppliersRowSourceAPPLICATION: ["Deal", "الصفقة"],
+  SuppliersRowSourceEXPENSE: ["Expense", "المصروف"],
+  SuppliersRowSourceOPENING: ["Opening balance", "الرصيد الافتتاحي"],
+  SuppliersRelationshipsTitle: ["Relationships", "السجلات المرتبطة"],
+  SuppliersRelationshipsSourcedTitle: ["Consignment vehicles", "مركبات الأمانة"],
+  SuppliersRelationshipsOwnedTitle: ["Owned vehicles bought on account", "المركبات المملوكة المشتراة على الحساب"],
+  SuppliersRelationshipsSourced: ["Consignment", "أمانة"],
+  SuppliersRelationshipsOwned: ["Owned · on account", "مملوكة · على الحساب"],
+  SuppliersRelationshipsScope: ["Linked by supplier id only. Older records without a supplier link are excluded; their count is unavailable here.", "الربط بمعرّف المورّد فقط. تُستبعد السجلات القديمة غير المرتبطة بمورّد؛ عددها غير متاح هنا."],
+  SuppliersRelationshipsLoading: ["Loading linked vehicles…", "جارٍ تحميل المركبات المرتبطة…"],
+  SuppliersRelationshipsEmpty: ["No linked vehicles in this category.", "لا توجد مركبات مرتبطة في هذه الفئة."],
+  SuppliersRelationshipsIncomplete: ["Incomplete list. More linked records may exist; no total is shown.", "القائمة غير مكتملة. قد توجد سجلات مرتبطة أخرى؛ لا يُعرض إجمالي."],
+  SuppliersRelationshipsMore: ["Load more", "تحميل المزيد"],
+  SuppliersRelationshipsError: ["Linked records could not be loaded. Please try again.", "تعذّر تحميل السجلات المرتبطة. يرجى المحاولة مجدداً."],
+  ServerError_SUPPLIER_NAVIGATION_UNAVAILABLE: ["Supplier records could not be loaded. Please try again.", "تعذّر تحميل سجلات المورّد. يرجى المحاولة مجدداً."],
+  ServerError_SUPPLIER_STATEMENT_INVALID_TIME: ["Refresh the statement to use the current date and time.", "حدّث كشف الحساب لاستخدام التاريخ والوقت الحاليين."],
   // Navigation and page chrome
   Suppliers: ["Suppliers", "الموردون"],
   SuppliersBalances: ["Balances", "الأرصدة"],
@@ -290,8 +316,8 @@ const suppliersMessages = defineBilingualMessages({
     "لا توجد بنود مستحقة على المورّد مرتبطة به.",
   ],
   SuppliersStmtScopeNote: [
-    "This lists only lines linked to this supplier. Opening lines carried over from before the system and lines not yet linked to a supplier are not included, so it may not show everything owed.",
-    "تعرض هذه القائمة البنود المرتبطة بهذا المورّد فقط. البنود الافتتاحية المرحّلة من قبل النظام والبنود غير المرتبطة بمورّد بعد غير مشمولة، لذا قد لا تعرض كل المبالغ المستحقة.",
+    "This lists lines linked by supplier id, including linked opening entries. Older records without a supplier link are excluded; their count is unavailable here.",
+    "تعرض هذه القائمة البنود المرتبطة بمعرّف المورّد، بما فيها الأرصدة الافتتاحية المرتبطة. تُستبعد السجلات القديمة غير المرتبطة بمورّد؛ عددها غير متاح هنا.",
   ],
   SuppliersStmtPlanGate: [
     "The supplier statement is not included in your current plan.",

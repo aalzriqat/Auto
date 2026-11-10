@@ -32,7 +32,11 @@
     },
     {
       "observable": "deletedSourceStatus",
-      "value": "UNAVAILABLE"
+      "value": "READY"
+    },
+    {
+      "observable": "deletedSourceCount",
+      "value": 0
     }
   ],
   "rulings": [
@@ -54,5 +58,5 @@
     "testName": "pending metadata update inherits identity but changed supplier text cannot"
   },
   "matrixRow": "SCRUM868-P7-launch-evidence",
-  "fingerprint": "b12a49a64dece7ed203e933cd46fc51efe73b1e890eb208fa43505bf20c53656"
+  "fingerprint": "37974b93a59d95e927f8a0b874e9c480a058a72d538b941848cd90e50d250152"
 }

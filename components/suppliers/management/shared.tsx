@@ -28,6 +28,11 @@ export function useTranslate(): Translate {
   return t as Translate;
 }
 
+export function SupplierLoadError() {
+  const translate = useTranslate();
+  return <p role="alert" className="py-4 text-sm text-destructive">{translate("SuppliersLoadError")}</p>;
+}
+
 export function supplierHref(orgId: string, supplierId: string): string {
   return `/${orgId}/suppliers/${supplierId}`;
 }
