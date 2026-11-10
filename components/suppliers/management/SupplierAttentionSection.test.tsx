@@ -19,6 +19,7 @@ vi.mock("convex/react", async () => {
   return { useQuery: (ref: never, args: unknown) => {
     if (args === "skip") return undefined;
     if (getFunctionName(ref) === "subscriptions:getMySubscription") return world.plan === undefined ? undefined : { planDetails: { gates: { accounting: world.plan } } };
+    if (["supplierStatement:outstanding", "supplierStatement:settled", "supplierStatement:paymentsReconciliation"].includes(getFunctionName(ref))) return undefined;
     if (getFunctionName(ref) === "supplierStatement:unlinkedAttention") {
       const result = typeof world.data === "function" ? world.data(args) : world.data;
       return (result as { unlinked?: string } | undefined)?.unlinked;
@@ -29,7 +30,8 @@ vi.mock("convex/react", async () => {
   } };
 });
 
-import { SupplierAttentionSection, SupplierAttentionView, SupplierAttentionError } from "./SupplierAttentionSection";
+import { SupplierAttentionView, SupplierAttentionError } from "./SupplierAttentionSection";
+import { SupplierStatementSection as SupplierAttentionSection } from "./SupplierStatementSection";
 import { dictionaries } from "@/lib/i18n/dictionaries";
 const en = dictionaries.en as Record<string, string>;
 const ar = dictionaries.ar as Record<string, string>;

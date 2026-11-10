@@ -56,6 +56,7 @@ vi.mock("convex/react", async () => {
       if (world.queryThrows) throw world.queryThrows;
       if (args === "skip") return undefined;
       if (name === "subscriptions:getMySubscription") return world.plan;
+      if (name === "supplierStatement:unlinkedAttention") return "NONE";
       if (name === "supplierStatement:attention") return { page: [], complete: true, isDone: true, continueCursor: "", pageStatus: null, splitCursor: null, asOfDate: "2026-06-15", unlinked: "NONE" };
       if (name === "supplierStatement:paymentsReconciliation") return world.recon;
       return name === "supplierStatement:settled" ? world.settled : world.statement;

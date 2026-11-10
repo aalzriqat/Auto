@@ -15,8 +15,9 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { ammanDateString } from "@/convex/utils/supplierDueDates";
+import { ammanDateString, msUntilAmmanMidnight } from "@/convex/utils/supplierDueDates";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Money } from "./SupplierStatementMoney";
 import { interpolate } from "@/lib/i18n/interpolate";
 import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
@@ -367,6 +368,7 @@ export function SupplierReconView({ recon }: Readonly<{ recon: SupplierReconData
 
 function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   const translate = useTranslate();
+  const { dir } = useLanguage();
   const { hasPermission, isLoading } = usePermissions();
   // The server requires the same pair (STATEMENT_PERMISSIONS): the amounts are a SOURCED car's cost (SCRUM-886 / ACC-10).
   const allowed = !isLoading && hasPermission(PERMISSIONS.VIEW_FINANCE) && hasPermission(PERMISSIONS.VIEW_COST_PRICE);
@@ -378,8 +380,15 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   // the mount-time value: refresh it hourly, which re-subscribes the query with a current window.
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
-    const timer = setInterval(() => setNowMs(Date.now()), NOW_REFRESH_MS);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        setNowMs(Date.now());
+        schedule();
+      }, Math.min(NOW_REFRESH_MS, msUntilAmmanMidnight(Date.now())));
+    };
+    schedule();
+    return () => clearTimeout(timer);
   }, []);
   const visible = allowed && accountingIncluded;
   const statement = useQuery(api.supplierStatement.outstanding, visible ? { orgId, supplierId, nowMs } : "skip");
@@ -388,14 +397,14 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   if (!allowed) return null;
   if (subscription !== undefined && !accountingIncluded) return <SupplierStatementPlanGate />;
   return (
-    <Card className="min-w-0 shadow-sm"><CardHeader className="pb-3"><h2 className="text-lg font-semibold">{translate("SuppliersAccountActivity")}</h2></CardHeader><CardContent>
-      <Tabs defaultValue="outstanding">
+    <Card dir={dir} className="min-w-0 shadow-sm"><CardHeader className="pb-3"><h2 className="text-lg font-semibold">{translate("SuppliersAccountActivity")}</h2></CardHeader><CardContent>
+      <Tabs dir={dir} defaultValue="outstanding">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="outstanding">{translate("SuppliersTabOutstanding")}</TabsTrigger>
           <TabsTrigger value="settled">{translate("SuppliersTabSettled")}</TabsTrigger>
           <TabsTrigger value="payments">{translate("SuppliersTabPayments")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="outstanding" className="space-y-6"><SupplierAttentionSection orgId={orgId} supplierId={supplierId} /><SupplierStatementView statement={statement} /></TabsContent>
+        <TabsContent value="outstanding" className="space-y-6"><SupplierAttentionSection orgId={orgId} supplierId={supplierId} enabled={visible} nowMs={nowMs} /><SupplierStatementView statement={statement} /></TabsContent>
         <TabsContent value="settled"><SupplierSettledView settled={settled} /></TabsContent>
         <TabsContent value="payments">{recon === undefined ? <output className="block py-4">{translate("SuppliersStmtLoading")}<Skeleton className="mt-3 h-24" /></output> : <SupplierReconView recon={recon} />}</TabsContent>
       </Tabs>

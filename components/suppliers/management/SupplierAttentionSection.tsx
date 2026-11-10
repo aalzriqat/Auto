@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { getCodedErrorMessage } from "@/lib/errors";
 import { interpolate } from "@/lib/i18n/interpolate";
@@ -44,7 +43,7 @@ function AttentionItem({ row }: Readonly<{ row: Row }>) {
 
 /** Ported attention labels and amounts. A page is never presented as a full count or total. */
 export function SupplierAttentionView({ data, kind, hasPrevious, onNext, onPrevious }: Readonly<{
-  data: AttentionData | undefined; kind: Kind; hasPrevious: boolean; onNext: () => void; onPrevious: () => void;
+  data: AttentionData | undefined; kind: Kind; hasPrevious: boolean; onNext: (cursor: string) => void; onPrevious: () => void;
 }>) {
   const translate = useTranslate();
   const title = translate(KIND_KEY[kind]);
@@ -63,7 +62,7 @@ export function SupplierAttentionView({ data, kind, hasPrevious, onNext, onPrevi
     </>}
     <div className="flex flex-wrap gap-2">
       {hasPrevious && <Button size="sm" variant="outline" onClick={onPrevious}>{translate("SuppliersStmtAttnPrevious")}</Button>}
-      {data && !data.isDone && !data.incompleteReason && <Button size="sm" variant="outline" onClick={onNext}>{translate("SuppliersStmtAttnNext")}</Button>}
+      {data && !data.isDone && !data.incompleteReason && <Button size="sm" variant="outline" onClick={() => onNext(data.continueCursor)}>{translate("SuppliersStmtAttnNext")}</Button>}
     </div>
   </section>;
 }
@@ -76,7 +75,7 @@ function AttentionGroup({ orgId, supplierId, kind, nowMs }: Readonly<Scope & { k
   const data = page ? { ...page, unlinked: unlinked ?? "INCOMPLETE" } : page;
   return <SupplierAttentionView data={data} kind={kind} hasPrevious={cursors.length > 0}
     onPrevious={() => setCursors(previous => previous.slice(0, -1))}
-    onNext={() => { if (data && !data.isDone && !data.incompleteReason) setCursors(previous => [...previous, data.continueCursor]); }} />;
+    onNext={nextCursor => setCursors(previous => [...previous, nextCursor])} />;
 }
 
 export function SupplierAttentionError({ error }: Readonly<{ error: unknown }>) {
@@ -84,30 +83,12 @@ export function SupplierAttentionError({ error }: Readonly<{ error: unknown }>) 
   return <p role="alert" className="py-3 text-sm text-destructive">{getCodedErrorMessage(error, translate) ?? translate("ServerError_SUPPLIER_ATTENTION_UNAVAILABLE")}</p>;
 }
 
-function refreshDelay(nowMs: number): number {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Amman", hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(nowMs);
-  const part = (name: string) => Number(parts.find(entry => entry.type === name)?.value ?? 0);
-  const elapsed = (part("hour") * 3600 + part("minute") * 60 + part("second")) * 1000 + new Date(nowMs).getMilliseconds();
-  return Math.min(3_600_000, Math.max(1, 86_400_000 - elapsed));
-}
-
-function AttentionBody(props: Readonly<Scope>) {
+function AttentionBody(props: Readonly<Scope & { enabled: boolean; nowMs: number }>) {
   const translate = useTranslate();
   const { dir } = useLanguage();
-  const { hasPermission, isLoading } = usePermissions();
-  const allowed = !isLoading && hasPermission("view:finance") && hasPermission("view:cost_price");
-  const subscription = useQuery(api.subscriptions.getMySubscription, allowed ? { orgId: props.orgId } : "skip");
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    // Refresh at the next Amman day boundary or within one hour, whichever comes first.
-    const timer = setTimeout(() => setNowMs(Date.now()), refreshDelay(Date.now()));
-    return () => clearTimeout(timer);
-  }, [nowMs]);
-  if (!allowed) return null;
-  if (subscription === undefined) return <output className="block py-3">{translate("SuppliersStmtLoading")}</output>;
-  if (subscription?.planDetails?.gates?.accounting !== true) return <p role="note">{translate("SuppliersStmtPlanGate")}</p>;
+  if (!props.enabled) return null;
   const group = (kind: Kind) => <QueryErrorBoundary key={`${props.orgId}:${props.supplierId}:${kind}`} render={error => <SupplierAttentionError error={error} />}>
-    <AttentionGroup {...props} kind={kind} nowMs={nowMs} />
+    <AttentionGroup {...props} kind={kind} nowMs={props.nowMs} />
   </QueryErrorBoundary>;
   return <Card dir={dir} className="min-w-0 shadow-sm">
     <CardHeader><h2 className="text-lg font-semibold">{translate("SuppliersStmtAttnTitle")}</h2>
@@ -124,6 +105,6 @@ function AttentionBody(props: Readonly<Scope>) {
   </Card>;
 }
 
-export function SupplierAttentionSection(props: Readonly<Scope>) {
+export function SupplierAttentionSection(props: Readonly<Scope & { enabled: boolean; nowMs: number }>) {
   return <QueryErrorBoundary key={`${props.orgId}:${props.supplierId}`} render={error => <SupplierAttentionError error={error} />}><AttentionBody {...props} /></QueryErrorBoundary>;
 }
