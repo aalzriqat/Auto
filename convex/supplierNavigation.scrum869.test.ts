@@ -398,7 +398,6 @@ describe("supplier navigation by canonical id", () => {
       kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
     }]);
     expect(JSON.stringify(result)).not.toContain(applicationId);
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("financed supplier sale with a deleted application exposes only the local sale without a link", async () => {
@@ -421,7 +420,6 @@ describe("supplier navigation by canonical id", () => {
       kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
     }]);
     expect(JSON.stringify(result)).not.toContain(applicationId);
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("financed supplier sale with a deleted application exposes only the local sale for a viewer without sales", async () => {
@@ -445,7 +443,6 @@ describe("supplier navigation by canonical id", () => {
     }]);
     expect(JSON.stringify(result)).not.toContain(saleId);
     expect(JSON.stringify(result)).not.toContain("941701");
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("deleted sale enrichment discloses no source, sale id or deal number", async () => {
@@ -458,7 +455,6 @@ describe("supplier navigation by canonical id", () => {
     }]);
     expect(JSON.stringify(result)).not.toContain(saleId);
     expect(JSON.stringify(result)).not.toContain("941702");
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("foreign expense enrichment discloses no source, expense id or title", async () => {
@@ -474,7 +470,6 @@ describe("supplier navigation by canonical id", () => {
     }]);
     expect(JSON.stringify(result)).not.toContain(expenseId);
     expect(JSON.stringify(result)).not.toContain("Synthetic foreign transport 941");
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("deleted expense enrichment discloses no source, expense id or title", async () => {
@@ -490,7 +485,6 @@ describe("supplier navigation by canonical id", () => {
     }]);
     expect(JSON.stringify(result)).not.toContain(expenseId);
     expect(JSON.stringify(result)).not.toContain("Synthetic deleted transport 941");
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("foreign opening draft enrichment discloses no source or draft id", async () => {
@@ -502,8 +496,6 @@ describe("supplier navigation by canonical id", () => {
       role: "AP", occurredAt: NOW, counterparty: "Synthetic opening supplier", source: null, vehicleSource: null,
     }]);
     expect(JSON.stringify(result)).not.toContain(draftId);
-    expect(JSON.stringify(result)).not.toContain("Synthetic foreign opening 941");
-    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
   });
 
   test("missing target permissions preserve labels without links and foreign or deleted targets disclose no label", async () => {
@@ -813,4 +805,467 @@ describe("supplier navigation by canonical id", () => {
   });
 
 
+});
+
+
+// SCRUM-941 round 5: cells seed and read back their own state before the public query.
+type NavigationCell = Readonly<Record<string, string>>;
+type NavigationTarget = { orgId?: Doc<"organizations">["_id"]; isDeleted?: boolean } | null;
+
+function assertNavigationTarget(doc: NavigationTarget, state: string, s: Seed, message: string) {
+  if (state === "missing") { expect(doc, message).toBeNull(); return; }
+  expect(doc, message).not.toBeNull();
+  expect(doc?.orgId, message).toBe(state === "foreign" ? s.foreignOrg : s.orgId);
+  expect(doc?.isDeleted === true, message).toBe(state === "deleted");
+}
+
+async function navigationCell(door: string, cell: NavigationCell) {
+  const message = `${door}: ${JSON.stringify(cell)}`;
+  const values: Readonly<Record<string, readonly string[]>> = {
+    shape: ["native", "cash", "financed", "expense"], target: ["local", "foreign", "deleted", "missing"],
+    dealNumber: ["with", "without"], vehicle: ["local", "hidden"],
+    viewSales: ["with", "without"], viewVehicles: ["with", "without"], manageFinance: ["with", "without"],
+    status: ["POSTED", "PENDING_APPROVAL", "REJECTED", "VOIDED"],
+  };
+  for (const [axis, value] of Object.entries(cell)) expect(values[axis], message).toContain(value);
+  const permissions = ["view:finance", "view:cost_price", ...(cell.viewSales === "with" ? ["view:sales"] : []),
+    ...(cell.viewVehicles === "with" ? ["view:vehicles"] : []), ...(cell.manageFinance === "with" ? ["manage:finance"] : [])];
+  const s = await seed(permissions);
+  const opening = door.startsWith("opening");
+  const shape = cell.shape ?? (opening ? "opening" : "expense");
+  const vehicleDoor = door === "expense vehicle lookup" || door === "native or sale vehicle lookup";
+  const vehicleState = vehicleDoor ? cell.target : cell.vehicle === "hidden" ? "foreign" : "local";
+  let sale: Awaited<ReturnType<typeof financedSale>> | null = null;
+  let expenseId: Doc<"expenses">["_id"] | null = null;
+  let draftId: Doc<"openingBalanceDrafts">["_id"] | null = null;
+  let obligationId: Doc<"vehicleSupplierPayables">["_id"] | Doc<"vehicleSupplierReceivables">["_id"] | Doc<"supplierCostRecoveries">["_id"];
+  if (opening) {
+    draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId,
+      status: cell.status as Doc<"openingBalanceDrafts">["status"], lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW }));
+    obligationId = await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { orgId: s.orgId, supplierId: s.supplierId,
+      sourcedFromName: "Synthetic opening supplier", amountDue: 10, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId,
+      createdAt: NOW, updatedAt: NOW, origin: "OPENING", openingBalanceDraftId: draftId!, openingRowKey: "AP1",
+      openingKind: "SUPPLIER_PAYABLE", title: "Synthetic local opening invoice" }));
+  } else if (shape === "expense") {
+    expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId,
+      title: "Synthetic vehicle transport", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
+    obligationId = await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId,
+      vehicleId: s.vehicleId, expenseId: expenseId!, sourceEventKey: "round-five-cell", sourcedFromName: "Synthetic supplier bearer",
+      amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0,
+      createdBy: s.userId, createdAt: NOW, updatedAt: NOW }));
+  } else if (shape === "native") {
+    obligationId = await payable(s);
+  } else {
+    sale = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(sale!.saleId, { dealNumber: cell.dealNumber === "without" ? undefined : 941,
+      ...(shape === "cash" ? { applicationId: undefined } : {}) }));
+    const rows = await s.t.run(ctx => ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(2));
+    expect(rows.length, message).toBe(1);
+    obligationId = rows[0]!._id;
+  }
+  await s.t.run(async ctx => {
+    if (sale) {
+      const doc = await ctx.db.get(sale.saleId);
+      expect(doc?.dealNumber, message).toBe(cell.dealNumber === "without" ? undefined : 941);
+      expect(doc?.applicationId, message).toBe(shape === "cash" ? undefined : sale.applicationId);
+    }
+    if (draftId) expect((await ctx.db.get(draftId))?.status, message).toBe(cell.status);
+    if (shape === "native") expect(await ctx.db.query("sales").take(1), message).toStrictEqual([]);
+  });
+  if (!opening && vehicleState !== "local") {
+    if (vehicleState === "missing") await s.t.run(ctx => ctx.db.delete(s.vehicleId));
+    else await hideVehicle(s, vehicleState === "deleted" ? "deleted" : "foreign");
+  }
+  const targetId = vehicleDoor ? s.vehicleId : opening ? draftId : door === "application lookup" ? sale?.applicationId : shape === "expense" ? expenseId : sale?.saleId;
+  if (!vehicleDoor && cell.target !== "local") {
+    expect(targetId, message).toBeTruthy();
+    if (cell.target === "missing") await s.t.run(ctx => ctx.db.delete(targetId!));
+    else await s.t.run(ctx => ctx.db.patch(targetId!, cell.target === "foreign" ? { orgId: s.foreignOrg } : { isDeleted: true }));
+  }
+  // Read-back assertions precede the query: an impossible or mis-seeded cell fails here.
+  await s.t.run(async ctx => {
+    expect((await ctx.db.get(s.roleId))?.permissions, message).toStrictEqual(permissions);
+    const obligation = await ctx.db.get(obligationId);
+    expect(obligation, message).not.toBeNull();
+    expect(obligation && "vehicleId" in obligation, message).toBe(!opening);
+    if (!opening) expect(obligation && "origin" in obligation ? obligation.origin : undefined, message).not.toBe("OPENING");
+    if (shape !== "expense") expect(obligation && "expenseId" in obligation, message).toBe(false);
+    if (opening) expect(obligation, message).toMatchObject({ origin: "OPENING", openingBalanceDraftId: draftId });
+    else if (shape === "expense") expect(obligation, message).toMatchObject({ expenseId, vehicleId: s.vehicleId });
+    else expect(obligation, message).toMatchObject({ vehicleId: s.vehicleId, ...(sale ? { saleId: sale.saleId } : {}) });
+    if (!opening) assertNavigationTarget(await ctx.db.get(s.vehicleId), vehicleState, s, message);
+    if (targetId) assertNavigationTarget(await ctx.db.get(targetId), cell.target, s, message);
+    if (sale) {
+      const doc = await ctx.db.get(sale.saleId);
+      if (!(door === "sale lookup" && cell.target === "missing")) {
+        expect(doc?.dealNumber, message).toBe(cell.dealNumber === "without" ? undefined : 941);
+        expect(doc?.applicationId, message).toBe(shape === "cash" ? undefined : sale.applicationId);
+      }
+      if (door !== "application lookup") assertNavigationTarget(await ctx.db.get(sale.applicationId), "local", s, message);
+    }
+    if (draftId && cell.target !== "missing") expect((await ctx.db.get(draftId))?.status, message).toBe(cell.status);
+    if (shape === "native") expect(obligation && "saleId" in obligation ? obligation.saleId : undefined, message).toBeUndefined();
+  });
+  const result = await outstanding(s);
+  const rows = opening || shape === "native" ? result.payable.rows : result.receivable.rows;
+  const visibleVehicle = vehicleState === "local";
+  const vehicleSource = visibleVehicle ? { kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry",
+    href: cell.viewVehicles === "with" ? `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` : null } : null;
+  let source: object | null = null;
+  let separateVehicle: object | null = null;
+  if (opening) {
+    if (cell.target === "local" && cell.status === "POSTED") source = { kind: "OPENING", id: draftId,
+      label: "Synthetic local opening invoice", href: cell.manageFinance === "with" ? `/${s.orgId}/accounting?section=settings` : null };
+  } else if (shape === "expense") {
+    if (door !== "expense lookup" || cell.target === "local") {
+      source = { kind: "EXPENSE", id: expenseId, label: "Synthetic vehicle transport", href: null };
+      separateVehicle = vehicleSource;
+    }
+  } else if (shape === "native") source = vehicleSource;
+  else if (sale && (door !== "sale lookup" || cell.target === "local")) {
+    const applicationVisible = shape === "financed" && (door !== "application lookup" || cell.target === "local");
+    const suffix = visibleVehicle ? "2024 Toyota Camry" : sale.saleId;
+    source = { kind: applicationVisible ? "APPLICATION" : "SALE", id: applicationVisible ? sale.applicationId : sale.saleId,
+      label: cell.dealNumber === "without" ? suffix : `#941 · ${suffix}`,
+      href: cell.viewSales === "with" && (shape === "cash" || applicationVisible) ?
+        (applicationVisible ? `/${s.orgId}/applications/${sale.applicationId}/deal` : `/${s.orgId}/sales/${sale.saleId}/deal`) : null };
+  }
+  expect(rows.map(row => row.context), message).toStrictEqual([{
+    role: opening || shape === "native" ? "AP" : "AR", occurredAt: NOW,
+    counterparty: opening ? "Synthetic opening supplier" : shape === "native" ? "Original supplier snapshot" : shape === "expense" ? "Synthetic supplier bearer" : "Synthetic supplier payer",
+    source, vehicleSource: separateVehicle,
+  }]);
+}
+
+async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[]) {
+  for (const tuple of cells) {
+    expect(tuple.length, `${door}: ${JSON.stringify(tuple)}`).toBe(axes.length);
+    await navigationCell(door, Object.fromEntries(axes.map((axis, index) => [axis, tuple[index]!])));
+  }
+}
+
+test("sale lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("sale lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
+    ["cash", "foreign", "with", "with", "local"],
+    ["cash", "foreign", "with", "with", "hidden"],
+    ["cash", "foreign", "with", "without", "local"],
+    ["cash", "foreign", "with", "without", "hidden"],
+    ["cash", "foreign", "without", "with", "local"],
+    ["cash", "foreign", "without", "with", "hidden"],
+    ["cash", "foreign", "without", "without", "local"],
+    ["cash", "foreign", "without", "without", "hidden"],
+    ["financed", "foreign", "with", "with", "local"],
+    ["financed", "foreign", "with", "with", "hidden"],
+    ["financed", "foreign", "with", "without", "local"],
+    ["financed", "foreign", "with", "without", "hidden"],
+    ["financed", "foreign", "without", "with", "local"],
+    ["financed", "foreign", "without", "with", "hidden"],
+    ["financed", "foreign", "without", "without", "local"],
+    ["financed", "foreign", "without", "without", "hidden"],
+  ]);
+});
+
+test("sale lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("sale lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
+    ["cash", "local", "with", "with", "local"],
+    ["cash", "local", "with", "with", "hidden"],
+    ["cash", "local", "with", "without", "local"],
+    ["cash", "local", "with", "without", "hidden"],
+    ["cash", "local", "without", "with", "local"],
+    ["cash", "local", "without", "with", "hidden"],
+    ["cash", "local", "without", "without", "local"],
+    ["cash", "local", "without", "without", "hidden"],
+    ["cash", "deleted", "with", "with", "local"],
+    ["cash", "deleted", "with", "with", "hidden"],
+    ["cash", "deleted", "with", "without", "local"],
+    ["cash", "deleted", "with", "without", "hidden"],
+    ["cash", "deleted", "without", "with", "local"],
+    ["cash", "deleted", "without", "with", "hidden"],
+    ["cash", "deleted", "without", "without", "local"],
+    ["cash", "deleted", "without", "without", "hidden"],
+    ["cash", "missing", "with", "with", "local"],
+    ["cash", "missing", "with", "with", "hidden"],
+    ["cash", "missing", "with", "without", "local"],
+    ["cash", "missing", "with", "without", "hidden"],
+    ["cash", "missing", "without", "with", "local"],
+    ["cash", "missing", "without", "with", "hidden"],
+    ["cash", "missing", "without", "without", "local"],
+    ["cash", "missing", "without", "without", "hidden"],
+    ["financed", "local", "with", "with", "local"],
+    ["financed", "local", "with", "with", "hidden"],
+    ["financed", "local", "with", "without", "local"],
+    ["financed", "local", "with", "without", "hidden"],
+    ["financed", "local", "without", "with", "local"],
+    ["financed", "local", "without", "with", "hidden"],
+    ["financed", "local", "without", "without", "local"],
+    ["financed", "local", "without", "without", "hidden"],
+    ["financed", "deleted", "with", "with", "local"],
+    ["financed", "deleted", "with", "with", "hidden"],
+    ["financed", "deleted", "with", "without", "local"],
+    ["financed", "deleted", "with", "without", "hidden"],
+    ["financed", "deleted", "without", "with", "local"],
+    ["financed", "deleted", "without", "with", "hidden"],
+    ["financed", "deleted", "without", "without", "local"],
+    ["financed", "deleted", "without", "without", "hidden"],
+    ["financed", "missing", "with", "with", "local"],
+    ["financed", "missing", "with", "with", "hidden"],
+    ["financed", "missing", "with", "without", "local"],
+    ["financed", "missing", "with", "without", "hidden"],
+    ["financed", "missing", "without", "with", "local"],
+    ["financed", "missing", "without", "with", "hidden"],
+    ["financed", "missing", "without", "without", "local"],
+    ["financed", "missing", "without", "without", "hidden"],
+  ]);
+});
+
+test("sales link gate checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("sales link gate", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
+    ["cash", "local", "with", "with", "local"],
+    ["cash", "local", "with", "with", "hidden"],
+    ["cash", "local", "with", "without", "local"],
+    ["cash", "local", "with", "without", "hidden"],
+    ["cash", "local", "without", "with", "local"],
+    ["cash", "local", "without", "with", "hidden"],
+    ["cash", "local", "without", "without", "local"],
+    ["cash", "local", "without", "without", "hidden"],
+    ["financed", "local", "with", "with", "local"],
+    ["financed", "local", "with", "with", "hidden"],
+    ["financed", "local", "with", "without", "local"],
+    ["financed", "local", "with", "without", "hidden"],
+    ["financed", "local", "without", "with", "local"],
+    ["financed", "local", "without", "with", "hidden"],
+    ["financed", "local", "without", "without", "local"],
+    ["financed", "local", "without", "without", "hidden"],
+  ]);
+});
+
+test("application lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("application lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
+    ["financed", "foreign", "with", "with", "local"],
+    ["financed", "foreign", "with", "with", "hidden"],
+    ["financed", "foreign", "with", "without", "local"],
+    ["financed", "foreign", "with", "without", "hidden"],
+    ["financed", "foreign", "without", "with", "local"],
+    ["financed", "foreign", "without", "with", "hidden"],
+    ["financed", "foreign", "without", "without", "local"],
+    ["financed", "foreign", "without", "without", "hidden"],
+  ]);
+});
+
+test("application lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("application lookup", ["shape", "target", "viewSales", "dealNumber", "vehicle"], [
+    ["financed", "local", "with", "with", "local"],
+    ["financed", "local", "with", "with", "hidden"],
+    ["financed", "local", "with", "without", "local"],
+    ["financed", "local", "with", "without", "hidden"],
+    ["financed", "local", "without", "with", "local"],
+    ["financed", "local", "without", "with", "hidden"],
+    ["financed", "local", "without", "without", "local"],
+    ["financed", "local", "without", "without", "hidden"],
+    ["financed", "missing", "with", "with", "local"],
+    ["financed", "missing", "with", "with", "hidden"],
+    ["financed", "missing", "with", "without", "local"],
+    ["financed", "missing", "with", "without", "hidden"],
+    ["financed", "missing", "without", "with", "local"],
+    ["financed", "missing", "without", "with", "hidden"],
+    ["financed", "missing", "without", "without", "local"],
+    ["financed", "missing", "without", "without", "hidden"],
+  ]);
+});
+
+test("opening lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("opening lookup", ["target", "status", "manageFinance"], [
+    ["foreign", "POSTED", "with"],
+    ["foreign", "POSTED", "without"],
+    ["foreign", "PENDING_APPROVAL", "with"],
+    ["foreign", "PENDING_APPROVAL", "without"],
+    ["foreign", "REJECTED", "with"],
+    ["foreign", "REJECTED", "without"],
+    ["foreign", "VOIDED", "with"],
+    ["foreign", "VOIDED", "without"],
+  ]);
+});
+
+test("opening lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("opening lookup", ["target", "status", "manageFinance"], [
+    ["local", "POSTED", "with"],
+    ["local", "POSTED", "without"],
+    ["local", "PENDING_APPROVAL", "with"],
+    ["local", "PENDING_APPROVAL", "without"],
+    ["local", "REJECTED", "with"],
+    ["local", "REJECTED", "without"],
+    ["local", "VOIDED", "with"],
+    ["local", "VOIDED", "without"],
+    ["missing", "POSTED", "with"],
+    ["missing", "POSTED", "without"],
+    ["missing", "PENDING_APPROVAL", "with"],
+    ["missing", "PENDING_APPROVAL", "without"],
+    ["missing", "REJECTED", "with"],
+    ["missing", "REJECTED", "without"],
+    ["missing", "VOIDED", "with"],
+    ["missing", "VOIDED", "without"],
+  ]);
+});
+
+test("opening status gate checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("opening status gate", ["target", "status", "manageFinance"], [
+    ["local", "POSTED", "with"],
+    ["local", "POSTED", "without"],
+    ["local", "PENDING_APPROVAL", "with"],
+    ["local", "PENDING_APPROVAL", "without"],
+    ["local", "REJECTED", "with"],
+    ["local", "REJECTED", "without"],
+    ["local", "VOIDED", "with"],
+    ["local", "VOIDED", "without"],
+  ]);
+});
+
+test("opening link gate checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("opening link gate", ["target", "status", "manageFinance"], [
+    ["local", "POSTED", "with"],
+    ["local", "POSTED", "without"],
+  ]);
+});
+
+test("expense lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("expense lookup", ["target", "vehicle", "viewVehicles"], [
+    ["foreign", "local", "with"],
+    ["foreign", "local", "without"],
+    ["foreign", "hidden", "with"],
+    ["foreign", "hidden", "without"],
+  ]);
+});
+
+test("expense lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("expense lookup", ["target", "vehicle", "viewVehicles"], [
+    ["local", "local", "with"],
+    ["local", "local", "without"],
+    ["local", "hidden", "with"],
+    ["local", "hidden", "without"],
+    ["deleted", "local", "with"],
+    ["deleted", "local", "without"],
+    ["deleted", "hidden", "with"],
+    ["deleted", "hidden", "without"],
+    ["missing", "local", "with"],
+    ["missing", "local", "without"],
+    ["missing", "hidden", "with"],
+    ["missing", "hidden", "without"],
+  ]);
+});
+
+test("expense vehicle lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("expense vehicle lookup", ["target", "viewVehicles"], [
+    ["foreign", "with"],
+    ["foreign", "without"],
+  ]);
+});
+
+test("expense vehicle lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("expense vehicle lookup", ["target", "viewVehicles"], [
+    ["local", "with"],
+    ["local", "without"],
+    ["deleted", "with"],
+    ["deleted", "without"],
+    ["missing", "with"],
+    ["missing", "without"],
+  ]);
+});
+
+test("native or sale vehicle lookup refuses foreign targets across every navigation condition", async () => {
+  await navigationCells("native or sale vehicle lookup", ["shape", "target", "viewSales", "viewVehicles", "dealNumber"], [
+    ["native", "foreign", "with", "with", "without"],
+    ["native", "foreign", "with", "without", "without"],
+    ["native", "foreign", "without", "with", "without"],
+    ["native", "foreign", "without", "without", "without"],
+    ["cash", "foreign", "with", "with", "with"],
+    ["cash", "foreign", "with", "with", "without"],
+    ["cash", "foreign", "with", "without", "with"],
+    ["cash", "foreign", "with", "without", "without"],
+    ["cash", "foreign", "without", "with", "with"],
+    ["cash", "foreign", "without", "with", "without"],
+    ["cash", "foreign", "without", "without", "with"],
+    ["cash", "foreign", "without", "without", "without"],
+    ["financed", "foreign", "with", "with", "with"],
+    ["financed", "foreign", "with", "with", "without"],
+    ["financed", "foreign", "with", "without", "with"],
+    ["financed", "foreign", "with", "without", "without"],
+    ["financed", "foreign", "without", "with", "with"],
+    ["financed", "foreign", "without", "with", "without"],
+    ["financed", "foreign", "without", "without", "with"],
+    ["financed", "foreign", "without", "without", "without"],
+  ]);
+});
+
+test("native or sale vehicle lookup checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("native or sale vehicle lookup", ["shape", "target", "viewSales", "viewVehicles", "dealNumber"], [
+    ["native", "local", "with", "with", "without"],
+    ["native", "local", "with", "without", "without"],
+    ["native", "local", "without", "with", "without"],
+    ["native", "local", "without", "without", "without"],
+    ["native", "deleted", "with", "with", "without"],
+    ["native", "deleted", "with", "without", "without"],
+    ["native", "deleted", "without", "with", "without"],
+    ["native", "deleted", "without", "without", "without"],
+    ["native", "missing", "with", "with", "without"],
+    ["native", "missing", "with", "without", "without"],
+    ["native", "missing", "without", "with", "without"],
+    ["native", "missing", "without", "without", "without"],
+    ["cash", "local", "with", "with", "with"],
+    ["cash", "local", "with", "with", "without"],
+    ["cash", "local", "with", "without", "with"],
+    ["cash", "local", "with", "without", "without"],
+    ["cash", "local", "without", "with", "with"],
+    ["cash", "local", "without", "with", "without"],
+    ["cash", "local", "without", "without", "with"],
+    ["cash", "local", "without", "without", "without"],
+    ["cash", "deleted", "with", "with", "with"],
+    ["cash", "deleted", "with", "with", "without"],
+    ["cash", "deleted", "with", "without", "with"],
+    ["cash", "deleted", "with", "without", "without"],
+    ["cash", "deleted", "without", "with", "with"],
+    ["cash", "deleted", "without", "with", "without"],
+    ["cash", "deleted", "without", "without", "with"],
+    ["cash", "deleted", "without", "without", "without"],
+    ["cash", "missing", "with", "with", "with"],
+    ["cash", "missing", "with", "with", "without"],
+    ["cash", "missing", "with", "without", "with"],
+    ["cash", "missing", "with", "without", "without"],
+    ["cash", "missing", "without", "with", "with"],
+    ["cash", "missing", "without", "with", "without"],
+    ["cash", "missing", "without", "without", "with"],
+    ["cash", "missing", "without", "without", "without"],
+    ["financed", "local", "with", "with", "with"],
+    ["financed", "local", "with", "with", "without"],
+    ["financed", "local", "with", "without", "with"],
+    ["financed", "local", "with", "without", "without"],
+    ["financed", "local", "without", "with", "with"],
+    ["financed", "local", "without", "with", "without"],
+    ["financed", "local", "without", "without", "with"],
+    ["financed", "local", "without", "without", "without"],
+    ["financed", "deleted", "with", "with", "with"],
+    ["financed", "deleted", "with", "with", "without"],
+    ["financed", "deleted", "with", "without", "with"],
+    ["financed", "deleted", "with", "without", "without"],
+    ["financed", "deleted", "without", "with", "with"],
+    ["financed", "deleted", "without", "with", "without"],
+    ["financed", "deleted", "without", "without", "with"],
+    ["financed", "deleted", "without", "without", "without"],
+    ["financed", "missing", "with", "with", "with"],
+    ["financed", "missing", "with", "with", "without"],
+    ["financed", "missing", "with", "without", "with"],
+    ["financed", "missing", "with", "without", "without"],
+    ["financed", "missing", "without", "with", "with"],
+    ["financed", "missing", "without", "with", "without"],
+    ["financed", "missing", "without", "without", "with"],
+    ["financed", "missing", "without", "without", "without"],
+  ]);
+});
+
+test("vehicle link gate checks local deleted and missing targets across every navigation condition", async () => {
+  await navigationCells("vehicle link gate", ["shape", "target", "viewVehicles"], [
+    ["native", "local", "with"],
+    ["native", "local", "without"],
+    ["expense", "local", "with"],
+    ["expense", "local", "without"],
+  ]);
 });

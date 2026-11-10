@@ -1,0 +1,102 @@
+{
+  "id": "supplier-nav-r5-opening-lookup-tenancy",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round5-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "opening-lookup",
+        "axes": [
+          "target",
+          "status",
+          "manageFinance"
+        ],
+        "cells": [
+          [
+            "foreign",
+            "POSTED",
+            "with"
+          ],
+          [
+            "foreign",
+            "POSTED",
+            "without"
+          ],
+          [
+            "foreign",
+            "PENDING_APPROVAL",
+            "with"
+          ],
+          [
+            "foreign",
+            "PENDING_APPROVAL",
+            "without"
+          ],
+          [
+            "foreign",
+            "REJECTED",
+            "with"
+          ],
+          [
+            "foreign",
+            "REJECTED",
+            "without"
+          ],
+          [
+            "foreign",
+            "VOIDED",
+            "with"
+          ],
+          [
+            "foreign",
+            "VOIDED",
+            "without"
+          ]
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesSeededCell",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "opening lookup refuses foreign targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "7a0eb2f1875f81b1814d4081b22474b313ca9a4f4dd31eae88a2070f7e4ded6a"
+}

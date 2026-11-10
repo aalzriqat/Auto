@@ -1,0 +1,176 @@
+{
+  "id": "supplier-nav-r5-sale-lookup-tenancy",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round5-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "sale-lookup",
+        "axes": [
+          "shape",
+          "target",
+          "viewSales",
+          "dealNumber",
+          "vehicle"
+        ],
+        "cells": [
+          [
+            "cash",
+            "foreign",
+            "with",
+            "with",
+            "local"
+          ],
+          [
+            "cash",
+            "foreign",
+            "with",
+            "with",
+            "hidden"
+          ],
+          [
+            "cash",
+            "foreign",
+            "with",
+            "without",
+            "local"
+          ],
+          [
+            "cash",
+            "foreign",
+            "with",
+            "without",
+            "hidden"
+          ],
+          [
+            "cash",
+            "foreign",
+            "without",
+            "with",
+            "local"
+          ],
+          [
+            "cash",
+            "foreign",
+            "without",
+            "with",
+            "hidden"
+          ],
+          [
+            "cash",
+            "foreign",
+            "without",
+            "without",
+            "local"
+          ],
+          [
+            "cash",
+            "foreign",
+            "without",
+            "without",
+            "hidden"
+          ],
+          [
+            "financed",
+            "foreign",
+            "with",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "foreign",
+            "with",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "foreign",
+            "with",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "foreign",
+            "with",
+            "without",
+            "hidden"
+          ],
+          [
+            "financed",
+            "foreign",
+            "without",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "foreign",
+            "without",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "foreign",
+            "without",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "foreign",
+            "without",
+            "without",
+            "hidden"
+          ]
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesSeededCell",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "sale lookup refuses foreign targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "433a2f6cc134395c0379c5444b6e601efed6903ddc6dade054dc075ca1dc42e4"
+}

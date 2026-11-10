@@ -1,0 +1,122 @@
+{
+  "id": "supplier-nav-r5-expense-lookup-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round5-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "expense-lookup",
+        "axes": [
+          "target",
+          "vehicle",
+          "viewVehicles"
+        ],
+        "cells": [
+          [
+            "local",
+            "local",
+            "with"
+          ],
+          [
+            "local",
+            "local",
+            "without"
+          ],
+          [
+            "local",
+            "hidden",
+            "with"
+          ],
+          [
+            "local",
+            "hidden",
+            "without"
+          ],
+          [
+            "deleted",
+            "local",
+            "with"
+          ],
+          [
+            "deleted",
+            "local",
+            "without"
+          ],
+          [
+            "deleted",
+            "hidden",
+            "with"
+          ],
+          [
+            "deleted",
+            "hidden",
+            "without"
+          ],
+          [
+            "missing",
+            "local",
+            "with"
+          ],
+          [
+            "missing",
+            "local",
+            "without"
+          ],
+          [
+            "missing",
+            "hidden",
+            "with"
+          ],
+          [
+            "missing",
+            "hidden",
+            "without"
+          ]
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesSeededCell",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense lookup checks local deleted and missing targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "7e8b5c1453acd473d79ffba30dcd7d0d01f1e5807528b76a4908942c797813e3"
+}

@@ -1,0 +1,176 @@
+{
+  "id": "supplier-nav-r5-application-lookup-permission",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round5-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "application-lookup",
+        "axes": [
+          "shape",
+          "target",
+          "viewSales",
+          "dealNumber",
+          "vehicle"
+        ],
+        "cells": [
+          [
+            "financed",
+            "local",
+            "with",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "local",
+            "with",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "local",
+            "with",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "local",
+            "with",
+            "without",
+            "hidden"
+          ],
+          [
+            "financed",
+            "local",
+            "without",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "local",
+            "without",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "local",
+            "without",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "local",
+            "without",
+            "without",
+            "hidden"
+          ],
+          [
+            "financed",
+            "missing",
+            "with",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "missing",
+            "with",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "missing",
+            "with",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "missing",
+            "with",
+            "without",
+            "hidden"
+          ],
+          [
+            "financed",
+            "missing",
+            "without",
+            "with",
+            "local"
+          ],
+          [
+            "financed",
+            "missing",
+            "without",
+            "with",
+            "hidden"
+          ],
+          [
+            "financed",
+            "missing",
+            "without",
+            "without",
+            "local"
+          ],
+          [
+            "financed",
+            "missing",
+            "without",
+            "without",
+            "hidden"
+          ]
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesSeededCell",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "application lookup checks local deleted and missing targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "9502aa4885d46bd48d4157f8adf9f479d57ce13a6b9fac95e4957d377dcc318a"
+}
