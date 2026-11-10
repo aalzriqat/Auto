@@ -1,0 +1,68 @@
+{
+  "id": "supplier-nav-financed-foreign-sales-without-vehicles-without",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round4-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "door": "native-or-sale-vehicle-lookup",
+        "shape": "financed",
+        "target": "foreign",
+        "viewSales": "without",
+        "viewVehicles": "without",
+        "permissions": [
+          "view:finance",
+          "view:cost_price"
+        ],
+        "supplierLink": "canonicalId"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "response.vehicleLabelDisclosed",
+      "value": false
+    },
+    {
+      "observable": "context.source.kind",
+      "value": "APPLICATION"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "financed sale hides its foreign vehicle label without sales and without vehicles"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "d7f52ac035d648068bf369666cb14f4146c78ffbeef82ed97058188385fe3b10"
+}

@@ -154,6 +154,39 @@ async function expectHiddenSaleVehicle(state: HiddenState, vehicles: boolean) {
   expectNoVehicleLabel(result);
 }
 
+// SCRUM-941 round 4: public-query cells, independent literal expected labels.
+async function expectVehicleCell(cell: { shape: "native" | "cash" | "financed"; target: "local" | "foreign" | "deleted"; sales: boolean; vehicles: boolean }) {
+  const s = await seed(["view:finance", "view:cost_price", ...(cell.sales ? ["view:sales"] : []), ...(cell.vehicles ? ["view:vehicles"] : [])]);
+  const ids = cell.shape === "native" ? null : await financedSale(s);
+  if (ids && cell.shape === "cash") await s.t.run(ctx => ctx.db.patch(ids.saleId, { applicationId: undefined }));
+  if (!ids) await payable(s);
+  if (cell.target !== "local") await hideVehicle(s, cell.target);
+  const result = await outstanding(s);
+  if (ids) {
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: cell.shape === "financed" ? "APPLICATION" : "SALE",
+      id: cell.shape === "financed" ? ids.applicationId : ids.saleId,
+      label: cell.target === "local" ? "#941 · 2024 Toyota Camry" : `#941 · ${ids.saleId}`,
+      href: cell.sales ? (cell.shape === "financed" ? `/${s.orgId}/applications/${ids.applicationId}/deal` : `/${s.orgId}/sales/${ids.saleId}/deal`) : null,
+    }]);
+    if (cell.target !== "local") expectNoVehicleLabel(result);
+  } else {
+    expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([cell.target === "local" ? {
+      kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry",
+      href: cell.vehicles ? `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` : null,
+    } : null]);
+    if (cell.target !== "local") expectNoVehicle(result, s);
+  }
+}
+
+async function expectUnpostedOpening(status: Exclude<Doc<"openingBalanceDrafts">["status"], "POSTED">, finance: boolean) {
+  const { s, draftId } = await openingFixture("posted", finance);
+  await s.t.run(ctx => ctx.db.patch(draftId, { status }));
+  const result = await outstanding(s);
+  expect(result.payable.rows.map(row => row.context.source)).toStrictEqual([null]);
+  expect(JSON.stringify(result)).not.toContain(draftId);
+}
+
 async function measureHandler(s: Seed, registered: unknown, args: unknown) {
   if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
   const handler = registered._handler;
@@ -666,4 +699,118 @@ describe("supplier navigation by canonical id", () => {
     await s.t.run(ctx => ctx.db.patch(id, { status: "PAID", amountPaid: 1 }));
     await expect(s.asUser.query(api.supplierStatement.settled, { orgId: s.orgId, supplierId: s.supplierId })).rejects.toThrow(expected);
   });
+  // SCRUM-941: literal titles bind the full door-axis coverage and scenario records.
+  test("local native vehicle keeps its label with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "local", sales: true, vehicles: false });
+  });
+
+  test("local native vehicle keeps its label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "local", sales: false, vehicles: true });
+  });
+
+  test("foreign native vehicle discloses no source with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "foreign", sales: true, vehicles: true });
+  });
+
+  test("foreign native vehicle discloses no source with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "foreign", sales: true, vehicles: false });
+  });
+
+  test("deleted native vehicle discloses no source with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "deleted", sales: true, vehicles: true });
+  });
+
+  test("deleted native vehicle discloses no source with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "native", target: "deleted", sales: true, vehicles: false });
+  });
+
+  test("cash sale keeps its local vehicle label with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "local", sales: true, vehicles: true });
+  });
+
+  test("cash sale keeps its local vehicle label with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "local", sales: true, vehicles: false });
+  });
+
+  test("cash sale keeps its local vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "local", sales: false, vehicles: true });
+  });
+
+  test("cash sale hides its foreign vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "foreign", sales: false, vehicles: true });
+  });
+
+  test("cash sale hides its foreign vehicle label without sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "foreign", sales: false, vehicles: false });
+  });
+
+  test("cash sale hides its deleted vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "deleted", sales: false, vehicles: true });
+  });
+
+  test("cash sale hides its deleted vehicle label without sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "cash", target: "deleted", sales: false, vehicles: false });
+  });
+
+  test("financed sale keeps its local vehicle label with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "local", sales: true, vehicles: true });
+  });
+
+  test("financed sale keeps its local vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "local", sales: false, vehicles: true });
+  });
+
+  test("financed sale hides its foreign vehicle label with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "foreign", sales: true, vehicles: true });
+  });
+
+  test("financed sale hides its foreign vehicle label with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "foreign", sales: true, vehicles: false });
+  });
+
+  test("financed sale hides its foreign vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "foreign", sales: false, vehicles: true });
+  });
+
+  test("financed sale hides its foreign vehicle label without sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "foreign", sales: false, vehicles: false });
+  });
+
+  test("financed sale hides its deleted vehicle label with sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "deleted", sales: true, vehicles: true });
+  });
+
+  test("financed sale hides its deleted vehicle label with sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "deleted", sales: true, vehicles: false });
+  });
+
+  test("financed sale hides its deleted vehicle label without sales and with vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "deleted", sales: false, vehicles: true });
+  });
+
+  test("financed sale hides its deleted vehicle label without sales and without vehicles", async () => {
+    await expectVehicleCell({ shape: "financed", target: "deleted", sales: false, vehicles: false });
+  });
+
+  test("pending approval opening yields no source without finance management", async () => {
+    await expectUnpostedOpening("PENDING_APPROVAL", false);
+  });
+
+  test("rejected opening yields no source with finance management", async () => {
+    await expectUnpostedOpening("REJECTED", true);
+  });
+
+  test("rejected opening yields no source without finance management", async () => {
+    await expectUnpostedOpening("REJECTED", false);
+  });
+
+  test("voided opening yields no source with finance management", async () => {
+    await expectUnpostedOpening("VOIDED", true);
+  });
+
+  test("voided opening yields no source without finance management", async () => {
+    await expectUnpostedOpening("VOIDED", false);
+  });
+
+
 });

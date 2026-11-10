@@ -72,7 +72,10 @@ SALE with a null link, including for viewers without view:sales. A foreign sale,
 expense or opening draft, or a soft-deleted sale or expense, yields no source.
 The covered public-query test rows are declared in
 `scripts/intelligence/supplierNavigationDoors.test.ts`. Its census test binds
-those rows to literal test titles and counts ownership lookups and permission gates.
+those rows to literal test titles, requires the full cross product of each declared
+door's axes or an explicit reasoned exemption, and counts ownership lookups and
+permission gates. This census is a tripwire: it does not see a new door that reads
+with `readCached` or `ctx.db.get` directly.
 A missing document needs no separate ownership row: `readCached` returns null with
 or without `owned`, so a removed ownership check cannot separate the outcomes.
 Existing financed-application missing rows remain listed. openingBalanceDrafts has
