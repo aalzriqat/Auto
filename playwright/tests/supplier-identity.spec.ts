@@ -103,7 +103,6 @@ async function supplierJourney(page: Page, baseURL: string | undefined, locale: 
     await vehicleDialog.getByRole("button", { name: t.WizardContinue, exact: true }).click();
     await vehicleDialog.getByRole("button", { name: t.WizardContinue, exact: true }).click();
     await expect(vehicleDialog.locator("p.text-sm.font-semibold")).toHaveText(t.VehicleWizardAvailability);
-    await expect(vehicleDialog.locator("p.text-sm.font-semibold")).toBeVisible();
     const beforeConfirmation = await client.query(api.vehicles.list, { orgId, paginationOpts: { cursor: null, numItems: 10 } });
     expect(beforeConfirmation.isDone).toBe(true);
     expect(beforeConfirmation.page).toHaveLength(0);

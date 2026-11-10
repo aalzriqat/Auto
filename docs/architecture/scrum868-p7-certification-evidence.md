@@ -75,9 +75,9 @@ The final named-file Vitest run passed 142 tests in 11 files with
 and `scripts/regression/scenarioRecord.test.ts`. The scenario validator printed
 fingerprint `6e4c46e1d276a3493b76cc76ef4835a70d4a1f9edfc7a9de46283456593b00f6`,
 now stored in `vehicle-wizard-final-confirmation.scenario.json`. Its bugRef
-names the full tests-only red SHA. The existing vehicle supplier-intake section
-in the SCRUM-486 oracle carries a screen-control row, explicitly not backend
-financial certification.
+names the full tests-only red SHA. The SCRUM-486 oracle carries a screen-control
+row under its own SCRUM-939 heading, explicitly not backend financial
+certification.
 
 Root `pnpm typecheck` passed, including Playwright and the new fixture; it
 excludes `convex/`. Separate `pnpm typecheck:convex` passed. Touched-file ESLint
