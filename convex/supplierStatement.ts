@@ -12,7 +12,7 @@ import { createSupplierReadCache } from "./utils/supplierReadCache";
 import { paginationOptsValidator } from "convex/server";
 import { isSystemOwnerRole } from "./utils/permissions";
 import { ammanDateString } from "./utils/supplierDueDates";
-import { attentionKind, attentionPage, readAttention, unlinkedPresence } from "./utils/supplierAttention";
+import { attentionKind, attentionPage, readAttention, unlinkedPresence, unlinkedStatus } from "./utils/supplierAttention";
 
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding A/P and A/R (ADR
@@ -198,10 +198,22 @@ export const attention = query({
       }
       const nowMs = args.nowMs;
       const result = await readAttention(ctx, args, nowMs);
-      const unlinked = await unlinkedPresence(ctx, args.orgId, args.kind);
-      return { ...result, asOfDate: ammanDateString(nowMs), unlinked };
+      return { ...result, asOfDate: ammanDateString(nowMs) };
     } catch (error) {
       return supplierNavigationFailure(error, "SUPPLIER_ATTENTION_UNAVAILABLE");
     }
+  },
+});
+
+/** Organisation-wide identity warning, independently cached from each supplier's attention pages. */
+export const unlinkedAttention = query({
+  args: { orgId: v.id("organizations"), kind: attentionKind },
+  returns: v.union(v.null(), unlinkedStatus),
+  handler: async (ctx, args) => {
+    try {
+      if (!(await mayReadStatement(ctx, args.orgId))) return null;
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await unlinkedPresence(ctx, args.orgId, args.kind);
+    } catch (error) { return supplierNavigationFailure(error, "SUPPLIER_ATTENTION_UNAVAILABLE"); }
   },
 });

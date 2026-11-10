@@ -19,6 +19,10 @@ vi.mock("convex/react", async () => {
   return { useQuery: (ref: never, args: unknown) => {
     if (args === "skip") return undefined;
     if (getFunctionName(ref) === "subscriptions:getMySubscription") return world.plan === undefined ? undefined : { planDetails: { gates: { accounting: world.plan } } };
+    if (getFunctionName(ref) === "supplierStatement:unlinkedAttention") {
+      const result = typeof world.data === "function" ? world.data(args) : world.data;
+      return (result as { unlinked?: string } | undefined)?.unlinked;
+    }
     world.calls.push(args);
     if (world.failure) throw new ConvexError({ code: "SUPPLIER_ATTENTION_UNAVAILABLE", message: "private database detail" });
     return typeof world.data === "function" ? world.data(args) : world.data;

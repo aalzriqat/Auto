@@ -15,7 +15,8 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Money } from "./SupplierStatementMoney";
 import { QueryErrorBoundary, useTranslate } from "./shared";
 
-export type AttentionData = FunctionReturnType<typeof api.supplierStatement.attention>;
+type AttentionPage = FunctionReturnType<typeof api.supplierStatement.attention>;
+export type AttentionData = (NonNullable<AttentionPage> & { unlinked: "PRESENT" | "NONE" | "INCOMPLETE" }) | null;
 type Kind = "PAYABLE" | "RECEIVABLE" | "RECOVERY";
 type Row = NonNullable<AttentionData>["page"][number];
 type Scope = { orgId: Id<"organizations">; supplierId: Id<"suppliers"> };
@@ -70,7 +71,9 @@ export function SupplierAttentionView({ data, kind, hasPrevious, onNext, onPrevi
 function AttentionGroup({ orgId, supplierId, kind, nowMs }: Readonly<Scope & { kind: Kind; nowMs: number }>) {
   const [cursors, setCursors] = useState<string[]>([]);
   const cursor = cursors.at(-1) ?? null;
-  const data = useQuery(api.supplierStatement.attention, { orgId, supplierId, kind, nowMs, paginationOpts: { numItems: 25, cursor } });
+  const page = useQuery(api.supplierStatement.attention, { orgId, supplierId, kind, nowMs, paginationOpts: { numItems: 25, cursor } });
+  const unlinked = useQuery(api.supplierStatement.unlinkedAttention, { orgId, kind });
+  const data = page ? { ...page, unlinked: unlinked ?? "INCOMPLETE" } : page;
   return <SupplierAttentionView data={data} kind={kind} hasPrevious={cursors.length > 0}
     onPrevious={() => setCursors(previous => previous.slice(0, -1))}
     onNext={() => { if (data && !data.isDone && !data.incompleteReason) setCursors(previous => [...previous, data.continueCursor]); }} />;

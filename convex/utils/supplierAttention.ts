@@ -4,7 +4,7 @@ import type { Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { readObligationPage, type ObligationRow, type ObligationKind } from "./supplierObligationDue";
 import { alertStatusFor } from "./supplierDueAlertPlan";
-import { readBoundedStream } from "./transactionReadHeadroom";
+import { hasReadHeadroom } from "./transactionReadHeadroom";
 import { supportedCurrencyScale } from "./money";
 import { SupplierReadBudgetExhausted } from "./supplierReadCache";
 import { boundedCount } from "./paginationBounds";
@@ -19,7 +19,7 @@ v.object({ ...common, status: v.literal("HELD"), heldReason: v.union(v.literal("
 export const attentionPage = v.object({ page: v.array(attentionRow), complete: v.boolean(), isDone: v.boolean(), continueCursor: v.string(),
   incompleteReason: v.optional(v.union(v.literal("READ_BUDGET"), v.literal("SPLIT_REQUIRED"))),
   pageStatus: v.union(v.literal("SplitRequired"), v.literal("SplitRecommended"), v.null()), splitCursor: v.union(v.string(), v.null()),
-  asOfDate: v.string(), unlinked: v.union(v.literal("PRESENT"), v.literal("NONE"), v.literal("INCOMPLETE")) });
+  asOfDate: v.string() });
 
 function attentionOf(row: ObligationRow): Infer<typeof attentionRow> | null {
   if (supportedCurrencyScale(row.currency) === null || !Number.isSafeInteger(row.outstandingMinor) ||
@@ -74,17 +74,31 @@ export async function readAttention(ctx: QueryCtx, args: { orgId: Id<"organizati
   return { ...result, complete: args.paginationOpts.cursor === null && result.isDone && !result.pageStatus };
 }
 
+export const unlinkedStatus = v.union(v.literal("PRESENT"), v.literal("NONE"), v.literal("INCOMPLETE"));
+type Presence = Infer<typeof unlinkedStatus>;
+
+/** Existence with a bounded scan and a headroom check before each read. No absence claim after a cut. */
+async function boundedPresence<D>(ctx: QueryCtx, source: AsyncIterable<D>, qualifies: (row: D) => boolean, maxRows: number): Promise<Presence> {
+  const iterator = source[Symbol.asyncIterator]();
+  try {
+    for (let read = 0; read < maxRows; read += 1) {
+      if (!(await hasReadHeadroom(ctx))) return "INCOMPLETE";
+      const next = await iterator.next();
+      if (next.done) return "NONE";
+      if (qualifies(next.value)) return "PRESENT";
+    }
+    return "INCOMPLETE";
+  } finally { await iterator.return?.(); }
+}
+
 /** Existence only, including history. No name inference, partial count, amounts or ordinary opening creditors. */
-export async function unlinkedPresence(ctx: QueryCtx, orgId: Id<"organizations">, kind: ObligationKind): Promise<"PRESENT" | "NONE" | "INCOMPLETE"> {
+export async function unlinkedPresence(ctx: QueryCtx, orgId: Id<"organizations">, kind: ObligationKind): Promise<Presence> {
   if (kind === "PAYABLE") {
-    const read = await readBoundedStream(ctx, ctx.db.query("vehicleSupplierPayables")
-      .withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", undefined)), MAX_ROWS);
-    if (read.docs.some(row => row.origin !== "OPENING" || row.openingKind !== "OTHER_PAYABLE")) return "PRESENT";
-    return read.outOfHeadroom || read.docs.length > MAX_ROWS ? "INCOMPLETE" : "NONE";
+    const source = ctx.db.query("vehicleSupplierPayables")
+      .withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", undefined));
+    return boundedPresence(ctx, source, row => row.origin !== "OPENING" || row.openingKind !== "OTHER_PAYABLE", MAX_ROWS + 1);
   }
   const table = kind === "RECEIVABLE" ? "vehicleSupplierReceivables" : "supplierCostRecoveries";
   const source = ctx.db.query(table).withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", undefined));
-  const read = await readBoundedStream(ctx, source, 0);
-  if (read.docs.length > 0) return "PRESENT";
-  return read.outOfHeadroom ? "INCOMPLETE" : "NONE";
+  return boundedPresence(ctx, source, () => true, 1);
 }

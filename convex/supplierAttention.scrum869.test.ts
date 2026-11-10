@@ -73,8 +73,12 @@ const addReceivable = async (s: Seed, fields: Partial<Omit<Doc<"vehicleSupplierR
   );
 };
 
-const attention = (s: Seed, extra: Partial<{ supplierId: Id<"suppliers">; orgId: Id<"organizations">; kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY"; nowMs: number; paginationOpts: { numItems: number; cursor: string | null; maximumRowsRead?: number; endCursor?: string } }> = {}) =>
-  s.asUser.query(api.supplierStatement.attention, { orgId: s.orgId, supplierId: s.supplierId, kind: "PAYABLE", nowMs: Date.now(), paginationOpts: { numItems: 25, cursor: null }, ...extra });
+const attention = async (s: Seed, extra: Partial<{ supplierId: Id<"suppliers">; orgId: Id<"organizations">; kind: "PAYABLE" | "RECEIVABLE" | "RECOVERY"; nowMs: number; paginationOpts: { numItems: number; cursor: string | null; maximumRowsRead?: number; endCursor?: string } }> = {}) =>
+  {
+  const result = await s.asUser.query(api.supplierStatement.attention, { orgId: s.orgId, supplierId: s.supplierId, kind: "PAYABLE", nowMs: Date.now(), paginationOpts: { numItems: 25, cursor: null }, ...extra });
+  if (result === null) return null;
+  return { ...result, unlinked: await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: extra.orgId ?? s.orgId, kind: extra.kind ?? "PAYABLE" }) };
+};
 
 describe("SCRUM-869 supplier attention port", () => {
   test("linked payable alerts with its authoritative amount and no aggregate fields", async () => {
@@ -252,7 +256,7 @@ describe("SCRUM-869 supplier attention port", () => {
     }
     const result = await attention(s);
     expect(result).toEqual({ page: [], complete: false, isDone: false, continueCursor: "", pageStatus: null,
-      splitCursor: null, asOfDate: "2026-06-15", unlinked: "INCOMPLETE", incompleteReason: "READ_BUDGET" });
+      splitCursor: null, asOfDate: "2026-06-15", unlinked: "NONE", incompleteReason: "READ_BUDGET" });
   });
 
   test("malformed recovery money is refused by the backend rather than marked complete", async () => {
@@ -280,5 +284,38 @@ describe("SCRUM-869 supplier attention port", () => {
     expect(result?.complete).toBe(false);
     expect(result?.continueCursor).toBe("");
     expect(result?.incompleteReason).toBe("SPLIT_REQUIRED");
+  });
+});
+
+
+describe("organisation-wide unlinked attention access", () => {
+  test.each([
+    { label: "without finance", permissions: ["view:cost_price"] },
+    { label: "without cost", permissions: ["view:finance"] },
+  ])("withholds presence $label", async ({ permissions }) => {
+    const s = await seed("presence-denied", permissions);
+    await addPayable(s, { supplierId: undefined });
+    expect(await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).toEqual(null);
+  });
+  test("refuses presence without accounting plan", async () => {
+    const s = await seed("presence-plan");
+    await s.t.run(async ctx => {
+      const subscription = await ctx.db.query("subscriptions").withIndex("by_org", q => q.eq("orgId", s.orgId)).unique();
+      if (!subscription) throw new Error("Fixture subscription missing");
+      await ctx.db.patch(subscription._id, { plan: "starter" });
+    });
+    await expect(s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).rejects.toThrow();
+  });
+  test("refuses foreign organisation presence", async () => {
+    const s = await seed("presence-tenant");
+    const orgId = await s.t.run(ctx => ctx.db.insert("organizations", { name: "Other", createdAt: NOW }));
+    await expect(s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId, kind: "PAYABLE" })).rejects.toThrow(/UNAUTHORIZED/);
+  });
+  test("attention subscriptions return no organisation-wide presence field", async () => {
+    const s = await seed("presence-independent");
+    await addPayable(s, { supplierId: undefined });
+    const result = await s.asUser.query(api.supplierStatement.attention, { orgId: s.orgId, supplierId: s.supplierId, kind: "PAYABLE", nowMs: NOW, paginationOpts: { numItems: 25, cursor: null } });
+    expect(result).not.toHaveProperty("unlinked");
+    expect(await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).toBe("PRESENT");
   });
 });
