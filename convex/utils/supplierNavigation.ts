@@ -96,7 +96,15 @@ export async function addSupplierRowContext<R extends { kind: ObligationKind; id
 }
 
 /** Stable, localized public code. Detailed source failures stay on the server. */
-export function supplierNavigationFailure(error: unknown): never {
+const READ_FAILURE_MESSAGE = {
+  SUPPLIER_NAVIGATION_UNAVAILABLE: "Supplier records could not be loaded. Please try again.",
+  SUPPLIER_ATTENTION_UNAVAILABLE: "Supplier attention could not be loaded. Please try again.",
+};
+
+export function supplierNavigationFailure(error: unknown, code: keyof typeof READ_FAILURE_MESSAGE = "SUPPLIER_NAVIGATION_UNAVAILABLE"): never {
+  // Attention retains coded auth/plan refusals; raw stored-fact and infrastructure errors stay server-side.
+  if (code === "SUPPLIER_ATTENTION_UNAVAILABLE" && error instanceof ConvexError &&
+    typeof error.data === "object" && error.data !== null && "code" in error.data) throw error;
   console.error("Supplier navigation read failed", error);
-  throw new ConvexError({ code: "SUPPLIER_NAVIGATION_UNAVAILABLE", message: "Supplier records could not be loaded. Please try again." });
+  throw new ConvexError({ code, message: READ_FAILURE_MESSAGE[code] });
 }

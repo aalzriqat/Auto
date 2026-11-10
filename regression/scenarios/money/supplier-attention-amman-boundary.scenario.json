@@ -1,0 +1,65 @@
+{
+  "id": "supplier-attention-amman-boundary",
+  "fingerprint": "588bd78d45c6485991f5406c1703f792fbeaaa3ab043dc0fc6d57f82f3375dd1",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "dueAt": "2026-06-14T21:00:00Z",
+        "serverTimes": [
+          "2026-06-15T20:59:59Z",
+          "2026-06-15T21:00:00Z"
+        ],
+        "nowMsMatchesServerTimes": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "daysOverdue",
+      "value": [
+        0,
+        1
+      ]
+    },
+    {
+      "observable": "step",
+      "value": "DUE_DAY"
+    },
+    {
+      "observable": "asOfDate",
+      "value": "2026-06-16"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "Amman midnight changes overdue day using the validated caller time"
+  },
+  "matrixRow": "SCRUM869-attention-read"
+}
