@@ -75,13 +75,15 @@ async function prepareNativeOpening(ctx, knownOrgIds, label, large = false) {
     type: "ASSET", normalBalance: "DEBIT", currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false }));
   const liability = id(await must("mutation", "chartOfAccounts:create", { orgId, code: "2998", name: "Cleanup opening commission",
     type: "LIABILITY", normalBalance: "CREDIT", currencyRestriction: "JOD", isControlAccount: true, allowManualPosting: false }));
+  const supplierId = id(object(await must("mutation", "suppliers:create", { orgId,
+    idempotencyKey: `cleanup-${label}-supplier`, displayName: "Synthetic cleanup supplier" })).supplierId);
   const fixture = { scope: scope(ctx, knownOrgIds, orgId), orgId };
   await previewMust(ctx, PREPARE, { ...fixture.scope, stage: "SEED_HISTORY", large });
   await must("mutation", "accountingCutover:postOpeningBalanceDirect", { orgId, expectedCurrency: "JOD", asOfDate: Date.now(),
     lines: [{ accountId: asset, debitMinor: 100000, creditMinor: 0 }, { accountId: liability, debitMinor: 0, creditMinor: 50000 },
       { accountId: id(retained._id), debitMinor: 0, creditMinor: 50000 }],
     allocations: [{ kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId: asset, amountMinor: 100000,
-      counterpartyName: "Synthetic cleanup supplier", title: "Cleanup claim", purpose: "CLAIM" },
+      supplierId, counterpartyName: "Synthetic cleanup supplier", title: "Cleanup claim", purpose: "CLAIM" },
     { kind: "EMPLOYEE_COMMISSION", rowKey: "commission", accountId: liability, amountMinor: 50000, userId: id(approver._id) }] });
   const readback = object(await must("query", "accountingCutover:postedOpeningAllocationReadback", { orgId }));
   demand(array(readback.rows).length === 2 && readback.rows.every(row => object(row).recordAvailable === true), "Cleanup opening is not natively available");

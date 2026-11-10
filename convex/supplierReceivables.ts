@@ -20,21 +20,8 @@ import { listEligibleBanks, requireActiveBankInCurrency } from "./utils/bankAcco
 import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlementContainment";
 import { AppErrorCode, throwAppError } from "./utils/errors";
 
-/**
- * Collecting the dealership's agency margin from a supplier who was paid
- * directly by the buyer.
- *
- * The mirror of `sourcingPayables`, and shaped like it on purpose: the same
- * status vocabulary, the same refusal to store a derivable remainder, the same
- * over-application guard. A consigned deal settles one way or the other, and
- * somebody reading one module should not have to learn a second set of
- * conventions to read the other.
- *
- * What it is NOT is a general receivables ledger. It answers one question per
- * deal — has the supplier paid us our margin yet, and how much of it — because
- * that is the question the DIRECT_TO_SUPPLIER route creates and nothing else
- * in the system could answer.
- */
+/** Agency-margin collection for DIRECT_TO_SUPPLIER sales. Mirrors sourcingPayables
+ * status and over-application rules, deriving the remainder instead of storing it. */
 
 /** The claim as it should be read, with the remainder derived rather than stored. */
 export interface SupplierReceivableView {
@@ -486,9 +473,10 @@ export const recordReceipt = mutation({
           actionType: "ALLOCATE_PAYMENT",
           resourceType: "vehicleSupplierReceivables",
           resourceId: args.receivableId,
-          description: `Received ${args.amount} ${row.currency} from ${row.sourcedFromName} against a consigned-sale commission claim of ${row.amountDue}.`,
+          description: "Recorded receipt against a consigned-sale commission claim.",
           before: { amountReceived: alreadyReceived, status: row.status },
-          after: { amountReceived: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID" },
+          after: { amountReceived: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID", paymentMethod: receiptMethod,
+            supplierName: row.sourcedFromName, amountMinor: toMinorUnits(args.amount, row.currency) },
           idempotencyKey: args.idempotencyKey,
         });
 

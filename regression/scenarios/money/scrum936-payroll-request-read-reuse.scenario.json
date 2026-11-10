@@ -1,0 +1,96 @@
+{
+  "id": "scrum936-payroll-request-read-reuse",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round2-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "cost-without-payroll",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "limit": 200,
+        "drafts": 2,
+        "linesPerDraft": 41,
+        "openingAndJournalRows": true
+      }
+    },
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "openingBalanceDrafts.patch",
+      "input": {
+        "addEmployeeAdvanceControl": true
+      }
+    },
+    {
+      "actor": {
+        "role": "cost-without-payroll",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "newRequest": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "audit.payrollRowsWithheld",
+      "value": 100
+    },
+    {
+      "observable": "audit.nonPayrollRowsFull",
+      "value": 100
+    },
+    {
+      "observable": "db.lineAccountGets",
+      "value": 3
+    },
+    {
+      "observable": "db.controlIndexLookups",
+      "value": 0
+    },
+    {
+      "observable": "db.draftGets.atMost",
+      "value": 2
+    },
+    {
+      "observable": "newRequest.allRowsWithheld",
+      "value": true
+    },
+    {
+      "observable": "db.eachDistinctAccountGets",
+      "value": 1
+    },
+    {
+      "observable": "db.subscriptionLookupsPerRequest",
+      "value": 1
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 audit pages reuse payroll controls and decisions per draft and request"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "e934f16d16de72acd72355a7faf322c67da62dbe"
+  },
+  "fingerprint": "e4dec53efe7df406e16dacd68dd3f4e9462f5b40e004cc2cba090264ea7377f8"
+}

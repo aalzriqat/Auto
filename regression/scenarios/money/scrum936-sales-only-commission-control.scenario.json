@@ -1,0 +1,52 @@
+{
+  "id": "scrum936-sales-only-commission-control",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round3-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "sales-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "viewSales": true,
+        "viewCommissions": false,
+        "expiredPlan": true,
+        "allBranches": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "sales.commissionVisible",
+      "value": true
+    },
+    {
+      "observable": "audit.fullStoredRowVisible",
+      "value": true
+    },
+    {
+      "observable": "commissionReader.refused",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 sales-only commission reader retains SET_COMMISSION_AMOUNT audit details without accounting plan"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "fingerprint": "cd9d924192f206aa4ccc0b66f0b1ff376ca5e96b8dd029cea1bd923c063dd59e"
+}

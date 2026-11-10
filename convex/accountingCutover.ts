@@ -1,5 +1,6 @@
 import { loadOpeningSourceIdentity } from "./utils/openingSourceIdentity";
 import { canReadVehicleCost } from "./utils/vehicleCostVisibility";
+import { canReadOpeningPayroll, containsEmployeeAdvanceControl } from "./utils/openingPayrollVisibility";
 import { openingRecoveryBasis, openingPayableBasis } from "./utils/openingSupplierBasis";
 import { resolveOpeningCommissionBasis } from "./utils/openingCommissionBasis";
 import { resolveOpeningSettlementBasis, createOpeningSettlementReader, type OpeningSettlementReader } from "./utils/openingSettlementBasis";
@@ -373,8 +374,6 @@ export const draftOpeningBalance = mutation({
       throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
-    // Preflight only: don't knowingly create a draft that approval must refuse.
-    // Activity that lands after this point is still caught at posting time.
     if (await hasPostedLedgerActivity(ctx, args.orgId)) {
       refuseOpeningAfterLedgerActivity();
     }
@@ -405,7 +404,7 @@ export const draftOpeningBalance = mutation({
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
 
-    await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
+    const allocationPlan = await prepareOpeningAllocations(ctx, { ...args, lines, currency: args.expectedCurrency, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -414,7 +413,7 @@ export const draftOpeningBalance = mutation({
       lines,
       asOfDate: args.asOfDate,
       memo: args.memo,
-      allocations: args.allocations,
+      allocations: [...allocationPlan.rows],
       createdBy: user._id,
       createdAt: now,
       // Snapshot the denomination and the preparer's identity at draft time.
@@ -476,14 +475,15 @@ export const editOpeningBalanceDraft = mutation({
     await assertDenominationUnchanged(ctx, args.orgId, args.expectedCurrency);
     const lines = await withSuspenseBalancing(ctx, args.orgId, user._id, args.lines);
     const replacement = { ...draft, lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency };
-    try { await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
+    let preflight: Awaited<ReturnType<typeof inspectOpeningPreflight>>;
+    try { preflight = await inspectOpeningPreflight(ctx, { orgId: args.orgId, draft: replacement, actorId: user._id }); }
     catch (error) {
       if (error instanceof OpeningPreflightError) throw error.original;
       throw error;
     }
     const version = (draft.version ?? 0) + 1;
     if (!Number.isSafeInteger(version) || version <= 0) refuseOpeningChange("OPENING_DRAFT_CHANGED");
-    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: args.allocations, currency: args.expectedCurrency, version });
+    await ctx.db.patch(draft._id, { lines, asOfDate: args.asOfDate, memo: args.memo, allocations: [...preflight.allocationPlan.rows], currency: args.expectedCurrency, version });
     await auditLog(ctx, { orgId: args.orgId, actorId: user._id, actionType: "EDIT_OPENING_DRAFT", resourceType: "openingBalanceDrafts",
       resourceId: String(draft._id), description: "Pending opening balance edited by its preparer.",
       before: openingDraftAuditSummary(draft),
@@ -706,6 +706,7 @@ async function postOpeningBalanceDraft(
     journalEntryId: journalId,
     autoApproved,
     allocationResults,
+    allocations: [...allocationPlan.rows],
   });
 
   await auditLog(ctx, {
@@ -718,8 +719,8 @@ async function postOpeningBalanceDraft(
     // legitimate operation here, but it is not the same event as a
     // two-person approval and the log should never conflate them.
     description: autoApproved
-      ? `Opening balance posted by owner without second approval: ${draft.lines.length} lines, ${totalDebits} total.`
-      : `Opening balance posted: ${draft.lines.length} lines, ${totalDebits} total.`,
+      ? `Opening balance posted by owner without second approval: ${draft.lines.length} lines.`
+      : `Opening balance posted: ${draft.lines.length} lines.`,
     after: {
       lines: draft.lines.length,
       totalDebits,
@@ -806,7 +807,7 @@ export const postOpeningBalanceDirect = mutation({
     // at the boundary. (The shared poster re-checks vouchability independently
     // as the chokepoint for callers that never came through here.)
     const orgDenomination = await getOrgCurrency(ctx, args.orgId);
-    await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
+    const allocationPlan = await prepareOpeningAllocations(ctx, { ...args, lines, currency: orgDenomination, actorId: user._id });
 
     const now = Date.now();
     const draftId = await ctx.db.insert("openingBalanceDrafts", {
@@ -825,7 +826,7 @@ export const postOpeningBalanceDirect = mutation({
       // an identically-shaped record. Vouched for immediately above, so the row
       // cannot be created carrying a denomination the poster would refuse.
       currency: orgDenomination,
-      allocations: args.allocations,
+      allocations: [...allocationPlan.rows],
       preparedByName: user.name || user.email || undefined,
     });
 
@@ -892,21 +893,6 @@ export const rejectOpeningBalanceDraft = mutation({
     });
   },
 });
-
-/** Checks both allocations and GL controls. Older drafts may contain the
- * control line without operational rows; they are still payroll-sensitive. */
-async function containsEmployeeAdvanceControl(
-  ctx: QueryCtx | MutationCtx,
-  orgId: Id<"organizations">,
-  draft: Doc<"openingBalanceDrafts">,
-): Promise<boolean> {
-  if (draft.allocations?.some((row) => (row.kind === "EMPLOYEE_ADVANCE" || row.kind === "EMPLOYEE_COMMISSION"))) return true;
-  for (const line of draft.lines) {
-    const account = await ctx.db.get(line.accountId);
-    if (account?.orgId === orgId && (account.systemKey === SYSTEM_KEYS.EMPLOYEE_ADVANCES || account.systemKey === SYSTEM_KEYS.COMMISSION_PAYABLE)) return true;
-  }
-  return false;
-}
 
 type OpeningDraftAllocation = NonNullable<Doc<"openingBalanceDrafts">["allocations"]>[number];
 function isRemainingOpeningAllocation(
@@ -1043,8 +1029,7 @@ export const listPendingOpeningBalanceDrafts = query({
     // reasoning as openingBalanceStatus.
     const orgCurrency = await getOrgCurrency(ctx, args.orgId);
 
-    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const visibleDrafts = [];
     for (const draft of drafts) {
       if (mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, draft))) visibleDrafts.push(draft);
@@ -1230,8 +1215,7 @@ export const openingBalanceStatus = query({
       isOwner || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
     const canEnter = canManageFinance && postedEntry === null && (pending === null || pending.createdBy === user._id);
 
-    const mayViewPayroll = isOwner || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const pendingVisible = !pending || mayViewPayroll || !(await containsEmployeeAdvanceControl(ctx, args.orgId, pending));
 
     return {
@@ -1617,8 +1601,7 @@ export const postedOpeningAllocationReadback = query({
       resultCounts.set(result.rowKey, (resultCounts.get(result.rowKey) ?? 0) + 1);
       resultByKey.set(result.rowKey, result);
     }
-    const mayViewPayroll = isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.VIEW_PAYROLL) ||
-      role.permissions.includes(PERMISSIONS.MANAGE_PAYROLL);
+    const mayViewPayroll = canReadOpeningPayroll(role);
     const rows = await Promise.all((draft.allocations ?? []).map(async (allocation) => {
       if ((allocation.kind === "EMPLOYEE_ADVANCE" || allocation.kind === "EMPLOYEE_COMMISSION") && !mayViewPayroll) {
         return { kind: allocation.kind, restricted: true as const };

@@ -1,0 +1,92 @@
+{
+  "id": "scrum936-supplier-full-audit-facts",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum936-round2-local",
+    "firstSeen": "2026-11-09"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "owner",
+        "org": "A"
+      },
+      "action": "sourcingPayables.markPaid",
+      "input": {
+        "amountMinor": 2000,
+        "paymentMethod": "CASH",
+        "supplierFixture": "synthetic-supplier"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-only",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "branches": [
+          "default",
+          "actor",
+          "action",
+          "date"
+        ]
+      }
+    },
+    {
+      "actor": {
+        "role": "authorized-reader",
+        "org": "A"
+      },
+      "action": "financialAudit.listAuditLog",
+      "input": {
+        "positiveControl": "cost"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "authorizedAudit.after.paymentMethod",
+      "value": "CASH"
+    },
+    {
+      "observable": "authorizedAudit.after.supplierNameMatchesSnapshot",
+      "value": true
+    },
+    {
+      "observable": "authorizedAudit.after.amountMinor",
+      "value": 2000
+    },
+    {
+      "observable": "restrictedAudit.protectedAmountIdentityAndTextVisible",
+      "value": false
+    },
+    {
+      "observable": "dedicatedReader.refusesOrWithholds",
+      "value": true
+    },
+    {
+      "observable": "audit.description.hasAmount",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/financialAudit.scrum936.test.ts",
+    "testName": "SCRUM-936 supplier full payment retains authorized structured audit facts"
+  },
+  "matrixRow": "SCRUM-936-audit-reader-confidentiality",
+  "bugRef": {
+    "key": "SCRUM-936",
+    "failingFirst": "0d219ab0bef216b8ecccda9d011c1690514ff02f"
+  },
+  "fingerprint": "b155c59775af39ce83fdd5932c394f6c7761142d4141a49c3a62805fce642fe6"
+}

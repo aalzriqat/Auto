@@ -32,6 +32,18 @@ const AMMAN_DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 });
 
+const AMMAN_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: AMMAN_TIME_ZONE, hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+
+/** Delay to the next Amman day boundary, using the runtime's zone data. */
+export function msUntilAmmanMidnight(nowMs: number): number {
+  const parts = AMMAN_TIME_FORMAT.formatToParts(nowMs);
+  const part = (name: string) => Number(parts.find(entry => entry.type === name)?.value ?? 0);
+  const elapsed = (part("hour") * 3600 + part("minute") * 60 + part("second")) * 1000 + new Date(nowMs).getMilliseconds();
+  return Math.max(1, MS_PER_DAY - elapsed);
+}
+
 type DatePart = "year" | "month" | "day";
 
 /** One calendar field of an instant as read in Asia/Amman (a two-digit string for month and day). */

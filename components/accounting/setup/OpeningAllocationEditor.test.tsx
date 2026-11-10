@@ -10,8 +10,10 @@ vi.mock("@/components/providers/LanguageProvider", () => ({
 }));
 vi.mock("convex/react", () => ({
   useQuery: () => queryRows,
+  useMutation: () => vi.fn(),
   usePaginatedQuery: () => ({ results: memberRows, status: "Exhausted", loadMore: vi.fn() }),
 }));
+vi.mock("@/hooks/use-permissions", () => ({ usePermissions: () => ({ isLoading: false, hasPermission: () => false }) }));
 
 import { OpeningAllocationEditor } from "./OpeningAllocationEditor";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -135,7 +137,7 @@ test.each(["en", "ar"] as const)("owned opening stock selection uses server-prov
     partyLabel: "SYNTHSTOCKVIN001 · 2024 Example Stock", amount: "8000" }]);
 });
 
-test.each(["en", "ar"] as const)("supplier snapshot and unknown-liability purposes have no invented party selector (%s)", (locale) => {
+test.each(["en", "ar"] as const)("supplier selection and unknown-liability purposes keep separate party roles (%s)", (locale) => {
   language.locale = locale;
   const groups: OpeningAllocationGroup[] = [
     { accountId: "supplier" as Id<"chartOfAccounts">, kind: "SUPPLIER_RECOVERABLE", journalMinor: 4_001, label: "Supplier claim" },
@@ -149,9 +151,8 @@ test.each(["en", "ar"] as const)("supplier snapshot and unknown-liability purpos
     groups={groups} rows={rows} onChange={onChange}
     canSelectCustomers={false} canSelectEmployees={false} canSelectPartners={false} />);
   expect(screen.queryByRole("combobox", { name: "OpeningAllocationPartner" })).toBeNull();
-  fireEvent.change(screen.getByRole("textbox", { name: "OpeningAllocationCounterpartySnapshot" }),
-    { target: { value: "Synthetic supplier" } });
-  expect(onChange).toHaveBeenCalledWith([{ ...rows[0], counterpartyName: "Synthetic supplier" }, rows[1]]);
+  expect(screen.getByRole("combobox", { name: "OpeningAllocationSupplier" })).toBeTruthy();
+  expect(screen.queryByRole("textbox", { name: "OpeningAllocationCounterpartySnapshot" })).toBeNull();
   const purposes = screen.getAllByRole("combobox", { name: "OpeningAllocationPurpose" });
   expect(purposes).toHaveLength(2);
   fireEvent.change(purposes[1], { target: { value: "UNIDENTIFIED_RECEIPT" } });

@@ -1,0 +1,50 @@
+{
+  "id": "supplier-p7-gate-complete",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p7-certification",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "RELEASE_OPERATOR",
+        "org": "A"
+      },
+      "action": "rolloutRelease.finishSuccessfulRollout",
+      "input": {
+        "tables": 11,
+        "allCounts": 0
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "ok",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    },
+    {
+      "id": "SCRUM-868#c23871",
+      "digest": "be84872df7c9145c7346dd59cd88baf6c454ccc2495b204188bb62884b7331b0"
+    },
+    {
+      "id": "SCRUM-868#c23873",
+      "digest": "5e78d17374e1fcc13f49f6e5afc73ca0d1e709bbe00877db64303c0d995d0fd4"
+    }
+  ],
+  "impl": {
+    "file": "scripts/releaseGuard.supplierLaunch.test.ts",
+    "testName": "complete zero requires independent evidence for every table"
+  },
+  "matrixRow": "SCRUM868-P7-launch-evidence",
+  "fingerprint": "5e04f423f057b3f48449c5d0ebd03d45179faaa21b27c46b7205fcc4c3c1d0c1"
+}

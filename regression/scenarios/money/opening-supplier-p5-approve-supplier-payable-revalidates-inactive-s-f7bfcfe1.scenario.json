@@ -1,0 +1,62 @@
+{
+  "id": "opening-supplier-p5-approve-supplier-payable-revalidates-inactive-s-f7bfcfe1",
+  "domain": "money",
+  "level": "backend",
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "accountingCutover.draftOpeningBalance",
+      "input": {
+        "kind": "SUPPLIER_PAYABLE",
+        "amountMinor": 100003,
+        "currency": "JOD",
+        "supplierId": "MASTER_A",
+        "counterpartyName": "Forged_client_name",
+        "supplierSnapshotVersion": 999
+      }
+    },
+    {
+      "actor": {
+        "role": "SECOND_FINANCE_ACTOR",
+        "org": "A"
+      },
+      "action": "accountingCutover.approveOpeningBalance",
+      "input": {
+        "draftId": "PENDING_OPENING_A",
+        "expectedVersion": 0,
+        "supplierState": "inactive"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "decision.refusal.code",
+      "value": "SUPPLIER_INACTIVE"
+    },
+    {
+      "observable": "decision.applicationState.changed",
+      "value": false
+    }
+  ],
+  "matrixRow": "SCRUM868-P5-opening-supplier-identity",
+  "impl": {
+    "file": "convex/openingSupplierIdentity.scrum868.test.ts",
+    "testName": "approve SUPPLIER_PAYABLE revalidates inactive supplier before any write"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum868-p5-opening-identity",
+    "firstSeen": "2026-11-09"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "fingerprint": "15233ab8edea105ea0ab3dca035f4a859b754d81e52e85e899f6ba5c1664dea8"
+}

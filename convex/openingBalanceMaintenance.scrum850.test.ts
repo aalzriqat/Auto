@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Id, TableNames } from "./_generated/dataModel";
 import schema from "./schema";
 import { inTurn } from "./utils/transactionReadHeadroom";
+import { supplierIdFor } from "../test-utils/supplierFixture";
 import { restoreOpeningAllocation, buildOpeningAllocationPayload } from "../components/accounting/setup/openingAllocationForm";
 
 // Real registered-function references allow the failing-first commit to compile
@@ -84,8 +85,8 @@ async function fixture(allFamilies = false) {
     { kind: "CUSTOMER_RECEIVABLE", rowKey: "ar", accountId: account("ACCOUNTS_RECEIVABLE_CUSTOMERS"), customerId: ids.customerId, amountMinor: 100_003, title: "Synthetic receivable", dueDate: asOfDate },
     { kind: "EMPLOYEE_ADVANCE", rowKey: "advance", accountId: account("EMPLOYEE_ADVANCES"), userId: ids.employeeId, amountMinor: 110_003 },
     { kind: "PREPAID_EXPENSE", rowKey: "prepaid", accountId: account("PREPAID_EXPENSES"), amountMinor: 120_003, title: "Synthetic benefit", startYearMonth: `${year}-01`, termMonths: 12, expenseSystemKey: "RENT_EXPENSE", attestedUnexpiredBenefit: true },
-    { kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId: account("RECEIVABLE_FROM_SUPPLIERS"), amountMinor: 130_003, counterpartyName: "Synthetic supplier", title: "Synthetic claim", purpose: "CLAIM" },
-    { kind: "SUPPLIER_PAYABLE", rowKey: "ap", accountId: account("ACCOUNTS_PAYABLE_SUPPLIERS"), amountMinor: 140_003, counterpartyName: "Synthetic supplier", title: "Synthetic payable" },
+    { kind: "SUPPLIER_RECOVERABLE", rowKey: "claim", accountId: account("RECEIVABLE_FROM_SUPPLIERS"), amountMinor: 130_003, counterpartyName: "Synthetic supplier", supplierId: await supplierIdFor(t, ids.orgId, "Synthetic supplier"), title: "Synthetic claim", purpose: "CLAIM" },
+    { kind: "SUPPLIER_PAYABLE", rowKey: "ap", accountId: account("ACCOUNTS_PAYABLE_SUPPLIERS"), amountMinor: 140_003, counterpartyName: "Synthetic supplier", supplierId: await supplierIdFor(t, ids.orgId, "Synthetic supplier"), title: "Synthetic payable" },
     { kind: "OTHER_PAYABLE", rowKey: "other", accountId: otherAccount, amountMinor: 150_003, counterpartyName: "Synthetic creditor", title: "Synthetic other debt" },
     { kind: "EMPLOYEE_COMMISSION", rowKey: "commission", accountId: account("COMMISSION_PAYABLE"), userId: ids.employeeId, amountMinor: 160_003 },
     { kind: "UNALLOCATED_LIABILITY", rowKey: "pool", accountId: poolAccount, amountMinor: 170_003, purpose: "UNIDENTIFIED_RECEIPT", title: "Synthetic unknown pool" },
@@ -146,7 +147,8 @@ async function singletonAuditConfidentiality(kind: "EMPLOYEE_ADVANCE" | "VEHICLE
       const edits = rows.filter(row => row.actionType === "EDIT_OPENING_DRAFT");
       expect(edits).toHaveLength(1);
       const metadata = { lineCount: 2, allocationCount: 1, allocationKinds: [kind], asOfDate: s.asOfDate, currency: "JOD" };
-      expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: String(draft._id) });
+      expect(edits[0]).toMatchObject({ actorId: s.ownerId, resourceId: "WITHHELD" });
+      expect(JSON.stringify(edits[0])).not.toContain(String(draft._id));
       expect(edits[0].before).toEqual({ ...metadata, version: 0 });
       expect(edits[0].after).toEqual({ ...metadata, version: 1, memoChanged: true });
     }

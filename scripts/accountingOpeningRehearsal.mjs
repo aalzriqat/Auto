@@ -262,6 +262,9 @@ async function prepareOpening(ctx, currentPrepaid = false) {
       idempotencyKey: key(),
     }),
   );
+  const supplierId = id(row(await must("mutation", "suppliers:create", {
+    orgId, displayName: "QA TEST supplier", idempotencyKey: key(),
+  })).supplierId);
   const vin = `QA${key().replaceAll("-", "").slice(0, 15).toUpperCase()}`;
   await must("mutation", "vehicles:importBulk", {
     orgId,
@@ -342,6 +345,7 @@ async function prepareOpening(ctx, currentPrepaid = false) {
       accountId: claim,
       amountMinor: 11001,
       counterpartyName: "QA TEST supplier",
+      supplierId,
       title: "QA TEST claim",
       purpose: "CLAIM",
     },
@@ -351,6 +355,7 @@ async function prepareOpening(ctx, currentPrepaid = false) {
       accountId: deposit,
       amountMinor: 13001,
       counterpartyName: "QA TEST supplier",
+      supplierId,
       title: "QA TEST refundable deposit",
       purpose: "REFUNDABLE_DEPOSIT",
     },
@@ -360,6 +365,7 @@ async function prepareOpening(ctx, currentPrepaid = false) {
       accountId: account("ACCOUNTS_PAYABLE_SUPPLIERS"),
       amountMinor: 100001,
       counterpartyName: "QA TEST supplier",
+      supplierId,
       title: "QA TEST supplier obligation",
     },
     {

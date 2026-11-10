@@ -21,6 +21,7 @@ import path from "node:path";
 import process from "node:process";
 import {
   assertDeploymentIdentity,
+  runSupplierLaunchEvidencePhase,
   captureRunBaseline,
   classifyMaterializationReport,
   decideEmptyRollout,
@@ -178,6 +179,18 @@ function convex(args) {
   return parseConvexRunJson(result.stdout ?? "");
 }
 
+/** Both successful exits pass through the P7 phase before publishing success. */
+function finishSuccessfulRollout(message) {
+  const refuse = (reason) => { lastOutcome = "failed"; fail(reason); };
+  const summary = runSupplierLaunchEvidencePhase({ convex, now: Date.now,
+    startedAt: rolloutStartedAt, timeoutMs: TIMEOUT_MS, fail: refuse });
+  supplierIdentitySummary = `${supplierIdentitySummary ?? ""}\n${summary}`;
+  console.log(`  ${summary}`);
+  writeSummary(null);
+  console.log(message);
+  process.exit(0);
+}
+
 /**
  * Walks every page of the report.
  *
@@ -302,12 +315,10 @@ if (before.verdict.orgCount === 0) {
   if (!empty.ok) fail(empty.reason);
   lastVerdict = confirmation.verdict;
   lastOutcome = empty.outcome;
-  writeSummary(null);
-  console.log(
+  finishSuccessfulRollout(
     `\n✔ ${EXPECTED_DEPLOYMENT} holds no organizations: nothing to materialise. ` +
       `This verifies the Social Inbox rollout only, not Accounting bootstrap or readiness.\n`
   );
-  process.exit(0);
 }
 
 // ─── 2. Start the backfills ─────────────────────────────────────────────────
@@ -484,9 +495,7 @@ if (!sourcedCostMirror.ok) {
 }
 
 if (lastOutcome === "verified") {
-  writeSummary(null);
-  console.log(`\n✔ Every organization is reading the materialised path on ${EXPECTED_DEPLOYMENT}.\n`);
-  process.exit(0);
+  finishSuccessfulRollout(`\n✔ Every organization is reading the materialised path on ${EXPECTED_DEPLOYMENT}.\n`);
 }
 
 for (const p of [...lastVerdict.problems, ...lastVerdict.inFlight]) {

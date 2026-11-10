@@ -1,11 +1,17 @@
 import { ConvexError, v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { requireOwnedRow, requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { readSupplierOutstanding, readSupplierSettled } from "./utils/supplierObligationDue";
 import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReconciliation";
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
+import { addSupplierRowContext, supplierNavigationFailure, supplierRowContextValidator } from "./utils/supplierNavigation";
+import { createSupplierReadCache } from "./utils/supplierReadCache";
+import { paginationOptsValidator } from "convex/server";
+import { ammanDateString } from "./utils/supplierDueDates";
+import { attentionKind, attentionPage, readAttention, unlinkedPresence, unlinkedStatus } from "./utils/supplierAttention";
 
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding A/P and A/R (ADR
@@ -22,7 +28,14 @@ const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
  */
 export const STATEMENT_PERMISSIONS = [PERMISSIONS.VIEW_FINANCE, PERMISSIONS.VIEW_COST_PRICE];
 
+/** Permission denial withholds cost-derived reads; tenant and impersonation failures still throw. */
+async function mayReadStatement(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const { role } = await requireTenantAuth(ctx, orgId);
+  return isSystemOwnerRole(role) || STATEMENT_PERMISSIONS.every(permission => role.permissions.includes(permission));
+}
+
 const row = v.object({
+  context: supplierRowContextValidator,
   kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
   id: v.string(),
   currency: v.string(),
@@ -47,6 +60,7 @@ const section = v.object({
 });
 
 const settledRow = v.object({
+  context: supplierRowContextValidator,
   kind: v.union(v.literal("PAYABLE"), v.literal("RECEIVABLE"), v.literal("RECOVERY")),
   id: v.string(),
   currency: v.string(),
@@ -81,11 +95,16 @@ export const settled = query({
   args: { orgId: v.id("organizations"), supplierId: v.id("suppliers") },
   returns: v.object({ supplierId: v.id("suppliers"), payable: settledSection, receivable: settledSection }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
+    const { role } = await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
-    const { payable, receivable } = await readSupplierSettled(ctx, args);
-    return { supplierId: args.supplierId, payable, receivable };
+    const result = await readSupplierSettled(ctx, args);
+    try {
+      const scope = { ...args, permissions: role.permissions, cache: createSupplierReadCache() };
+      const payable = await addSupplierRowContext(ctx, scope, result.payable);
+      const receivable = await addSupplierRowContext(ctx, scope, result.receivable);
+      return { supplierId: args.supplierId, payable, receivable };
+    } catch (error) { return supplierNavigationFailure(error); }
   },
 });
 
@@ -144,13 +163,56 @@ export const outstanding = query({
   },
   returns: v.object({ supplierId: v.id("suppliers"), payable: section, receivable: section }),
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
+    const { role } = await requireTenantAuth(ctx, args.orgId, STATEMENT_PERMISSIONS);
     await requireFeature(ctx, args.orgId, "accounting");
     if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
-      throw new ConvexError("nowMs must be a whole number of milliseconds within one day of the server clock.");
+      throw new ConvexError({ code: "SUPPLIER_STATEMENT_INVALID_TIME", message: "nowMs must be a whole number of milliseconds within one day of the server clock." });
     }
     await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
-    const { payable, receivable } = await readSupplierOutstanding(ctx, args);
-    return { supplierId: args.supplierId, payable, receivable };
+    const cache = createSupplierReadCache();
+    const result = await readSupplierOutstanding(ctx, args, cache);
+    try {
+      const scope = { ...args, permissions: role.permissions, cache };
+      const payable = await addSupplierRowContext(ctx, scope, result.payable);
+      const receivable = await addSupplierRowContext(ctx, scope, result.receivable);
+      return { supplierId: args.supplierId, payable, receivable };
+    } catch (error) { return supplierNavigationFailure(error); }
+  },
+});
+
+/** Port of the unmerged attention slice: canonical-id pages, never notification delivery or an aggregate. */
+export const attention = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers"), kind: attentionKind,
+    nowMs: v.number(), paginationOpts: paginationOptsValidator },
+  returns: v.union(v.null(), attentionPage),
+  handler: async (ctx, args) => {
+    try {
+      if (!(await mayReadStatement(ctx, args.orgId))) return null;
+      await requireFeature(ctx, args.orgId, "accounting");
+      await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+      // A clock read in a cached query does not itself refresh the subscription. Validate and use the caller's time, as outstanding does.
+      // https://docs.convex.dev/functions/query-functions#caching--reactivity--consistency
+      if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
+        throw new ConvexError({ code: "SUPPLIER_STATEMENT_INVALID_TIME", message: "nowMs must be a whole number of milliseconds within one day of the server clock." });
+      }
+      const nowMs = args.nowMs;
+      const result = await readAttention(ctx, args, nowMs);
+      return { ...result, asOfDate: ammanDateString(nowMs) };
+    } catch (error) {
+      return supplierNavigationFailure(error, "SUPPLIER_ATTENTION_UNAVAILABLE");
+    }
+  },
+});
+
+/** Organisation-wide identity warning, independently cached from each supplier's attention pages. */
+export const unlinkedAttention = query({
+  args: { orgId: v.id("organizations"), kind: attentionKind },
+  returns: v.union(v.null(), unlinkedStatus),
+  handler: async (ctx, args) => {
+    try {
+      if (!(await mayReadStatement(ctx, args.orgId))) return null;
+      await requireFeature(ctx, args.orgId, "accounting");
+      return await unlinkedPresence(ctx, args.orgId, args.kind);
+    } catch (error) { return supplierNavigationFailure(error, "SUPPLIER_ATTENTION_UNAVAILABLE"); }
   },
 });

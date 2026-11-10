@@ -1,0 +1,61 @@
+{
+  "id": "supplier-worker-payable-gross-guard",
+  "fingerprint": "6914ae8e7a70f3d1801e74097c4f011ff5d19284ecc638674514a8724e8e286d",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-r3",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "INTERNAL_WORKER",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "PAYABLE",
+        "status": "DISPUTED",
+        "amountDueJOD": 17592186044416,
+        "amountPaidJOD": 17592186044415.998,
+        "usablePayableJOD": 9500
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerted",
+      "value": 3
+    },
+    {
+      "observable": "skipped",
+      "value": 1
+    },
+    {
+      "observable": "unreadableRowReported",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "payable worker refuses unsafe gross operands with a safe remainder"
+  },
+  "matrixRow": "SCRUM869-worker-money-guard"
+}

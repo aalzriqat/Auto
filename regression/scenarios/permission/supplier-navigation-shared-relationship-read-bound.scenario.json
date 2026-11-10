@@ -1,0 +1,50 @@
+{
+  "id": "supplier-navigation-shared-relationship-read-bound",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-round2",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "purchaseObligations": 50,
+        "vehicles": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "gets",
+      "value": 4
+    },
+    {
+      "observable": "isDone",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-868#c23794",
+      "digest": "fa2f414771ac037a89dcbb7ce0428d84cc20c3657c641666a75b355d96843a67"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "owned relationships sharing a vehicle spend one vehicle get per call"
+  },
+  "matrixRow": "SCRUM869-navigation-bounds",
+  "fingerprint": "9f3f3971c4d7010b2b6d3280162e6fea3fd26f169ab65a0fb1c09177e30b7984"
+}

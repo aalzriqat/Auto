@@ -1,0 +1,63 @@
+{
+  "id": "supplier-attention-required-split",
+  "fingerprint": "3e339af982d4b855bf06a4aca9bd1bccb59c399cd2db2b7da2a0f89a3352b716",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "payables": 2,
+        "numItems": 25,
+        "maximumRowsRead": 1
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": []
+    },
+    {
+      "observable": "complete",
+      "value": false
+    },
+    {
+      "observable": "pagination.cursorAdvanced",
+      "value": false
+    },
+    {
+      "observable": "incompleteReason",
+      "value": "SPLIT_REQUIRED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "required native page split withholds figures and preserves the current cursor"
+  },
+  "matrixRow": "SCRUM869-attention-bounds"
+}

@@ -1,0 +1,56 @@
+{
+  "id": "supplier-navigation-relationship-end-cursor",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-navigation-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierRelationships.vehicles",
+      "input": {
+        "vehicles": 52,
+        "numItems": 1,
+        "endCursor": "DISTANT_END_CURSOR",
+        "maximumRowsRead": 1000000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "maximumRowsReturned",
+      "value": 50
+    },
+    {
+      "observable": "pageStatus",
+      "value": "SplitRequired"
+    },
+    {
+      "observable": "splitCursor",
+      "value": "PRESENT"
+    },
+    {
+      "observable": "isDone",
+      "value": false
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "a distant endCursor cannot widen the relationship read bound"
+  },
+  "matrixRow": "SCRUM869-navigation-bounds",
+  "fingerprint": "39cc7f4894460dcbbf9130e83408d247e78a370e5043ec994d783772c75579b8"
+}

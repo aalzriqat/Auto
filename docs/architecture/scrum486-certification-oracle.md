@@ -800,6 +800,12 @@ The same matrix row also includes `opening-reset-recovery-checkpoint-org-delete`
 
 The recovery checkpoint scenario additionally invokes an internal destructive reset continuation after public deletion admission. It must refuse without recreating the abandoned checkpoint; natural deletion still removes the recovery without leaving a retained organization reference. Literal sibling controls cover public approval and a FAILED deletion followed by a new hard-delete retry. Dry-run inspection remains available. A bounded request-pointer read reserves destructive progress for RUNNING/FAILED deletion, including persisted start/purge markers; missing, foreign or closed request metadata refuses before writes. Verified same-org PENDING_REVIEW/APPROVED requests without destruction markers preserve ordinary reset continuation, so the existing reset-completion prerequisite for rejection does not become stranded. These are serial lifecycle harness controls, not platform/OCC proof or evidence that operators have used the interleaving in a deployment.
 
+### SCRUM-939 vehicle wizard final confirmation
+
+| Intake screen control | Required result | Bound check and evidence limit |
+| --- | --- | --- |
+| SCRUM939-final-confirmation | Photos Continue mounts a different button for Availability; an early create submit calls neither create nor request-create; final confirmation and edit submit still save | `components/vehicles/VehicleDialog.submit.test.tsx`, red at `8574e06bd6aa658a46d1ca92b81bb95abdee4c30`; strict EN/AR journey in `playwright/tests/supplier-identity.spec.ts` asserts an empty vehicle read before the final click. Local component evidence only; the authenticated backend journey has not been run for this fix. |
+
 ### SCRUM-868 P2 canonical supplier identity on vehicles
 
 Matrix rows `SCRUM868-P2-supplier-identity` (money, 33 scenarios) and `SCRUM868-P2-supplier-isolation` (permission, 3 scenarios) bind literal tests in `convex/vehicleSupplierIdentity.test.ts`. Owner ruling SCRUM-868 c23794 and the SCRUM-760 pilot scope: every pilot-enabled door that sets a SOURCED vehicle's consignment supplier (`vehicles.create`, `update`, `createSourced`, `importBulk`, `vehicleEdits.requestCreate`, `requestUpdate`, `resolve`) or an OWNED ON_ACCOUNT creditor takes a supplier master id. The server resolves the id inside the caller's organization, stores the id and writes the name snapshot itself; a typed name is never trusted. Independent expected values: a name-only call (the shape the mobile app sends) refuses with `SUPPLIER_IDENTITY_REQUIRED` and no table changes; a foreign-organization id and a deleted id refuse with the same code and the same message (`SUPPLIER_NOT_FOUND`); an inactive supplier refuses with `SUPPLIER_INACTIVE`; a creditor id on a consignment car, or a consignment id on an owned car or a cash purchase, refuses with `SUPPLIER_ROLE_CONFLICT`. Once a supplier payable or a supplier-borne expense exists, changing the consignment supplier refuses with `SUPPLIER_LINK_FROZEN` at request time and at approval, while re-sending the stored id is a no-op. The freeze is proven for each money record on its own: a supplier payable, a supplier receivable with no payable (a direct-to-supplier sale), a supplier cost recovery, a supplier-borne expense and a finance application holding a supplier concession each refuse a supplier change with nothing written (the held concession also refuses ehicleEdits.requestUpdate at request time with HELD_BY_DEAL and stores no request), and a vehicle with 199 dealership-borne expenses may still change supplier while the 200th fills the scan bound and refuses (fail closed). A purchase import whose (import, row) evidence already exists with the same fingerprint is recognised as already recorded (inserted 0, alreadyRecorded 2, one payable of 9,000, no table changes) even after its creditor was deactivated, including a row number that is negative (-1) or beyond 2^53, which the purchase validator accepts; a different import using that inactive creditor still refuses with `SUPPLIER_INACTIVE`, and a changed or foreign-supplier replay of the same key still refuses with `IDEMPOTENCY_CONFLICT`. An UPDATE request stores no typed `purchaseSupplierName`: only the server snapshot name beside the creditor id. The on-account payable carries the creditor id, snapshot version 1 and the server name for 10,000 JOD, and the acquisition journal is the unchanged single VEHICLE_ACQUIRED event (no posting or amount change). A master rename after creation does not rewrite the stored vehicle name, and a retry of the same idempotency key replays the first vehicle. The data browser refuses a change to `sourcedSupplierId` as a locked ownership field, and a stored link that points at another organization is dropped by the buy-out conversion reader. This is serial `convex-test` harness evidence only. It does not prove concurrency (the harness has no OCC), Convex platform behaviour or production data. A legacy name-only vehicle already stored keeps its name and no id: it is not backfilled by this change, and a legacy name-only pending request cannot be approved. The mobile app is outside the pilot and is not changed; it now receives the coded refusal on a name-only supplier write. The web supplier picker, import mapping and their English and Arabic strings are covered by component tests only; no browser replay record exists for them yet and the rendered EN/AR desktop and phone screens were not inspected by this change.
@@ -1826,3 +1832,309 @@ Two edits changing only cash amounts require summaries differing only in version
 with no monetary key or amount delta. Unsafe retained history is still correctable,
 without a null total field or replacement amount in the audit. Separate source
 mutants reintroducing totalDebits in before and after must each fail these tests.
+
+
+### SCRUM-936-audit-reader-confidentiality
+
+Financial audit copies inherit the dedicated source reader's permission. Run
+`convex/financialAudit.scrum936.test.ts`. Twelve literal scenario tests are
+registered in `regression/scenarios/money/scrum936-*.scenario.json`, with
+failing-first commit `e5813b68f46b63546c3b448900efec0efa0241e9` (13 failed,
+including classification completeness). All four audit branches, both opening
+posting doors, singleton vehicle and employee openings, retained full-draft and
+total-only edits, posted manual journal history, commission add/remove/set,
+retained migration COGS, and supplier cost receipt/reversal payloads are covered.
+Each negative audit assertion has a source-reader refusal/withholding control
+and a full-row owner control. Explicit non-owner grants also restore full rows.
+Cost-only employee controls remain withheld under the opening payroll rule.
+Pending manual-journal drafts preserve their existing manage-finance audience.
+The stored rows remain unchanged. Classification is exhaustive over the schema.
+
+This is serial convex-test evidence. It is not platform, cloud, concurrency,
+production-data, independent-seat or pilot-release certification. The manual
+posting pilot switch remains blocked. Historical supplier and migration rows
+are inserted as fixtures, not emitted by executing their internal or disabled
+writers. The complete writer census and final checks are recorded in
+`docs/architecture/scrum936-audit-reader-evidence.md`.
+
+
+SCRUM-936 supplemental controls at
+`18992de610caea44ce5503f2362bfc27b36f5225` fail all 15 tests against that
+checkpoint's production sources. Two additional records cover posted-event line
+counts and unwind-actor remittance parity. The primary tests also cover protected
+source ids, mutable-draft payroll history and the stricter maintenance payroll
+predicate. Restricted resource types remain visible; source ids are `WITHHELD`.
+
+
+The initial SCRUM-936 library contains fourteen records for fourteen behavioral
+tests. The legacy-edit and direct-employee records include the historical-employee and
+void-reason controls from the supplemental checkpoint. The initial eighteen source mutants produced failed tests
+and were restored clean. Both typechecks and the source-freshness check passed at that checkpoint.
+The unrelated refreshRulings parse failure and thermally interrupted broad
+SCRUM-858 read-budget suite remain failed/incomplete verification, not waivers.
+
+Three further records cover the application base-reader gate and real public
+cheque writers. `c941eba60f4c1125e78775b329702a50d5cd57ef` fails the application
+gate test (1 failed, 15 passed). `9956ef3e01b055416dd920bce89aa85210949c8f`
+fails the literal cheque-face-reader and expected-payment-reader tests (2 failed,
+16 passed). The final library has seventeen behavioral records and one separate
+schema classification test. Cheque attestation retains the finance-only reader's
+existing full visibility; expected-payment method/date follow view:sales while
+cheque ids and the stored cancellation reason follow view:finance. No new policy
+is inferred from the writer module. The final source checkpoint
+`26fe73f57f621a571097d4c75c9cc526b4d0b677` passed 307 tests in seven focused files.
+The final-head proof and repeated mutation results are in the evidence report.
+All nineteen final-source mutants failed tests and were restored clean. The
+restored four-file proof passed 137 tests, and the two required guards passed 32.
+
+Round 2 adds five literal regression checks to the same backend suite and five
+records, bringing the SCRUM-936 library to twenty-two scenarios plus the schema
+classification check. The request-reuse case fails at
+`e934f16d1` with 8,200 line-account gets for a 200-row synthetic page. It requires
+zero such gets at that checkpoint, two org-scoped control lookups, at most two draft
+gets, correct visibility for both drafts, and fresh decisions on a later request.
+The four public supplier-writer cases fail at `0d219ab0b` because authorized
+audit rows lack structured payment method, supplier snapshot name, and operation
+amount. Each now checks restored authorized evidence, refused dedicated-reader
+controls, all audit branches, amount-free descriptions, and unchanged stored rows.
+Full failing-first SHAs are stored in the records. Earlier scenarios are retained.
+The maintenance payroll rule and unwind actor predicate retain their permissions.
+See the round 2 evidence appendix for checks and explicit execution limits.
+
+Round 3 retains those twenty-two scenarios and adds ten literal checks: active
+and inactive duplicates of both payroll control keys, owner and non-owner plan
+lifecycles, the accounting-reader entitlement census, missing and foreign draft
+evidence, and the sales-only SET_COMMISSION_AMOUNT positive control. The duplicate
+regressions fail first at `c928ff01c`; the entitlement regressions fail first at
+`896249060`. The three Seat 1 coverage controls change no production behavior.
+Their corresponding source mutations fail the tests.
+
+The request-reuse scenario now follows the actual referenced account ids rather
+than assuming unique system keys. Its mixed 200-row page requires three account
+gets, one per distinct account, zero control-index lookups, at most two draft
+gets and one subscription lookup. A later request reads fresh state. The
+duplicate cases reference the non-canonical account, preserve inactive controls,
+withhold protected draft and journal copies, and keep ordinary/payroll-authorized
+positive controls. The page-size and draft-read bounds, feature gates and grants
+are unchanged. Account reads are now bounded by distinct referenced ids.
+
+The plan cases keep event metadata and counts while withholding protected
+accounting details for expired, cancelled, past-due, free and absent subscription
+states, including for owners. Active and restored plans retain full rows. An
+active subscription with an old period end follows stored status. Independent
+opening, manual-draft, supplier, sales, commission, application, bank and sign-off
+families remain readable under their existing grants. The action census tests
+both owner and explicitly granted non-owner readers. This matrix row remains a
+local backend permission oracle, not cloud or release certification.
+### SCRUM868-P5-opening-supplier-identity
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Opening supplier identity | 100003 JOD minor units, MASTER_A, master name and version 3; approval after rename captures version 4 | `convex/openingSupplierIdentity.scrum868.test.ts`, direct master-snapshot cases and approval rename |
+| Identity admission and provenance | Missing/name-only, foreign, deleted and inactive new use refuse without state changes; different and one-sided ids do not match | Same suite, 36 literal preparation/review refusals and both basis cases |
+| Settlement and history | Id-less supplier openings refuse; ordinary creditor settles 100003; identified partial payment is 40001 and legacy partial 10001 refuses | Same suite, legacy, ordinary-creditor, inactive-retry and partial/dispute cases |
+| Pending review | Unbound approval refuses, edit increments version, stale version 0 refuses and version 1 posts | Same suite, pending legacy draft case |
+
+Run `convex/openingSupplierIdentity.scrum868.test.ts` through convex-test public
+mutations and queries. The 52 backend scenarios are registered under
+`regression/scenarios/money/opening-supplier-p5-*.scenario.json` and bind to the
+actual registered case names. Supplier openings use 100003 JOD minor units;
+the receipt and partial-payment inputs are 40001, and the refused legacy partial
+input is 10001. These are synthetic independent literals, not business data.
+
+Create, edit, approve and direct posting require a same-org active supplier for
+SUPPLIER_PAYABLE and SUPPLIER_RECOVERABLE. Identified OTHER_PAYABLE records use
+the same master snapshot; ordinary creditors remain id-less. Id/name/version
+come from the master, never the supplied label/version. Different or one-sided
+ids cannot satisfy opening provenance. Legacy reads preserve stored content;
+new supplier settlement without an id refuses, while inactive identified
+obligations remain serviceable and retries change no state. Pending edits keep
+reviewed-version binding. SCRUM-850 void/re-entry and audit confidentiality
+controls remain covered by their existing suites.
+
+The pending-legacy-draft scenario cites failing-first commit
+`16d16280cbe2c02cacc5605fc67077b03b6257de`, where the unbound approval resolves
+instead of refusing. Other new records are preventive controls and have no
+bugRef. Rulings: SCRUM-868 c23871/c23873, OQ-4, and SCRUM-850 c24749.
+This is harness evidence, not real-backend, OCC, production or pilot certification.
+
+### SCRUM869-navigation-identity
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Canonical statement source | One linked payable: 9500000 JOD minor units, A/P, original supplier snapshot and creation timestamp. Same-name different-id and id-less records are absent | `convex/supplierNavigation.scrum869.test.ts`, authoritative statement source case |
+| Settled and opening source | Paid amount is 9500000 minor units. Posted opening payable and recovery link to opening Settings, with A/P and A/R roles | Same suite, settled and P5 opening cases |
+| Sale and expense source | A/R sale uses its deal route. Expense retains Transport invoice label without an invented record route, plus its recorded vehicle link | Same suite, sale/expense case |
+| Relationship identity | SOURCED uses sourcedSupplierId; native owned purchase payable uses supplierId. SOLD owned stock remains included; deleted, same-name and id-less controls do not enter | Same suite, sourced/owned relationship case |
+| Repeated purchase relationship | Two native purchase obligations for one vehicle, on two pages, retain their distinct payable ids as keys. No purchase relationship is hidden | Same suite, `two purchase obligations for one vehicle retain distinct stable relationship ids across pages` |
+
+### SCRUM869-navigation-permissions
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Cost boundary | Finance-only response equals the complete vehicle metadata allowlist: id, vehicleId, label, model, status and href. No cost fields; outstanding and settled statement queries refuse | Backend finance-without-cost case, whole-shape `toEqual` |
+| Target boundary | Without view:vehicles, the server returns a plain label and null href. Foreign/deleted source has no label. The UI follows href alone with no per-row permission lookup; its statement gate remains | Backend missing-target case and EN/AR component permission cases; `source href alone controls links without a client permission lookup` |
+| Tenancy | Supplier from org B supplied to org A refuses; querying org B without membership refuses; finance permission absent refuses | Backend public-reader refusal case |
+| Safe error | Stored NaN retains the money reader's existing refusal in both views. Only unexpected navigation enrichment errors become SUPPLIER_NAVIGATION_UNAVAILABLE. UI errors remain localized, without raw technical text | Backend `invalid stored money keeps the money reader error contract` and component error cases |
+| Direct vehicle opening | Missing id or vehicle permission produces no direct record query. A supplier id outside loaded inventory opens the actual detail dialog using vehicles.get, without inventory-list queries | `components/suppliers/management/SupplierVehicleTarget.test.tsx` |
+
+### SCRUM869-navigation-bounds
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Continuation | Two synthetic linked vehicles, page size 1: first page is incomplete; continuation returns the different remaining vehicle and is done | Backend continuation case |
+| Distant end cursor | 52 linked vehicles; numItems 1 and caller maximumRowsRead 1000000 cannot widen server cap: at most 50 returned, SplitRequired, split cursor present, isDone false | Backend distant-endCursor case |
+| Honest notice | Nonterminal relationship list has EN/AR incomplete notice and load-more 25; no partial monetary total | `components/suppliers/management/SupplierNavigation.test.tsx` |
+| Decoration budget | A/R exhausts the shared budget after the payable reader computed 9500000 JOD minor units. The payable row, exact total and complete flag remain. Both link sources become null | Backend `decoration exhaustion preserves every computed payable row and complete money totals` |
+| Distinct target gets | At 100 rows in each family: 803 actual gets for outstanding and 803 for settled, with complete literal totals and three auth/supplier gets included | Backend distinct outstanding and settled read-count cases |
+| Cache gets | At the same bound with shared targets: 7 outstanding gets. Fifty native purchase relationships sharing one vehicle: 4 gets, with native capped-page incompleteness retained | Backend shared outstanding and relationship read-count cases |
+
+### SCRUM869-navigation-screen
+
+The component checks use the real supplier components and dictionaries, with SDK
+and auth boundaries supplied synthetic records. They cover EN and AR source
+links, A/P and A/R, payer/payee, currency and minor-unit formatting, timestamps,
+plain opening labels when manage:finance is absent, ownership/status, RTL,
+loading, empty, error and incomplete states. The direct vehicle check renders
+the actual existing detail dialog. Local Chromium fixture renders at 375 and
+1440 pixels use application CSS and blocked network access; they are not
+cloud-backed screen-audit or mobile certification.
+
+Twenty-seven permanent records are stored as
+`regression/scenarios/{money,permission,tenancy,screen}/supplier-navigation-*.scenario.json`.
+Their exact executable registrations are the 17 backend cases, seven EN/AR
+component cases and three direct-vehicle cases (27 literal test registrations;
+localized cases execute a bounded EN/AR loop). Every stored fingerprint comes from the expected value printed by
+`scripts/regression/scenarioRecord.test.ts` and is checked again by that file.
+Run those three named test files and the regression library with one worker.
+These are read-only harness and synthetic screen controls. They neither certify
+OCC/platform read limits nor fulfill SCRUM-760's independent real-backend
+hunters, exact-SHA release rehearsal or P7 launch evidence.
+
+### SCRUM869-attention-read
+
+Supplier attention is an eligibility projection, not notification-delivery proof.
+Public query: `supplierStatement.attention`. Bound checks live in
+`convex/supplierAttention.scrum869.test.ts`; scenarios use the
+`supplier-attention-` prefix under `regression/scenarios/`.
+
+| Cell | Hand-specified expected result | Executable check |
+| --- | --- | --- |
+| Linked payable | 9,500 JOD = 9,500,000 minor; ten days overdue reaches OVERDUE_7; no total/net/count field and no notification write | linked payable alerts with its authoritative amount and no aggregate fields |
+| Identity | Same-name different-id and id-less payables are absent from the supplier's page; missing-id presence is organisation-wide | same-name supplier and id-less legacy rows never enter the account |
+| Dispute and missing date | Disputed 9,500,000 remains visible as HELD/DISPUTED; undated is HELD/NO_DUE_DATE, never overdue | disputed obligation is held rather than silently healthy; undated obligation is held rather than silently healthy |
+| Receivable and recovery | Near-due margin is 3,000,000 JOD minor and T_MINUS_3; later margin is absent. Recovery 200,000 minus 50,000 = 150,000, DUE_DAY, with no invented A/P | supplier receivable is due while a later receivable is not yet eligible; cost recovery uses the same reminder decision without fabricating a payable |
+| Amman midnight | At 20:59:59Z the due item is zero days overdue; at 21:00Z it is one. Validated caller nowMs drives the day; invalid clocks refuse | Amman midnight changes overdue day using the validated caller time; validated caller time controls cached eligibility and invalid clocks refuse |
+| Ordinary creditor | Id-less OPENING/OTHER_PAYABLE does not produce an unresolved-supplier warning | ordinary id-less opening creditors are excluded from unresolved supplier warnings |
+| Invalid data | NaN due facts, NaN/infinite/fractional/unsafe recovery money and unsupported currency refuse with SUPPLIER_ATTENTION_UNAVAILABLE, not complete money | unreadable stored due fact is a coded generic error rather than a silent omission; malformed recovery money is refused by the backend rather than marked complete |
+
+### SCRUM869-attention-permissions
+
+| Cell | Expected result | Executable check in the same backend file |
+| --- | --- | --- |
+| Missing either grant | Entire response equals null for no grants, finance-only and cost-only, with the separately gated unlinked query | no finance or cost permission withholds the whole response; finance-only access withholds the whole response; cost-only access withholds the whole response |
+| Foreign party and tenant | Supplier from B requested in A refuses generically; querying B without membership returns UNAUTHORIZED; no figures | foreign supplier and foreign organisation refuse without data |
+| Accounting plan | Starter plan refuses the reader before figures | accounting plan denial refuses before reading obligation figures |
+
+### SCRUM869-attention-bounds
+
+| Cell | Expected result | Executable check in the same backend file |
+| --- | --- | --- |
+| Native continuation | Two records, size one: first and continuation differ; each partial view has complete=false; final isDone=true; no accumulated total | page boundary is incomplete with no partial count and continuation reaches remaining rows |
+| Filtered history | A cancelled-only page is incomplete, not an empty supplier account; continuation reaches the open obligation | settled-only filtered page stays incomplete until the linked open row is reached |
+| Forced widening | Requested 1,000,000 rows cannot widen the 50-document cap; native required split yields no figures, complete=false, split cursor | caller cannot widen the fifty-document page bound |
+| Join headroom | Twenty joined sales with 900,000-byte synthetic strings return READ_BUDGET, no rows and no cursor advance with harness transaction limits enforced | large joined sale documents withhold figures as incomplete without advancing the cursor |
+| Required split | Two source rows with maximumRowsRead=1 produce SPLIT_REQUIRED, no figures and unchanged cursor, never advance over unread rows | required native page split withholds figures and preserves the current cursor |
+
+### SCRUM869-attention-screen
+
+`components/suppliers/management/SupplierAttentionSection.test.tsx` binds 18
+literal executable registrations: each reminder step and hold in EN and AR;
+separate A/P and A/R; loading, empty and incomplete notices; organisation-wide
+unlinked warnings; permission and plan query skips; coded localized errors;
+independent next/previous cursors; midnight refresh; read-budget and split
+refusals with no Next action; synthetic workspace/state fixtures with RTL.
+These are component tests, not authenticated browser replays.
+
+All 38 records are preventive feature controls without bugRef: the initial
+failing-first commit and two later advisory reproductions are reported
+separately, without attributing one red SHA to renamed or later-added tests.
+Their fingerprints are the values printed by scenarioRecord.test.ts.
+No real-backend/OCC, cloud read-limit, independent seat or pilot certificate is
+claimed. Full status-index paging is deferred: settled history can consume
+attention pages. Required-split ranges remain unavailable in this fixed-page UI,
+with figures withheld and navigation refused; this is explicit containment.
+
+
+### SCRUM869-worker-money-guard
+
+Read-integrity cells, local convex-test evidence only. Internal worker: supplierDueAlerts.processOrgSupplierDueAlerts without supplierId. Tests: convex/supplierDueAlerts.scrum869.test.ts.
+
+| Cell | Inputs and expected result | Executable check |
+| --- | --- | --- |
+| Recovery gross | 2^53 due minus (2^53 - 2) recovered must be unreadable despite a safe-looking remainder. Beside a usable 200,000-minor recovery, exactly 3 authorised alerts, 1 skipped row, one owner amount 200.000 and an unreadable-row log. Never alert from the invalid row. | recovery worker reports unsafe gross with safe remainder |
+| Recovery invalid forms | NaN due, 0.5 recovered, or unsafe recovered each produce the same reported skip; the usable recovery continues. | recovery worker reports NaN due without alerting unusable money; recovery worker reports fractional recovered money; recovery worker reports unsafe recovered money |
+| Payable gross | Disputed gross operands above safe minor-unit range must be reported before subtraction, alongside 3 alerts for a usable payable. | payable worker refuses unsafe gross operands with a safe remainder |
+| Receivable control | The existing separate operand conversions refuse unsafe gross values. | receivable worker refuses unsafe gross operands with a safe remainder |
+| Receivable remainder | 9,007,199,254,740 JOD due and -1 JOD received have safe individual minor conversions but an unsafe remainder. Report 1 skipped row; only the valid sibling produces 3 alerts. | org-wide receivable worker reports an unsafe remainder from safe operands |
+
+The first tests-only commit e0dcf977376e29b57b07be727215727e0ccd4f06 failed five parameterized cases. Literal wrappers added later retain their assertions, so their records are preventive controls rather than claiming those literal names existed at that red SHA. The receivable-remainder test is unchanged from its separate red commit 17a653a1f40c3832c96c88af546f5b9ea9e203d7 and carries that bugRef. No accounting or notification-delivery certification is claimed from this harness.
+
+### SCRUM869-attention-presence-access
+
+Public query: supplierStatement.unlinkedAttention, keyed only by orgId and kind. Tests: convex/supplierAttention.scrum869.test.ts.
+
+| Cell | Expected result | Executable check |
+| --- | --- | --- |
+| Finance gate | Cost-only caller gets exactly null. | withholds presence without finance |
+| Cost gate | Finance-only caller gets exactly null, under SCRUM-902 c24475. | withholds presence without cost |
+| Plan gate | Starter accounting denial refuses. | refuses presence without accounting plan |
+| Tenant gate | Foreign organisation refuses UNAUTHORIZED. | refuses foreign organisation presence |
+| Early existence | 51 real qualifying documents read as PRESENT after one document and zero writes in harness transaction metrics. | presence stops reading after the first qualifying document |
+| Independent read range | Attention page has no unlinked field; separate query reports PRESENT. Join-budget withholding still preserves every amount/cursor refusal while the separate empty-range presence is NONE. | attention subscriptions return no organisation-wide presence field; large joined sale documents withhold figures as incomplete without advancing the cursor |
+
+### SCRUM868-P7-launch-evidence
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Missing identity | One missing row counts 1 for each of eleven tables; supplier expense missing payee and bearer counts 1 in each independent reason | `convex/supplierLaunchEvidence.test.ts`, eleven literal table cases |
+| Complete identified data | All eleven tables report 0; full before/after document arrays equal | Same suite, fully identified tenant |
+| Exemptions | Ordinary OPENING OTHER_PAYABLE and SHOWROOM vendor text count 0; supplier opening counts 1; metadata-only pending update inherits id | Same suite, ordinary creditor and partial-edit cases |
+| Partial and unreadable evidence | 1,001 conversion rows (1 identified) require two pages, missing counts 999 then 1. A native byte split and an unreadable cursor return UNAVAILABLE without counts. A pending UPDATE whose vehicle was deleted counts 0, because approval refuses it without writes | Same suite, paging, split, cursor and pending-edit cases |
+| Release refusal | Any count 1 refuses with SUPPLIER_IDENTITY_UNRESOLVED; failed call, malformed response, deadline and page cap return SUPPLIER_EVIDENCE_UNAVAILABLE | `scripts/releaseGuard.supplierLaunch.test.ts`; actual rollout phase executed with failing CLI responses |
+| Browser identity | EN and AR/RTL: opening 100003 JOD minor units selects MASTER_A, consigned vehicle cost 80 and selling price 100 selects the same party with zero journal change, payment 100.003 retains MASTER_A after reload | `playwright/tests/supplier-identity.spec.ts`, both literal journeys |
+
+The eleven-table census adds openingPayablePayments to design section 4.1.
+Recovery receipts and opening payments prove identity through their same-org
+parents. OWNED ON_ACCOUNT creditor identity remains on the acquisition payable.
+The query is internal and read-only; no amount, posting, settlement, opening or
+correction behavior changes. Counts are complete or UNAVAILABLE. See
+`docs/adr/2026-11-10-supplier-launch-evidence.md` for limits and exclusions.
+
+P7 also registers thirteen previously unbound P2-P4b controls against the existing
+matrix rows: P2 update-by-id, unchanged-name echo, role conflict and on-account
+creditor; P3 concession basis; P4a inactive completion and receipt refusal; P4b
+bearer spoofing, legacy notes-only edit, SHOWROOM free text, pending bearer
+switch, inactive/stale parties and shared economic confirmation. P5's 52 literal
+backend controls already have registrations. These are preventive controls
+without bugRef. Scenario records use the repository fingerprint function.
+
+Local harness and script results do not certify the browser rows. The journeys
+require the disposable runner-local backend, block cloud Convex HTTP and
+nonlocal WebSockets, and preserve existing authentication. Docker and QA auth
+state were unavailable in the implementing worktree, so browser execution,
+phone/desktop screen audit, explorer hunters, hosted Sonar, independent seats,
+real-platform certification and production counts remain UNAVAILABLE here.
+The trusted exact-SHA accounting release verdict remains a separate gate.
+
+### SCRUM868-P7-launch-evidence round 2 controls
+
+| Control | Expected result | Executable evidence |
+| --- | --- | --- |
+| Large census | 5 vehicle pages + 20 expense pages for the fixed 5,000/20,000-row driver fixture; nine other empty-table calls; real backend page returns 1,000 then one | releaseGuard.supplierLaunch large tenant test; supplierLaunchEvidence pagination test |
+| Dead pending update | Missing, foreign or deleted vehicle refuses approval without writes, while the census reports zero for the dead request | supplierLaunchEvidence literal dead pending missing/foreign/deleted tests |
+| Finance history | P7 counts a terminal unbound basis and held concessions, including absent basis; P3 terminal scope remains exempt | supplierLaunchEvidence historical bases comparison test |
+| Parent cache | Two receipts sharing a recovery and two ordinary-creditor payments each use one parent get per table; exemptions remain zero | supplierLaunchEvidence parent cache test |
+| Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
+
+These are local harness/driver controls, not production counts or pilot certification.

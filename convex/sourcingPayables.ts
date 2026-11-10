@@ -33,28 +33,18 @@ import { assertSupplierSettlementMethodAllowed } from "./utils/supplierSettlemen
 
 const OPENING_PAYABLE_VAT_REFUSAL = "Opening liabilities cannot be reclassified as VAT.";
 
-/**
- * SCRUM-781, owner rulings SCRUM-773 c22401 and SCRUM-760 c23812: no reclaimable VAT on a consigned
- * supplier payable. Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN) in lib/i18n/domains/common.ts.
- */
+// SCRUM-781 / SCRUM-773 c22401 / SCRUM-760 c23812: no reclaimable consignment VAT.
+// Must equal ServerError_CONSIGNED_PAYABLE_VAT_REFUSED (EN).
 export const CONSIGNED_PAYABLE_VAT_REFUSAL =
   "A consigned vehicle's supplier payable is settled at its gross amount. VAT cannot be reclassified on it.";
 
-/**
- * SCRUM-869: the over-application refusal of `recordPartialPayment`. Must equal
- * ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE (EN) in lib/i18n/domains/common.ts once `{projected}` and `{due}`
- * are filled. It names only an action the user can take: payable correction is pilot-disabled.
- */
+// SCRUM-869: matches ServerError_SUPPLIER_PAYMENT_EXCEEDS_BALANCE (EN) after amount substitution.
+// Payable correction is pilot-disabled; offer only reducing the payment.
 export function supplierPaymentExceedsBalanceMessage(projected: number, due: number): string {
   return `That would pay ${projected} against ${due} owed. Reduce the amount to the balance still owed.`;
 }
 
-/**
- * Whether this payable may carry an input-VAT reclassification. THE one answer, read by the
- * `markPaid` refusal and by the `list`/`get` flag the screens use to hide the VAT field, so the
- * screen can never offer what the mutation refuses. An opening liability has no vehicle to prove
- * ownership from, and a vehicle of another organization is not readable evidence: both fail closed.
- */
+// Shared VAT decision for mutations and list/get flags. Opening or foreign vehicles fail closed.
 function payableAcceptsVatReclass(
   payable: { origin?: string; saleId?: unknown },
   vehicle: Doc<"vehicles"> | null,
@@ -474,8 +464,7 @@ export const markPaid = mutation({
           updatedAt: now,
         });
 
-        // Use the currency snapshotted at sale time — not the current org
-        // currency — so settlement always matches the original AP posting scale.
+        // Settle in the obligation's snapshotted currency.
         const currency = payable.currency;
         // A payable with a linked sale was created at SALE time for a sourced
         // vehicle (AP credited against COST_OF_VEHICLES_SOLD — sourced vehicles
@@ -498,6 +487,7 @@ export const markPaid = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
+          supplierId: payable.supplierId,
           amountMinor: settlementAmountMinor,
           paymentSeq: (payable.paymentSeq ?? 0) + 1,
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
@@ -516,9 +506,9 @@ export const markPaid = mutation({
           actionType: "ALLOCATE_PAYMENT",
           resourceType: "vehicleSupplierPayables",
           resourceId: args.payableId,
-          description: `Paid ${remainingToSettle} ${currency} to ${payable.sourcedFromName} to settle the supplier payable of ${payable.amountDue} in full (${paymentMethod}).`,
+          description: "Settled supplier payable in full.",
           before: { amountPaid: payable.amountPaid ?? 0, status: payable.status },
-          after: { amountPaid: paidInFull, status: "PAID" },
+          after: { amountPaid: paidInFull, status: "PAID", paymentMethod, supplierName: payable.sourcedFromName, amountMinor: settlementAmountMinor },
           idempotencyKey: args.idempotencyKey,
         });
       }
@@ -678,6 +668,7 @@ export const recordPartialPayment = mutation({
           orgId: args.orgId,
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
+          supplierId: payable.supplierId,
           amountMinor: toMinorUnits(args.amount, payable.currency),
           currency: payable.currency,
           paymentMethod,
@@ -688,16 +679,16 @@ export const recordPartialPayment = mutation({
           occurredAt: now,
         });
 
-        // SCRUM-869 S1: who paid how much of which supplier entitlement, in what state it was.
         await auditLog(ctx, {
           orgId: args.orgId,
           actorId: user._id,
           actionType: "ALLOCATE_PAYMENT",
           resourceType: "vehicleSupplierPayables",
           resourceId: args.payableId,
-          description: `Paid ${args.amount} ${payable.currency} to ${payable.sourcedFromName} against a supplier payable of ${payable.amountDue} (${paymentMethod}).`,
+          description: "Recorded payment against a supplier payable.",
           before: { amountPaid: alreadyPaid, status: payable.status },
-          after: { amountPaid: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID" },
+          after: { amountPaid: projected, status: settlesInFull ? "PAID" : "PARTIALLY_PAID", paymentMethod,
+            supplierName: payable.sourcedFromName, amountMinor: toMinorUnits(args.amount, payable.currency) },
           idempotencyKey: args.idempotencyKey,
         });
 
