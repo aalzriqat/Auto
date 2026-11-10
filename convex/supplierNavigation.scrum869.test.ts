@@ -45,6 +45,18 @@ const outstanding = (s: Seed) => s.asUser.query(api.supplierStatement.outstandin
 const related = (s: Seed, kind = "SOURCED", paginationOpts = { numItems: 25, cursor: null as string | null }) =>
   s.asUser.query(vehicles, { orgId: s.orgId, supplierId: s.supplierId, kind, paginationOpts });
 
+async function financedSale(s: Seed) {
+  return s.t.run(async ctx => {
+    const customerId = await ctx.db.insert("customers", { orgId: s.orgId, firstName: "Synthetic", lastName: "Buyer" });
+    const companyId = await ctx.db.insert("financeCompanies", { orgId: s.orgId, name: "Synthetic lender", isActive: true, profitRate: 5, maxTermMonths: 72, gracePeriodMonths: 3 });
+    const quoteId = await ctx.db.insert("quotes", { orgId: s.orgId, vehicleId: s.vehicleId, customerId, vehiclePrice: 12000, downPayment: 2000, totalFinancedAmount: 10000, termMonths: 24, status: "DRAFT", companyId, createdBy: s.userId, createdAt: NOW });
+    const applicationId = await ctx.db.insert("financeApplications", { orgId: s.orgId, vehicleId: s.vehicleId, customerId, companyId, quoteId, salespersonId: s.userId, status: "CLOSED", createdAt: NOW, updatedAt: NOW });
+    const saleId = await ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId, customerId, salespersonId: s.userId, applicationId, salePrice: 12000, saleDate: NOW, status: "COMPLETED", dealNumber: 941 });
+    await ctx.db.insert("vehicleSupplierReceivables", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, saleId, sourcedFromName: "Synthetic supplier payer", amountDue: 3000, currency: "JOD", status: "OPEN", createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
+    return { saleId, applicationId };
+  });
+}
+
 async function measureHandler(s: Seed, registered: unknown, args: unknown) {
   if (typeof registered !== "function" || !("_handler" in registered) || typeof registered._handler !== "function") throw new Error("Registered handler unavailable");
   const handler = registered._handler;
@@ -224,6 +236,50 @@ describe("supplier navigation by canonical id", () => {
       expect.objectContaining({ context: expect.objectContaining({ role: "AR", counterparty: "Supplier payer", source: expect.objectContaining({ kind: "SALE", id: saleId, href: `/${s.orgId}/sales/${saleId}/deal` }) }) }),
       expect.objectContaining({ context: expect.objectContaining({ counterparty: "Supplier bearer", source: expect.objectContaining({ kind: "EXPENSE", label: "Transport invoice", href: null }), vehicleSource: expect.objectContaining({ kind: "VEHICLE", id: s.vehicleId, label: "2024 Toyota Camry", href: `/${s.orgId}/vehicles?supplierVehicleId=${s.vehicleId}` }) }) }),
     ]));
+  });
+
+  // SCRUM-941: the applications/[applicationId]/deal route and its view:sales guard,
+  // plus ADR 2026-11-10-supplier-statement-links-and-relationships, define these oracles.
+  test("financed supplier sale links to its same-organization application for a sales viewer", async () => {
+    const s = await seed(["view:finance", "view:cost_price", "view:sales"]);
+    const { applicationId } = await financedSale(s);
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "APPLICATION", id: applicationId, label: "#941 · 2024 Toyota Camry",
+      href: `/${s.orgId}/applications/${applicationId}/deal`,
+    }]);
+  });
+
+  test("financed supplier sale preserves its application label without a link for a viewer without sales", async () => {
+    const s = await seed(["view:finance", "view:cost_price"]);
+    const { applicationId } = await financedSale(s);
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "APPLICATION", id: applicationId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+  });
+
+  test("financed supplier sale with a foreign application exposes only the local sale without a link", async () => {
+    const s = await seed(["view:finance", "view:cost_price", "view:sales"]);
+    const { saleId, applicationId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.patch(applicationId, { orgId: s.foreignOrg }));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(applicationId);
+    expect(JSON.stringify(result)).not.toContain(s.foreignOrg);
+  });
+
+  test("financed supplier sale with a deleted application exposes only the local sale without a link", async () => {
+    const s = await seed(["view:finance", "view:cost_price", "view:sales"]);
+    const { saleId, applicationId } = await financedSale(s);
+    await s.t.run(ctx => ctx.db.delete(applicationId));
+    const result = await outstanding(s);
+    expect(result.receivable.rows.map(row => row.context.source)).toStrictEqual([{
+      kind: "SALE", id: saleId, label: "#941 · 2024 Toyota Camry", href: null,
+    }]);
+    expect(JSON.stringify(result)).not.toContain(applicationId);
   });
 
   test("missing target permissions preserve labels without links and foreign or deleted targets disclose no label", async () => {
