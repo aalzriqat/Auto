@@ -8,6 +8,7 @@ import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 import { supplierNavigationFailure, supplierVehicleHref, supplierVehicleLabel } from "./utils/supplierNavigation";
 import { createSupplierReadCache, readCached, type SupplierReadCache } from "./utils/supplierReadCache";
 import { boundedCount } from "./utils/paginationBounds";
+import { inTurn } from "./utils/transactionReadHeadroom";
 
 const MAX_ROWS = 50;
 const MAX_BYTES = 1024 * 1024;
@@ -47,10 +48,10 @@ export const vehicles = query({
       } else {
         result = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", args.orgId).eq("supplierId", args.supplierId)).order("desc").paginate(options);
         const cache = createSupplierReadCache();
-        for (const payable of result.page) {
+        await inTurn(result.page, async payable => {
           const vehicle = await ownedVehicle(ctx, args.orgId, payable, cache);
           if (vehicle) page.push(project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id));
-        }
+        });
       }
       return { ...result, page, pageStatus: result.pageStatus ?? null, splitCursor: result.splitCursor ?? null };
     } catch (error) {

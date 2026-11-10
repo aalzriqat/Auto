@@ -1,10 +1,11 @@
 import { ConvexError, v, type Infer } from "convex/values";
-import type { Doc, Id, TableNames } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { PERMISSIONS } from "./permissions";
 import type { ObligationKind } from "./supplierObligationDue";
 import type { SupplierObligation } from "./supplierSettledRows";
-import { readCached, SupplierReadBudgetExhausted, type SupplierReadCache } from "./supplierReadCache";
+import { readCached, SupplierReadBudgetExhausted, type CachedTable, type SupplierReadCache } from "./supplierReadCache";
+import { inTurn } from "./transactionReadHeadroom";
 
 export const supplierSourceValidator = v.object({
   kind: v.union(v.literal("VEHICLE"), v.literal("SALE"), v.literal("APPLICATION"), v.literal("EXPENSE"), v.literal("OPENING")),
@@ -22,7 +23,7 @@ type Context = Infer<typeof supplierRowContextValidator>;
 type NavigationArgs = { orgId: Id<"organizations">; permissions: readonly string[]; cache: SupplierReadCache };
 
 /** Every enrichment get spends the statement transaction's existing byte/document/range budget. */
-async function owned<T extends TableNames>(ctx: QueryCtx, orgId: Id<"organizations">, cache: Map<Id<T>, Doc<T> | null>, id: Id<T>): Promise<Doc<T> | null> {
+async function owned<T extends CachedTable>(ctx: QueryCtx, orgId: Id<"organizations">, cache: Map<Id<T>, Doc<T> | null>, id: Id<T>): Promise<Doc<T> | null> {
   const doc = await readCached(ctx, cache, id);
   if (!doc || !("orgId" in doc) || doc.orgId !== orgId) return null;
   if ("isDeleted" in doc && doc.isDeleted) return null;
@@ -56,7 +57,7 @@ async function sourceFor(ctx: QueryCtx, args: NavigationArgs, obligation: Suppli
   // P5 opening obligations have no vehicle. Never reinterpret them as a native obligation.
   if ("origin" in obligation && obligation.origin === "OPENING") {
     const draft = await owned(ctx, args.orgId, args.cache.openings, obligation.openingBalanceDraftId);
-    if (!draft || draft.status !== "POSTED") return { source: null };
+    if (draft?.status !== "POSTED") return { source: null };
     const canOpen = args.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
     return { source: { kind: "OPENING", id: draft._id, label: obligation.title, href: canOpen ? `/${args.orgId}/accounting?section=settings` : null } };
   }
@@ -79,7 +80,7 @@ export async function addSupplierRowContext<R extends { kind: ObligationKind; id
   totals: unknown[]; complete: boolean;
 }>(ctx: QueryCtx, args: NavigationArgs, section: S & { rows: R[] }): Promise<Omit<S, "rows"> & { rows: Array<Omit<R, "document"> & { context: Context }> }> {
   const rows: Array<Omit<R, "document"> & { context: Context }> = [];
-  for (const entry of section.rows) {
+  await inTurn(section.rows, async entry => {
     // The money reader already holds the obligation in this query's consistent snapshot.
     const { document: obligation, ...row } = entry;
     const occurredAt = Number.isSafeInteger(obligation.createdAt) && Math.abs(obligation.createdAt) <= 8.64e15 ? obligation.createdAt : null;
@@ -90,7 +91,7 @@ export async function addSupplierRowContext<R extends { kind: ObligationKind; id
       if (!(error instanceof SupplierReadBudgetExhausted)) throw error;
     }
     rows.push({ ...row, context });
-  }
+  });
   return { ...section, rows };
 }
 

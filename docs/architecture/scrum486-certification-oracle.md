@@ -800,6 +800,12 @@ The same matrix row also includes `opening-reset-recovery-checkpoint-org-delete`
 
 The recovery checkpoint scenario additionally invokes an internal destructive reset continuation after public deletion admission. It must refuse without recreating the abandoned checkpoint; natural deletion still removes the recovery without leaving a retained organization reference. Literal sibling controls cover public approval and a FAILED deletion followed by a new hard-delete retry. Dry-run inspection remains available. A bounded request-pointer read reserves destructive progress for RUNNING/FAILED deletion, including persisted start/purge markers; missing, foreign or closed request metadata refuses before writes. Verified same-org PENDING_REVIEW/APPROVED requests without destruction markers preserve ordinary reset continuation, so the existing reset-completion prerequisite for rejection does not become stranded. These are serial lifecycle harness controls, not platform/OCC proof or evidence that operators have used the interleaving in a deployment.
 
+### SCRUM-939 vehicle wizard final confirmation
+
+| Intake screen control | Required result | Bound check and evidence limit |
+| --- | --- | --- |
+| SCRUM939-final-confirmation | Photos Continue mounts a different button for Availability; an early create submit calls neither create nor request-create; final confirmation and edit submit still save | `components/vehicles/VehicleDialog.submit.test.tsx`, red at `8574e06bd6aa658a46d1ca92b81bb95abdee4c30`; strict EN/AR journey in `playwright/tests/supplier-identity.spec.ts` asserts an empty vehicle read before the final click. Local component evidence only; the authenticated backend journey has not been run for this fix. |
+
 ### SCRUM-868 P2 canonical supplier identity on vehicles
 
 Matrix rows `SCRUM868-P2-supplier-identity` (money, 33 scenarios) and `SCRUM868-P2-supplier-isolation` (permission, 3 scenarios) bind literal tests in `convex/vehicleSupplierIdentity.test.ts`. Owner ruling SCRUM-868 c23794 and the SCRUM-760 pilot scope: every pilot-enabled door that sets a SOURCED vehicle's consignment supplier (`vehicles.create`, `update`, `createSourced`, `importBulk`, `vehicleEdits.requestCreate`, `requestUpdate`, `resolve`) or an OWNED ON_ACCOUNT creditor takes a supplier master id. The server resolves the id inside the caller's organization, stores the id and writes the name snapshot itself; a typed name is never trusted. Independent expected values: a name-only call (the shape the mobile app sends) refuses with `SUPPLIER_IDENTITY_REQUIRED` and no table changes; a foreign-organization id and a deleted id refuse with the same code and the same message (`SUPPLIER_NOT_FOUND`); an inactive supplier refuses with `SUPPLIER_INACTIVE`; a creditor id on a consignment car, or a consignment id on an owned car or a cash purchase, refuses with `SUPPLIER_ROLE_CONFLICT`. Once a supplier payable or a supplier-borne expense exists, changing the consignment supplier refuses with `SUPPLIER_LINK_FROZEN` at request time and at approval, while re-sending the stored id is a no-op. The freeze is proven for each money record on its own: a supplier payable, a supplier receivable with no payable (a direct-to-supplier sale), a supplier cost recovery, a supplier-borne expense and a finance application holding a supplier concession each refuse a supplier change with nothing written (the held concession also refuses ehicleEdits.requestUpdate at request time with HELD_BY_DEAL and stores no request), and a vehicle with 199 dealership-borne expenses may still change supplier while the 200th fills the scan bound and refuses (fail closed). A purchase import whose (import, row) evidence already exists with the same fingerprint is recognised as already recorded (inserted 0, alreadyRecorded 2, one payable of 9,000, no table changes) even after its creditor was deactivated, including a row number that is negative (-1) or beyond 2^53, which the purchase validator accepts; a different import using that inactive creditor still refuses with `SUPPLIER_INACTIVE`, and a changed or foreign-supplier replay of the same key still refuses with `IDEMPOTENCY_CONFLICT`. An UPDATE request stores no typed `purchaseSupplierName`: only the server snapshot name beside the creditor id. The on-account payable carries the creditor id, snapshot version 1 and the server name for 10,000 JOD, and the acquisition journal is the unchanged single VEHICLE_ACQUIRED event (no posting or amount change). A master rename after creation does not rewrite the stored vehicle name, and a retry of the same idempotency key replays the first vehicle. The data browser refuses a change to `sourcedSupplierId` as a locked ownership field, and a stored link that points at another organization is dropped by the buy-out conversion reader. This is serial `convex-test` harness evidence only. It does not prove concurrency (the harness has no OCC), Convex platform behaviour or production data. A legacy name-only vehicle already stored keeps its name and no id: it is not backfilled by this change, and a legacy name-only pending request cannot be approved. The mobile app is outside the pilot and is not changed; it now receives the coded refusal on a name-only supplier write. The web supplier picker, import mapping and their English and Arabic strings are covered by component tests only; no browser replay record exists for them yet and the rendered EN/AR desktop and phone screens were not inspected by this change.
@@ -2086,3 +2092,49 @@ Public query: supplierStatement.unlinkedAttention, keyed only by orgId and kind.
 | Tenant gate | Foreign organisation refuses UNAUTHORIZED. | refuses foreign organisation presence |
 | Early existence | 51 real qualifying documents read as PRESENT after one document and zero writes in harness transaction metrics. | presence stops reading after the first qualifying document |
 | Independent read range | Attention page has no unlinked field; separate query reports PRESENT. Join-budget withholding still preserves every amount/cursor refusal while the separate empty-range presence is NONE. | attention subscriptions return no organisation-wide presence field; large joined sale documents withhold figures as incomplete without advancing the cursor |
+
+### SCRUM868-P7-launch-evidence
+
+| Cell | Literal expected result | Bound check |
+| --- | --- | --- |
+| Missing identity | One missing row counts 1 for each of eleven tables; supplier expense missing payee and bearer counts 1 in each independent reason | `convex/supplierLaunchEvidence.test.ts`, eleven literal table cases |
+| Complete identified data | All eleven tables report 0; full before/after document arrays equal | Same suite, fully identified tenant |
+| Exemptions | Ordinary OPENING OTHER_PAYABLE and SHOWROOM vendor text count 0; supplier opening counts 1; metadata-only pending update inherits id | Same suite, ordinary creditor and partial-edit cases |
+| Partial and unreadable evidence | 1,001 conversion rows (1 identified) require two pages, missing counts 999 then 1. A native byte split and an unreadable cursor return UNAVAILABLE without counts. A pending UPDATE whose vehicle was deleted counts 0, because approval refuses it without writes | Same suite, paging, split, cursor and pending-edit cases |
+| Release refusal | Any count 1 refuses with SUPPLIER_IDENTITY_UNRESOLVED; failed call, malformed response, deadline and page cap return SUPPLIER_EVIDENCE_UNAVAILABLE | `scripts/releaseGuard.supplierLaunch.test.ts`; actual rollout phase executed with failing CLI responses |
+| Browser identity | EN and AR/RTL: opening 100003 JOD minor units selects MASTER_A, consigned vehicle cost 80 and selling price 100 selects the same party with zero journal change, payment 100.003 retains MASTER_A after reload | `playwright/tests/supplier-identity.spec.ts`, both literal journeys |
+
+The eleven-table census adds openingPayablePayments to design section 4.1.
+Recovery receipts and opening payments prove identity through their same-org
+parents. OWNED ON_ACCOUNT creditor identity remains on the acquisition payable.
+The query is internal and read-only; no amount, posting, settlement, opening or
+correction behavior changes. Counts are complete or UNAVAILABLE. See
+`docs/adr/2026-11-10-supplier-launch-evidence.md` for limits and exclusions.
+
+P7 also registers thirteen previously unbound P2-P4b controls against the existing
+matrix rows: P2 update-by-id, unchanged-name echo, role conflict and on-account
+creditor; P3 concession basis; P4a inactive completion and receipt refusal; P4b
+bearer spoofing, legacy notes-only edit, SHOWROOM free text, pending bearer
+switch, inactive/stale parties and shared economic confirmation. P5's 52 literal
+backend controls already have registrations. These are preventive controls
+without bugRef. Scenario records use the repository fingerprint function.
+
+Local harness and script results do not certify the browser rows. The journeys
+require the disposable runner-local backend, block cloud Convex HTTP and
+nonlocal WebSockets, and preserve existing authentication. Docker and QA auth
+state were unavailable in the implementing worktree, so browser execution,
+phone/desktop screen audit, explorer hunters, hosted Sonar, independent seats,
+real-platform certification and production counts remain UNAVAILABLE here.
+The trusted exact-SHA accounting release verdict remains a separate gate.
+
+### SCRUM868-P7-launch-evidence round 2 controls
+
+| Control | Expected result | Executable evidence |
+| --- | --- | --- |
+| Large census | 5 vehicle pages + 20 expense pages for the fixed 5,000/20,000-row driver fixture; nine other empty-table calls; real backend page returns 1,000 then one | releaseGuard.supplierLaunch large tenant test; supplierLaunchEvidence pagination test |
+| Dead pending update | Missing, foreign or deleted vehicle refuses approval without writes, while the census reports zero for the dead request | supplierLaunchEvidence literal dead pending missing/foreign/deleted tests |
+| Finance history | P7 counts a terminal unbound basis and held concessions, including absent basis; P3 terminal scope remains exempt | supplierLaunchEvidence historical bases comparison test |
+| Parent cache | Two receipts sharing a recovery and two ordinary-creditor payments each use one parent get per table; exemptions remain zero | supplierLaunchEvidence parent cache test |
+| Both successful exits | Empty and verified exits refuse unreadable/unresolved evidence before success summary/exit | supplierLaunchRollout literal empty and verified tests |
+
+These are local harness/driver controls, not production counts or pilot certification.

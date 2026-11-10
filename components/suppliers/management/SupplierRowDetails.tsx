@@ -27,7 +27,8 @@ export function SupplierRowDetails({ context }: Readonly<{ context: Context | un
   const { locale } = useLanguage();
   const date = context?.occurredAt;
   const instant = date === null || date === undefined ? null : new Date(date);
-  const timestamp = instant ? timestampFormatters[locale === "ar" ? "ar" : "en"].format(instant) : null;
+  const formatter = timestampFormatters[locale === "ar" ? "ar" : "en"];
+  const timestamp = instant ? formatter.format(instant) : null;
   return (
     <div className="mt-1 min-w-0 space-y-1 text-xs font-normal text-muted-foreground">
       <SourceLabel source={context?.source ?? null} />

@@ -326,30 +326,11 @@ export async function createVehicle(
   // Step 4/5 — Photos. Optional; no upload needed for a test vehicle.
   await advanceVehicleWizard(dialog, 5, "Availability");
 
-  // Step 5/5 — Availability. Status defaults to AVAILABLE and Trust Passport
-  // fields are optional, so the final step submits directly.
-  //
-  // Unlike the Continue clicks above, this click's own success handler closes
-  // the dialog (onOpenChange(false)) synchronously enough to race Playwright's
-  // click-actionability tracking: a fresh-preview trace confirmed the "Vehicle
-  // added successfully" toast and dialog-closed state landing well under a
-  // second after this click, while Playwright itself still reported the click
-  // as "element was detached from the DOM, retrying" all the way to its own
-  // action timeout. The submission had already succeeded; only Playwright's
-  // own bookkeeping for *this specific click* never resolved. Two things
-  // follow: the click is fired without being awaited on its own so the toast
-  // check below can catch the toast the moment it appears rather than after
-  // the click's bookkeeping gives up, and its own timeout is capped short —
-  // otherwise awaiting it later (even caught) burns most of the test's
-  // budget before the dialog-closed check ever gets to run, which is exactly
-  // what turned a real pass into a "Test timeout of 60000ms exceeded" here.
-  // A submission that genuinely doesn't happen still fails the toast and
-  // dialog-closed assertions correctly.
-  const submitClick = dialog
-    .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
-    .click({ timeout: 5_000 })
-    .catch(() => {});
-
+  // SCRUM-939: reaching Availability must not save before final confirmation.
+  const submit = dialog.getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ });
+  await expect(submit).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: /Saving/ })).toHaveCount(0);
+  await submit.click();
   // A caller holding only CREATE_VEHICLES_REQUEST gets "Submit for Approval":
   // a pending vehicleEdits row is written and NO vehicles row exists. Callers
   // that go on to select the vehicle must insist on the direct path, or they
@@ -366,7 +347,6 @@ export async function createVehicle(
       ),
     ).toBeVisible();
   }
-  await submitClick;
   await expect(dialog).not.toBeVisible();
 
   return { make, model, vin };

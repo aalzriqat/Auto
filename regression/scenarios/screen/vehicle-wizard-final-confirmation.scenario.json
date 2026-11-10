@@ -1,0 +1,39 @@
+{
+  "id": "vehicle-wizard-final-confirmation",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "trusted-main-42733392378",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": { "role": "OWNER_OR_VEHICLE_REQUESTER", "org": "A" },
+      "action": "VehicleDialog.create.fill",
+      "input": { "renderer": "jsdom", "make": "Toyota", "model": "Synthetic", "color": "Black", "sourceType": "STOCK", "purchasePrice": 0 }
+    },
+    {
+      "actor": { "role": "OWNER_OR_VEHICLE_REQUESTER", "org": "A" },
+      "action": "VehicleDialog.create.continuePhotos",
+      "input": { "fromStep": 4, "toStep": 5 }
+    }
+  ],
+  "expected": [
+    { "observable": "beforeFinalConfirmation.createMutationCalls", "value": 0 },
+    { "observable": "photosContinueAndAvailabilitySubmit.sameDOMNode", "value": false },
+    { "observable": "photosContinue.connectedAfterNavigation", "value": false },
+    { "observable": "availabilityConfirmation.buttonType", "value": "submit" }
+  ],
+  "rulings": [
+    { "id": "SCRUM-760#description", "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69" }
+  ],
+  "impl": {
+    "file": "components/vehicles/VehicleDialog.submit.test.tsx",
+    "testName": "Photos Continue and Availability submit are different DOM nodes"
+  },
+  "sourceGlobs": ["components/vehicles/VehicleDialog.tsx", "playwright/utils.ts", "playwright/tests/supplier-identity.spec.ts"],
+  "bugRef": { "key": "SCRUM-939", "failingFirst": "8574e06bd6aa658a46d1ca92b81bb95abdee4c30" },
+  "fingerprint": "6e4c46e1d276a3493b76cc76ef4835a70d4a1f9edfc7a9de46283456593b00f6"
+}

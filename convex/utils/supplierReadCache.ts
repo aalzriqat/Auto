@@ -1,4 +1,4 @@
-import type { Doc, Id, TableNames } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { hasReadHeadroom, type HeadroomCtx } from "./transactionReadHeadroom";
 
@@ -15,9 +15,11 @@ export function createSupplierReadCache() {
   };
 }
 export type SupplierReadCache = ReturnType<typeof createSupplierReadCache>;
+/** The source tables a statement row links to. Never a supplier table, so the supplier lock guard can prove it. */
+export type CachedTable = "vehicles" | "sales" | "financeApplications" | "expenses" | "openingBalanceDrafts";
 
 /** One query snapshot, one read per id, including missing documents. Headroom is charged only on a miss. */
-export async function readCached<T extends TableNames>(
+export async function readCached<T extends CachedTable>(
   ctx: Pick<QueryCtx, "db"> & HeadroomCtx,
   cache: Map<Id<T>, Doc<T> | null>,
   id: Id<T>,

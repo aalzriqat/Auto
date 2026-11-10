@@ -25,10 +25,14 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalQuery } from "./_generated/server";
 import { internalMutation } from "./functions";
-import { IN_FLIGHT_FINANCE_STATUSES } from "./utils/financeStatuses";
 import { applicationVehicleIds } from "./utils/supplierConcession";
 import {
   clampRepairPageSize,
+  isIdLessNativeRow,
+  holdsConcession,
+  lacksVehicleSupplier,
+  scanOptions,
+  finishedPage,
   emptyReasonCounts,
   evaluateVehicleLink,
   repairStamp,
@@ -37,12 +41,7 @@ import {
 } from "./utils/supplierIdentityRepair";
 
 const REPAIR_PHASES = ["PAYABLES", "RECEIVABLES", "RECOVERIES", "CONCESSIONS"] as const;
-const repairPhaseValidator = v.union(
-  v.literal("PAYABLES"),
-  v.literal("RECEIVABLES"),
-  v.literal("RECOVERIES"),
-  v.literal("CONCESSIONS"),
-);
+const repairPhaseValidator = v.union(...REPAIR_PHASES.map(phase => v.literal(phase)));
 const countPhaseValidator = v.union(
   v.literal("PAYABLES"),
   v.literal("RECEIVABLES"),
@@ -72,9 +71,6 @@ const pageResultValidator = v.object({
   byReason: byReasonValidator,
 });
 
-/** A native scan budget (Convex 1.42): a page that would read more than this stops early and returns a cursor. */
-const MAX_BYTES_READ_PER_PAGE = 4 * 1024 * 1024;
-
 type PageResult = {
   status: "MORE" | "READY";
   cursor: string | null;
@@ -83,26 +79,6 @@ type PageResult = {
   unresolved: number;
   byReason: ReasonCounts;
 };
-
-type Page<T> = { page: T[]; isDone: boolean; continueCursor: string };
-
-/** Whether a row is one the repair or the check is about: a native row, with no supplier id. */
-const isIdLessNativeRow = (row: { origin?: string; supplierId?: Id<"suppliers"> }): boolean =>
-  row.origin !== "OPENING" && row.supplierId === undefined;
-
-/**
- * The concession the settlement completion revalidates: an unfinalized application in flight that holds
- * a supplier share. The same predicate as `assertNoHeldSupplierConcession`, so a deal the vehicle-edit
- * freeze protects is exactly a deal this repair and the check look at.
- */
-const holdsConcession = (app: Doc<"financeApplications">): boolean =>
-  (app.supplierGapShareMinor ?? 0) > 0 &&
-  app.finalizedSaleId === undefined &&
-  IN_FLIGHT_FINANCE_STATUSES.includes(app.status);
-
-function scanOptions(cursor: string | null, numItems: number) {
-  return { cursor, numItems, maximumRowsRead: numItems, maximumBytesRead: MAX_BYTES_READ_PER_PAGE };
-}
 
 async function pageOf(
   ctx: QueryCtx | MutationCtx,
@@ -128,11 +104,6 @@ async function pageOf(
         .paginate(options);
   }
 }
-
-const finishedPage = (page: Pick<Page<unknown>, "isDone" | "continueCursor">) => ({
-  status: page.isDone ? ("READY" as const) : ("MORE" as const),
-  cursor: page.isDone ? null : page.continueCursor,
-});
 
 const noWork: PageResult = {
   status: "READY",
@@ -302,7 +273,7 @@ export const countPage = internalQuery({
         }
         case "VEHICLES": {
           const vehicle = row as Doc<"vehicles">;
-          if (vehicle.isDeleted !== true && vehicle.sourcedSupplierId === undefined) unresolved += 1;
+          if (lacksVehicleSupplier(vehicle)) unresolved += 1;
           break;
         }
       }
