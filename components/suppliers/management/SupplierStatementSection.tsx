@@ -20,7 +20,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Money } from "./SupplierStatementMoney";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { QueryErrorBoundary, useTranslate, type Translate } from "./shared";
+import { QueryErrorBoundary, useTranslate, SupplierDaysOverdue, type Translate } from "./shared";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -41,7 +41,6 @@ const KIND_KEY: Record<StatementRow["kind"], string> = {
   RECOVERY: "SuppliersStmtKindRecovery",
 };
 
-
 function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Translate }>) {
   const due = row.dueDate ?? translate("SuppliersStmtNoDueDate");
   return (
@@ -49,15 +48,7 @@ function RowItem({ row, translate }: Readonly<{ row: StatementRow; translate: Tr
       <TableCell className="block p-1 font-medium sm:table-cell sm:p-3">{translate(KIND_KEY[row.kind])}<SupplierRowDetails context={row.context} /></TableCell>
       <TableCell className="block p-1 text-muted-foreground sm:table-cell sm:p-3">
         {translate("SuppliersStmtDue")}: <bdi>{due}</bdi>
-        {row.daysOverdue !== null && row.daysOverdue > 0 && (
-          <>
-            {" "}
-            ·{" "}
-            <Badge variant="outline" className="border-money-out/30 text-money-out">{interpolate(translate("SuppliersStmtDaysOverdue"), {
-              days: String(row.daysOverdue),
-            })}</Badge>
-          </>
-        )}
+        <SupplierDaysOverdue days={row.daysOverdue} badge />
       </TableCell>
       <TableCell className={`block p-1 text-end font-semibold sm:table-cell sm:p-3 ${row.kind === "PAYABLE" ? "text-money-out" : "text-profit-positive"}`}>
         <Money minor={row.outstandingMinor} currency={row.currency} />

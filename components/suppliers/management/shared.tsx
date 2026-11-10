@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { getCodedErrorMessage } from "@/lib/errors";
+import { interpolate } from "@/lib/i18n/interpolate";
 import type { SupplierCandidate } from "../useSupplierCreateFlow";
 
 export type Translate = (key: string) => string;
@@ -329,4 +330,14 @@ function duplicateReasonLabel(reason: string, translate: Translate): string {
 
 export function loadErrorMessage(error: unknown, translate: Translate): string {
   return getCodedErrorMessage(error, translate) ?? translate("SuppliersLoadError");
+}
+
+
+/** The same overdue condition and wording in statements and attention rows. */
+export function SupplierDaysOverdue({ days, badge = false }: Readonly<{ days: number | null; badge?: boolean }>) {
+  const translate = useTranslate();
+  if (days === null || !(days > 0)) return null;
+  const label = interpolate(translate("SuppliersStmtDaysOverdue"), { days: String(days) });
+  if (badge) return <> · <Badge variant="outline" className="border-money-out/30 text-money-out">{label}</Badge></>;
+  return <span className="ms-2">{label}</span>;
 }

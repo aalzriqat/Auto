@@ -6,13 +6,11 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { getCodedErrorMessage } from "@/lib/errors";
-import { interpolate } from "@/lib/i18n/interpolate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Money } from "./SupplierStatementMoney";
-import { QueryErrorBoundary, useTranslate } from "./shared";
+import { QueryErrorBoundary, useTranslate, loadErrorMessage, SupplierDaysOverdue } from "./shared";
 
 type AttentionPage = FunctionReturnType<typeof api.supplierStatement.attention>;
 export type AttentionData = (NonNullable<AttentionPage> & { unlinked: "PRESENT" | "NONE" | "INCOMPLETE" }) | null;
@@ -35,7 +33,7 @@ function AttentionItem({ row }: Readonly<{ row: Row }>) {
       </span>
     </div>
     <p className="break-words text-xs text-muted-foreground">{translate("SuppliersStmtDue")}: <bdi>{row.dueDate ?? translate("SuppliersStmtNoDueDate")}</bdi>
-      {row.daysOverdue !== null && row.daysOverdue > 0 && <span className="ms-2">{interpolate(translate("SuppliersStmtDaysOverdue"), { days: String(row.daysOverdue) })}</span>}
+      <SupplierDaysOverdue days={row.daysOverdue} />
     </p>
     <p className="break-all text-xs text-muted-foreground">{translate("SuppliersStmtAttnRecord")}: <bdi>{row.id}</bdi></p>
   </li>;
@@ -53,7 +51,7 @@ export function SupplierAttentionView({ data, kind, hasPrevious, onNext, onPrevi
     {data === undefined && <output className="block text-sm text-muted-foreground">{translate("SuppliersStmtLoading")}</output>}
     {data === null && <p className="text-sm text-muted-foreground">{translate("SuppliersStmtAttnRestricted")}</p>}
     {data && <>
-      <p className="text-xs text-muted-foreground">{translate("SuppliersStmtAttnAsOf")}: <bdi>{data.asOfDate}</bdi></p>
+      <p className="text-xs text-muted-foreground">{translate("SuppliersBalancesAsOf")}: <bdi>{data.asOfDate}</bdi></p>
       {rows.length === 0 && data.complete && <p className="text-sm text-muted-foreground">{translate("SuppliersStmtAttnNone")}</p>}
       <ul>{rows.map(row => <AttentionItem key={`${row.kind}:${row.id}`} row={row} />)}</ul>
       {!data.complete && <output className="block text-xs text-money-out">{translate(data.incompleteReason ? INCOMPLETE_KEY[data.incompleteReason] : "SuppliersStmtAttnIncomplete")}</output>}
@@ -80,7 +78,7 @@ function AttentionGroup({ orgId, supplierId, kind, nowMs }: Readonly<Scope & { k
 
 export function SupplierAttentionError({ error }: Readonly<{ error: unknown }>) {
   const translate = useTranslate();
-  return <p role="alert" className="py-3 text-sm text-destructive">{getCodedErrorMessage(error, translate) ?? translate("ServerError_SUPPLIER_ATTENTION_UNAVAILABLE")}</p>;
+  return <p role="alert" className="py-3 text-sm text-destructive">{loadErrorMessage(error, translate)}</p>;
 }
 
 function AttentionBody(props: Readonly<Scope & { enabled: boolean; nowMs: number }>) {
