@@ -185,8 +185,12 @@ export const attention = query({
       if (!isSystemOwnerRole(role) && !STATEMENT_PERMISSIONS.every(permission => role.permissions.includes(permission))) return null;
       await requireFeature(ctx, args.orgId, "accounting");
       await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
-      // The argument invalidates the reactive subscription. Only the server clock decides eligibility.
-      const nowMs = Date.now();
+      // A clock read in a cached query does not itself refresh the subscription. Validate and use the caller's time, as outstanding does.
+      // https://docs.convex.dev/functions/query-functions#caching--reactivity--consistency
+      if (!Number.isSafeInteger(args.nowMs) || Math.abs(args.nowMs - Date.now()) > MAX_CLOCK_SKEW_MS) {
+        throw new ConvexError({ code: "SUPPLIER_STATEMENT_INVALID_TIME", message: "nowMs must be a whole number of milliseconds within one day of the server clock." });
+      }
+      const nowMs = args.nowMs;
       const result = await readAttention(ctx, args, nowMs);
       const unlinked = await unlinkedPresence(ctx, args.orgId, args.kind);
       return { ...result, asOfDate: ammanDateString(nowMs), unlinked };

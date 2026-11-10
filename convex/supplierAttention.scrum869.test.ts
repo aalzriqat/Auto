@@ -178,15 +178,27 @@ describe("SCRUM-869 supplier attention port", () => {
     expect(next?.page.map(row => row.id)).toEqual([id]);
   });
 
-  test("Amman midnight changes overdue day using server time despite a skewed refresh key", async () => {
+  test("Amman midnight changes overdue day using the validated caller time", async () => {
     const s = await seed("midnight");
     const due = Date.parse("2026-06-14T21:00:00Z");
     await addPayable(s, { paymentDueDate: due });
     vi.setSystemTime(Date.parse("2026-06-15T20:59:59Z"));
-    expect((await attention(s, { nowMs: NOW }))?.page[0]).toMatchObject({ daysOverdue: 0, step: "DUE_DAY" });
+    expect((await attention(s))?.page[0]).toMatchObject({ daysOverdue: 0, step: "DUE_DAY" });
     vi.setSystemTime(Date.parse("2026-06-15T21:00:00Z"));
-    expect((await attention(s, { nowMs: NOW }))?.page[0]).toMatchObject({ daysOverdue: 1, step: "DUE_DAY" });
+    expect((await attention(s))?.page[0]).toMatchObject({ daysOverdue: 1, step: "DUE_DAY" });
     expect((await attention(s))?.asOfDate).toBe("2026-06-16");
+  });
+
+  test("validated caller time controls cached eligibility and invalid clocks refuse", async () => {
+    const s = await seed("caller-time");
+    await addPayable(s, { paymentDueDate: Date.parse("2026-06-14T21:00:00Z") });
+    vi.setSystemTime(Date.parse("2026-06-15T21:00:00Z"));
+    const result = await attention(s, { nowMs: NOW });
+    expect(result?.page[0]).toMatchObject({ daysOverdue: 0, step: "DUE_DAY" });
+    expect(result?.asOfDate).toBe("2026-06-15");
+    for (const nowMs of [Number.NaN, Infinity, NOW + 0.5, Date.now() - DAY - 1, Date.now() + DAY + 1]) {
+      await expect(attention(s, { nowMs })).rejects.toThrow(/SUPPLIER_STATEMENT_INVALID_TIME/);
+    }
   });
 
   test("ordinary id-less opening creditors are excluded from unresolved supplier warnings", async () => {

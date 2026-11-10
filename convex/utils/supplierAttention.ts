@@ -36,28 +36,29 @@ function attentionOf(row: ObligationRow): Infer<typeof attentionRow> | null {
 
 const MAX_ROWS = 50;
 const MAX_BYTES = 1024 * 1024;
-function bounded(value: number | undefined, max: number): number {
-  if (value === undefined || !Number.isFinite(value)) return max;
-  return boundedCount(value, max);
+type AttentionResult = Omit<Infer<typeof attentionPage>, "asOfDate" | "unlinked" | "complete">;
+
+function unavailablePage(cursor: string | null, incompleteReason: "READ_BUDGET" | "SPLIT_REQUIRED", pageStatus: AttentionResult["pageStatus"] = null, splitCursor: string | null = null): AttentionResult {
+  return { page: [], isDone: false, continueCursor: cursor ?? "", pageStatus, splitCursor, incompleteReason };
 }
 
-export async function readAttention(ctx: QueryCtx, args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; kind: ObligationKind; paginationOpts: PaginationOptions }, nowMs: number): Promise<Omit<Infer<typeof attentionPage>, "asOfDate" | "unlinked">> {
+async function attentionPageOf(ctx: QueryCtx, args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; kind: ObligationKind; paginationOpts: PaginationOptions }, nowMs: number): Promise<AttentionResult> {
   const options = args.paginationOpts;
+  const { numItems = MAX_ROWS, maximumRowsRead = MAX_ROWS, maximumBytesRead = MAX_BYTES } = options;
   let page: Awaited<ReturnType<typeof readObligationPage>>;
   try {
     page = await readObligationPage(ctx, { ...args, nowMs,
-    paginationOpts: { cursor: options.cursor, endCursor: options.endCursor, numItems: bounded(options.numItems, MAX_ROWS),
-      maximumRowsRead: bounded(options.maximumRowsRead, MAX_ROWS), maximumBytesRead: bounded(options.maximumBytesRead, MAX_BYTES) } });
+      paginationOpts: { cursor: options.cursor, endCursor: options.endCursor,
+        numItems: boundedCount(Number.isFinite(numItems) ? numItems : MAX_ROWS, MAX_ROWS),
+        maximumRowsRead: boundedCount(Number.isFinite(maximumRowsRead) ? maximumRowsRead : MAX_ROWS, MAX_ROWS),
+        maximumBytesRead: boundedCount(Number.isFinite(maximumBytesRead) ? maximumBytesRead : MAX_BYTES, MAX_BYTES) } });
   } catch (error) {
     if (!(error instanceof SupplierReadBudgetExhausted)) throw error;
     // Never advance a native cursor across obligations whose joined facts were unread.
-    return { page: [], complete: false, isDone: false, continueCursor: options.cursor ?? "", pageStatus: null,
-      splitCursor: null, incompleteReason: "READ_BUDGET" };
+    return unavailablePage(options.cursor, "READ_BUDGET");
   }
   if (page.pageStatus === "SplitRequired") {
-    // This native range may omit source rows. Refuse it without advancing over those rows.
-    return { page: [], complete: false, isDone: false, continueCursor: options.cursor ?? "",
-      pageStatus: page.pageStatus, splitCursor: page.splitCursor ?? null, incompleteReason: "SPLIT_REQUIRED" };
+    return unavailablePage(options.cursor, "SPLIT_REQUIRED", page.pageStatus, page.splitCursor);
   }
   const rows: Infer<typeof attentionRow>[] = [];
   for (const row of page.rows) {
@@ -65,8 +66,12 @@ export async function readAttention(ctx: QueryCtx, args: { orgId: Id<"organizati
     if (projected) rows.push(projected);
   }
   return { page: rows, isDone: page.complete, continueCursor: page.continueCursor,
-    complete: options.cursor === null && page.complete && !page.pageStatus,
-    pageStatus: page.pageStatus ?? null, splitCursor: page.splitCursor ?? null };
+    pageStatus: page.pageStatus, splitCursor: page.splitCursor };
+}
+
+export async function readAttention(ctx: QueryCtx, args: { orgId: Id<"organizations">; supplierId: Id<"suppliers">; kind: ObligationKind; paginationOpts: PaginationOptions }, nowMs: number) {
+  const result = await attentionPageOf(ctx, args, nowMs);
+  return { ...result, complete: args.paginationOpts.cursor === null && result.isDone && !result.pageStatus };
 }
 
 /** Existence only, including history. No name inference, partial count, amounts or ordinary opening creditors. */
