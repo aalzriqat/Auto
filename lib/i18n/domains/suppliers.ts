@@ -1,3 +1,4 @@
+import { supplierAttentionEn, supplierAttentionAr } from "./supplierAttention";
 import { defineBilingualMessages } from "../defineBilingualMessages";
 
 /**
@@ -408,7 +409,8 @@ const suppliersMessages = defineBilingualMessages({
     "Total unavailable: this list is incomplete",
     "الإجمالي غير متاح: القائمة غير مكتملة",
   ],
+
 });
 
-export const suppliersEn = suppliersMessages.en;
-export const suppliersAr = suppliersMessages.ar;
+export const suppliersEn = { ...suppliersMessages.en, ...supplierAttentionEn };
+export const suppliersAr = { ...suppliersMessages.ar, ...supplierAttentionAr };

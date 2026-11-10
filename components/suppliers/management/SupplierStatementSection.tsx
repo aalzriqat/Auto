@@ -26,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { SupplierRowDetails } from "./SupplierRowDetails";
+import { SupplierAttentionSection } from "./SupplierAttentionSection";
 
 export type SupplierStatementData = FunctionReturnType<typeof api.supplierStatement.outstanding>;
 type StatementSectionData = SupplierStatementData["payable"];
@@ -394,7 +395,7 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
           <TabsTrigger value="settled">{translate("SuppliersTabSettled")}</TabsTrigger>
           <TabsTrigger value="payments">{translate("SuppliersTabPayments")}</TabsTrigger>
         </TabsList>
-        <TabsContent value="outstanding"><SupplierStatementView statement={statement} /></TabsContent>
+        <TabsContent value="outstanding" className="space-y-6"><SupplierAttentionSection orgId={orgId} supplierId={supplierId} /><SupplierStatementView statement={statement} /></TabsContent>
         <TabsContent value="settled"><SupplierSettledView settled={settled} /></TabsContent>
         <TabsContent value="payments">{recon === undefined ? <output className="block py-4">{translate("SuppliersStmtLoading")}<Skeleton className="mt-3 h-24" /></output> : <SupplierReconView recon={recon} />}</TabsContent>
       </Tabs>

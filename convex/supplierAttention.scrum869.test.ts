@@ -1,12 +1,12 @@
 /**
- * SCRUM-869 feature 5 - the supplier "needs attention" view (ADR docs/adr/2026-11-04-supplier-attention-view.md).
+ * SCRUM-869 feature 5 - the supplier "needs attention" view (ADR docs/adr/2026-11-10-supplier-attention-port.md).
  * Read-only. Evidence boundary: convex-test only, seeded rows. 9,500 JOD is 9_500_000 minor units.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const DAY = 86_400_000;
@@ -16,17 +16,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type SupplierDb = { db: { insert: (table: "suppliers", doc: never) => Promise<Id<"suppliers">> } };
+type SupplierDb = Pick<import("./_generated/server").MutationCtx, "db">;
 const insertSupplier = (ctx: SupplierDb, orgId: Id<"organizations">, userId: Id<"users">, displayName: string) =>
   ctx.db.insert("suppliers", {
     orgId, displayName, displayNameKey: displayName.toLowerCase(), status: "ACTIVE", origin: "MANUAL", version: 1,
     createdBy: userId, updatedBy: userId, createdAt: NOW, updatedAt: NOW,
-  } as never);
+  });
 
-async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"]) {
+async function seed(tag: string, permissions: string[] = ["view:finance", "view:cost_price"], transactionLimits = false) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
-  const t = convexTestWithComponents(schema, MODULES);
+  const t = convexTestWithComponents(schema, MODULES, { transactionLimits });
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: `AT ${tag}`, createdAt: Date.now() }));
   await t.run((ctx) =>
     ctx.db.insert("subscriptions", { orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
@@ -48,28 +48,28 @@ async function seed(tag: string, permissions: string[] = ["view:finance", "view:
 }
 type Seed = Awaited<ReturnType<typeof seed>>;
 
-const addPayable = (s: Seed, fields: Record<string, unknown> = {}) =>
+const addPayable = (s: Seed, fields: Partial<Omit<Extract<Doc<"vehicleSupplierPayables">, { vehicleId: Id<"vehicles"> }>, "_id" | "_creationTime">> = {}) =>
   s.t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
       orgId: s.orgId, vehicleId: s.vehicleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", amountDue: 9_500,
       currency: "JOD", status: "DUE_ON_SALE", paymentDueDate: NOW - 10 * DAY, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
       ...fields,
-    } as never)
+    })
   );
 
-const addReceivable = async (s: Seed, fields: Record<string, unknown> = {}) => {
+const addReceivable = async (s: Seed, fields: Partial<Omit<Doc<"vehicleSupplierReceivables">, "_id" | "_creationTime">> = {}) => {
   const saleId = await s.t.run((ctx) =>
     ctx.db.insert("sales", {
       orgId: s.orgId, vehicleId: s.vehicleId, customerId: s.customerId, salespersonId: s.userId,
       salePrice: 12_500, saleDate: NOW - 40 * DAY, status: "COMPLETED",
-    } as never)
+    })
   );
   return await s.t.run((ctx) =>
     ctx.db.insert("vehicleSupplierReceivables", {
       orgId: s.orgId, vehicleId: s.vehicleId, saleId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co",
       amountDue: 3_000, currency: "JOD", status: "OPEN", agreedDueDate: NOW + 5 * DAY, createdBy: s.userId,
       createdAt: NOW, updatedAt: NOW, ...fields,
-    } as never)
+    })
   );
 };
 
@@ -99,16 +99,16 @@ describe("SCRUM-869 supplier attention port", () => {
     expect(result?.unlinked).toBe("PRESENT");
   });
 
-  test.each([
-    ["DISPUTED", NOW - DAY, "DISPUTED", 9_500_000],
-    ["PENDING", undefined, "NO_DUE_DATE", 0],
-  ])("%s obligation is held rather than silently healthy", async (status, paymentDueDate, heldReason, disputedMinor) => {
+  async function heldObligation(status: Doc<"vehicleSupplierPayables">["status"], paymentDueDate: number | undefined, heldReason: string, disputedMinor: number) {
     const s = await seed(`held-${status}`);
     const id = await addPayable(s, { status, paymentDueDate });
     const result = await attention(s);
     expect(result?.page).toEqual([{ kind: "PAYABLE", id, currency: "JOD", outstandingMinor: 9_500_000, disputedMinor,
       dueDate: paymentDueDate ? "2026-06-14" : null, daysOverdue: paymentDueDate ? 1 : null, status: "HELD", heldReason }]);
-  });
+  }
+  test("disputed obligation is held rather than silently healthy", () => heldObligation("DISPUTED", NOW - DAY, "DISPUTED", 9_500_000));
+  test("undated obligation is held rather than silently healthy", () => heldObligation("PENDING", undefined, "NO_DUE_DATE", 0));
+
 
   test("supplier receivable is due while a later receivable is not yet eligible", async () => {
     const s = await seed("ar");
@@ -121,23 +121,27 @@ describe("SCRUM-869 supplier attention port", () => {
 
   test("cost recovery uses the same reminder decision without fabricating a payable", async () => {
     const s = await seed("recovery");
-    const expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" } as never));
+    const expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" }));
     const id = await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", {
       orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Amman Importer Co", vehicleId: s.vehicleId,
       expenseId, sourceEventKey: "RECOVERY_1", amountDueMinor: 200_000, amountRecoveredMinor: 50_000,
       currency: "JOD", status: "PARTIALLY_RECOVERED", receiptSeq: 1, agreedDueDate: NOW, createdBy: s.userId, createdAt: NOW, updatedAt: NOW,
-    } as never));
+    }));
     expect((await attention(s, { kind: "RECOVERY" }))?.page).toEqual([{ kind: "RECOVERY", id, currency: "JOD",
       outstandingMinor: 150_000, disputedMinor: 0, dueDate: "2026-06-15", daysOverdue: 0, status: "ALERTING", step: "DUE_DAY" }]);
     expect((await attention(s))?.page).toEqual([]);
   });
 
-  test.each([{ permissions: [] }, { permissions: ["view:finance"] }, { permissions: ["view:cost_price"] }])("missing permission pair withholds the whole response: $permissions", async ({ permissions }) => {
+  async function permissionWithheld({ permissions }: { permissions: string[] }) {
     const s = await seed(`gate-${permissions.join()}`, permissions);
     await addPayable(s);
     await addPayable(s, { supplierId: undefined });
     expect(await attention(s)).toEqual(null);
-  });
+  }
+  test("no finance or cost permission withholds the whole response", () => permissionWithheld({ permissions: [] }));
+  test("finance-only access withholds the whole response", () => permissionWithheld({ permissions: ["view:finance"] }));
+  test("cost-only access withholds the whole response", () => permissionWithheld({ permissions: ["view:cost_price"] }));
+
 
   test("foreign supplier and foreign organisation refuse without data", async () => {
     const s = await seed("tenant");
@@ -146,7 +150,7 @@ describe("SCRUM-869 supplier attention port", () => {
       return { orgId, supplierId: await insertSupplier(ctx, orgId, s.userId, "Amman Importer Co") };
     });
     await expect(attention(s, { supplierId: foreign.supplierId })).rejects.toThrow(/SUPPLIER_ATTENTION_UNAVAILABLE/);
-    await expect(attention(s, foreign)).rejects.toThrow(/FORBIDDEN/);
+    await expect(attention(s, foreign)).rejects.toThrow(/UNAUTHORIZED/);
   });
 
   test("page boundary is incomplete with no partial count and continuation reaches remaining rows", async () => {
@@ -209,7 +213,9 @@ describe("SCRUM-869 supplier attention port", () => {
     const s = await seed("hard-bound");
     for (let i = 0; i < 51; i += 1) await addPayable(s);
     const result = await attention(s, { paginationOpts: { numItems: 1000000, maximumRowsRead: 1000000, cursor: null } });
-    expect(result?.page).toHaveLength(50);
+    expect(result?.page).toEqual([]);
+    expect(result?.incompleteReason).toBe("SPLIT_REQUIRED");
+    expect(result?.splitCursor).toEqual(expect.any(String));
     expect(result?.complete).toBe(false);
     expect(result?.isDone).toBe(false);
   });
@@ -224,6 +230,43 @@ describe("SCRUM-869 supplier attention port", () => {
     });
     await expect(attention(s)).rejects.toThrow();
   });
+
+  test("large joined sale documents withhold figures as incomplete without advancing the cursor", async () => {
+    const s = await seed("join-budget", undefined, true);
+    for (let i = 0; i < 20; i += 1) {
+      const saleId = await s.t.run(ctx => ctx.db.insert("sales", { orgId: s.orgId, vehicleId: s.vehicleId,
+        customerId: s.customerId, salespersonId: s.userId, salePrice: 12500, saleDate: NOW, status: "COMPLETED", commissionPaymentIdempotencyKey: "k".repeat(900_000) }));
+      await addPayable(s, { saleId });
+    }
+    const result = await attention(s);
+    expect(result).toEqual({ page: [], complete: false, isDone: false, continueCursor: "", pageStatus: null,
+      splitCursor: null, asOfDate: "2026-06-15", unlinked: "INCOMPLETE", incompleteReason: "READ_BUDGET" });
+  });
+
+  test("malformed recovery money is refused by the backend rather than marked complete", async () => {
+    const s = await seed("bad-recovery");
+    const expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, title: "Transport", amount: 200, date: NOW, category: "TRANSPORT", status: "PAID" }));
+    const id = await s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId,
+      sourcedFromName: "Supplier", vehicleId: s.vehicleId, expenseId, sourceEventKey: "RECOVERY_1", amountDueMinor: 200_000,
+      amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, agreedDueDate: NOW, createdBy: s.userId, createdAt: NOW, updatedAt: NOW }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const change of [{ amountDueMinor: Number.NaN }, { amountDueMinor: Infinity }, { amountDueMinor: 200_000.5 },
+        { amountDueMinor: Number.MAX_SAFE_INTEGER + 1, amountRecoveredMinor: Number.MAX_SAFE_INTEGER }, { amountDueMinor: 200_000, amountRecoveredMinor: 0, currency: "NOT_CURRENCY" }]) {
+        await s.t.run(ctx => ctx.db.patch(id, change));
+        await expect(attention(s, { kind: "RECOVERY" })).rejects.toThrow(/SUPPLIER_ATTENTION_UNAVAILABLE/);
+      }
+    } finally { log.mockRestore(); }
+  });
+
+  test("required native page split withholds figures and preserves the current cursor", async () => {
+    const s = await seed("split");
+    await addPayable(s); await addPayable(s);
+    const result = await attention(s, { paginationOpts: { numItems: 25, maximumRowsRead: 1, cursor: null } });
+    expect(result?.pageStatus).toBe("SplitRequired");
+    expect(result?.page).toEqual([]);
+    expect(result?.complete).toBe(false);
+    expect(result?.continueCursor).toBe("");
+    expect(result?.incompleteReason).toBe("SPLIT_REQUIRED");
+  });
 });
-
-

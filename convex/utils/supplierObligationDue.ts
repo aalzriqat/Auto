@@ -151,7 +151,7 @@ function financierFundingFact(
   return { fundedAt: received ? renderableDate("disbursedAt", application?.disbursedAt) : undefined };
 }
 
-async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
+export async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierPayables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
   const view = settlementView(row);
   // Settled rows drop out through a zero remainder, not through the stored status: a status that
   // disagrees with the amounts must not hide open money.
@@ -170,7 +170,7 @@ async function payableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"v
   };
 }
 
-async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierReceivables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
+export async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc<"vehicleSupplierReceivables">, cache?: SupplierReadCache): Promise<Outstanding | null> {
   if (row.status === "CANCELLED") return null;
   const outstandingMinor = Math.max(
     0,
@@ -187,7 +187,7 @@ async function receivableFacts(ctx: Reader, orgId: Id<"organizations">, row: Doc
   };
 }
 
-function recoveryFacts(row: Doc<"supplierCostRecoveries">): Outstanding | null {
+export function recoveryFacts(row: Doc<"supplierCostRecoveries">): Outstanding | null {
   if (row.status === "REVERSED") return null;
   const outstandingMinor = Math.max(0, row.amountDueMinor - row.amountRecoveredMinor);
   if (outstandingMinor <= 0) return null;
@@ -248,7 +248,7 @@ export interface UnreadableRow {
  * rather than show a page that silently omits money). Only `ConvexError` data faults are caught; an
  * infrastructure error always propagates.
  */
-async function readRow(
+export async function readRow(
   kind: ObligationKind,
   id: string,
   currency: string,
@@ -269,49 +269,7 @@ async function readRow(
   }
 }
 
-export async function readObligationPage(
-  ctx: Reader,
-  args: {
-    orgId: Id<"organizations">;
-    kind: ObligationKind;
-    cursor: string | null;
-    limit: number;
-    nowMs: number;
-    /** Supplied by a writer that must decide before it writes anything (the due-alert worker). */
-    onUnreadableRow?: (row: UnreadableRow) => void;
-  }
-): Promise<ObligationPage> {
-  const { orgId, kind, cursor, nowMs, onUnreadableRow } = args;
-  const numItems = Math.min(Math.max(Math.trunc(args.limit), 1), OBLIGATION_PAGE_MAX);
-  const rows: ObligationRow[] = [];
-  let isDone: boolean;
-  let continueCursor: string;
-
-  if (kind === "PAYABLE") {
-    const page = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
-    for (const row of page.page) {
-      const read = await readRow(kind, row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row), onUnreadableRow);
-      if (read) rows.push(read);
-    }
-    ({ isDone, continueCursor } = page);
-  } else if (kind === "RECEIVABLE") {
-    const page = await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
-    for (const row of page.page) {
-      const read = await readRow(kind, row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row), onUnreadableRow);
-      if (read) rows.push(read);
-    }
-    ({ isDone, continueCursor } = page);
-  } else {
-    const page = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", (q) => q.eq("orgId", orgId)).paginate({ cursor, numItems });
-    for (const row of page.page) {
-      const read = await readRow(kind, row._id, row.currency, nowMs, () => recoveryFacts(row), onUnreadableRow);
-      if (read) rows.push(read);
-    }
-    ({ isDone, continueCursor } = page);
-  }
-
-  return { rows, totals: totalsOf(rows), complete: isDone, continueCursor };
-}
+export { readObligationPage } from "./supplierObligationPage";
 
 /** Rows read per family for one supplier's statement; one more is fetched to prove the family is not complete. */
 export const STATEMENT_FAMILY_LIMIT = 100;

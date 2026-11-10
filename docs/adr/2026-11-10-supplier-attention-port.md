@@ -1,6 +1,6 @@
 # Supplier attention from authoritative obligation pages
 
-Status: proposed implementation, SCRUM-869 feature 5. Base: `df1fd388bc717dddc946c71fcbde2d3fcf2e8e70`.
+Status: implementation for local verification, SCRUM-869 feature 5. Base: `7065336c6f462a4f98cfb44c6a79f52b2e324113` (parent round 2).
 Ports `d4c551d2a`, `fb7ec375a`, `dc840b6c3` and the cost gate in
 `408857137`, from the never-merged supplier-alerts branch. That branch stays unchanged.
 Extends the supplier row-links ADR and SCRUM-868 P4/P5 identity decisions.
@@ -33,8 +33,9 @@ step, occurrence, recipient and idempotency behavior.
 Id-less rows never appear in a supplier account. A separate presence flag warns
 that this organisation has unlinked records in that family, including history.
 It names no supplier, shows no amount/count and offers no repair or money action.
-SCRUM-858 c23884 requires complete figures or UNAVAILABLE. This panel returns no
-aggregate figures. Each listed row retains its authoritative amount/currency.
+SCRUM-858 c23884 requires supplier allocations separately. The owner brief and
+c24419 require complete figures or UNAVAILABLE. This panel returns no aggregate
+figures. Each listed row retains its authoritative amount/currency.
 SCRUM-902 c24475 and SCRUM-869 c24460 require the cost gate.
 
 ## Reader census
@@ -43,7 +44,7 @@ SCRUM-902 c24475 and SCRUM-869 c24460 require the cost gate.
 | --- | --- | --- | --- |
 | supplierStatement.attention, one family per call | vehicleSupplierPayables, vehicleSupplierReceivables or supplierCostRecoveries, existing by_org_and_supplierId_and_status prefix; one native paginate, initial 25, maximum 50 documents and 1 MiB, server clamps caller limits | Authenticated tenant, owned supplier, finance + cost, accounting plan | Nullable response; attention rows with kind/id/currency/outstanding/disputed minor amounts, due date, days overdue, discriminated eligibility; native cursor/split metadata, completeness, unlinked presence. No total/count/net |
 | Shared obligation facts | Existing sale get and application get, at most two per page row; tenant check on both; query aborts safely on unreadable facts | Inherits public query or existing sweep gate | Existing due/aging and outstanding facts, projected to attention allowlist |
-| Unlinked presence, one family per call | Same index, orgId and supplierId=undefined prefix, first() reads at most one document | Same attention gate | Boolean existence, explicitly organisation-wide and includes history; false means this indexed range is empty, not all identity defects are absent |
+| Unlinked presence, one family per call | Same index, orgId and supplierId=undefined prefix; byte-aware stream, maximum 51 payables or one A/R document | Same attention gate | PRESENT, NONE or INCOMPLETE, explicitly organisation-wide including history. Excludes legitimate OPENING OTHER_PAYABLE creditors. No amount or count. NONE is limited to missing-id supplier records, not every identity defect |
 | Existing supplierDueAlerts worker | Existing org pagination, membership pages and send budget unchanged | Existing server-resolved recipients and cost redaction unchanged | Existing notifications unchanged; delegates eligibility to ported pure decision |
 
 The existing compound indexes fit supplier and missing-id prefixes, so no index
@@ -63,10 +64,16 @@ family cursors and tenant/supplier-keyed error boundaries. EN/AR use existing
 Tailwind tokens, Card/Badge/Button and Money, logical alignment and bidi isolation.
 Routine loading/incomplete notices use output; errors use role=alert without focus moves.
 
-The explicit nowMs follows the statement's clock contract, validated within one
-day of server time. Refresh hourly and at Amman midnight. A skewed client clock
-can still disagree with the sweep within that window; the panel labels its as-of
-date and does not control payment authority or promise delivery.
+The explicit nowMs is a subscription refresh key. Server Date.now determines
+eligibility and the returned Amman as-of date. Refresh hourly and at Amman
+midnight. Between refreshes the cached page retains its labelled as-of date;
+neither an arbitrary client timestamp nor a skewed clock sets the aging day.
+Budget exhaustion during joins returns an empty incomplete page, with no cursor
+advance and no Next action. Unreadable data faults return a generic coded error.
+Native SplitRequired also withholds figures and prevents cursor advance. This
+slice refuses that range truthfully rather than implementing client range splits.
+An operator must reduce its range outside this fixed-page screen or retry after
+the data changes; very large individual records can keep the panel unavailable.
 
 The original bounded all-family projection was considered against native family
 pages. Choose family pages to avoid a permanent 100-row cutoff and satisfy this
@@ -106,3 +113,42 @@ bounded native pages and authenticated backend checks.
 support error announcements and routine updates without moving focus.
 These sources guide design; harness tests and synthetic renders do not certify
 Convex cloud limits, OCC, production data or the SCRUM-760 launch gate.
+
+The advisory pre-code design check identified the ordinary-creditor exemption,
+server-clock requirement and join budget. All three are incorporated above.
+The shared page reader moves into supplierObligationPage to keep the existing
+large supplierObligationDue module below its ceiling; its original export and
+org-wide response shape are preserved. No financial formulas move or change.
+The final advisory Standards and Spec checks both identified ignored required
+splits. A public-query maximumRowsRead=1 probe reproduced it. Spec also identified
+malformed recovery money; a stored NaN reproduced a complete response with NaN.
+Both now have failing-first controls and backend refusal/withholding. A dash in
+the existing formatter was not accepted as backend money validation.
+
+## Round 2 integration
+
+Adopt the parent per-call `supplierReadCache`; do not restore `budgetedReader`
+or its local error class. Supplier-scoped pages create one cache and pass it
+to the exported payable/receivable facts with their optional cache parameter.
+Cache misses alone check read headroom; repeated sale/application ids reuse
+the same query snapshot, including missing documents. Attention catches
+`SupplierReadBudgetExhausted` and still withholds the entire page, totals and
+counts, retaining the input cursor. The 50-document / 1 MiB bounds, native
+split refusal and tenant/finance/cost/plan gates are unchanged.
+
+The org-wide `readObligationPage` call without `supplierId` passes no cache.
+It keeps its direct gets and previous absence of join-headroom checks; this
+port adds neither caching nor a budget to that path or its alert worker.
+The shared pagination clamp supplies the finite integer clamp; attention keeps
+its existing undefined/nonfinite default to the maximum. UI money already uses
+the parent's shared Money (also imported as SupplierMoney by balance callers);
+it now consumes `useLanguage().dir`. Attention adds no source links or client
+permission maps. Parent server href decisions remain authoritative.
+
+[Convex OCC](https://docs.convex.dev/database/advanced/occ) documents consistent
+query reads, supporting per-call reuse rather than rereading an id. The
+[pagination](https://docs.convex.dev/database/pagination) and
+[limits](https://docs.convex.dev/production/state/limits) guidance supports native
+row/byte caps and accounting for joined reads outside the page. WAI sources
+above still govern output status and non-focus-moving error alerts. These
+sources were checked again on 2026-11-10; local harness I/O is not cloud proof.

@@ -337,6 +337,7 @@ import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
 import type * as utils_subscriptionFeatures from "../utils/subscriptionFeatures.js";
+import type * as utils_supplierAttention from "../utils/supplierAttention.js";
 import type * as utils_supplierConcession from "../utils/supplierConcession.js";
 import type * as utils_supplierDueAlertPlan from "../utils/supplierDueAlertPlan.js";
 import type * as utils_supplierDueDates from "../utils/supplierDueDates.js";
@@ -344,6 +345,7 @@ import type * as utils_supplierIdentityRepair from "../utils/supplierIdentityRep
 import type * as utils_supplierNames from "../utils/supplierNames.js";
 import type * as utils_supplierNavigation from "../utils/supplierNavigation.js";
 import type * as utils_supplierObligationDue from "../utils/supplierObligationDue.js";
+import type * as utils_supplierObligationPage from "../utils/supplierObligationPage.js";
 import type * as utils_supplierPaymentAmounts from "../utils/supplierPaymentAmounts.js";
 import type * as utils_supplierPaymentsReconciliation from "../utils/supplierPaymentsReconciliation.js";
 import type * as utils_supplierReadCache from "../utils/supplierReadCache.js";
@@ -721,6 +723,7 @@ declare const fullApi: ApiFromModules<{
   "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/storageValidation": typeof utils_storageValidation;
   "utils/subscriptionFeatures": typeof utils_subscriptionFeatures;
+  "utils/supplierAttention": typeof utils_supplierAttention;
   "utils/supplierConcession": typeof utils_supplierConcession;
   "utils/supplierDueAlertPlan": typeof utils_supplierDueAlertPlan;
   "utils/supplierDueDates": typeof utils_supplierDueDates;
@@ -728,6 +731,7 @@ declare const fullApi: ApiFromModules<{
   "utils/supplierNames": typeof utils_supplierNames;
   "utils/supplierNavigation": typeof utils_supplierNavigation;
   "utils/supplierObligationDue": typeof utils_supplierObligationDue;
+  "utils/supplierObligationPage": typeof utils_supplierObligationPage;
   "utils/supplierPaymentAmounts": typeof utils_supplierPaymentAmounts;
   "utils/supplierPaymentsReconciliation": typeof utils_supplierPaymentsReconciliation;
   "utils/supplierReadCache": typeof utils_supplierReadCache;

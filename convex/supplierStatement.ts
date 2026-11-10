@@ -8,6 +8,10 @@ import { readSupplierPaymentsReconciliation } from "./utils/supplierPaymentsReco
 import { SUPPLIER_NOT_FOUND_MESSAGE } from "./utils/supplierRegistry";
 import { addSupplierRowContext, supplierNavigationFailure, supplierRowContextValidator } from "./utils/supplierNavigation";
 import { createSupplierReadCache } from "./utils/supplierReadCache";
+import { paginationOptsValidator } from "convex/server";
+import { isSystemOwnerRole } from "./utils/permissions";
+import { ammanDateString } from "./utils/supplierDueDates";
+import { attentionKind, attentionPage, readAttention, unlinkedPresence } from "./utils/supplierAttention";
 
 /**
  * SCRUM-869 slice 1 - one supplier's outstanding A/P and A/R (ADR
@@ -167,5 +171,29 @@ export const outstanding = query({
       const receivable = await addSupplierRowContext(ctx, scope, result.receivable);
       return { supplierId: args.supplierId, payable, receivable };
     } catch (error) { return supplierNavigationFailure(error); }
+  },
+});
+
+/** Port of the unmerged attention slice: canonical-id pages, never notification delivery or an aggregate. */
+export const attention = query({
+  args: { orgId: v.id("organizations"), supplierId: v.id("suppliers"), kind: attentionKind,
+    nowMs: v.number(), paginationOpts: paginationOptsValidator },
+  returns: v.union(v.null(), attentionPage),
+  handler: async (ctx, args) => {
+    try {
+      const { role } = await requireTenantAuth(ctx, args.orgId);
+      if (!isSystemOwnerRole(role) && !STATEMENT_PERMISSIONS.every(permission => role.permissions.includes(permission))) return null;
+      await requireFeature(ctx, args.orgId, "accounting");
+      await requireOwnedRow(ctx, args.orgId, "suppliers", args.supplierId, SUPPLIER_NOT_FOUND_MESSAGE);
+      // The argument invalidates the reactive subscription. Only the server clock decides eligibility.
+      const nowMs = Date.now();
+      const result = await readAttention(ctx, args, nowMs);
+      const unlinked = await unlinkedPresence(ctx, args.orgId, args.kind);
+      return { ...result, asOfDate: ammanDateString(nowMs), unlinked };
+    } catch (error) {
+      if (error instanceof ConvexError && typeof error.data === "object" && error.data !== null && "code" in error.data) throw error;
+      console.error("Supplier attention read failed", error);
+      throw new ConvexError({ code: "SUPPLIER_ATTENTION_UNAVAILABLE", message: "Supplier attention could not be loaded. Please try again." });
+    }
   },
 });
