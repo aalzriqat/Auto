@@ -134,13 +134,18 @@ describe("finance application projection through get, list and dealCockpit", () 
     expect(rows.viewonly!.get.submittedQuotationMinor).toBeUndefined();
   });
 
-  // characterises applications.ts:1544 get and :1439 list: the enrichment each door adds beside the projected row; no ruling.
+  // characterises applications.ts:1544 get and :1439 list: the enrichment each door adds beside the projected row; no ruling, except
+  // the keys in RAW_QUOTE_KEYS: quote, company and deposits on get, and financedAmount and monthlyInstallment on list, come from the raw
+  // quote (applications.ts:1585,1629,1533-1534); left unpinned for roles without view:finance because rulings #3 and #5 in
+  // financeApplicationProjection.ts withhold quotation and composition from them; SCRUM-526.
+  const RAW_QUOTE_KEYS = ["quote", "company", "deposits", "financedAmount", "monthlyInstallment"];
+  const pinnedFor = (role: RoleName, keys: readonly string[]) => (MAY_READ[role].has("FINANCE") ? [...keys] : keys.filter((key) => !RAW_QUOTE_KEYS.includes(key)));
   const GET_ENRICHMENT = ["company", "customer", "deposits", "economicsStamp", "handoverEvidence", "quote", "salesperson", "vehicle"];
   const LIST_ENRICHMENT = ["companyLabelKey", "companyName", "customerName", "financedAmount", "hasPendingDepositResolution", "monthlyInstallment", "salespersonName", "vehicleDesc"];
 
   test.each(ROLES)("%s: get serves its enrichment to every role and list serves its own, not get's", (role) => {
-    for (const key of GET_ENRICHMENT) expect(PRESENT(rows[role]!.get[key]), `get.${key}`).toBe(true);
-    for (const key of LIST_ENRICHMENT) expect(PRESENT(rows[role]!.listRow[key]), `list.${key}`).toBe(true);
+    for (const key of pinnedFor(role, GET_ENRICHMENT)) expect(PRESENT(rows[role]!.get[key]), `get.${key}`).toBe(true);
+    for (const key of pinnedFor(role, LIST_ENRICHMENT)) expect(PRESENT(rows[role]!.listRow[key]), `list.${key}`).toBe(true);
     for (const key of ["company", "deposits", "quote", "salesperson", "handoverEvidence"]) expect(PRESENT(rows[role]!.listRow[key]), `list must not carry ${key}`).toBe(false);
   });
 
@@ -178,11 +183,11 @@ describe("finance application projection through get, list and dealCockpit", () 
   const definedKeys = (row: Row) => Object.keys(row).filter((key) => row[key] !== undefined);
 
   test.each(ROLES)("get as %s: the served key set equals the base plus the classes the role may read", (role) => {
-    expect(new Set(definedKeys(rows[role]!.get))).toEqual(new Set([...GET_BASE, ...classKeysFor(role)]));
+    expect(new Set(pinnedFor(role, definedKeys(rows[role]!.get)))).toEqual(new Set(pinnedFor(role, [...GET_BASE, ...classKeysFor(role)])));
   });
   test.each(ROLES)("list row as %s: the served key set equals the list base plus the classes the role may read", (role) => {
     const listBase = [...GET_BASE.filter((key) => !GET_ONLY.includes(key)), ...LIST_ENRICHMENT];
-    expect(new Set(definedKeys(rows[role]!.listRow))).toEqual(new Set([...listBase, ...classKeysFor(role)]));
+    expect(new Set(pinnedFor(role, definedKeys(rows[role]!.listRow)))).toEqual(new Set(pinnedFor(role, [...listBase, ...classKeysFor(role)])));
   });
   // characterises applications.ts:1779 dealCockpit: the top-level keys every role receives; no ruling.
   const COCKPIT_KEYS = [
