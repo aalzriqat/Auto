@@ -2004,3 +2004,57 @@ Run those three named test files and the regression library with one worker.
 These are read-only harness and synthetic screen controls. They neither certify
 OCC/platform read limits nor fulfill SCRUM-760's independent real-backend
 hunters, exact-SHA release rehearsal or P7 launch evidence.
+
+### SCRUM869-attention-read
+
+Supplier attention is an eligibility projection, not notification-delivery proof.
+Public query: `supplierStatement.attention`. Bound checks live in
+`convex/supplierAttention.scrum869.test.ts`; scenarios use the
+`supplier-attention-` prefix under `regression/scenarios/`.
+
+| Cell | Hand-specified expected result | Executable check |
+| --- | --- | --- |
+| Linked payable | 9,500 JOD = 9,500,000 minor; ten days overdue reaches OVERDUE_7; no total/net/count field and no notification write | linked payable alerts with its authoritative amount and no aggregate fields |
+| Identity | Same-name different-id and id-less payables are absent from the supplier's page; missing-id presence is organisation-wide | same-name supplier and id-less legacy rows never enter the account |
+| Dispute and missing date | Disputed 9,500,000 remains visible as HELD/DISPUTED; undated is HELD/NO_DUE_DATE, never overdue | disputed obligation is held rather than silently healthy; undated obligation is held rather than silently healthy |
+| Receivable and recovery | Near-due margin is 3,000,000 JOD minor and T_MINUS_3; later margin is absent. Recovery 200,000 minus 50,000 = 150,000, DUE_DAY, with no invented A/P | supplier receivable is due while a later receivable is not yet eligible; cost recovery uses the same reminder decision without fabricating a payable |
+| Amman midnight | At 20:59:59Z the due item is zero days overdue; at 21:00Z it is one. Skewed client refresh timestamp cannot change the server day | Amman midnight changes overdue day using server time despite a skewed refresh key |
+| Ordinary creditor | Id-less OPENING/OTHER_PAYABLE does not produce an unresolved-supplier warning | ordinary id-less opening creditors are excluded from unresolved supplier warnings |
+| Invalid data | NaN due facts, NaN/infinite/fractional/unsafe recovery money and unsupported currency refuse with SUPPLIER_ATTENTION_UNAVAILABLE, not complete money | unreadable stored due fact is a coded generic error rather than a silent omission; malformed recovery money is refused by the backend rather than marked complete |
+
+### SCRUM869-attention-permissions
+
+| Cell | Expected result | Executable check in the same backend file |
+| --- | --- | --- |
+| Missing either grant | Entire response equals null for no grants, finance-only and cost-only, including unlinked metadata | no finance or cost permission withholds the whole response; finance-only access withholds the whole response; cost-only access withholds the whole response |
+| Foreign party and tenant | Supplier from B requested in A refuses generically; querying B without membership returns UNAUTHORIZED; no figures | foreign supplier and foreign organisation refuse without data |
+| Accounting plan | Starter plan refuses the reader before figures | accounting plan denial refuses before reading obligation figures |
+
+### SCRUM869-attention-bounds
+
+| Cell | Expected result | Executable check in the same backend file |
+| --- | --- | --- |
+| Native continuation | Two records, size one: first and continuation differ; each partial view has complete=false; final isDone=true; no accumulated total | page boundary is incomplete with no partial count and continuation reaches remaining rows |
+| Filtered history | A cancelled-only page is incomplete, not an empty supplier account; continuation reaches the open obligation | settled-only filtered page stays incomplete until the linked open row is reached |
+| Forced widening | Requested 1,000,000 rows cannot widen the 50-document cap; native required split yields no figures, complete=false, split cursor | caller cannot widen the fifty-document page bound |
+| Join headroom | Twenty joined sales with 900,000-byte synthetic strings return READ_BUDGET, no rows and no cursor advance with harness transaction limits enforced | large joined sale documents withhold figures as incomplete without advancing the cursor |
+| Required split | Two source rows with maximumRowsRead=1 produce SPLIT_REQUIRED, no figures and unchanged cursor, never advance over unread rows | required native page split withholds figures and preserves the current cursor |
+
+### SCRUM869-attention-screen
+
+`components/suppliers/management/SupplierAttentionSection.test.tsx` binds 18
+literal executable registrations: each reminder step and hold in EN and AR;
+separate A/P and A/R; loading, empty and incomplete notices; organisation-wide
+unlinked warnings; permission and plan query skips; coded localized errors;
+independent next/previous cursors; midnight refresh; read-budget and split
+refusals with no Next action; synthetic workspace/state fixtures with RTL.
+These are component tests, not authenticated browser replays.
+
+All 38 records are preventive feature controls without bugRef: the initial
+failing-first commit and two later advisory reproductions are reported
+separately, without attributing one red SHA to renamed or later-added tests.
+Their fingerprints are the values printed by scenarioRecord.test.ts.
+No real-backend/OCC, cloud read-limit, independent seat or pilot certificate is
+claimed. Full status-index paging is deferred: settled history can consume
+attention pages. Required-split ranges remain unavailable in this fixed-page UI,
+with figures withheld and navigation refused; this is explicit containment.

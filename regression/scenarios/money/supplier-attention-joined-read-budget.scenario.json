@@ -1,0 +1,67 @@
+{
+  "id": "supplier-attention-joined-read-budget",
+  "fingerprint": "7e1e91c696d4e811b0070e7896abffe5c41e2e0cf27202430e956bd5058ab6c8",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "payables": 20,
+        "joinedSaleStringBytes": 900000,
+        "transactionLimits": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "rows",
+      "value": []
+    },
+    {
+      "observable": "complete",
+      "value": false
+    },
+    {
+      "observable": "incompleteReason",
+      "value": "READ_BUDGET"
+    },
+    {
+      "observable": "pagination.cursorAdvanced",
+      "value": false
+    },
+    {
+      "observable": "unlinked",
+      "value": "INCOMPLETE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "large joined sale documents withhold figures as incomplete without advancing the cursor"
+  },
+  "matrixRow": "SCRUM869-attention-bounds"
+}
