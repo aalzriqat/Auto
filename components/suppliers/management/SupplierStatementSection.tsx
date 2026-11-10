@@ -107,7 +107,6 @@ function StatementRegion({
         {title}
       </h3>
       {data.rows.length === 0 ? (
-        // An empty list means "none" only when the whole family was read; a cut section says why in the note below.
         data.complete && <p className="text-sm text-muted-foreground">{translate(emptyKey)}</p>
       ) : (
         <Table><TableHeader className="hidden bg-muted/60 sm:table-header-group"><TableRow>
