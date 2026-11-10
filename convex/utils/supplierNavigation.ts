@@ -5,6 +5,7 @@ import { PERMISSIONS } from "./permissions";
 import type { ObligationKind } from "./supplierObligationDue";
 import type { SupplierObligation } from "./supplierSettledRows";
 import { readCached, SupplierReadBudgetExhausted, type CachedTable, type SupplierReadCache } from "./supplierReadCache";
+import { inTurn } from "./transactionReadHeadroom";
 
 export const supplierSourceValidator = v.object({
   kind: v.union(v.literal("VEHICLE"), v.literal("SALE"), v.literal("APPLICATION"), v.literal("EXPENSE"), v.literal("OPENING")),
@@ -56,7 +57,7 @@ async function sourceFor(ctx: QueryCtx, args: NavigationArgs, obligation: Suppli
   // P5 opening obligations have no vehicle. Never reinterpret them as a native obligation.
   if ("origin" in obligation && obligation.origin === "OPENING") {
     const draft = await owned(ctx, args.orgId, args.cache.openings, obligation.openingBalanceDraftId);
-    if (!draft || draft.status !== "POSTED") return { source: null };
+    if (draft?.status !== "POSTED") return { source: null };
     const canOpen = args.permissions.includes(PERMISSIONS.MANAGE_FINANCE);
     return { source: { kind: "OPENING", id: draft._id, label: obligation.title, href: canOpen ? `/${args.orgId}/accounting?section=settings` : null } };
   }
@@ -79,7 +80,7 @@ export async function addSupplierRowContext<R extends { kind: ObligationKind; id
   totals: unknown[]; complete: boolean;
 }>(ctx: QueryCtx, args: NavigationArgs, section: S & { rows: R[] }): Promise<Omit<S, "rows"> & { rows: Array<Omit<R, "document"> & { context: Context }> }> {
   const rows: Array<Omit<R, "document"> & { context: Context }> = [];
-  for (const entry of section.rows) {
+  await inTurn(section.rows, async entry => {
     // The money reader already holds the obligation in this query's consistent snapshot.
     const { document: obligation, ...row } = entry;
     const occurredAt = Number.isSafeInteger(obligation.createdAt) && Math.abs(obligation.createdAt) <= 8.64e15 ? obligation.createdAt : null;
@@ -90,7 +91,7 @@ export async function addSupplierRowContext<R extends { kind: ObligationKind; id
       if (!(error instanceof SupplierReadBudgetExhausted)) throw error;
     }
     rows.push({ ...row, context });
-  }
+  });
   return { ...section, rows };
 }
 

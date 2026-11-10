@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Locale, dictionaries } from "@/lib/i18n/dictionaries";
 
 type LanguageContextType = {
@@ -29,10 +29,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
-  const setLocale = (newLocale: Locale) => {
+  const setLocale = useCallback((newLocale: Locale) => {
     setLocaleState(newLocale);
     localStorage.setItem("autoflow-locale", newLocale);
-  };
+  }, []);
 
   const isRtl = locale === "ar";
   const dir = isRtl ? "rtl" : "ltr";
@@ -54,13 +54,15 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     }
   }, [locale, mounted, isRtl, dir]);
 
-  const t = (key: keyof typeof dictionaries.en | (string & {})) => {
+  const t = useCallback((key: keyof typeof dictionaries.en | (string & {})) => {
     const k = key as keyof typeof dictionaries.en;
     return dictionaries[locale][k] || dictionaries["en"][k] || key;
-  };
+  }, [locale]);
+
+  const value = useMemo<LanguageContextType>(() => ({ locale, setLocale, t, isRtl, dir }), [locale, setLocale, t, isRtl, dir]);
 
   return (
-    <LanguageContext.Provider value={{ locale, setLocale, t, isRtl, dir }}>
+    <LanguageContext.Provider value={value}>
       <div dir={dir} className="h-full w-full">
         {children}
       </div>
