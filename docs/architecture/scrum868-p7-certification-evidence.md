@@ -1,5 +1,117 @@
 # SCRUM-868 P7 local implementation evidence
 
+## SCRUM-939 follow-up, 2026-11-10
+
+This follow-up is on PR #806, branch `claude/scrum868-p7-e2e-submit-race`,
+starting at `a9f48638539154676a9c679074b0bf64a6b3bbd5`, with fetched main
+`43b8eafe0df7` and zero commits behind. The earlier sections below are historical
+P7 evidence, not certification of this follow-up.
+
+The component test at `8574e06bd6aa658a46d1ca92b81bb95abdee4c30` ran red:
+three failures and one passing edit-mode control. The Photos Continue and final
+submit were the same DOM node. A fully valid early form submit invoked
+`vehicles.create` for a creator and `vehicleEdits.requestCreate` for a requester.
+`fireEvent.click` did not reproduce native activation. Reading the supplied
+`0db3070ff1dd686e499fb76bd8da488498a9408c.zip` trace confirmed that AR Continue
+`call@390` already had Availability and Saving in its after-snapshot. DOM reuse
+and early-submit behavior are reproduced locally; the native microtask and
+activation ordering in the production component remains inferred.
+
+Fix `626f432e4189d1f417848c0832e942b010591e10` adds distinct button keys and
+returns before saving a new vehicle until Availability. Payloads, supplier
+snapshots, approval selection, labels and idempotency retirement are unchanged.
+The guard protects navigation intent; financial and authorization validation
+still belongs to the backend. React documents distinct keys as distinct identity
+in [Preserving and Resetting State](https://react.dev/learn/preserving-and-resetting-state).
+The [HTML button activation rules](https://html.spec.whatwg.org/multipage/form-elements.html#the-button-element)
+submit the form when an activated submit button has a form owner.
+These sources support the design, not a claim that browser event timing was traced.
+
+The four component checks then passed. Removing only the keys made the DOM
+identity assertion fail (one failed, three passed). Removing only the guard
+made the creator and requester early-submit assertions fail (two failed, two
+passed). Both protections were restored. No existing VehicleDialog assertion
+was changed. Test UUIDs are fixed low-entropy fixture values.
+
+Strict-spec commit `4cf715540fdfcf0b25d2d0c9c5675a3a73280c70` removes swallowed
+submit clicks. The supplier journey checks Availability and a complete empty
+inventory read before the enabled Add Vehicle button is clicked. Confirm Payment
+uses a plain awaited click too. Existing backend and dialog-close assertions
+remain. The shared helper checks step 5, an enabled submit and no Saving button,
+then awaits the click before checking the unchanged toast and closed dialog.
+The nine call sites still consume the same returned make/model/VIN:
+
+- `playwright/fixtures/cashSale.ts:10`
+- `playwright/fixtures/financedDeal.ts:460`
+- `playwright/tests/financed-deal-economics.spec.ts:89`
+- `playwright/tests/pilot-commissions-cash.spec.ts:65`, `:80`, `:134`
+- `playwright/tests/profit-approval.spec.ts:48`
+- `playwright/tests/sales-wizard-guards.spec.ts:38`
+- `playwright/tests/vehicles.spec.ts:12`
+
+Enumeration command: `git grep -n "createVehicle(" -- playwright`. Its other
+two hits are the helper declaration and its diagnostic message. All nine calls
+are awaited; the required-immediate controls and caller assertions are intact.
+
+The final class census parsed 646 tracked JS/TS files under `components/` and `app/`:
+3,834 conditional expressions, 2,463 if statements and 580 JSX type attributes.
+It compared both button/submit orders across multiline branches and checked
+dynamic type attributes. The sole candidate was VehicleDialog's footer at
+line 1235. No if/else candidate was found. The five dynamic attributes belong
+to input fields (`listingFields`, `CreateAccountingPeriodDialog`,
+`CustomFieldsSection`, `ui/input`) or the `MovementDialog` domain prop in
+`PartnerEquityTab`, not a swapped submit control. This is a source census, not
+proof about arbitrary runtime spread props or external component implementations.
+
+The final named-file Vitest run passed 142 tests in 11 files with
+`--maxWorkers=1 --testTimeout=120000`: every `components/vehicles/*.test.tsx`
+and `scripts/regression/scenarioRecord.test.ts`. The scenario validator printed
+fingerprint `6e4c46e1d276a3493b76cc76ef4835a70d4a1f9edfc7a9de46283456593b00f6`,
+now stored in `vehicle-wizard-final-confirmation.scenario.json`. Its bugRef
+names the full tests-only red SHA. The existing vehicle supplier-intake section
+in the SCRUM-486 oracle carries a screen-control row, explicitly not backend
+financial certification.
+
+Root `pnpm typecheck` passed, including Playwright and the new fixture; it
+excludes `convex/`. Separate `pnpm typecheck:convex` passed. Touched-file ESLint
+exited zero with zero errors and 83 warnings in the existing VehicleDialog.
+Playwright discovery passed with 70 tests in 20 files. Guardrails FAILED:
+VehicleDialog measures 1,696 formatted nonblank lines against the existing
+1,690 ceiling (`SIZE-GROWN` and `CEILING-BELOW-CURRENT`). No ceiling was raised
+and no unrelated refactor was made. This remains a merge blocker.
+
+Baseline identity initially refused eight entries shifted by the one inserted
+guard line. The relocation tool compared each call expression to `a9f48638`,
+proposed eight safe relocations and zero changed/ambiguous calls, then wrote
+only those eight callSiteId positions. No finding or reviewed metadata was
+removed or renewed. The post-relocation check passed: 948 baseline entries
+matched by surface, file, callSiteId and functionId. Backend finding identity
+was not checked by that command.
+
+The small offline markup bridge `VehicleDialogVisualFixture.test.tsx` renders
+the real create wizard with synthetic data. Chromium painted it with compiled
+`app/globals.css`, no server, auth or backend, and network requests blocked.
+All eight PNGs were visually inspected, with zero page horizontal overflow:
+
+- `vehicle-en-375-step4.png`
+- `vehicle-en-375-step5.png`
+- `vehicle-en-1440-step4.png`
+- `vehicle-en-1440-step5.png`
+- `vehicle-ar-375-step4.png`
+- `vehicle-ar-375-step5.png`
+- `vehicle-ar-1440-step4.png`
+- `vehicle-ar-1440-step5.png`
+
+PNG directory:
+`C:/Users/123/AppData/Local/Temp/claude/E--tmp-auto-781/481625ee-e49b-4d02-bc36-ebcb71386b79/scratchpad/939-renders/`.
+Raw red, green, mutant, census, lint and check logs are retained under
+`C:/Users/123/AppData/Local/Temp/scrum939-evidence/`.
+These static renders verify paint and RTL, not native submit timing or backend
+effects. Authenticated E2E, explorer hunters, independent review and a fresh
+Sonar analysis (zero new issues and at least 80% new-code coverage) remain
+UNAVAILABLE. No push, deployment, production credential or backend browser run
+was performed. `.ignore` and `.gitignore` remain outside the patch.
+
 Base: `68be2346d9e2441e9d5bcf88cb980d9ad9189cd6`.
 Branch: `claude/scrum868-p7-launch-evidence`, worktree `E:/tmp/auto-868p7`.
 Round 1: `01ebb04b5cdb351e602719aa6ac740090019cd1b`, Jira SCRUM-868 c24892/c24893, PR #804.
