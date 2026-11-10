@@ -42,9 +42,9 @@ SCRUM-902 c24475 and SCRUM-869 c24460 require the cost gate.
 
 | Reader | Index and bound | Permission | Returned fields |
 | --- | --- | --- | --- |
-| supplierStatement.attention, one family per call | vehicleSupplierPayables, vehicleSupplierReceivables or supplierCostRecoveries, existing by_org_and_supplierId_and_status prefix; one native paginate, initial 25, maximum 50 documents and 1 MiB, server clamps caller limits | Authenticated tenant, owned supplier, finance + cost, accounting plan | Nullable response; attention rows with kind/id/currency/outstanding/disputed minor amounts, due date, days overdue, discriminated eligibility; native cursor/split metadata, completeness, unlinked presence. No total/count/net |
+| supplierStatement.attention, one family per call | vehicleSupplierPayables, vehicleSupplierReceivables or supplierCostRecoveries, existing by_org_and_supplierId_and_status prefix; one native paginate, initial 25, maximum 50 documents and 1 MiB, server clamps caller limits | Authenticated tenant, owned supplier, finance + cost, accounting plan | Nullable response; attention rows with kind/id/currency/outstanding/disputed minor amounts, due date, days overdue, discriminated eligibility; native cursor/split metadata, completeness. No total/count/net |
 | Shared obligation facts | Existing sale get and application get, at most two per page row; tenant check on both; query aborts safely on unreadable facts | Inherits public query or existing sweep gate | Existing due/aging and outstanding facts, projected to attention allowlist |
-| Unlinked presence, one family per call | Same index, orgId and supplierId=undefined prefix; byte-aware stream, maximum 51 payables or one A/R document | Same attention gate | PRESENT, NONE or INCOMPLETE, explicitly organisation-wide including history. Excludes legitimate OPENING OTHER_PAYABLE creditors. No amount or count. NONE is limited to missing-id supplier records, not every identity defect |
+| supplierStatement.unlinkedAttention, one family per call, keyed only by orgId and kind | Same index, orgId and supplierId=undefined prefix; byte-aware stream, maximum 51 payables or one A/R document, stopping at the first qualifying row | Same attention gate | PRESENT, NONE or INCOMPLETE, explicitly organisation-wide including history. Excludes legitimate OPENING OTHER_PAYABLE creditors. No amount or count. NONE is limited to missing-id supplier records, not every identity defect |
 | Existing supplierDueAlerts worker | Existing org pagination, membership pages and send budget unchanged | Existing server-resolved recipients and cost redaction unchanged | Existing notifications unchanged; delegates eligibility to ported pure decision |
 
 The existing compound indexes fit supplier and missing-id prefixes, so no index
@@ -64,8 +64,8 @@ family cursors and tenant/supplier-keyed error boundaries. EN/AR use existing
 Tailwind tokens, Card/Badge/Button and Money, logical alignment and bidi isolation.
 Routine loading/incomplete notices use output; errors use role=alert without focus moves.
 
-The explicit nowMs is a subscription refresh key. Server Date.now determines
-eligibility and the returned Amman as-of date. Refresh hourly and at Amman
+The explicit nowMs is a subscription refresh key. The validated caller time determines
+eligibility and the returned Amman as-of date (round 3). Refresh hourly and at Amman
 midnight. Between refreshes the cached page retains its labelled as-of date;
 neither an arbitrary client timestamp nor a skewed clock sets the aging day.
 Budget exhaustion during joins returns an empty incomplete page, with no cursor
@@ -152,3 +152,28 @@ query reads, supporting per-call reuse rather than rereading an id. The
 row/byte caps and accounting for joined reads outside the page. WAI sources
 above still govern output status and non-focus-moving error alerts. These
 sources were checked again on 2026-11-10; local harness I/O is not cloud proof.
+
+
+## Round 3 quality decisions
+
+Item 1 is a read-integrity change. Recovery facts validate both minor-unit operands before subtraction for every scope and raise ConvexError data faults. Payable facts validate both major-unit operands through toMinorUnits before settlementView can subtract them, including disputed rows. Receivables already validate each operand separately; an advisory probe additionally reproduced an unsafe positive remainder from two safe operands and a negative recorded receipt. Its remainder now refuses too. The worker reports each bad row through onUnreadableRow before writes, counts it as skipped and only alerts usable rows. Other readers fail closed. No money is posted or corrected.
+
+The page reader uses one typed family table and one scoped-index helper. Shared facts moved to supplierObligationFacts, removing the Due/Page cycle. Choose the third-module alternative so the statement readers and the native pager share facts without importing each other. The guardrail formatter measures Due at 684 nonblank formatted lines (ceiling 1,117), Facts at 340 and Page at 94. A merged-file size is not inferred by adding these counts, since imports would differ. Existing outstanding and statement reader bodies stay intact. The shared pager returns pageStatus and splitCursor consistently, including nulls; supplierDueAging alone computes totals and explicitly retains its existing public shape. Callers pass paginationOpts alone.
+
+The attention row cap remains independent of numItems: the UI requests 25 source rows, the server clamps both numItems and maximumRowsRead to at most 50, and maximumBytesRead to 1 MiB. A caller may lower either read cap. Settled history still consumes source pages. maximumRowsRead is intentionally 50 by default, rather than numItems: native cursor/endCursor ranges can require more source work than their requested output size. SplitRequired still withholds all figures and retains the input cursor. Nonfinite option defaults retain the old maximum fallback before the shared boundedCount clamp. The fixed-page UI does not implement native split ranges.
+
+Attention now follows outstanding's time contract: nowMs must be a safe integer within one day of Date.now(), then the supplied nowMs drives eligibility and asOfDate. Date.now() in a query does not itself schedule re-execution when wall time passes. Convex caches by arguments and read dependencies. One statement timer updates the shared argument hourly or at the next Amman midnight. A module-level time formatter backs msUntilAmmanMidnight. Statement access and accounting-plan decisions are passed to attention, so the second subscription, gate note and timer are removed.
+
+mayReadStatement is a soft permission helper in supplierStatement, shared by attention and unlinkedAttention. It first calls requireTenantAuth with its existing empty permission list, retaining tenant, membership and impersonation-grant liveness checks, then permits system owner or both finance and cost. Missing grants return null. No tenancy implementation changed. The existing supplierNavigationFailure mechanism maps raw failures; the distinct SUPPLIER_ATTENTION_UNAVAILABLE code stays because the UI uses its specific EN/AR translation. Coded auth, plan and clock refusals pass through as before.
+
+Unlinked presence is a separate query keyed by orgId and kind with the same permission and accounting gates. Its bounded existence helper checks headroom before each document, stops at the first qualifying row, and reports INCOMPLETE after at most 51 ordinary-creditor exclusions. One A/R document is sufficient for existence. Per-supplier pages no longer read that range. The UI subscribes to the separate result; its cached value is shared across supplier pages. A supplier page's join-budget failure cannot contaminate that separate query's completeness. A local harness metrics probe measures actual reads and zero writes; it does not certify cloud invalidation costs.
+
+Attention message pairs now live inside the suppliers domain's own defineBilingualMessages. The side bundle already used that helper, so its parity was not previously unchecked. This change consolidates ownership rather than repairing missing parity. SuppliersBalancesAsOf and loadErrorMessage are reused, and overdue rendering is shared without changing the positive-days condition. Keep Next records / Previous records: the existing suppliers-domain pair says Next suppliers / Previous suppliers, which would change the object being paged in both languages.
+
+Official sources rechecked 2026-11-10: [query caching and Date.now](https://docs.convex.dev/functions/query-functions#caching--reactivity--consistency), [native pagination and read caps](https://docs.convex.dev/database/pagination), [transaction limits](https://docs.convex.dev/production/state/limits), and [WAI status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html). Routine updates remain output elements. Error alerts do not move focus. These sources justify the design, while tests and synthetic renders establish only local evidence.
+
+
+The table/facts factory has one schema-derived type assertion after the native query: scopedIndex queries the same source.table captured as T, so its union result has that table's document type. Convex's generic index-range type does not preserve that correlation through the shared helper. The assertion passes through unknown rather than any; no document or client value is decoded by it. Public tests cover all three table/fact pairings. This is a compile-time bridge, not runtime validation or proof. See the [TypeScript assertion guidance](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#type-assertions). The separate Convex and root typechecks must both pass this factory.
+
+
+The final UI/domain split follows the existing size guard without trimming comments: statement gate/error messages move into shared.tsx (statement: 605, ceiling 614; shared: 423), and existing navigation message pairs move into the bilingual supplierNavigation domain part (suppliers: 585; navigation part: 61; both limit 600). Attention keys remain directly inside suppliersMessages. The final EN/AR dictionaries preserve all moved values; component controls rerun across the supplier screens.

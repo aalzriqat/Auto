@@ -1,6 +1,6 @@
 {
   "id": "supplier-attention-joined-read-budget",
-  "fingerprint": "7e1e91c696d4e811b0070e7896abffe5c41e2e0cf27202430e956bd5058ab6c8",
+  "fingerprint": "f6442a5b1928adcb9abbbe16a1d0ec43c7d77068a0a2a6de8512491605e94370",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -20,6 +20,16 @@
         "payables": 20,
         "joinedSaleStringBytes": 900000,
         "transactionLimits": true
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.unlinkedAttention",
+      "input": {
+        "kind": "PAYABLE"
       }
     }
   ],
@@ -41,8 +51,8 @@
       "value": false
     },
     {
-      "observable": "unlinked",
-      "value": "INCOMPLETE"
+      "observable": "independentUnlinkedPresence",
+      "value": "NONE"
     }
   ],
   "rulings": [

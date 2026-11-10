@@ -295,3 +295,134 @@ under someone else's session.
 
 Next: coordinator reviews the rebased head, supplies isolated runtime proof
 and independent seats, and owns the serial PR/CI train. No push is authorized.
+
+
+## Round 3 quality implementation (2026-11-10)
+
+Worktree E:/tmp/auto-869s4, branch claude/scrum869-supplier-alerts-v2. Round-2 starting head 669d91d578f06fb1865dfd5d3449f0c46a2d5920, stacked parent 7065336c6f462a4f98cfb44c6a79f52b2e324113. No push, PR, merge, deployment, server, watcher or production access. Protected ignore files remain unstaged and unchanged by implementation edits. No backup-branch operation was performed.
+
+### Claim dispositions
+
+| Item | Disposition and reproduction at round-2 source | Final change and evidence |
+| --- | --- | --- |
+| 1 | Accepted and expanded. Page's scopedRecoveryFacts checked only supplierId calls and threw plain Error; readRow only reports ConvexError data faults. Disputed payable settlement could skip operand conversion. Receivables already converted each operand but a negative received amount could make the remainder unsafe. | Checks live in shared facts for every scope. Worker tests use real stored documents, report bad rows before writes, and verify usable sibling delivery. Two independent red commits and a killed operand mutant below. |
+| 2 | Accepted. Three branches repeated the same native-index selection and always computed totals. Due and Page imported each other. | One family factory/table and scoped index; always-nullable split metadata; paginationOpts only; aging alone computes totals and preserves its public shape. Facts moved to a third module, original four Due exports removed, duplicate imports removed. Outstanding/statement reader bodies compare byte-for-byte after newline normalization against the money-fix commit. |
+| 3 | Modified as explicitly requested. bounded already delegated arithmetic to boundedCount but duplicated defaults; maximumRowsRead was 50, independent of requested 25, not equal to numItems. nowMs was ignored. | Shared clamp with preserved nonfinite defaults; common incomplete-page construction and one complete derivation. Keep independent 50-row / 1 MiB bounds. Validate and use nowMs exactly as outstanding. Existing midnight expected values stay, with current caller-time inputs; new cached-time/invalid-clock test failed before the change. ADR cites Convex caching guidance. |
+| 4 | Accepted. attention repeated the system-owner/both-grants decision after requireTenantAuth. | Module-local mayReadStatement is shared by attention and unlinkedAttention. Tenant auth and impersonation liveness still run first, and grant denial returns exactly null. tenancy.ts is unchanged. |
+| 5 | Modified. Local catch duplicated the existing supplier read failure mechanism. | Reuse supplierNavigationFailure, retaining coded auth/plan/time refusals. Keep SUPPLIER_ATTENTION_UNAVAILABLE because SupplierAttentionError's EN/AR coded message uses it; raw errors remain logged server-side and mapped generically. Existing navigation behavior and tests remain. |
+| 6 | Accepted. Org-wide unlinked scan joined every supplier page and fetched up to 51 rows before some(). | Separate unlinkedAttention query, keyed by orgId/kind and gated by tenant, finance, cost and accounting. Named boundedPresence stops at first qualifying row, preserves headroom/51-row incompleteness and ordinary-creditor exemption. Public permission cases plus actual harness metrics: 1 document read and 0 writes among 51 qualifying documents. |
+| 7 | Accepted. Attention repeated permissions, plan subscription/note and a timer. | Statement passes enabled and one nowMs. One active timer refreshes hourly or at Amman midnight with cached formatter helper; parent uses PERMISSIONS constants. No client query hook wrapper. Next advances using the cursor supplied by the sole eligibility condition in the view. Statement/Card/Tabs preserve language direction. |
+| 8 | Modified. Side bundle already used defineBilingualMessages, so parity was already checked. | Attention pairs now directly belong to suppliersMessages. Reuse SuppliersBalancesAsOf, loadErrorMessage and shared positive-days rendering. Keep Next records / Previous records: available supplier pair pages suppliers, not records, and would change both language meanings. Twenty-one retained attention pairs compare identically. Split existing navigation message pairs to meet the unchanged size guard. |
+
+### Failing-first evidence and commit order
+
+First tests-only commit e0dcf977376e29b57b07be727215727e0ccd4f06: named worker file, selector unusable money, 5 intended failures and 1 passing receivable control (73 unrelated cases filtered). Recovery NaN/fractional/unsafe-gross variants returned 6 alerts / 0 skipped instead of 3 / 1; unsafe recovered and disputed unsafe payable silently returned 0 skipped. Log: C:/Users/123/AppData/Local/Temp/869s4-r3-red-committed.log. The initial behavior fix is 24341d304, followed by item refactor commits.
+
+Advisory static inspection later suggested a separate receivable remainder gap. The public worker reproduced it at tests-only commit 17a653a1f40c3832c96c88af546f5b9ea9e203d7: 1 intended failure, 6 alerts / 0 skipped instead of 3 / 1. Log: 869s4-r3-remainder-red.log. Fix cc962c76c adds its safe-result check. This second test/fix pair follows the refactors because the finding arrived later. No reordering of prior commits or protected ignore-file changes was attempted.
+
+The additional caller-time test failed before implementation: the ignored argument produced daysOverdue 1 instead of 0. Log: 869s4-r3-clock-red.log. Its final assertions cover the supplied day and NaN/infinite/fractional/out-of-window refusals.
+
+An early mutant attempt overlapped a running green job, which invalidated that run and captured temporary source in a local commit. The temporary source was restored and that commit amended to the one-line intended fix after a serial green run. The first mutant also timed out before starting its worker, so it is not mutation evidence. Logs are retained, but none of those outcomes is counted as green or killed. Subsequent mutations and staging ran serially.
+
+### Assertions and permanent records
+
+No existing money, cost, permission, cursor, read-budget or threshold assertion was weakened. One existing expected field changed: the joined-sale-budget test now expects the independent unlinked query to return NONE rather than INCOMPLETE. It still requires an empty incomplete attention page, READ_BUDGET, isDone=false and the unchanged cursor. With independent queries, the empty missing-id range has its own budget and cannot inherit a supplier join failure. A mutant that forces that query to return INCOMPLETE fails exactly this assertion.
+
+The old midnight test name/inputs now use validated caller time; its expected day, step and as-of values are unchanged. Component network mocks route the new independent endpoint and mount the real parent statement to exercise shared access and timer behavior. Render capture calls write only synthetic markup. No component assertion changed. New worker/permission tables became literal registrations with the same helper assertions because the scenario library rejects parameterized bindings. The original parameterized red names are not misrepresented as later literal names: their records are preventive controls without bugRef. The unchanged receivable-remainder test alone carries its own red SHA.
+
+Sixteen changed records comprise 14 additions and 2 updated records, bringing this attention/worker group to 52. Their stored fingerprints come from scenarioRecord.test.ts's printed expected values (869s4-r3-fingerprints-initial.log and 869s4-r3-fingerprints-new.log). Scenario validation subsequently passed 70/70; the full library run passed too. Matrix additions: SCRUM869-worker-money-guard and SCRUM869-attention-presence-access. Existing Amman and join-budget rows were updated. No high-entropy idempotency value was added.
+
+### Executed verification
+
+All Vitest commands used named files and --maxWorkers=1. The supplier manifest is C:/Users/123/AppData/Local/Temp/869s4-r2-supplier-files.txt (43 existing files, complete component/supplier utility/worker enumeration). Results: 43 files, 959 tests passed, zero skipped. Log/report: 869s4-r3-suppliers.log and .json. Scoped coverage over 12 touched production modules: statements 95.90%, branches 92.03%, functions 95.74%, lines 97.94%. Page is measured: 17/17 lines, 18/18 statements, 10/10 branches. Facts has 63/63 lines and 77/80 statements. JSON inventory is 869s4-r3-coverage/coverage-summary.json; no absent/zero-case file is claimed covered.
+
+After the final presentation/domain split, all 8 component files passed again (128 tests). UI/domain scoped coverage: 98.73% statements, 100% lines; log 869s4-r3-ui-final.log and summary 869s4-r3-ui-coverage/coverage-summary.json. This is local scoped coverage, not a hosted Sonar new-code verdict.
+
+All 7 scripts/regression test files ran together: 379 passed, zero skipped. refreshRulings.mjs was temporarily set to the exact committed LF blob because this Windows checkout's CRLF shebang fails the transformer; its original bytes were restored in finally. This is not a claim that the original CRLF bytes passed. Log/report: 869s4-r3-regression.log and .json.
+
+Serial final mutants:
+- Recovery operand check replaced with false: literal unsafe-gross worker test fails with 6 alerts / 0 skipped versus 3 / 1. Log 869s4-r3-mutant-money-final.log.
+- Independent presence query forced to INCOMPLETE: existing joined-budget assertion fails. Log 869s4-r3-mutant-independent-presence.log.
+Both source files were restored byte-for-byte. The restored selectors pass together: 2/2, log 869s4-r3-restored-final.log. Earlier complete restored attention/worker run: 107/107, log 869s4-r3-restored.log.
+
+pnpm typecheck passes after final UI/domain changes (root excludes convex as entry roots; transitive imports may still be checked). pnpm typecheck:convex checks the separate Convex project; the final repeat log is 869s4-r3-typecheck-convex-final.log. Root log: 869s4-r3-typecheck-final.log. Early generic index-type compiler failures were fixed with one schema-derived bridge at the shared pager; the table/facts pairing is native-query-bound, documented in the ADR, and tested for all three kinds.
+
+Touched-file ESLint: 18 files, --max-warnings=0, pass (869s4-r3-eslint-final.log). Guardrails: pass, 1,069 production files measured, no limit/baseline/waiver change (869s4-r3-guardrails-final.log). Formatted nonblank counts from the real guardrail measureLines: statement 605/614, shared 423/600, Due 684/1117, Facts 340/600, Page 94/600, suppliers domain 585/600, navigation messages 61/600. Comments were not trimmed to fit.
+
+checkBaselineIdentity: 948 baseline call identities matched; backend finding identity is explicitly not measured by this command (869s4-r3-identity.log). The focused opening-route test passes 1/1, with 231 unrelated tests filtered, log 869s4-r3-opening.log. api.d.ts has 379 entries in each block, both ordinal sorted, unique and identical, with Facts registered. Script: 869s4-r3-api-order.mjs.
+
+Committed-tree renewal runs after this evidence/scenarios commit: node scripts/contractSkew/renewBaselineReviewed.mjs --check-evidence --reviewed 7065336c6f462a4f98cfb44c6a79f52b2e324113 --pr-base 7065336c6f462a4f98cfb44c6a79f52b2e324113. The parser requires a SHA after --reviewed. Read its actual final result in C:/Users/123/AppData/Local/Temp/869s4-r3-renewal-final.log and the final handoff; no baseline entry was edited.
+
+### Synthetic renders
+
+Design source: AutoFlow's existing globals.css, Tailwind tokens and shared components. Fresh Chromium pages, synthetic fixtures, all network requests aborted, local fallback fonts. All 24 captures have expected direction and zero horizontal overflow in r3-render-evidence.json. Representative populated, empty, loading, error, incomplete and unlinked captures were visually inspected across EN/AR and phone/desktop. No signed-in journey or assistive-technology behavior is claimed.
+
+Directory: C:/Users/123/AppData/Local/Temp/claude/E--tmp-auto-781/481625ee-e49b-4d02-bc36-ebcb71386b79/scratchpad/869s4-renders/
+
+- r3-empty-ar-1440.png
+- r3-empty-ar-375.png
+- r3-empty-en-1440.png
+- r3-empty-en-375.png
+- r3-error-ar-1440.png
+- r3-error-ar-375.png
+- r3-error-en-1440.png
+- r3-error-en-375.png
+- r3-incomplete-ar-1440.png
+- r3-incomplete-ar-375.png
+- r3-incomplete-en-1440.png
+- r3-incomplete-en-375.png
+- r3-loading-ar-1440.png
+- r3-loading-ar-375.png
+- r3-loading-en-1440.png
+- r3-loading-en-375.png
+- r3-populated-ar-1440.png
+- r3-populated-ar-375.png
+- r3-populated-en-1440.png
+- r3-populated-en-375.png
+- r3-unlinked-ar-1440.png
+- r3-unlinked-ar-375.png
+- r3-unlinked-en-1440.png
+- r3-unlinked-en-375.png
+
+### Remaining evidence boundary
+
+Hosted Sonar 0-new-issues/new-code coverage, cloud CI, independent certification seats, authenticated three-hunter journeys, real Convex limits/OCC and production parity remain UNVERIFIED. The advisory was read-only static inspection, not a required review seat. It proposed the reproduced receivable remainder case; the implementer did not self-certify a seat. The existing exact-SHA release and pilot gates remain unchanged. No enabled financial operation, correction door or deployment credential was touched.
+
+The correct skill was invoked for the recurring safe-net/unsafe-gross class (earlier SCRUM-850 memory plus this lane). Prevention is in shared backend fact checks and real-document worker tests, rather than unenforced prose; the existing memory was updated instead of duplicated. Industry sources and the query/pagination/read/status decisions are linked in the ADR.
+
+### Round 3 code/test commits before this documentation commit
+
+- e0dcf977376e29b57b07be727215727e0ccd4f06 test(SCRUM-869): expose unusable money in org-wide alert worker
+- 24341d304e3e3fb59bebd8e1c70904b9f1ad1e33 fix(SCRUM-869): validate obligation operands for every alert scope
+- 37053200e098fb226b80460c983823cc9b0b23e1 refactor(SCRUM-869): share obligation facts and consolidate native paging
+- dc69bab9645bf259ed4ce78f956efd93731386c8 refactor(SCRUM-869): simplify attention paging and honor validated query time
+- b4217787baa02ec234160053037b8b5a00e2b8d5 refactor(SCRUM-869): centralize soft statement access decision
+- a76f297ace438123d3e2078ea8b75290e1272f4e refactor(SCRUM-869): reuse supplier read failure mapping
+- 3218219bf89d88e9cd4f1b2db82b22b15c89d123 refactor(SCRUM-869): cache unlinked presence independently per organization
+- 96b49ff8e1f651a9032a4b0cc360e09ed628915a refactor(SCRUM-869): share statement access and one attention clock
+- e11cb943c671eb6ac7f5c71610013e9ab4ae24c0 refactor(SCRUM-869): consolidate supplier messages and overdue rendering
+- 17a653a1f40c3832c96c88af546f5b9ea9e203d7 test(SCRUM-869): expose unsafe receivable remainder from safe operands
+- cc962c76cc8aa2149119acf3303924f619f43c13 fix(SCRUM-869): refuse unrepresentable receivable remainders
+- bbab0761acb6787937147a0668fff28c8b8cb986 refactor(SCRUM-869): preserve schema types through the shared pager
+- 62a259c205852b5df54a3e4c051b2dd8f4d637f5 refactor(SCRUM-869): split supplier presentation and bind literal scenarios
+
+### Changed scenario fingerprints
+
+| Record | Printed fingerprint stored |
+| --- | --- |
+| supplier-attention-amman-boundary | 588bd78d45c6485991f5406c1703f792fbeaaa3ab043dc0fc6d57f82f3375dd1 |
+| supplier-attention-cached-caller-time | b448d979c19c521a924de37759ecadf23e998ff739ca9d7f8ccf9e1538420cce |
+| supplier-attention-joined-read-budget | f6442a5b1928adcb9abbbe16a1d0ec43c7d77068a0a2a6de8512491605e94370 |
+| supplier-attention-presence-first-match | 00426dedfc20820210cf1cf235428bfc2ac71f721032357559504f66120ac481 |
+| supplier-attention-presence-independent | 1fd0e286fad3bf9a0850d912b7a863907aedae8759f173886014ed0e294a72f0 |
+| supplier-attention-presence-plan | 0bef0a842e07bb57d7665c1e97f3c9cd17420b1f9bf7330fe6d320afc50d8635 |
+| supplier-attention-presence-tenant | 067a5313b8b0f230a2e9d9f5e5db12ac13860abb0b7e10561e6891cf7e3a20df |
+| supplier-attention-presence-without-cost | 44b59016bd21b3c6cd4b529dc9d6e8545db41881d72ddd2e776ab9cc61b6f418 |
+| supplier-attention-presence-without-finance | cf4f3973482d51c7e3785edb1ae509db2ce4b6f4244a467e2bfeda3dc3ea34f1 |
+| supplier-worker-payable-gross-guard | 6914ae8e7a70f3d1801e74097c4f011ff5d19284ecc638674514a8724e8e286d |
+| supplier-worker-receivable-gross-control | a02f8ef8a9a747986c7ddc2ca51bf1f4484a8bddce8df1549ec20bc0c1a10248 |
+| supplier-worker-receivable-net-guard | 4670cf02d573020245f823354493df194f837d76cd617e25e48bc9f4e23d7326 |
+| supplier-worker-recovery-fractional | 8191ba45cbdd571e75d269ecda9e4884437b8d16736f7cfafa0775dff19e1ecb |
+| supplier-worker-recovery-money-guard | cf1fc8863573edf54d8dd11982b3988906108e9e32d0a5612b6c24030d7911fb |
+| supplier-worker-recovery-nan | 4e0dc5662103957f079d4fd7a1dfb817741c28f980906b30b33a5b44c5dfcb6d |
+| supplier-worker-recovery-unsafe-recovered | 7bf5184fcdb7f414220474d61810336f6f4de2430f789fef02d4df239321a365 |

@@ -1,6 +1,6 @@
 {
   "id": "supplier-attention-amman-boundary",
-  "fingerprint": "1400953e8768421151438eb0634b2d692163a348299030026387278e3be72762",
+  "fingerprint": "588bd78d45c6485991f5406c1703f792fbeaaa3ab043dc0fc6d57f82f3375dd1",
   "domain": "money",
   "level": "backend",
   "status": "active",
@@ -22,7 +22,7 @@
           "2026-06-15T20:59:59Z",
           "2026-06-15T21:00:00Z"
         ],
-        "skewedRefreshKey": "2026-06-15T09:00:00Z"
+        "nowMsMatchesServerTimes": true
       }
     }
   ],
@@ -59,7 +59,7 @@
   ],
   "impl": {
     "file": "convex/supplierAttention.scrum869.test.ts",
-    "testName": "Amman midnight changes overdue day using server time despite a skewed refresh key"
+    "testName": "Amman midnight changes overdue day using the validated caller time"
   },
   "matrixRow": "SCRUM869-attention-read"
 }

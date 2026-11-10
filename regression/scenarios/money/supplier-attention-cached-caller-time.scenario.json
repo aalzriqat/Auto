@@ -1,0 +1,65 @@
+{
+  "id": "supplier-attention-cached-caller-time",
+  "fingerprint": "b448d979c19c521a924de37759ecadf23e998ff739ca9d7f8ccf9e1538420cce",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-r3",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.attention",
+      "input": {
+        "serverTime": "2026-06-15T21:00:00Z",
+        "nowMs": "2026-06-15T09:00:00Z",
+        "invalidClocks": [
+          "NaN",
+          "Infinity",
+          "fractional",
+          "older-than-one-day",
+          "newer-than-one-day"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "daysOverdue",
+      "value": 0
+    },
+    {
+      "observable": "asOfDate",
+      "value": "2026-06-15"
+    },
+    {
+      "observable": "invalidClockCode",
+      "value": "SUPPLIER_STATEMENT_INVALID_TIME"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierAttention.scrum869.test.ts",
+    "testName": "validated caller time controls cached eligibility and invalid clocks refuse"
+  },
+  "matrixRow": "SCRUM869-attention-read"
+}

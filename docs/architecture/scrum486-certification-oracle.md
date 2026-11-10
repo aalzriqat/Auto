@@ -2018,7 +2018,7 @@ Public query: `supplierStatement.attention`. Bound checks live in
 | Identity | Same-name different-id and id-less payables are absent from the supplier's page; missing-id presence is organisation-wide | same-name supplier and id-less legacy rows never enter the account |
 | Dispute and missing date | Disputed 9,500,000 remains visible as HELD/DISPUTED; undated is HELD/NO_DUE_DATE, never overdue | disputed obligation is held rather than silently healthy; undated obligation is held rather than silently healthy |
 | Receivable and recovery | Near-due margin is 3,000,000 JOD minor and T_MINUS_3; later margin is absent. Recovery 200,000 minus 50,000 = 150,000, DUE_DAY, with no invented A/P | supplier receivable is due while a later receivable is not yet eligible; cost recovery uses the same reminder decision without fabricating a payable |
-| Amman midnight | At 20:59:59Z the due item is zero days overdue; at 21:00Z it is one. Skewed client refresh timestamp cannot change the server day | Amman midnight changes overdue day using server time despite a skewed refresh key |
+| Amman midnight | At 20:59:59Z the due item is zero days overdue; at 21:00Z it is one. Validated caller nowMs drives the day; invalid clocks refuse | Amman midnight changes overdue day using the validated caller time; validated caller time controls cached eligibility and invalid clocks refuse |
 | Ordinary creditor | Id-less OPENING/OTHER_PAYABLE does not produce an unresolved-supplier warning | ordinary id-less opening creditors are excluded from unresolved supplier warnings |
 | Invalid data | NaN due facts, NaN/infinite/fractional/unsafe recovery money and unsupported currency refuse with SUPPLIER_ATTENTION_UNAVAILABLE, not complete money | unreadable stored due fact is a coded generic error rather than a silent omission; malformed recovery money is refused by the backend rather than marked complete |
 
@@ -2026,7 +2026,7 @@ Public query: `supplierStatement.attention`. Bound checks live in
 
 | Cell | Expected result | Executable check in the same backend file |
 | --- | --- | --- |
-| Missing either grant | Entire response equals null for no grants, finance-only and cost-only, including unlinked metadata | no finance or cost permission withholds the whole response; finance-only access withholds the whole response; cost-only access withholds the whole response |
+| Missing either grant | Entire response equals null for no grants, finance-only and cost-only, with the separately gated unlinked query | no finance or cost permission withholds the whole response; finance-only access withholds the whole response; cost-only access withholds the whole response |
 | Foreign party and tenant | Supplier from B requested in A refuses generically; querying B without membership returns UNAUTHORIZED; no figures | foreign supplier and foreign organisation refuse without data |
 | Accounting plan | Starter plan refuses the reader before figures | accounting plan denial refuses before reading obligation figures |
 
@@ -2058,3 +2058,31 @@ No real-backend/OCC, cloud read-limit, independent seat or pilot certificate is
 claimed. Full status-index paging is deferred: settled history can consume
 attention pages. Required-split ranges remain unavailable in this fixed-page UI,
 with figures withheld and navigation refused; this is explicit containment.
+
+
+### SCRUM869-worker-money-guard
+
+Read-integrity cells, local convex-test evidence only. Internal worker: supplierDueAlerts.processOrgSupplierDueAlerts without supplierId. Tests: convex/supplierDueAlerts.scrum869.test.ts.
+
+| Cell | Inputs and expected result | Executable check |
+| --- | --- | --- |
+| Recovery gross | 2^53 due minus (2^53 - 2) recovered must be unreadable despite a safe-looking remainder. Beside a usable 200,000-minor recovery, exactly 3 authorised alerts, 1 skipped row, one owner amount 200.000 and an unreadable-row log. Never alert from the invalid row. | recovery worker reports unsafe gross with safe remainder |
+| Recovery invalid forms | NaN due, 0.5 recovered, or unsafe recovered each produce the same reported skip; the usable recovery continues. | recovery worker reports NaN due without alerting unusable money; recovery worker reports fractional recovered money; recovery worker reports unsafe recovered money |
+| Payable gross | Disputed gross operands above safe minor-unit range must be reported before subtraction, alongside 3 alerts for a usable payable. | payable worker refuses unsafe gross operands with a safe remainder |
+| Receivable control | The existing separate operand conversions refuse unsafe gross values. | receivable worker refuses unsafe gross operands with a safe remainder |
+| Receivable remainder | 9,007,199,254,740 JOD due and -1 JOD received have safe individual minor conversions but an unsafe remainder. Report 1 skipped row; only the valid sibling produces 3 alerts. | org-wide receivable worker reports an unsafe remainder from safe operands |
+
+The first tests-only commit e0dcf977376e29b57b07be727215727e0ccd4f06 failed five parameterized cases. Literal wrappers added later retain their assertions, so their records are preventive controls rather than claiming those literal names existed at that red SHA. The receivable-remainder test is unchanged from its separate red commit 17a653a1f40c3832c96c88af546f5b9ea9e203d7 and carries that bugRef. No accounting or notification-delivery certification is claimed from this harness.
+
+### SCRUM869-attention-presence-access
+
+Public query: supplierStatement.unlinkedAttention, keyed only by orgId and kind. Tests: convex/supplierAttention.scrum869.test.ts.
+
+| Cell | Expected result | Executable check |
+| --- | --- | --- |
+| Finance gate | Cost-only caller gets exactly null. | withholds presence without finance |
+| Cost gate | Finance-only caller gets exactly null, under SCRUM-902 c24475. | withholds presence without cost |
+| Plan gate | Starter accounting denial refuses. | refuses presence without accounting plan |
+| Tenant gate | Foreign organisation refuses UNAUTHORIZED. | refuses foreign organisation presence |
+| Early existence | 51 real qualifying documents read as PRESENT after one document and zero writes in harness transaction metrics. | presence stops reading after the first qualifying document |
+| Independent read range | Attention page has no unlinked field; separate query reports PRESENT. Join-budget withholding still preserves every amount/cursor refusal while the separate empty-range presence is NONE. | attention subscriptions return no organisation-wide presence field; large joined sale documents withhold figures as incomplete without advancing the cursor |

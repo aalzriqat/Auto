@@ -1,0 +1,67 @@
+{
+  "id": "supplier-worker-recovery-unsafe-recovered",
+  "fingerprint": "7bf5184fcdb7f414220474d61810336f6f4de2430f789fef02d4df239321a365",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum869-attention-r3",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "INTERNAL_WORKER",
+        "org": "A"
+      },
+      "action": "supplierDueAlerts.processOrgSupplierDueAlerts",
+      "input": {
+        "kind": "RECOVERY",
+        "amountDueMinor": 200000,
+        "amountRecoveredMinor": 9007199254740992,
+        "usableRecoveryMinor": 200000,
+        "agreedDueDate": "2026-06-15T09:00:00Z"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alerted",
+      "value": 3
+    },
+    {
+      "observable": "skipped",
+      "value": 1
+    },
+    {
+      "observable": "ownerAmounts",
+      "value": [
+        "200.000"
+      ]
+    },
+    {
+      "observable": "unreadableRowReported",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-869#c23883",
+      "digest": "62087ef1739a9ed0c89a2576c5b91c10b6f033bd5e7ac393339c59eb74e91651"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    },
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierDueAlerts.scrum869.test.ts",
+    "testName": "recovery worker reports unsafe recovered money"
+  },
+  "matrixRow": "SCRUM869-worker-money-guard"
+}
