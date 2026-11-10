@@ -45,7 +45,7 @@ export async function readAttention(ctx: QueryCtx, args: { orgId: Id<"organizati
   const options = args.paginationOpts;
   let page: Awaited<ReturnType<typeof readObligationPage>>;
   try {
-    page = await readObligationPage(ctx, { ...args, nowMs, cursor: options.cursor, limit: MAX_ROWS,
+    page = await readObligationPage(ctx, { ...args, nowMs,
     paginationOpts: { cursor: options.cursor, endCursor: options.endCursor, numItems: bounded(options.numItems, MAX_ROWS),
       maximumRowsRead: bounded(options.maximumRowsRead, MAX_ROWS), maximumBytesRead: bounded(options.maximumBytesRead, MAX_BYTES) } });
   } catch (error) {

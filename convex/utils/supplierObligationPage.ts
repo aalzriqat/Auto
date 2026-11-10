@@ -1,61 +1,53 @@
-import type { PaginationOptions, PaginationResult } from "convex/server";
-import type { Id } from "../_generated/dataModel";
+import type { PaginationOptions } from "convex/server";
+import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
-import { createSupplierReadCache } from "./supplierReadCache";
-import { OBLIGATION_PAGE_MAX, readRow, payableFacts, receivableFacts, recoveryFacts, totalsOf, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationDue";
+import { createSupplierReadCache, type SupplierReadCache } from "./supplierReadCache";
+import { readRow, payableFacts, receivableFacts, recoveryFacts, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationFacts";
 
-async function projectPage<D>(page: PaginationResult<D>, read: (doc: D) => Promise<ObligationRow | null>, supplierId: Id<"suppliers"> | undefined) {
-  const rows: ObligationRow[] = [];
-  for (const doc of page.page) {
-    const row = await read(doc);
-    if (row) rows.push(row);
-  }
-  const result = { rows, totals: totalsOf(rows), complete: page.isDone, continueCursor: page.continueCursor };
-  if (!supplierId) return result;
-  return { ...result, pageStatus: page.pageStatus ?? null, splitCursor: page.splitCursor ?? null };
+type Table = "vehicleSupplierPayables" | "vehicleSupplierReceivables" | "supplierCostRecoveries";
+interface PageArgs {
+  orgId: Id<"organizations">;
+  kind: ObligationKind;
+  nowMs: number;
+  supplierId?: Id<"suppliers">;
+  paginationOpts: PaginationOptions;
+  /** The worker reports data faults before writing any notifications. Other callers fail closed. */
+  onUnreadableRow?: (row: UnreadableRow) => void;
 }
 
-export async function readObligationPage(
-  ctx: QueryCtx,
-  args: {
-    orgId: Id<"organizations">;
-    kind: ObligationKind;
-    cursor: string | null;
-    limit: number;
-    nowMs: number;
-    /** Supplied by a writer that must decide before it writes anything (the due-alert worker). */
-    supplierId?: Id<"suppliers">;
-    paginationOpts?: PaginationOptions;
-    onUnreadableRow?: (row: UnreadableRow) => void;
-  }
-): Promise<ObligationPage & { pageStatus?: "SplitRequired" | "SplitRecommended" | null; splitCursor?: string | null }> {
-  const { orgId, kind, cursor, nowMs, onUnreadableRow } = args;
-  const numItems = Math.min(Math.max(Math.trunc(args.limit), 1), OBLIGATION_PAGE_MAX);
-  const cache = args.supplierId ? createSupplierReadCache() : undefined;
-  const options = args.paginationOpts ?? { cursor, numItems };
-
-  if (kind === "PAYABLE") {
-    const source = ctx.db.query("vehicleSupplierPayables");
-    const query = args.supplierId
-      ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", args.supplierId))
-      : source.withIndex("by_org", q => q.eq("orgId", orgId));
-    const page = await query.paginate(options);
-    return projectPage(page, row => readRow(kind, row._id, row.currency, nowMs, () => payableFacts(ctx, orgId, row, cache), onUnreadableRow), args.supplierId);
-  } else if (kind === "RECEIVABLE") {
-    const source = ctx.db.query("vehicleSupplierReceivables");
-    const query = args.supplierId
-      ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", args.supplierId))
-      : source.withIndex("by_org", q => q.eq("orgId", orgId));
-    const page = await query.paginate(options);
-    return projectPage(page, row => readRow(kind, row._id, row.currency, nowMs, () => receivableFacts(ctx, orgId, row, cache), onUnreadableRow), args.supplierId);
-  } else {
-    const source = ctx.db.query("supplierCostRecoveries");
-    const query = args.supplierId
-      ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", orgId).eq("supplierId", args.supplierId))
-      : source.withIndex("by_org", q => q.eq("orgId", orgId));
-    const page = await query.paginate(options);
-    return projectPage(page, row => readRow(kind, row._id, row.currency, nowMs, () => recoveryFacts(row), onUnreadableRow), args.supplierId);
-  }
-
+function scopedIndex<T extends Table>(ctx: QueryCtx, table: T, args: PageArgs) {
+  const source = ctx.db.query(table);
+  return args.supplierId
+    ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", args.orgId).eq("supplierId", args.supplierId))
+    : source.withIndex("by_org", q => q.eq("orgId", args.orgId));
 }
 
+/** Bind each table to its document reader while preserving the schema's document type. */
+function family<T extends Table>(source: {
+  table: T;
+  facts: (ctx: QueryCtx, orgId: Id<"organizations">, row: Doc<T>, cache?: SupplierReadCache) => ReturnType<typeof payableFacts> | ReturnType<typeof recoveryFacts>;
+}) {
+  return async (ctx: QueryCtx, args: PageArgs): Promise<ObligationPage> => {
+    const cache = args.supplierId ? createSupplierReadCache() : undefined;
+    const page = await scopedIndex(ctx, source.table, args).paginate(args.paginationOpts);
+    const rows: ObligationRow[] = [];
+    for (const doc of page.page) {
+      const row = await readRow(args.kind, doc._id, doc.currency, args.nowMs,
+        () => source.facts(ctx, args.orgId, doc, cache), args.onUnreadableRow);
+      if (row) rows.push(row);
+    }
+    return { rows, complete: page.isDone, continueCursor: page.continueCursor,
+      pageStatus: page.pageStatus ?? null, splitCursor: page.splitCursor ?? null };
+  };
+}
+
+const FAMILIES = {
+  PAYABLE: family({ table: "vehicleSupplierPayables", facts: payableFacts }),
+  RECEIVABLE: family({ table: "vehicleSupplierReceivables", facts: receivableFacts }),
+  RECOVERY: family({ table: "supplierCostRecoveries", facts: (_ctx, _orgId, row) => recoveryFacts(row) }),
+};
+
+/** One native page per invocation; totals belong only to the aging consumer that displays them. */
+export async function readObligationPage(ctx: QueryCtx, args: PageArgs): Promise<ObligationPage> {
+  return FAMILIES[args.kind](ctx, args);
+}

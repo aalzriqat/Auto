@@ -213,8 +213,7 @@ export const processOrgSupplierDueAlerts = internalMutation({
     const page = await readObligationPage(ctx, {
       orgId: args.orgId,
       kind,
-      cursor: args.cursor ?? null,
-      limit: ROW_PAGE_SIZE,
+      paginationOpts: { cursor: args.cursor ?? null, numItems: ROW_PAGE_SIZE },
       nowMs: args.now,
       onUnreadableRow: (row) => {
         // The same unreadable row is met again by each membership continuation: count and log it once.
