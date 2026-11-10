@@ -405,6 +405,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   };
 
   const onSubmit = async (values: VehicleFormValues) => {
+    if (!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1) return;
     if (!activeOrgId) return;
     if (!validateOwnership(values)) return;
 
@@ -1232,11 +1233,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   {t("Cancel")}
                 </Button>
                 {!vehicle && wizardStep < VEHICLE_WIZARD_STEPS.length - 1 ? (
-                  <Button type="button" onClick={() => void handleNextStep()}>
+                  <Button key="wizard-continue" type="button" onClick={() => void handleNextStep()}>
                     {t("WizardContinue")}<ArrowRight className="h-4 w-4 ms-2 rtl:rotate-180" />
                   </Button>
                 ) : (
-                  <Button type="submit" disabled={isSubmitting || costLockLoading || (needsAcquisitionBank && (!selectedAcquisitionBank || acquisitionBanks?.truncated))}>
+                  <Button key="vehicle-submit" type="submit" disabled={isSubmitting || costLockLoading || (needsAcquisitionBank && (!selectedAcquisitionBank || acquisitionBanks?.truncated))}>
                     {submitLabel}
                   </Button>
                 )}
