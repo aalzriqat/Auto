@@ -21,7 +21,8 @@
           "ar"
         ],
         "targetPermission": false,
-        "costPermission": false
+        "costPermission": false,
+        "serverHref": null
       }
     }
   ],
@@ -54,5 +55,5 @@
     "testName": "unavailable target permission leaves the statement label and cost access gates the whole statement"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "7ce329607680c676493aff292bb37edca2bf56b5d3b8c690db29249f87aaab55"
+  "fingerprint": "49e856651827988a7d9e5f656829b124267a32747b475806514c6de0e3237de6"
 }

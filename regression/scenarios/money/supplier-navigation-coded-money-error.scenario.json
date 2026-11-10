@@ -16,18 +16,22 @@
       },
       "action": "supplierStatement.outstanding",
       "input": {
-        "storedAmount": "NaN"
+        "storedAmount": "NaN",
+        "views": [
+          "outstanding",
+          "settled"
+        ]
       }
     }
   ],
   "expected": [
     {
-      "observable": "publicError",
-      "value": "SUPPLIER_NAVIGATION_UNAVAILABLE"
+      "observable": "moneyReaderErrorPreserved",
+      "value": true
     },
     {
-      "observable": "serverErrorLogged",
-      "value": true
+      "observable": "navigationErrorReplacement",
+      "value": false
     }
   ],
   "rulings": [
@@ -42,8 +46,8 @@
   ],
   "impl": {
     "file": "convex/supplierNavigation.scrum869.test.ts",
-    "testName": "invalid stored money returns a coded generic error without exposing technical detail"
+    "testName": "invalid stored money keeps the money reader error contract"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "ecb874a68c7171ad9f36dd4be30b2f16fdff3be0b505e0c177db4939182155e0"
+  "fingerprint": "d609bcc64d5cac660db55e0c98771de9e9e41027ead3530327251d588f73982a"
 }

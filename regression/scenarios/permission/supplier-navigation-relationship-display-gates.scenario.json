@@ -21,7 +21,8 @@
           "ar"
         ],
         "vehiclePermission": false,
-        "financePermission": false
+        "financePermission": false,
+        "serverHref": null
       }
     }
   ],
@@ -54,5 +55,5 @@
     "testName": "relationships with no vehicle permission have labels without links and no finance skips reads"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "6f150c2d08264349b90e08c4b7abf47207d403353d447bc4ba00c8ed8ce01e5a"
+  "fingerprint": "5d921aa4f48578ede2eb3a8068315205ced70fb9b1c32ea0d9b6fde3a297c74c"
 }
