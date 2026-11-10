@@ -7,6 +7,7 @@ import { convexTestWithComponents } from "../test-utils/convexTest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id, Doc } from "./_generated/dataModel";
+import { unlinkedPresence } from "./utils/supplierAttention";
 
 const MODULES = import.meta.glob("./**/*.*s");
 const DAY = 86_400_000;
@@ -289,14 +290,26 @@ describe("SCRUM-869 supplier attention port", () => {
 
 
 describe("organisation-wide unlinked attention access", () => {
-  test.each([
-    { label: "without finance", permissions: ["view:cost_price"] },
-    { label: "without cost", permissions: ["view:finance"] },
-  ])("withholds presence $label", async ({ permissions }) => {
+  test("presence stops reading after the first qualifying document", async () => {
+    const s = await seed("presence-io", undefined, true);
+    for (let i = 0; i < 51; i += 1) await addPayable(s, { supplierId: undefined });
+    const result = await s.t.run(async ctx => {
+      const before = await ctx.meta.getTransactionMetrics();
+      const presence = await unlinkedPresence(ctx, s.orgId, "PAYABLE");
+      const after = await ctx.meta.getTransactionMetrics();
+      return { presence, documentsRead: after.documentsRead.used - before.documentsRead.used,
+        documentsWritten: after.documentsWritten.used - before.documentsWritten.used };
+    });
+    expect(result).toEqual({ presence: "PRESENT", documentsRead: 1, documentsWritten: 0 });
+  });
+
+  async function presenceWithheld(permissions: string[]) {
     const s = await seed("presence-denied", permissions);
     await addPayable(s, { supplierId: undefined });
     expect(await s.asUser.query(api.supplierStatement.unlinkedAttention, { orgId: s.orgId, kind: "PAYABLE" })).toEqual(null);
-  });
+  }
+  test("withholds presence without finance", () => presenceWithheld(["view:cost_price"]));
+  test("withholds presence without cost", () => presenceWithheld(["view:finance"]));
   test("refuses presence without accounting plan", async () => {
     const s = await seed("presence-plan");
     await s.t.run(async ctx => {

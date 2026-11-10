@@ -341,3 +341,21 @@ export function SupplierDaysOverdue({ days, badge = false }: Readonly<{ days: nu
   if (badge) return <> · <Badge variant="outline" className="border-money-out/30 text-money-out">{label}</Badge></>;
   return <span className="ms-2">{label}</span>;
 }
+
+export function SupplierStatementPlanGate() {
+  const translate = useTranslate();
+  return (
+    <p role="note" className="py-4 text-center text-sm text-muted-foreground">
+      {translate("SuppliersStmtPlanGate")}
+    </p>
+  );
+}
+
+export function SupplierStatementError() {
+  const translate = useTranslate();
+  return (
+    <p role="alert" className="py-4 text-center text-sm text-destructive">
+      {translate("SuppliersStmtLoadError")}
+    </p>
+  );
+}

@@ -20,7 +20,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Money } from "./SupplierStatementMoney";
 import { interpolate } from "@/lib/i18n/interpolate";
-import { QueryErrorBoundary, useTranslate, SupplierDaysOverdue, type Translate } from "./shared";
+import { QueryErrorBoundary, useTranslate, SupplierDaysOverdue, SupplierStatementPlanGate, SupplierStatementError, type Translate } from "./shared";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -403,23 +403,7 @@ function StatementBody({ orgId, supplierId }: Readonly<{ orgId: Id<"organization
   );
 }
 
-function SupplierStatementPlanGate() {
-  const translate = useTranslate();
-  return (
-    <p role="note" className="py-4 text-center text-sm text-muted-foreground">
-      {translate("SuppliersStmtPlanGate")}
-    </p>
-  );
-}
-
-export function SupplierStatementError() {
-  const translate = useTranslate();
-  return (
-    <p role="alert" className="py-4 text-center text-sm text-destructive">
-      {translate("SuppliersStmtLoadError")}
-    </p>
-  );
-}
+export { SupplierStatementError } from "./shared";
 
 export function SupplierStatementSection(props: Readonly<{ orgId: Id<"organizations">; supplierId: Id<"suppliers"> }>) {
   return (

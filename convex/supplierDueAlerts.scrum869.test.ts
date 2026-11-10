@@ -165,12 +165,7 @@ describe("SCRUM-869 unusable money is reported before alert delivery", () => {
     } finally { log.mockRestore(); }
   });
 
-  test.each([
-    { label: "NaN due", amountDueMinor: Number.NaN, amountRecoveredMinor: 0 },
-    { label: "fractional recovered", amountDueMinor: 200_000, amountRecoveredMinor: 0.5 },
-    { label: "unsafe due with safe remainder", amountDueMinor: 2 ** 53, amountRecoveredMinor: 2 ** 53 - 2 },
-    { label: "unsafe recovered", amountDueMinor: 200_000, amountRecoveredMinor: 2 ** 53 },
-  ])("org-wide recovery worker reports $label and only alerts usable money", async (money) => {
+  async function reportsRecovery(money: { label: string; amountDueMinor: number; amountRecoveredMinor: number }) {
     const t = newHarness();
     const s = await seedOrg(t, "bad-recovery");
     const { label: _label, ...fields } = money;
@@ -186,9 +181,13 @@ describe("SCRUM-869 unusable money is reported before alert delivery", () => {
         orgId: s.orgId, kind: "RECOVERY", id: badId, reason: expect.any(String),
       }));
     } finally { log.mockRestore(); }
-  });
+  }
+  test("recovery worker reports NaN due without alerting unusable money", () => reportsRecovery({ label: "NaN due", amountDueMinor: Number.NaN, amountRecoveredMinor: 0 }));
+  test("recovery worker reports fractional recovered money", () => reportsRecovery({ label: "fractional recovered", amountDueMinor: 200_000, amountRecoveredMinor: 0.5 }));
+  test("recovery worker reports unsafe gross with safe remainder", () => reportsRecovery({ label: "unsafe due with safe remainder", amountDueMinor: 2 ** 53, amountRecoveredMinor: 2 ** 53 - 2 }));
+  test("recovery worker reports unsafe recovered money", () => reportsRecovery({ label: "unsafe recovered", amountDueMinor: 200_000, amountRecoveredMinor: 2 ** 53 }));
 
-  test.each(["PAYABLE", "RECEIVABLE"] as const)("org-wide %s worker refuses unsafe gross operands with a safe remainder", async kind => {
+  async function reportsGrossOperands(kind: "PAYABLE" | "RECEIVABLE") {
     const t = newHarness();
     const s = await seedOrg(t, "bad-major");
     // JOD: each gross converts past MAX_SAFE_INTEGER, but their difference is 1.953 fils.
@@ -207,7 +206,9 @@ describe("SCRUM-869 unusable money is reported before alert delivery", () => {
         .toEqual({ alerted: 3, skipped: 1 });
       expect(log).toHaveBeenCalledWith("supplier due alert skipped an unreadable row", expect.objectContaining({ kind }));
     } finally { log.mockRestore(); }
-  });
+  }
+  test("payable worker refuses unsafe gross operands with a safe remainder", () => reportsGrossOperands("PAYABLE"));
+  test("receivable worker refuses unsafe gross operands with a safe remainder", () => reportsGrossOperands("RECEIVABLE"));
 });
 
 describe("SCRUM-869 S8 - schedule and content", () => {

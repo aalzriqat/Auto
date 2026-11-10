@@ -79,22 +79,26 @@ describe("supplier needs attention", () => {
 
   function showsStates(locale: "en" | "ar") {
     world.locale = locale; const text = locale === "ar" ? ar : en;
-    const { rerender } = render(<SupplierAttentionView data={undefined} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
+    const { rerender, container } = render(<SupplierAttentionView data={undefined} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
     expect(screen.getByRole("status").textContent).toContain(text.SuppliersStmtLoading);
+    saveRender("loading", container);
     rerender(<SupplierAttentionView data={page([]) as never} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
     expect(screen.getByText(text.SuppliersStmtAttnNone)).toBeTruthy();
+    saveRender("empty", container);
     rerender(<SupplierAttentionView data={page([], { complete: false, isDone: false, unlinked: "INCOMPLETE" }) as never} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
     expect(screen.queryByText(text.SuppliersStmtAttnNone)).toBeNull();
     expect(screen.getByText(text.SuppliersStmtAttnIncomplete)).toBeTruthy();
     expect(screen.getByText(text.SuppliersStmtAttnUnlinkedIncomplete)).toBeTruthy();
+    saveRender("incomplete", container);
   }
   test("EN loading, empty and incomplete states never invent a full count", () => showsStates("en"));
   test("AR loading, empty and incomplete states never invent a full count", () => showsStates("ar"));
 
   function showsUnlinked(locale: "en" | "ar") {
     world.locale = locale; const text = locale === "ar" ? ar : en;
-    render(<SupplierAttentionView data={page([], { unlinked: "PRESENT" }) as never} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
+    const view = render(<SupplierAttentionView data={page([], { unlinked: "PRESENT" }) as never} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />);
     expect(screen.getByText(text.SuppliersStmtAttnUnlinked)).toBeTruthy();
+    saveRender("unlinked", view.container);
   }
   test("EN unlinked records are labelled organisation-wide", () => showsUnlinked("en"));
   test("AR unlinked records are labelled organisation-wide", () => showsUnlinked("ar"));
@@ -120,9 +124,10 @@ describe("supplier needs attention", () => {
     world.locale = locale; world.failure = true; const text = locale === "ar" ? ar : en;
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
-      render(<SupplierAttentionSection {...props} />);
+      const view = render(<SupplierAttentionSection {...props} />);
       expect(screen.getAllByRole("alert")[0]?.textContent).toContain(text.ServerError_SUPPLIER_ATTENTION_UNAVAILABLE);
       expect(screen.queryByText(/private database detail/)).toBeNull();
+      saveRender("error", view.container);
     } finally { log.mockRestore(); }
   }
   test("EN coded query failures are localized without raw details", () => localizedErrors("en"));
@@ -179,7 +184,7 @@ describe("supplier needs attention", () => {
       expect(view.container.querySelector("[dir]")?.getAttribute("dir")).toBe(locale === "ar" ? "rtl" : "ltr");
       expect(screen.getByText(text.SuppliersStmtAttnTitle)).toBeTruthy();
       expect(screen.getByText(text.SuppliersStmtAttnUnlinked)).toBeTruthy();
-      saveRender("workspace", view.container); cleanup();
+      saveRender("populated", view.container); cleanup();
       const states = render(<>
         <SupplierAttentionView data={undefined} kind="PAYABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />
         <SupplierAttentionView data={page([]) as never} kind="RECEIVABLE" hasPrevious={false} onNext={() => undefined} onPrevious={() => undefined} />
