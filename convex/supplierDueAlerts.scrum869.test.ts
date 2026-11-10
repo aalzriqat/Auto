@@ -151,6 +151,20 @@ const alerts = (t: T): Promise<Alert[]> =>
 const recipients = (rows: Alert[]) => rows.map((r) => String(r.userId)).sort();
 
 describe("SCRUM-869 unusable money is reported before alert delivery", () => {
+  test("org-wide receivable worker reports an unsafe remainder from safe operands", async () => {
+    const t = newHarness();
+    const s = await seedOrg(t, "bad-remainder");
+    const saleId = await addSale(t, s);
+    await addReceivable(t, s, saleId, { amountDue: 9_007_199_254_740, amountReceived: -1, agreedDueDate: NOW });
+    await addReceivable(t, s, saleId, { agreedDueDate: NOW });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, kind: "RECEIVABLE", now: NOW }))
+        .toEqual({ alerted: 3, skipped: 1 });
+      expect(log).toHaveBeenCalledWith("supplier due alert skipped an unreadable row", expect.objectContaining({ kind: "RECEIVABLE" }));
+    } finally { log.mockRestore(); }
+  });
+
   test.each([
     { label: "NaN due", amountDueMinor: Number.NaN, amountRecoveredMinor: 0 },
     { label: "fractional recovered", amountDueMinor: 200_000, amountRecoveredMinor: 0.5 },
