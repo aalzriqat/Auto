@@ -150,6 +150,52 @@ const alerts = (t: T): Promise<Alert[]> =>
 
 const recipients = (rows: Alert[]) => rows.map((r) => String(r.userId)).sort();
 
+describe("SCRUM-869 unusable money is reported before alert delivery", () => {
+  test.each([
+    { label: "NaN due", amountDueMinor: Number.NaN, amountRecoveredMinor: 0 },
+    { label: "fractional recovered", amountDueMinor: 200_000, amountRecoveredMinor: 0.5 },
+    { label: "unsafe due with safe remainder", amountDueMinor: 2 ** 53, amountRecoveredMinor: 2 ** 53 - 2 },
+    { label: "unsafe recovered", amountDueMinor: 200_000, amountRecoveredMinor: 2 ** 53 },
+  ])("org-wide recovery worker reports $label and only alerts usable money", async (money) => {
+    const t = newHarness();
+    const s = await seedOrg(t, "bad-recovery");
+    const { label: _label, ...fields } = money;
+    const badId = await addRecovery(t, s, { ...fields, agreedDueDate: NOW });
+    await addRecovery(t, s, { agreedDueDate: NOW });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, {
+        orgId: s.orgId, kind: "RECOVERY", now: NOW,
+      })).toEqual({ alerted: 3, skipped: 1 });
+      expect((await alerts(t)).map(row => row.data?.amount).filter(Boolean)).toEqual(["200.000"]);
+      expect(log).toHaveBeenCalledWith("supplier due alert skipped an unreadable row", expect.objectContaining({
+        orgId: s.orgId, kind: "RECOVERY", id: badId, reason: expect.any(String),
+      }));
+    } finally { log.mockRestore(); }
+  });
+
+  test.each(["PAYABLE", "RECEIVABLE"] as const)("org-wide %s worker refuses unsafe gross operands with a safe remainder", async kind => {
+    const t = newHarness();
+    const s = await seedOrg(t, "bad-major");
+    // JOD: each gross converts past MAX_SAFE_INTEGER, but their difference is 1.953 fils.
+    const fields = { amountDue: 2 ** 44, agreedDueDate: NOW, paymentDueDate: NOW };
+    if (kind === "PAYABLE") {
+      await addPayable(t, s, { status: "DISPUTED", amountDue: fields.amountDue, amountPaid: 2 ** 44 - 0.001953125, paymentDueDate: NOW });
+      await addPayable(t, s, { paymentDueDate: NOW });
+    } else {
+      const saleId = await addSale(t, s);
+      await addReceivable(t, s, saleId, { amountDue: fields.amountDue, amountReceived: 2 ** 44 - 0.001953125, agreedDueDate: NOW });
+      await addReceivable(t, s, saleId, { agreedDueDate: NOW });
+    }
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await t.mutation(internal.supplierDueAlerts.processOrgSupplierDueAlerts, { orgId: s.orgId, kind, now: NOW }))
+        .toEqual({ alerted: 3, skipped: 1 });
+      expect(log).toHaveBeenCalledWith("supplier due alert skipped an unreadable row", expect.objectContaining({ kind }));
+    } finally { log.mockRestore(); }
+  });
+});
+
 describe("SCRUM-869 S8 - schedule and content", () => {
   test("an obligation due in 3 days alerts each authorised recipient once, in-app", async () => {
     const t = newHarness();
