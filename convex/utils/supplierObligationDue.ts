@@ -6,7 +6,7 @@ import { SYSTEM_KEYS } from "./defaultChart";
 import { inTurn, readBoundedStream, type HeadroomCtx } from "./transactionReadHeadroom";
 import { settledPayableRows, settledRecoveryRows, settledClaimRow, type DatedSettledRow, type SupplierObligation, type WithSupplierDocument } from "./supplierSettledRows";
 import { createSupplierReadCache, SupplierReadBudgetExhausted } from "./supplierReadCache";
-import { readRow, payableFacts, receivableFacts, recoveryFacts, type ObligationRow } from "./supplierObligationFacts";
+import { readRow, payableFacts, receivableFacts, recoveryFacts, type ObligationRow, type ObligationKind } from "./supplierObligationFacts";
 export { OBLIGATION_PAGE_DEFAULT, OBLIGATION_PAGE_MAX, totalsOf, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationFacts";
 type Reader = Pick<QueryCtx, "db">;
 

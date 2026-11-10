@@ -1,5 +1,5 @@
 import type { PaginationOptions } from "convex/server";
-import type { Doc, Id } from "../_generated/dataModel";
+import type { DataModel, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { createSupplierReadCache, type SupplierReadCache } from "./supplierReadCache";
 import { readRow, payableFacts, receivableFacts, recoveryFacts, type ObligationKind, type ObligationRow, type ObligationPage, type UnreadableRow } from "./supplierObligationFacts";
@@ -15,7 +15,7 @@ interface PageArgs {
   onUnreadableRow?: (row: UnreadableRow) => void;
 }
 
-function scopedIndex<T extends Table>(ctx: QueryCtx, table: T, args: PageArgs) {
+function scopedIndex(ctx: QueryCtx, table: Table, args: PageArgs) {
   const source = ctx.db.query(table);
   return args.supplierId
     ? source.withIndex("by_org_and_supplierId_and_status", q => q.eq("orgId", args.orgId).eq("supplierId", args.supplierId))
@@ -25,13 +25,15 @@ function scopedIndex<T extends Table>(ctx: QueryCtx, table: T, args: PageArgs) {
 /** Bind each table to its document reader while preserving the schema's document type. */
 function family<T extends Table>(source: {
   table: T;
-  facts: (ctx: QueryCtx, orgId: Id<"organizations">, row: Doc<T>, cache?: SupplierReadCache) => ReturnType<typeof payableFacts> | ReturnType<typeof recoveryFacts>;
+  facts: (ctx: QueryCtx, orgId: Id<"organizations">, row: DataModel[T]["document"], cache?: SupplierReadCache) => ReturnType<typeof payableFacts> | ReturnType<typeof recoveryFacts>;
 }) {
   return async (ctx: QueryCtx, args: PageArgs): Promise<ObligationPage> => {
     const cache = args.supplierId ? createSupplierReadCache() : undefined;
     const page = await scopedIndex(ctx, source.table, args).paginate(args.paginationOpts);
     const rows: ObligationRow[] = [];
-    for (const doc of page.page) {
+    for (const document of page.page) {
+      // scopedIndex queries source.table; T retains that table/facts pairing across Convex's union index type.
+      const doc = document as unknown as DataModel[T]["document"];
       const row = await readRow(args.kind, doc._id, doc.currency, args.nowMs,
         () => source.facts(ctx, args.orgId, doc, cache), args.onUnreadableRow);
       if (row) rows.push(row);
