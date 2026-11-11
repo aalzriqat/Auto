@@ -67,7 +67,9 @@ export function BankAccountsTable({
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right space-x-2">
+                    <TableCell>
+                      {/* Wrapping flex row: logical alignment and gap hold in RTL and when three actions wrap on a phone. */}
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                       {canManageFinance && !account.isReconciliationTarget && (
                         <Button
                           size="sm"
@@ -111,6 +113,7 @@ export function BankAccountsTable({
                           {t("Deactivate" as any)}
                         </Button>
                       )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

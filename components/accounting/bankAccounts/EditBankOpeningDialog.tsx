@@ -62,7 +62,7 @@ function EditForm({ account, saving, t, onOpenChange, onSave }: Readonly<EditBan
           </div>
           <div className="space-y-1">
             <p className="text-muted-foreground">{t("Currency")}</p>
-            <p className="font-medium text-foreground" dir="ltr">{account.currency}</p>
+            <p className="font-medium text-foreground"><bdi dir="ltr">{account.currency}</bdi></p>
           </div>
         </div>
         <div className="space-y-1.5">
