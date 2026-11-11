@@ -18,21 +18,22 @@
       "input": {
         "contract": "EXACT_STORED_PERMISSIONS_UNCHANGED",
         "r5Conditions": [
-          "isDeleted=true",
-          "isDeleted=false",
-          "OWNER=false/full",
-          "OWNER=false/short",
-          "OWNER=missing/full",
-          "OWNER=missing/short",
-          "OTHER=missing/full",
-          "OTHER=true",
-          "OWNER=duplicate-missing-member",
+          "isDeleted-true",
+          "isDeleted-false",
+          "OWNER-false-full",
+          "OWNER-false-short",
+          "OWNER-missing-full",
+          "OWNER-missing-short",
+          "OTHER-missing-full",
+          "OTHER-true",
+          "OWNER-duplicate-missing-member",
           "live-grant-read-empty",
           "live-grant-read-permissions",
           "live-grant-write-empty",
           "live-grant-write-permissions"
         ],
-        "literalRows": 24
+        "literalRows": 24,
+        "literalAssertions": 72
       }
     }
   ],
@@ -40,6 +41,10 @@
     {
       "observable": "supplierNavigationContract",
       "value": "EXACT_STORED_PERMISSIONS_UNCHANGED"
+    },
+    {
+      "observable": "returnedRoleId",
+      "value": "EXACT_CALLER_STORED_ROLE_ID"
     }
   ],
   "rulings": [
@@ -57,5 +62,5 @@
     "testName": "tenant auth preserves literal stored permissions across names cardinalities and system owner"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "6c25d39f9e54658c611e28e1e8362730bb9b53b92a446e71ddd7b0b27fee4819"
+  "fingerprint": "48a48c96093933a35685f1901c1e200b91beb6825e5da64e27f73f97a802efb8"
 }

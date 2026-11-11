@@ -303,7 +303,7 @@ describe("Tenancy Utilities", () => {
 });
 
 it("tenant auth preserves literal stored permissions across names cardinalities and system owner", async () => {
-  expect.assertions(48);
+  expect.assertions(72);
   const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
   const { orgId, userId } = await t.run(async ctx => ({
     orgId: await ctx.db.insert("organizations", { name: "Permission snapshot contract", createdAt: 1 }),
@@ -378,7 +378,7 @@ it("tenant auth preserves literal stored permissions across names cardinalities 
     { label: "live-grant-read-permissions", name: "Limited reviewer", owner: false, grant: "read", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
   ];
   for (const cell of cases) {
-    const membershipId = await t.run(async ctx => {
+    const { membershipId, roleId } = await t.run(async ctx => {
       const roleId = await ctx.db.insert("roles", { orgId, name: cell.name, permissions: cell.stored, isSystemOwnerRole: cell.owner, isDeleted: cell.deleted });
       const id = await ctx.db.insert("memberships", { orgId, userId, roleId });
       if (cell.grant) {
@@ -388,7 +388,7 @@ it("tenant auth preserves literal stored permissions across names cardinalities 
           reason: "Synthetic permission contract", grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
         await ctx.db.patch(id, { impersonationGrantId: grantId });
       }
-      return id;
+      return { membershipId: id, roleId };
     });
     try {
       const required: Parameters<typeof requireTenantAuth>[2] = cell.required ?? (cell.owner || cell.stored.length > 0 ? ["view:finance", "view:cost_price"] : []);
@@ -397,6 +397,7 @@ it("tenant auth preserves literal stored permissions across names cardinalities 
         return requireTenantAuth(cell.grant === "read" ? readContext : ctx, orgId, required);
       });
       expect(role.permissions, cell.label ?? cell.name + "/" + cell.stored.length + "/owner=" + cell.owner).toStrictEqual(cell.expected);
+      expect(role._id, "auth must return the caller's own stored role").toBe(roleId);
       const stored = await t.run(ctx => ctx.db.get(role._id));
       expect(stored?.permissions, "auth must not persist a widened role").toStrictEqual(cell.expected);
     } finally { await t.run(ctx => ctx.db.delete(membershipId)); }
@@ -415,9 +416,10 @@ async function seedAuthRefusal(state: AuthRefusalState) {
     const membershipId = await ctx.db.insert("memberships", membership);
     const targetUserId = await ctx.db.insert("users", { clerkId: "auth-refusal-target", email: "target@example.test" });
     await ctx.db.insert("memberships", { orgId, userId: targetUserId, roleId });
+    const expiresAt = state === "expired-grant" ? 999 : 2000;
     const grantId = await ctx.db.insert("impersonationGrants", {
       orgId, membershipId, actorUserId: userId, targetUserId, reason: "Synthetic refusal contract", grantedAt: 1,
-      expiresAt: state === "expiry-boundary" ? 1000 : state === "expired-grant" ? 999 : 2000,
+      expiresAt: state === "expiry-boundary" ? 1000 : expiresAt,
       revokedAt: state === "revoked-grant" ? 900 : undefined,
     });
     await ctx.db.patch(membershipId, { impersonationGrantId: grantId });

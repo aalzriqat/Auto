@@ -4281,7 +4281,8 @@ test("caller admitted reference table closes every registration callback envelop
     const source = ts.createSourceFile("envelope.ts", form, ts.ScriptTarget.Latest, true);
     const statement = source.statements[0];
     if (!statement || !ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) throw new Error("literal callback fixture unavailable");
-    expect(() => assertRunnerCallback(source, statement.expression), form)
+    const call = statement.expression;
+    expect(() => assertRunnerCallback(source, call), form)
       .toThrow(/zero-parameter/);
   }
 });

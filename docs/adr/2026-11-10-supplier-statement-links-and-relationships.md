@@ -379,7 +379,8 @@ and leaves the product decision to the owner. No tenancy.ts declaration is
 fingerprinted: shared auth must remain free
 to evolve for unrelated backend lanes.
 Each cache registration requires nine expect calls outside its helper, and the
-auth snapshot registration requires forty-eight, so an empty helper/loop fails. These
+auth snapshot registration requires seventy-two, including caller-role identity,
+so an empty helper/loop fails. These
 are call counts, not matcher-execution proof. Separate negative contracts exercise
 the receipt-count checker and each cache fingerprint with a deliberately wrong
 input, independently of their normal positive callers.
