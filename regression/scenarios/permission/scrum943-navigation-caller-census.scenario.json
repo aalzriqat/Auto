@@ -18,10 +18,10 @@
       "input": {
         "files": "CONVEX_TYPESCRIPT_RECURSIVE",
         "exclude": "TESTS_AND_GENERATED",
-        "exports": [
-          "addSupplierRowContext",
-          "supplierVehicleHref"
-        ]
+        "exports": "CALLABLE_EXPORTS_TWO_PINNED_EXCEPTIONS",
+        "forwarding": "AUTH_AND_FORWARDING_FUNCTION_FINGERPRINTS",
+        "cells": "DECLARED_LITERAL_CELLS_TOP_LEVEL_AWAIT",
+        "dynamic": "REFUSE_LITERAL_IMPORT_REQUIRE_AND_IMPORT_EQUALS"
       }
     }
   ],
@@ -33,6 +33,14 @@
     {
       "observable": "callerBehaviourBindings",
       "value": "ACTIVE_LITERAL_TESTS"
+    },
+    {
+      "observable": "declaredCallerCells",
+      "value": "EXACT_NON_EMPTY_TABLE_PER_TITLE"
+    },
+    {
+      "observable": "declaredCallerCells",
+      "value": "EXACT_NON_EMPTY_TABLE_PER_TITLE"
     }
   ],
   "rulings": [
@@ -50,5 +58,5 @@
     "testName": "supplier navigation caller census pins every permission scope and binds public query behaviour"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "4df96708970b7e478a4f60d2e9827f1fb6d4d61bf25013bfa081543172619726"
+  "fingerprint": "8b4580735a33f9d552576f775671d0398e2ab00b453fb78aab3ccda80a8dccf3"
 }

@@ -78,8 +78,9 @@
       },
       "action": "harness.settleSupplierNavigationObligation",
       "input": {
-        "receipt": "POSTED_CONTROL_CREDIT",
-        "settledMinor": 10000
+        "receipt": "NONE_PAYABLE_STATE_PATCH",
+        "settledMinor": 10000,
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS"
       }
     },
     {
@@ -143,5 +144,5 @@
     "testName": "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "efd1487ad733e502c0e3cf92a1f938a4b4f359d04fe547586f6525b9d2daf5c8"
+  "fingerprint": "6f94c19da371fefc64c37a90c7795fa36660e134a3d14e4e0669dbf1b516ca81"
 }

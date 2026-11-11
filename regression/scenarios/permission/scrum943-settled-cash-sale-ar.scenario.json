@@ -60,7 +60,8 @@
       "action": "harness.settleSupplierNavigationObligation",
       "input": {
         "receipt": "POSTED_CONTROL_CREDIT",
-        "settledMinor": 10000
+        "settledMinor": 10000,
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS"
       }
     },
     {
@@ -116,5 +117,5 @@
     "testName": "settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "856fd1b5f00af09b72587b2b294197ba4666f973fb23dbe2d8a5b1537eb58379"
+  "fingerprint": "594f81fe43e6ba72138d270aec00af31634a0f720a60889d6014ab8e615ae61d"
 }

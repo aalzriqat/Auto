@@ -78,8 +78,10 @@
       },
       "action": "harness.settleSupplierNavigationObligation",
       "input": {
-        "receipt": "POSTED_CONTROL_CREDIT",
-        "settledMinor": 10000
+        "receipt": "NONE_RECOVERY_STATE_PATCH",
+        "settledMinor": 10000,
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS",
+        "recoveryStatus": "PARTIALLY_RECOVERED"
       }
     },
     {
@@ -143,5 +145,5 @@
     "testName": "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "37f3d615e9605db4ec752a9104e49b99e2110ccfb9e6ed0e2e2e7649423b16c8"
+  "fingerprint": "458809747664703f8a473c23351bc9274842e45d24729c3f0046b0488f188026"
 }

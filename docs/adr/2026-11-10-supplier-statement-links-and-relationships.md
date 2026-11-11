@@ -70,15 +70,57 @@ the existing detail dialog opens. This avoids the existing highlight hook's
 A financed sale whose application is foreign or deleted falls back to kind
 SALE with a null link, including for viewers without view:sales. A foreign sale,
 expense or opening draft, or a soft-deleted sale or expense, yields no source.
-The covered public-query test rows are declared in
-`scripts/intelligence/supplierNavigationDoors.test.ts`. Its census test binds
-those rows to literal test titles, retains the round-six core plus base-choice
-cells, and counts ownership lookups and permission gates. The read allowlist and
+The census is a tripwire, not a proof of correctness. The original 721
+outstanding cells retain their literal outcomes and base-choice design in
+`scripts/intelligence/supplierNavigationDoors.test.ts`. Within
+`convex/utils/supplierNavigation.ts` only, the read allowlist and original 22
 statement fingerprints refuse new reads through `readCached` or `ctx.db.get`.
-The caller census scans non-test Convex TypeScript for every permission-taking
-navigation export and pins each call's arguments and scope initializer.
-Each pinned caller must bind active literal behavioural tests, including both
-statement queries and the vehicle relationship projection.
+The relationship reader's `ownedVehicle` calls `readCached` outside that scan.
+
+The caller census scans recursive non-test, non-generated Convex TypeScript.
+It enumerates callable navigation exports regardless of parameter spelling or
+imported permission types, except the two non-permission helpers
+`supplierVehicleLabel` and `supplierNavigationFailure`, which the original
+fingerprints pin. Literal dynamic `import()`, `require()` and import-equals
+references to the navigation module refuse and require reviewed static callers.
+
+| Forwarding site | Structural pins | Behavioural evidence |
+| --- | --- | --- |
+| `supplierStatement.settled`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 38 settled cells; 16 multi-row source/role cells; four opening/expense partial-recovery gate cells |
+| `supplierStatement.outstanding`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 721 cells; 16 multi-row source/role cells |
+| `supplierRelationships.vehicles`, SOURCED | Complete query declaration and tenancy import; exact `project(vehicle, "SOURCED", role.permissions)` arguments | Original denied/admitted cells; denied/admitted two-row, numItems 26 and endCursor cells |
+| `supplierRelationships.vehicles`, OWNED | Same declaration/import; exact `project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id)` arguments | Same conditions for owned stock |
+| `supplierRelationships.project` | Complete function declaration and exact `supplierVehicleHref` arguments | Both public relationship branches |
+| `supplierNavigation.vehicleSource` | Original statement fingerprint and exact `supplierVehicleHref` arguments | Outstanding vehicle cells and settled native AP cells |
+
+Enclosing-statement fingerprints cover auth destructuring, role provenance inside
+the handler, all later writes to role or scope permissions, conditions and both
+public forwarding branches. They do not follow imported helper implementations.
+Every changed fingerprint requires re-deriving the affected cells and rerunning
+mutants before reviewing a new pin.
+
+Each settled and relationship registration has an independently declared,
+non-empty literal argument/cell/outcome table. The census requires an exact
+match, including denied and foreign/deleted rows, and a single top-level awaited
+helper call. The runtime helpers refuse empty lists; navigationCells also checks
+that every supplied tuple finishes. The original relationship four tuples and
+38 settled outcomes are retained. The new tests seed synthetic settlement state
+directly, never call payment writers, and claim query coverage only. The old
+recovery fixture marked 10,000 recovered of 20,000 as RECOVERED; recordReceipt's
+recoveryStatusFor derives PARTIALLY_RECOVERED. The fixture now uses that status,
+and the new partial cells assert due 20,000, settled 10,000 and PARTIAL.
+Relationship endCursor comes from an earlier invocation of the same query.
+
+`attention`, `unlinkedAttention` and `paymentsReconciliation` return no row
+context or link and are outside this navigation caller census.
+
+Boundaries remain: computed module specifiers and indirect runtime loaders are
+not resolved; the scan follows direct static imports, not arbitrary module graphs;
+imported helper bodies and authentication semantics require their own checks;
+reviewers can update a declared table or fingerprint incorrectly; finite harness
+cells do not prove platform pagination, cloud limits, concurrency or correctness
+under every possible input. The fingerprint review and behavioural tests are
+complementary evidence, and neither is a security boundary.
 A missing document needs no separate ownership row: `readCached` returns null with
 or without `owned`, so a removed ownership check cannot separate the outcomes.
 Existing financed-application missing rows remain listed. openingBalanceDrafts has
@@ -162,3 +204,15 @@ supports existing internal routes; disable prefetch on financial record links.
 supports non-focus-moving updates. Use native output for loading/incomplete
 notices and alerts for errors, with EN/AR text and logical RTL layout.
 Documentation supports the design, not platform/OCC or production verification.
+
+SCRUM-943 review round 2, checked 2026-11-11: use the maintained
+[TypeScript compiler API](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
+for syntax, binding and fingerprints. Use
+[mutation testing](https://stryker-mutator.io/docs/mutation-testing-elements/mutant-states-and-metrics/)
+to measure whether each injected fault fails a check, not to infer untested
+properties. [Convex pagination options](https://docs.convex.dev/api/interfaces/server.PaginationOptions)
+documents endCursor page splitting, and
+[function authorization](https://docs.convex.dev/auth/functions-auth)
+keeps caller access on the server. These checks run public queries using
+[convex-test](https://docs.convex.dev/testing/convex-test), a mock backend;
+they do not certify the Convex platform or production.

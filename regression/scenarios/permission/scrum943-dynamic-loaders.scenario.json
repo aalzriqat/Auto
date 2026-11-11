@@ -1,0 +1,53 @@
+{
+  "id": "scrum943-dynamic-loaders",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.refuseDynamicSupplierNavigation",
+      "input": {
+        "forms": [
+          "DYNAMIC_IMPORT",
+          "REQUIRE",
+          "IMPORT_EQUALS",
+          "TEMPLATE_IMPORT",
+          "TEMPLATE_REQUIRE",
+          "MODULE_REQUIRE",
+          "TEMPLATE_MODULE_REQUIRE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "allForms",
+      "value": "REFUSED_WITH_SITE"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "navigation census refuses literal dynamic imports and require loaders"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "ea5b64f4bb9412f7d5207ed695caaf30a94cc53752d3003f237e8f226d3fe6a5"
+}

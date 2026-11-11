@@ -2102,27 +2102,252 @@ function assertNavigationFingerprints(source: ts.SourceFile) {
 test("supplier navigation statement fingerprints require a reviewed door table for every token change", () => {
   assertNavigationFingerprints(parse("convex/utils/supplierNavigation.ts"));
 });
+
+// These enclosing statements include auth destructuring, all writes, branches,
+// scope creation and both vehicles -> project calls. Hashes are reviewed constants.
+const FORWARDING_FINGERPRINTS = [
+  {
+    "file": "convex/supplierStatement.ts",
+    "name": "import:./utils/tenancy",
+    "hash": "e36e85a1915b7b3a4e9b84a31e8ea2441edd3b330e1a1470ecbbf4a3eabeffff"
+  },
+  {
+    "file": "convex/supplierStatement.ts",
+    "name": "settled",
+    "hash": "85ff2fcef110f5d542e317a5b044a9e35de8903321f7c558e666d91bd6a632cf"
+  },
+  {
+    "file": "convex/supplierStatement.ts",
+    "name": "outstanding",
+    "hash": "e84fa1f7f16f19f24a4d488b95ba9a030bf4f1497e7bb703e88d702781ca90ab"
+  },
+  {
+    "file": "convex/supplierRelationships.ts",
+    "name": "import:./utils/tenancy",
+    "hash": "e36e85a1915b7b3a4e9b84a31e8ea2441edd3b330e1a1470ecbbf4a3eabeffff"
+  },
+  {
+    "file": "convex/supplierRelationships.ts",
+    "name": "vehicles",
+    "hash": "3bc0fc56ddf4c03525bc1712ab10c59b49f598b99c840f8c22cf3c18e4d6249e"
+  },
+  {
+    "file": "convex/supplierRelationships.ts",
+    "name": "project",
+    "hash": "7591f078011da2d81b09b41c7f7a579c7ec5b603dd017b522a3615464c65983b"
+  }
+];
+function assertForwardingFingerprints(): void {
+  for (const pin of FORWARDING_FINGERPRINTS) {
+    const source = parse(pin.file);
+    const node = source.statements.find(statement => navigationStatementName(statement, source) === pin.name);
+    const message = `${pin.file}:${pin.name}: permission forwarding fingerprint changed; re-derive role provenance and every caller cell before reviewing this pin. ${updateTable}`;
+    expect(node, message).toBeDefined();
+    expect(node && navigationFingerprint(node, source), message).toBe(pin.hash);
+  }
+}
+interface DeclaredCallerCells { title: string; helper: string; args: readonly unknown[] }
+// Independently declared literal inputs AND outcomes; never populated at test runtime.
+const DECLARED_CALLER_CELLS: readonly DeclaredCallerCells[] = [
+ { title: "settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", helper: "navigationCells", args: ["settled cash sale AP", ["shape","saleTarget","viewSales","timestamp"], [
+  ["cash","local","with","valid","sale+link","number+vehicle"],
+  ["cash","local","without","valid","sale","number+vehicle"],
+  ["cash","foreign","with","valid","none","none"],
+  ["cash","deleted","with","valid","none","none"],
+ ], "settled", "AP"] },
+ { title: "settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales", helper: "navigationCells", args: ["settled cash sale AR", ["shape","saleTarget","viewSales","timestamp"], [
+  ["cash","local","with","valid","sale+link","number+vehicle"],
+  ["cash","local","without","valid","sale","number+vehicle"],
+  ["cash","foreign","with","valid","none","none"],
+  ["cash","deleted","with","valid","none","none"],
+ ], "settled", "AR"] },
+ { title: "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales", helper: "navigationCells", args: ["settled application AP", ["shape","saleTarget","applicationTarget","viewSales","timestamp"], [
+  ["financed","local","local","with","valid","application+link","number+vehicle"],
+  ["financed","local","local","without","valid","application","number+vehicle"],
+  ["financed","local","foreign","with","valid","sale","number+vehicle"],
+  ["financed","local","missing","with","valid","sale","number+vehicle"],
+  ["financed","foreign","local","with","valid","none","none"],
+  ["financed","deleted","local","with","valid","none","none"],
+ ], "settled", "AP"] },
+ { title: "settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales", helper: "navigationCells", args: ["settled application AR", ["shape","saleTarget","applicationTarget","viewSales","timestamp"], [
+  ["financed","local","local","with","valid","application+link","number+vehicle"],
+  ["financed","local","local","without","valid","application","number+vehicle"],
+  ["financed","local","foreign","with","valid","sale","number+vehicle"],
+  ["financed","local","missing","with","valid","sale","number+vehicle"],
+  ["financed","foreign","local","with","valid","none","none"],
+  ["financed","deleted","local","with","valid","none","none"],
+ ], "settled", "AR"] },
+ { title: "settled opening AP preserves the viewer gate and refuses foreign or missing drafts", helper: "navigationCells", args: ["settled opening AP", ["shape","draftTarget","status","manageFinance","timestamp"], [
+  ["opening","local","POSTED","with","valid","opening+link","opening"],
+  ["opening","local","POSTED","without","valid","opening","opening"],
+  ["opening","foreign","POSTED","with","valid","none","none"],
+  ["opening","missing","POSTED","with","valid","none","none"],
+ ], "settled", "AP"] },
+ { title: "settled opening AR preserves the viewer gate and refuses foreign or missing drafts", helper: "navigationCells", args: ["settled opening AR", ["shape","draftTarget","status","manageFinance","timestamp"], [
+  ["opening","local","POSTED","with","valid","opening+link","opening"],
+  ["opening","local","POSTED","without","valid","opening","opening"],
+  ["opening","foreign","POSTED","with","valid","none","none"],
+  ["opening","missing","POSTED","with","valid","none","none"],
+ ], "settled", "AR"] },
+ { title: "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", helper: "navigationCells", args: ["settled native vehicle AP", ["shape","vehicle","viewVehicles","timestamp"], [
+  ["native","local","with","valid","vehicle+link","vehicle"],
+  ["native","local","without","valid","vehicle","vehicle"],
+  ["native","foreign","with","valid","none","none"],
+  ["native","deleted","with","valid","none","none"],
+ ], "settled", "AP"] },
+ { title: "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources", helper: "navigationCells", args: ["settled expense vehicle AR", ["shape","expenseTarget","vehicle","viewVehicles","timestamp"], [
+  ["expense","local","local","with","valid","expense+vehicle+link","expense"],
+  ["expense","local","local","without","valid","expense+vehicle","expense"],
+  ["expense","foreign","local","with","valid","none","none"],
+  ["expense","deleted","local","with","valid","none","none"],
+  ["expense","local","foreign","with","valid","expense","expense"],
+  ["expense","local","deleted","with","valid","expense","expense"],
+ ], "settled", "AR"] },
+ { title: "relationship query preserves the viewer vehicle permission for sourced and owned rows", helper: "relationshipCells", args: [[
+    ["SOURCED", "without", "SOURCED", "none"],
+    ["SOURCED", "with", "SOURCED", "vehicle"],
+    ["OWNED", "without", "OWNED_ON_ACCOUNT", "none"],
+    ["OWNED", "with", "OWNED_ON_ACCOUNT", "vehicle"],
+  ]] },
+ { title: "settled multi-row AP and AR preserve denied and allowed source links", helper: "navigationCells", args: ["settled multi-row caller", ["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"], [
+  ["cash","AP","without","without","without","two","valid","POSTED","sale","number+vehicle"],
+  ["cash","AR","without","without","without","two","valid","POSTED","sale","number+vehicle"],
+  ["financed","AP","without","without","without","two","valid","POSTED","application","number+vehicle"],
+  ["financed","AR","without","without","without","two","valid","POSTED","application","number+vehicle"],
+  ["native","AP","without","without","without","two","valid","POSTED","vehicle","vehicle"],
+  ["opening","AP","without","without","without","two","valid","POSTED","opening","opening"],
+  ["opening","AR","without","without","without","two","valid","POSTED","opening","opening"],
+  ["expense","AR","without","without","without","two","valid","POSTED","expense+vehicle","expense"],
+  ["cash","AP","with","with","with","two","valid","POSTED","sale+link","number+vehicle"],
+  ["cash","AR","with","with","with","two","valid","POSTED","sale+link","number+vehicle"],
+  ["financed","AP","with","with","with","two","valid","POSTED","application+link","number+vehicle"],
+  ["financed","AR","with","with","with","two","valid","POSTED","application+link","number+vehicle"],
+  ["native","AP","with","with","with","two","valid","POSTED","vehicle+link","vehicle"],
+  ["opening","AP","with","with","with","two","valid","POSTED","opening+link","opening"],
+  ["opening","AR","with","with","with","two","valid","POSTED","opening+link","opening"],
+  ["expense","AR","with","with","with","two","valid","POSTED","expense+vehicle+link","expense"],
+ ], "settled"] },
+ { title: "outstanding multi-row AP and AR preserve denied and allowed source links", helper: "navigationCells", args: ["outstanding multi-row caller", ["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"], [
+  ["cash","AP","without","without","without","two","valid","POSTED","sale","number+vehicle"],
+  ["cash","AR","without","without","without","two","valid","POSTED","sale","number+vehicle"],
+  ["financed","AP","without","without","without","two","valid","POSTED","application","number+vehicle"],
+  ["financed","AR","without","without","without","two","valid","POSTED","application","number+vehicle"],
+  ["native","AP","without","without","without","two","valid","POSTED","vehicle","vehicle"],
+  ["opening","AP","without","without","without","two","valid","POSTED","opening","opening"],
+  ["opening","AR","without","without","without","two","valid","POSTED","opening","opening"],
+  ["expense","AR","without","without","without","two","valid","POSTED","expense+vehicle","expense"],
+  ["cash","AP","with","with","with","two","valid","POSTED","sale+link","number+vehicle"],
+  ["cash","AR","with","with","with","two","valid","POSTED","sale+link","number+vehicle"],
+  ["financed","AP","with","with","with","two","valid","POSTED","application+link","number+vehicle"],
+  ["financed","AR","with","with","with","two","valid","POSTED","application+link","number+vehicle"],
+  ["native","AP","with","with","with","two","valid","POSTED","vehicle+link","vehicle"],
+  ["opening","AP","with","with","with","two","valid","POSTED","opening+link","opening"],
+  ["opening","AR","with","with","with","two","valid","POSTED","opening+link","opening"],
+  ["expense","AR","with","with","with","two","valid","POSTED","expense+vehicle+link","expense"],
+ ], "outstanding"] },
+ { title: "settled partially recovered opening and expense rows preserve denied and allowed viewer gates", helper: "navigationCells", args: ["settled partial recovery caller", ["shape","role","manageFinance","viewVehicles","status","recovery","timestamp"], [
+  ["opening","AR","without","without","POSTED","partial","valid","opening","opening"],
+  ["opening","AR","with","with","POSTED","partial","valid","opening+link","opening"],
+  ["expense","AR","without","without","POSTED","partial","valid","expense+vehicle","expense"],
+  ["expense","AR","with","with","POSTED","partial","valid","expense+vehicle+link","expense"],
+ ], "settled"] },
+ { title: "relationship multi-row large and endCursor pages preserve both viewer gates", helper: "relationshipCells", args: [[
+  ["SOURCED","without","SOURCED","none","multiple"],
+  ["OWNED","without","OWNED_ON_ACCOUNT","none","multiple"],
+  ["SOURCED","without","SOURCED","none","large"],
+  ["OWNED","without","OWNED_ON_ACCOUNT","none","large"],
+  ["SOURCED","without","SOURCED","none","endCursor"],
+  ["OWNED","without","OWNED_ON_ACCOUNT","none","endCursor"],
+  ["SOURCED","with","SOURCED","vehicle","multiple"],
+  ["OWNED","with","OWNED_ON_ACCOUNT","vehicle","multiple"],
+  ["SOURCED","with","SOURCED","vehicle","large"],
+  ["OWNED","with","OWNED_ON_ACCOUNT","vehicle","large"],
+  ["SOURCED","with","SOURCED","vehicle","endCursor"],
+  ["OWNED","with","OWNED_ON_ACCOUNT","vehicle","endCursor"],
+ ]] },
+];
+function callerLiteral(node: ts.Node, message: string): unknown {
+  if (ts.isStringLiteral(node)) return node.text;
+  if (ts.isArrayLiteralExpression(node)) return node.elements.map(value => callerLiteral(value, message));
+  throw new Error(`${message}: caller cells and arguments must be inline literal strings or arrays`);
+}
+function literalTestBody(source: ts.SourceFile, title: string): ts.Block | undefined {
+  const registration = source.statements.filter(ts.isExpressionStatement).map(statement => statement.expression)
+    .filter(ts.isCallExpression).find(call => call.expression.getText(source) === "test" &&
+      call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text === title);
+  const callback = registration?.arguments[1];
+  return callback && ts.isArrowFunction(callback) && ts.isBlock(callback.body) ? callback.body : undefined;
+}
+function awaitedCallerCall(statement: ts.Statement): ts.CallExpression | null {
+  if (!ts.isExpressionStatement(statement) || !ts.isAwaitExpression(statement.expression)) return null;
+  return ts.isCallExpression(statement.expression.expression) ? statement.expression.expression : null;
+}
+function callerCellRegistrationTitles(source: ts.SourceFile): string[] {
+  return source.statements.flatMap(statement => {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
+    const call = statement.expression;
+    const [title, callback] = call.arguments;
+    if (call.expression.getText(source) !== "test" || !title || !ts.isStringLiteral(title) || !callback) return [];
+    let bound = false;
+    const visit = (node: ts.Node): void => {
+      if (isExplicitCallerCell(node, source)) bound = true;
+      ts.forEachChild(node, visit);
+    };
+    visit(callback);
+    return bound ? [title.text] : [];
+  });
+}
+function isExplicitCallerCell(node: ts.Node, source: ts.SourceFile): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  if (node.expression.getText(source) === "relationshipCells") return true;
+  const query = node.arguments[3];
+  return node.expression.getText(source) === "navigationCells" && query !== undefined && ts.isStringLiteral(query) &&
+    ["settled", "outstanding"].includes(query.text);
+}
+
+function assertDeclaredCallerCells(source: ts.SourceFile): void {
+  expect(callerCellRegistrationTitles(source).sort(), "caller cells: actual and independently declared title sets must match in both directions")
+    .toStrictEqual(DECLARED_CALLER_CELLS.map(cell => cell.title).toSorted());
+  for (const declared of DECLARED_CALLER_CELLS) {
+    const message = `supplier caller / ${declared.title}: executed caller cells must equal the non-empty declared literal cells`;
+    const body = literalTestBody(source, declared.title);
+    expect(body?.statements.length, message).toBe(1);
+    const call = body?.statements[0] && awaitedCallerCall(body.statements[0]);
+    expect(call?.expression.getText(source), message).toBe(declared.helper);
+    const actual = call?.arguments.map(node => callerLiteral(node, message));
+    expect(actual, message).toStrictEqual(declared.args);
+    const cells = declared.args[declared.helper === "navigationCells" ? 2 : 0];
+    expect(Array.isArray(cells) && cells.length > 0, message).toBe(true);
+  }
+}
+
 // SCRUM-943: pin the caller, not just the helper. getText deliberately includes
 // the scope's exact initializer so permission re-sourcing needs explicit review.
 interface NavigationCaller {
   file: string; caller: string; exportedQuery: string | null; callee: string; arguments: string; scope: string;
 }
 const NAVIGATION_CALLERS: readonly (NavigationCaller & { tests: readonly string[] })[] = [
+  { file: "convex/supplierRelationships.ts", caller: "vehicles", exportedQuery: "vehicles", callee: "project",
+    arguments: 'vehicle, "SOURCED", role.permissions', scope: 'role.permissions',
+    tests: ["relationship query preserves the viewer vehicle permission for sourced and owned rows", "relationship multi-row large and endCursor pages preserve both viewer gates"] },
+  { file: "convex/supplierRelationships.ts", caller: "vehicles", exportedQuery: "vehicles", callee: "project",
+    arguments: 'vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id', scope: 'role.permissions',
+    tests: ["relationship query preserves the viewer vehicle permission for sourced and owned rows", "relationship multi-row large and endCursor pages preserve both viewer gates"] },
   { file: "convex/supplierStatement.ts", caller: "settled", exportedQuery: "settled", callee: "addSupplierRowContext",
     arguments: "ctx, scope, result.payable", scope: "{ ...args, permissions: role.permissions, cache: createSupplierReadCache() }",
-    tests: ["settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AP preserves the viewer gate and refuses foreign or missing drafts", "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles"] },
+    tests: ["settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AP preserves the viewer gate and refuses foreign or missing drafts", "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", "settled multi-row AP and AR preserve denied and allowed source links"] },
   { file: "convex/supplierStatement.ts", caller: "settled", exportedQuery: "settled", callee: "addSupplierRowContext",
     arguments: "ctx, scope, result.receivable", scope: "{ ...args, permissions: role.permissions, cache: createSupplierReadCache() }",
-    tests: ["settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales", "settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AR preserves the viewer gate and refuses foreign or missing drafts", "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources"] },
+    tests: ["settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales", "settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AR preserves the viewer gate and refuses foreign or missing drafts", "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources", "settled multi-row AP and AR preserve denied and allowed source links", "settled partially recovered opening and expense rows preserve denied and allowed viewer gates"] },
   { file: "convex/supplierStatement.ts", caller: "outstanding", exportedQuery: "outstanding", callee: "addSupplierRowContext",
     arguments: "ctx, scope, result.payable", scope: "{ ...args, permissions: role.permissions, cache }",
-    tests: ["opening link gate checks local targets across every navigation condition", "vehicle link gate checks local targets across every navigation condition"] },
+    tests: ["opening link gate checks local targets across every navigation condition", "vehicle link gate checks local targets across every navigation condition", "outstanding multi-row AP and AR preserve denied and allowed source links"] },
   { file: "convex/supplierStatement.ts", caller: "outstanding", exportedQuery: "outstanding", callee: "addSupplierRowContext",
     arguments: "ctx, scope, result.receivable", scope: "{ ...args, permissions: role.permissions, cache }",
-    tests: ["sales link gate checks local targets across every navigation condition", "application lookup checks local deleted and missing targets across every navigation condition"] },
+    tests: ["sales link gate checks local targets across every navigation condition", "application lookup checks local deleted and missing targets across every navigation condition", "outstanding multi-row AP and AR preserve denied and allowed source links"] },
   { file: "convex/supplierRelationships.ts", caller: "project", exportedQuery: null, callee: "supplierVehicleHref",
     arguments: "vehicle.orgId, vehicle._id, permissions", scope: "permissions: readonly string[]",
-    tests: ["relationship query preserves the viewer vehicle permission for sourced and owned rows"] },
+    tests: ["relationship query preserves the viewer vehicle permission for sourced and owned rows", "relationship multi-row large and endCursor pages preserve both viewer gates"] },
   { file: "convex/utils/supplierNavigation.ts", caller: "vehicleSource", exportedQuery: null, callee: "supplierVehicleHref",
     arguments: "args.orgId, vehicle._id, args.permissions", scope: "args: NavigationArgs",
     tests: ["settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", "vehicle link gate checks local targets across every navigation condition"] },
@@ -2132,14 +2357,16 @@ function permissionExports(source: ts.SourceFile): string[] {
   const checker = identifierChecker(source);
   const moduleSymbol = checker.getSymbolAtLocation(source);
   if (!moduleSymbol) throw new Error(`Cannot enumerate navigation exports. ${updateTable}`);
+  // Fail closed on EVERY callable export, regardless of parameter spelling,
+  // array aliases, imported scope types or renamed permissions properties.
+  // The two non-permission helpers are separately pinned by the original 22 hashes.
   return checker.getExportsOfModule(moduleSymbol).filter(symbol =>
-    checker.getTypeOfSymbolAtLocation(symbol, source).getCallSignatures().some(signature => signature.parameters.some(parameter =>
-      parameter.name === "permissions" || checker.getTypeOfSymbolAtLocation(parameter, source).getProperty("permissions"))))
-    .map(symbol => symbol.name).sort();
+    checker.getTypeOfSymbolAtLocation(symbol, source).getCallSignatures().length > 0)
+    .map(symbol => symbol.name).filter(name => !["supplierVehicleLabel", "supplierNavigationFailure"].includes(name)).sort();
 }
 
 function isNavigationModule(source: ts.SourceFile, specifier: ts.Expression): boolean {
-  if (!ts.isStringLiteral(specifier)) return false;
+  if (!ts.isStringLiteral(specifier) && !ts.isNoSubstitutionTemplateLiteral(specifier)) return false;
   const target = ts.resolveModuleName(specifier.text, join(root, source.fileName), CALLER_COMPILER_OPTIONS, ts.sys).resolvedModule?.resolvedFileName;
   return target !== undefined && resolve(target) === resolve(root, "convex/utils/supplierNavigation.ts");
 }
@@ -2171,7 +2398,8 @@ function navigationBindings(source: ts.SourceFile, names: readonly string[]): Ma
     }
   }
   const own: [string, string][] = source.fileName === "convex/utils/supplierNavigation.ts" ? names.map(name => [name, name]) : [];
-  return new Map([...own, ...source.statements.filter(ts.isImportDeclaration).flatMap(statement => navigationImportBindings(source, statement, names))]);
+  const forwarding: [string, string][] = source.fileName === "convex/supplierRelationships.ts" ? [["project", "project"]] : [];
+  return new Map([...own, ...forwarding, ...source.statements.filter(ts.isImportDeclaration).flatMap(statement => navigationImportBindings(source, statement, names))]);
 }
 
 function enclosingCaller(node: ts.Node): { caller: string; exportedQuery: string | null } {
@@ -2201,7 +2429,27 @@ function navigationReference(source: ts.SourceFile, node: ts.Node): string {
   return node.getText(source);
 }
 
+
+function dynamicNavigationTarget(source: ts.SourceFile, node: ts.Node): ts.Expression | undefined {
+  if (ts.isExternalModuleReference(node)) return node.expression;
+  if (!ts.isCallExpression(node)) return undefined;
+  const expression = node.expression;
+  if (expression.kind === ts.SyntaxKind.ImportKeyword || expression.getText(source) === "require" ||
+    ts.isPropertyAccessExpression(expression) && expression.name.text === "require") return node.arguments[0];
+  return undefined;
+}
+function refuseDynamicNavigation(source: ts.SourceFile): void {
+  const visit = (node: ts.Node): void => {
+    const target = dynamicNavigationTarget(source, node);
+    if (target && isNavigationModule(source, target)) throw new Error(
+      `${source.fileName}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: dynamic navigation import/require must become a reviewed static caller. ${updateTable}`);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+}
+
 function sourceNavigationCallers(source: ts.SourceFile, names: readonly string[]): (NavigationCaller & { line: number })[] {
+  refuseDynamicNavigation(source);
   const bindings = navigationBindings(source, names);
   if (!bindings.size) return [];
   const checker = identifierChecker(source);
@@ -2254,7 +2502,7 @@ function callerLocation(caller: NavigationCaller): string {
 
 function boundCallerCell(node: ts.Node, caller: NavigationCaller): boolean {
   if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return false;
-  if (caller.caller === "project") return node.expression.text === "related";
+  if (caller.caller === "project" || caller.caller === "vehicles") return node.expression.text === "relationshipCells";
   if (node.expression.text !== "navigationCells") return false;
   if (caller.caller === "vehicleSource") return node.arguments[1]?.getText().includes('"viewVehicles"') === true;
   const mode = node.arguments[3];
@@ -2264,15 +2512,10 @@ function boundCallerCell(node: ts.Node, caller: NavigationCaller): boolean {
 }
 
 function testHasCallerCells(source: ts.SourceFile, title: string, caller: NavigationCaller): boolean {
-  let found = false;
-  const visit = (node: ts.Node, within = false): void => {
-    if (ts.isCallExpression(node) && node.expression.getText(source) === "test" &&
-      node.arguments[0] && ts.isStringLiteral(node.arguments[0])) within = node.arguments[0].text === title;
-    if (within && boundCallerCell(node, caller)) found = true;
-    ts.forEachChild(node, child => visit(child, within));
-  };
-  visit(source);
-  return found;
+  const body = literalTestBody(source, title);
+  if (body?.statements.length !== 1) return false;
+  const call = awaitedCallerCall(body.statements[0]!);
+  return call !== null && boundCallerCell(call, caller);
 }
 
 function assertCallerTests(caller: typeof NAVIGATION_CALLERS[number]): void {
@@ -2294,9 +2537,11 @@ function callerPin({ file, caller, exportedQuery, callee, arguments: argumentTex
 }
 
 test("supplier navigation caller census pins every permission scope and binds public query behaviour", () => {
+  const syntax = parse("convex/supplierNavigation.scrum869.test.ts");
+  assertDeclaredCallerCells(syntax);
   const names = permissionExports(parse("convex/utils/supplierNavigation.ts"));
   expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
-  const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts"]);
+  const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts", "**/_generated/**"]);
   expect(files.length, "The recursive Convex caller sweep must not be empty").toBeGreaterThan(0);
   const found = files.flatMap(file => {
     const text = readFileSync(file, "utf8");
@@ -2312,4 +2557,31 @@ test("supplier navigation caller census pins every permission scope and binds pu
       `${callerLocation(pin)}: removed or changed caller ${pin.caller} / ${pin.arguments}. ${updateTable}; review its behavioural binding`).toBe(1);
   }
   for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller);
+  assertForwardingFingerprints();
+});
+
+test("navigation export census includes renamed arrays and imported scope types", () => {
+  const source = ts.createSourceFile("probe.ts", `
+    import type { NavigationArgs } from "./imported-scope";
+    export function importedScope(args: NavigationArgs): void {}
+    export function renamedArray(perms: readonly string[]): void {}
+    export function renamedProperty(scope: { grants: string[] }): void {}
+  `, ts.ScriptTarget.Latest, true);
+  expect(permissionExports(source), "callable exports cannot disappear through noResolve or a permissions rename")
+    .toStrictEqual(["importedScope", "renamedArray", "renamedProperty"]);
+});
+
+test("navigation census refuses literal dynamic imports and require loaders", () => {
+  for (const form of [
+    'void import("./utils/supplierNavigation")',
+    'require("./utils/supplierNavigation")',
+    'void import(`./utils/supplierNavigation`)',
+    'require(`./utils/supplierNavigation`)',
+    'module.require("./utils/supplierNavigation")',
+    'module.require(`./utils/supplierNavigation`)',
+    'import navigation = require("./utils/supplierNavigation")',
+  ]) {
+    const source = ts.createSourceFile("convex/loader-probe.ts", form, ts.ScriptTarget.Latest, true);
+    expect(() => refuseDynamicNavigation(source), `dynamic loader cell: ${form}`).toThrow(/dynamic navigation import\/require/);
+  }
 });

@@ -64,8 +64,9 @@
       },
       "action": "harness.settleSupplierNavigationObligation",
       "input": {
-        "receipt": "POSTED_CONTROL_CREDIT",
-        "settledMinor": 10000
+        "receipt": "NONE_PAYABLE_STATE_PATCH",
+        "settledMinor": 10000,
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS"
       }
     },
     {
@@ -121,5 +122,5 @@
     "testName": "settled opening AP preserves the viewer gate and refuses foreign or missing drafts"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "71eb086aa55699a9264332e4ad606f926b5b0516926f474c6b173f226e1cf92e"
+  "fingerprint": "00b0cb4c2cdfbc10f7bc65c03554bec90495a6e85618feb947e918f4ae6426bf"
 }
