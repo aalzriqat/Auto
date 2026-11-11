@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -23,7 +23,8 @@
           "applicationTarget",
           "viewSales",
           "dealNumber",
-          "vehicle"
+          "vehicle",
+          "timestamp"
         ],
         "cells": [
           [
@@ -33,6 +34,7 @@
             "with",
             "with",
             "local",
+            "valid",
             "sale",
             "number+vehicle"
           ],
@@ -42,7 +44,173 @@
             "foreign",
             "with",
             "with",
+            "local",
+            "fractional",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
             "foreign",
+            "with",
+            "with",
+            "local",
+            "positive-overflow",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "local",
+            "negative-overflow",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "local",
+            "valid",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "local",
+            "fractional",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "local",
+            "positive-overflow",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "local",
+            "negative-overflow",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "valid",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "fractional",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "foreign",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "foreign",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "foreign",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "foreign",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "valid",
             "sale",
             "number+id"
           ],
@@ -53,6 +221,84 @@
             "with",
             "with",
             "deleted",
+            "fractional",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "deleted",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "deleted",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "deleted",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "deleted",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "valid",
             "sale",
             "number+id"
           ],
@@ -63,6 +309,7 @@
             "with",
             "with",
             "missing",
+            "fractional",
             "sale",
             "number+id"
           ],
@@ -71,8 +318,108 @@
             "local",
             "foreign",
             "with",
+            "with",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "with",
+            "missing",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "missing",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "missing",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "second",
+            "missing",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
             "without",
             "local",
+            "valid",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "local",
+            "fractional",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "local",
+            "positive-overflow",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "local",
+            "negative-overflow",
             "sale",
             "vehicle"
           ],
@@ -83,6 +430,40 @@
             "with",
             "without",
             "foreign",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "foreign",
+            "negative-overflow",
             "sale",
             "id"
           ],
@@ -93,6 +474,40 @@
             "with",
             "without",
             "deleted",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "deleted",
+            "negative-overflow",
             "sale",
             "id"
           ],
@@ -103,6 +518,40 @@
             "with",
             "without",
             "missing",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "with",
+            "without",
+            "missing",
+            "negative-overflow",
             "sale",
             "id"
           ],
@@ -113,6 +562,7 @@
             "without",
             "with",
             "local",
+            "valid",
             "sale",
             "number+vehicle"
           ],
@@ -122,7 +572,173 @@
             "foreign",
             "without",
             "with",
+            "local",
+            "fractional",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
             "foreign",
+            "without",
+            "with",
+            "local",
+            "positive-overflow",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "local",
+            "negative-overflow",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "local",
+            "valid",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "local",
+            "fractional",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "local",
+            "positive-overflow",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "local",
+            "negative-overflow",
+            "sale",
+            "second+vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "foreign",
+            "valid",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "foreign",
+            "fractional",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "foreign",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "foreign",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "foreign",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "foreign",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "deleted",
+            "valid",
             "sale",
             "number+id"
           ],
@@ -133,6 +749,84 @@
             "without",
             "with",
             "deleted",
+            "fractional",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "deleted",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "deleted",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "deleted",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "deleted",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "missing",
+            "valid",
             "sale",
             "number+id"
           ],
@@ -143,6 +837,7 @@
             "without",
             "with",
             "missing",
+            "fractional",
             "sale",
             "number+id"
           ],
@@ -151,8 +846,108 @@
             "local",
             "foreign",
             "without",
+            "with",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "with",
+            "missing",
+            "negative-overflow",
+            "sale",
+            "number+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "missing",
+            "valid",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "missing",
+            "fractional",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "second",
+            "missing",
+            "negative-overflow",
+            "sale",
+            "second+id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
             "without",
             "local",
+            "valid",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "local",
+            "fractional",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "local",
+            "positive-overflow",
+            "sale",
+            "vehicle"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "local",
+            "negative-overflow",
             "sale",
             "vehicle"
           ],
@@ -163,6 +958,40 @@
             "without",
             "without",
             "foreign",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "foreign",
+            "negative-overflow",
             "sale",
             "id"
           ],
@@ -173,6 +1002,40 @@
             "without",
             "without",
             "deleted",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "deleted",
+            "negative-overflow",
             "sale",
             "id"
           ],
@@ -183,6 +1046,40 @@
             "without",
             "without",
             "missing",
+            "valid",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "fractional",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "positive-overflow",
+            "sale",
+            "id"
+          ],
+          [
+            "financed",
+            "local",
+            "foreign",
+            "without",
+            "without",
+            "missing",
+            "negative-overflow",
             "sale",
             "id"
           ]
@@ -209,6 +1106,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -226,5 +1127,5 @@
     "testName": "application lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "d27736a254e372986aaadee186541118f9fc15703689a30ef7551464991e2a3d"
+  "fingerprint": "c89b012418ee14ef2305ac5759284084b6a3c4f4c6da03a636c69fd3bae9eba0"
 }

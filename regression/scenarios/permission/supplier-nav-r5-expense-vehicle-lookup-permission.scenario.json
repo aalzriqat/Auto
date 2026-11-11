@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "expenseTarget",
           "vehicle",
-          "viewVehicles"
+          "viewVehicles",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "local",
             "with",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
             "expense+vehicle+link",
             "expense"
           ],
@@ -37,6 +66,34 @@
             "local",
             "local",
             "without",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
             "expense+vehicle",
             "expense"
           ],
@@ -45,6 +102,34 @@
             "local",
             "deleted",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -53,6 +138,34 @@
             "local",
             "deleted",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -61,6 +174,34 @@
             "local",
             "missing",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -69,6 +210,34 @@
             "local",
             "missing",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ]
@@ -95,6 +264,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -112,5 +285,5 @@
     "testName": "expense vehicle lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "56d1a424d561193cbceb27b745badbcb3efb72d1640c68321a14d750b8671ba0"
+  "fingerprint": "fa720ab583cc5c8b1ec98487e54250cb83aec9d3b1455e16a42914adb56d8617"
 }

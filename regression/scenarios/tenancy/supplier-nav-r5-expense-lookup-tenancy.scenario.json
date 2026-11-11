@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "expenseTarget",
           "vehicle",
-          "viewVehicles"
+          "viewVehicles",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "foreign",
             "local",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -37,6 +66,34 @@
             "foreign",
             "local",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -45,6 +102,34 @@
             "foreign",
             "foreign",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -53,6 +138,34 @@
             "foreign",
             "foreign",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "foreign",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -61,6 +174,34 @@
             "foreign",
             "deleted",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -69,6 +210,34 @@
             "foreign",
             "deleted",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "deleted",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -77,6 +246,34 @@
             "foreign",
             "missing",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -85,6 +282,34 @@
             "foreign",
             "missing",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "foreign",
+            "missing",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ]
@@ -111,6 +336,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -128,5 +357,5 @@
     "testName": "expense lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "a5d5a9ec799797c42ef9d12b46f32c730e939a34963e7015f9f68ae74e75a002"
+  "fingerprint": "0c540fc4b49e6e81b4b68e9dc570d71061553082b5347c811fd6d1284ea6e4fa"
 }

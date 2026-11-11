@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "draftTarget",
           "status",
-          "manageFinance"
+          "manageFinance",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "POSTED",
             "with",
+            "valid",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "fractional",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "positive-overflow",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "negative-overflow",
             "opening+link",
             "opening"
           ],
@@ -37,6 +66,34 @@
             "local",
             "POSTED",
             "without",
+            "valid",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "fractional",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "positive-overflow",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "negative-overflow",
             "opening",
             "opening"
           ]
@@ -63,6 +120,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -80,5 +141,5 @@
     "testName": "opening link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "f7d6f93a5c64e0d0dd91710491364565935d0968d1c994fa1a8d0d50da917af2"
+  "fingerprint": "142d5d24ad060c9e92924cda8798706d05321b0056053d8e5e0454e8d08821cd"
 }

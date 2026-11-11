@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "expenseTarget",
           "vehicle",
-          "viewVehicles"
+          "viewVehicles",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "local",
             "with",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
             "expense+vehicle+link",
             "expense"
           ],
@@ -37,6 +66,34 @@
             "local",
             "local",
             "without",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
             "expense+vehicle",
             "expense"
           ],
@@ -45,6 +102,34 @@
             "local",
             "foreign",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -53,6 +138,34 @@
             "local",
             "foreign",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -61,6 +174,34 @@
             "local",
             "deleted",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -69,6 +210,34 @@
             "local",
             "deleted",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -77,6 +246,34 @@
             "local",
             "missing",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -85,6 +282,34 @@
             "local",
             "missing",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "missing",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -93,6 +318,34 @@
             "deleted",
             "local",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -101,6 +354,34 @@
             "deleted",
             "local",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -109,6 +390,34 @@
             "deleted",
             "foreign",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -117,6 +426,34 @@
             "deleted",
             "foreign",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "foreign",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -125,6 +462,34 @@
             "deleted",
             "deleted",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -133,6 +498,34 @@
             "deleted",
             "deleted",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "deleted",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -141,6 +534,34 @@
             "deleted",
             "missing",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -149,6 +570,34 @@
             "deleted",
             "missing",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "deleted",
+            "missing",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -157,6 +606,34 @@
             "missing",
             "local",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -165,6 +642,34 @@
             "missing",
             "local",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "local",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -173,6 +678,34 @@
             "missing",
             "foreign",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -181,6 +714,34 @@
             "missing",
             "foreign",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "foreign",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -189,6 +750,34 @@
             "missing",
             "deleted",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -197,6 +786,34 @@
             "missing",
             "deleted",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "deleted",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -205,6 +822,34 @@
             "missing",
             "missing",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -213,6 +858,34 @@
             "missing",
             "missing",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "expense",
+            "missing",
+            "missing",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ]
@@ -239,6 +912,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -256,5 +933,5 @@
     "testName": "expense lookup checks local deleted and missing targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "d1a9d786c93003e877707327457c12dde4b2d98e840843b88a2759c55f3a212c"
+  "fingerprint": "732fe80db151228d6f7118dfa7336d6d629300563a84a8953bf2048177c5362d"
 }

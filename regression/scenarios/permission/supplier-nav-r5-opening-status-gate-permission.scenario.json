@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "draftTarget",
           "status",
-          "manageFinance"
+          "manageFinance",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "POSTED",
             "with",
+            "valid",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "fractional",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "positive-overflow",
+            "opening+link",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "with",
+            "negative-overflow",
             "opening+link",
             "opening"
           ],
@@ -37,6 +66,34 @@
             "local",
             "POSTED",
             "without",
+            "valid",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "fractional",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "positive-overflow",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "local",
+            "POSTED",
+            "without",
+            "negative-overflow",
             "opening",
             "opening"
           ],
@@ -45,6 +102,34 @@
             "local",
             "PENDING_APPROVAL",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -53,6 +138,34 @@
             "local",
             "PENDING_APPROVAL",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "PENDING_APPROVAL",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -61,6 +174,34 @@
             "local",
             "REJECTED",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -69,6 +210,34 @@
             "local",
             "REJECTED",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "REJECTED",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -77,6 +246,34 @@
             "local",
             "VOIDED",
             "with",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "with",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "with",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "with",
+            "negative-overflow",
             "none",
             "none"
           ],
@@ -85,6 +282,34 @@
             "local",
             "VOIDED",
             "without",
+            "valid",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "without",
+            "fractional",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "without",
+            "positive-overflow",
+            "none",
+            "none"
+          ],
+          [
+            "opening",
+            "local",
+            "VOIDED",
+            "without",
+            "negative-overflow",
             "none",
             "none"
           ]
@@ -111,6 +336,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -128,5 +357,5 @@
     "testName": "opening status gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "9c5c54152071485d920d9fe70092f845257d0b451e5ea0cbcfd45675f18cc2c1"
+  "fingerprint": "a5d15ed865d58cbc5614a6ce0e7235ed546621ab447fc0156d8fa092bf832191"
 }

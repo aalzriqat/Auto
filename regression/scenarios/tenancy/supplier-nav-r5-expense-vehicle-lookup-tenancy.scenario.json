@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "expenseTarget",
           "vehicle",
-          "viewVehicles"
+          "viewVehicles",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "foreign",
             "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "negative-overflow",
             "expense",
             "expense"
           ],
@@ -37,6 +66,34 @@
             "local",
             "foreign",
             "without",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "fractional",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "positive-overflow",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "negative-overflow",
             "expense",
             "expense"
           ]
@@ -63,6 +120,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -80,5 +141,5 @@
     "testName": "expense vehicle lookup refuses foreign targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "f99adbd8ee1fab3177d476e5b24aa84c1f409ab3b61b8dda073ec9f3e3582526"
+  "fingerprint": "ad229e2b722fac8206b5753722e5ed00fe6b1bd98f1abfddd0849beb013ad3c0"
 }

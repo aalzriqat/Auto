@@ -5,7 +5,7 @@
   "status": "active",
   "source": {
     "hunter": "scripted",
-    "runId": "scrum941-round6-local",
+    "runId": "scrum941-round7-local",
     "firstSeen": "2026-11-10"
   },
   "steps": [
@@ -21,7 +21,8 @@
           "shape",
           "expenseTarget",
           "vehicle",
-          "viewVehicles"
+          "viewVehicles",
+          "timestamp"
         ],
         "cells": [
           [
@@ -29,6 +30,34 @@
             "local",
             "local",
             "with",
+            "valid",
+            "vehicle+link",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "vehicle+link",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "vehicle+link",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
             "vehicle+link",
             "vehicle"
           ],
@@ -37,6 +66,34 @@
             "local",
             "local",
             "without",
+            "valid",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "native",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
             "vehicle",
             "vehicle"
           ],
@@ -45,6 +102,34 @@
             "local",
             "local",
             "with",
+            "valid",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "fractional",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "positive-overflow",
+            "expense+vehicle+link",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "negative-overflow",
             "expense+vehicle+link",
             "expense"
           ],
@@ -53,6 +138,34 @@
             "local",
             "local",
             "without",
+            "valid",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "fractional",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "positive-overflow",
+            "expense+vehicle",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "negative-overflow",
             "expense+vehicle",
             "expense"
           ]
@@ -79,6 +192,10 @@
     {
       "observable": "seededDocumentAxesAndExactPermissionsReadBack",
       "value": true
+    },
+    {
+      "observable": "invalidCreatedAtPreservesSourceAndLinkWithNullOccurredAt",
+      "value": true
     }
   ],
   "rulings": [
@@ -96,5 +213,5 @@
     "testName": "vehicle link gate checks local targets across every navigation condition"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "55c5b27eeb4a59792cd79297f77d6f8ec4ed1558e2b2a02e75f37da1d9a00db7"
+  "fingerprint": "3fe18e9c53fab3abd82669bf649dba5efc103037c8a33330bcaea0499be754d0"
 }
