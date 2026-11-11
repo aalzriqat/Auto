@@ -1,0 +1,192 @@
+{
+  "id": "scrum943-settled-cross-permission-multi-row",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r3-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationCallerCells",
+      "input": {
+        "helper": "navigationCells",
+        "cells": [
+          [
+            "cash",
+            "AP",
+            "without",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "cash",
+            "AR",
+            "without",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "sale",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AP",
+            "without",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "application",
+            "number+vehicle"
+          ],
+          [
+            "financed",
+            "AR",
+            "without",
+            "with",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "application",
+            "number+vehicle"
+          ],
+          [
+            "native",
+            "AP",
+            "with",
+            "without",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "opening",
+            "AP",
+            "with",
+            "with",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "opening",
+            "opening"
+          ],
+          [
+            "opening",
+            "AR",
+            "with",
+            "with",
+            "without",
+            "two",
+            "valid",
+            "POSTED",
+            "opening",
+            "opening"
+          ],
+          [
+            "expense",
+            "AR",
+            "with",
+            "without",
+            "with",
+            "two",
+            "valid",
+            "POSTED",
+            "expense+vehicle",
+            "expense"
+          ]
+        ],
+        "query": "supplierStatement.settled",
+        "fixtureWrites": "DIRECT_SYNTHETIC_STATE_NO_PAYMENT_WRITERS",
+        "axes": [
+          "shape",
+          "role",
+          "viewSales",
+          "viewVehicles",
+          "manageFinance",
+          "rowCount",
+          "timestamp",
+          "status"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerCells.complete",
+      "value": 8
+    },
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "sale",
+          "number+vehicle"
+        ],
+        [
+          "sale",
+          "number+vehicle"
+        ],
+        [
+          "application",
+          "number+vehicle"
+        ],
+        [
+          "application",
+          "number+vehicle"
+        ],
+        [
+          "vehicle",
+          "vehicle"
+        ],
+        [
+          "opening",
+          "opening"
+        ],
+        [
+          "opening",
+          "opening"
+        ],
+        [
+          "expense+vehicle",
+          "expense"
+        ]
+      ]
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled multi-row cross-permission viewers cannot substitute another navigation gate"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "991c32cd3bbd7009ba09d6cd3755a968ce40b5432ae25552f0e4b0d7a381c124"
+}

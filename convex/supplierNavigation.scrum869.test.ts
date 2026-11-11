@@ -17,7 +17,28 @@ import { SYSTEM_KEYS } from "./utils/defaultChart";
 const modules = import.meta.glob("./**/*.*s");
 const NOW = Date.parse("2026-11-10T09:00:00Z");
 const vehicles = makeFunctionReference<"query">("supplierRelationships:vehicles");
-afterEach(() => vi.useRealTimers());
+type CallerAudit = { expected: readonly (readonly string[])[]; asserted: (readonly string[])[]; message: string };
+const callerAudits: CallerAudit[] = [];
+afterEach(() => {
+  try { for (const audit of callerAudits) verifyCallerAssertions(audit); }
+  finally { callerAudits.length = 0; vi.useRealTimers(); }
+});
+
+function beginCallerAssertions(cells: readonly (readonly string[])[], message: string): CallerAudit {
+  const audit: CallerAudit = { expected: cells.map(tuple => [...tuple]), asserted: [], message };
+  callerAudits.push(audit);
+  return audit;
+}
+function verifyCallerAssertions(audit: CallerAudit) {
+  expect(audit.asserted, audit.message + ": every handed caller cell must execute its result assertion exactly once").toStrictEqual(audit.expected);
+}
+function assertCallerResult(actual: unknown, expected: unknown, audit: CallerAudit, tuple: readonly string[], message: string) {
+  const before = expect.getState().assertionCalls;
+  expect(actual, message).toStrictEqual(expected);
+  const assertions = expect.getState().assertionCalls - before;
+  expect(assertions, message + ": result assertion must execute once").toBe(1);
+  audit.asserted.push(tuple);
+}
 
 async function seed(permissions = ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "manage:finance"], transactionLimits = false) {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -1066,27 +1087,35 @@ function expectedNavigationOutcome(f: NavigationFixture, outcome: NavigationOutc
 
 
 async function duplicateNavigationObligation(f: NavigationFixture, message: string) {
+  const copied = await duplicateNavigationPayable(f, message) ?? await duplicateNavigationClaim(f, message);
+  if (copied) return copied;
   return f.s.t.run(async ctx => {
-    const payableId = ctx.db.normalizeId("vehicleSupplierPayables", f.obligationId);
-    if (payableId) {
-      const row = await ctx.db.get(payableId);
-      if (!row) throw new Error(message);
-      const { _id, _creationTime, ...fields } = row;
-      return ctx.db.insert("vehicleSupplierPayables", fields);
-    }
-    const claimId = ctx.db.normalizeId("vehicleSupplierReceivables", f.obligationId);
-    if (claimId) {
-      const row = await ctx.db.get(claimId);
-      if (!row) throw new Error(message);
-      const { _id, _creationTime, ...fields } = row;
-      return ctx.db.insert("vehicleSupplierReceivables", fields);
-    }
-    const recoveryId = ctx.db.normalizeId("supplierCostRecoveries", f.obligationId);
-    if (!recoveryId) throw new Error(message);
-    const row = await ctx.db.get(recoveryId);
+    const id = ctx.db.normalizeId("supplierCostRecoveries", f.obligationId);
+    if (!id) throw new Error(message);
+    const row = await ctx.db.get(id);
     if (!row) throw new Error(message);
     const { _id, _creationTime, ...fields } = row;
     return ctx.db.insert("supplierCostRecoveries", { ...fields, ...("expenseId" in fields ? { sourceEventKey: "second-navigation-cell" } : {}) });
+  });
+}
+async function duplicateNavigationPayable(f: NavigationFixture, message: string) {
+  return f.s.t.run(async ctx => {
+    const id = ctx.db.normalizeId("vehicleSupplierPayables", f.obligationId);
+    if (!id) return null;
+    const row = await ctx.db.get(id);
+    if (!row) throw new Error(message);
+    const { _id, _creationTime, ...fields } = row;
+    return ctx.db.insert("vehicleSupplierPayables", fields);
+  });
+}
+async function duplicateNavigationClaim(f: NavigationFixture, message: string) {
+  return f.s.t.run(async ctx => {
+    const id = ctx.db.normalizeId("vehicleSupplierReceivables", f.obligationId);
+    if (!id) return null;
+    const row = await ctx.db.get(id);
+    if (!row) throw new Error(message);
+    const { _id, _creationTime, ...fields } = row;
+    return ctx.db.insert("vehicleSupplierReceivables", fields);
   });
 }
 
@@ -1097,33 +1126,62 @@ async function assertPartialRecovery(f: NavigationFixture, message: string) {
   });
 }
 
-async function relationshipCells(cells: readonly (readonly string[])[]) {
-  expect(cells.length, "vehicles/project: relationship caller cells must be non-empty").toBeGreaterThan(0);
-  for (const [kind, permission, model, link, condition = "single"] of cells) {
-    const message = `vehicles/project: relationship ${kind}/${permission}/${condition}`;
-    const f = await seedNavigationCell({ shape: "native", viewVehicles: permission!, timestamp: "valid" }, message);
-    await readBackNavigationCell(f, { shape: "native", viewVehicles: permission!, timestamp: "valid" }, message);
-    if (kind === "OWNED") await f.s.t.run(ctx => ctx.db.patch(f.s.vehicleId, { sourceType: "STOCK" }));
-    const expected = [{ id: kind === "OWNED" ? f.obligationId : f.s.vehicleId, vehicleId: f.s.vehicleId,
-      label: "2024 Toyota Camry", model, status: "AVAILABLE",
-      href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${f.s.vehicleId}` : null }];
-    if (condition !== "single") {
-      const second = await duplicateRelationship(f.s, kind!);
-      expected.push({ ...expected[0]!, id: second.id, vehicleId: second.vehicleId,
-        href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${second.vehicleId}` : null });
-    }
-    const paginationOpts = await relationshipPagination(f.s, kind!, condition, message);
-    if (condition === "endCursor") expected.shift();
-    const result = await f.s.asUser.query(vehicles, { orgId: f.s.orgId, supplierId: f.s.supplierId, kind, paginationOpts });
-    expect(result.page.toSorted((a: { vehicleId: string }, b: { vehicleId: string }) => a.vehicleId.localeCompare(b.vehicleId)), message)
-      .toStrictEqual(expected.toSorted((a, b) => a.vehicleId.localeCompare(b.vehicleId)));
-  }
+type RelationshipKind = "SOURCED" | "OWNED";
+type RelationshipCondition = "single" | "multiple" | "large" | "endCursor";
+type RelationshipBase = readonly [kind: RelationshipKind, permission: "with" | "without", model: "SOURCED" | "OWNED_ON_ACCOUNT", link: "none" | "vehicle"];
+type RelationshipCell = RelationshipBase | readonly [...RelationshipBase, condition: RelationshipCondition];
+function validateRelationshipCell(tuple: RelationshipCell, message: string) {
+  expect(tuple.length, message).toBeGreaterThanOrEqual(4);
+  expect(tuple.length, message).toBeLessThanOrEqual(5);
+  const [kind, permission, model, link, condition = "single"] = tuple;
+  expect(["SOURCED", "OWNED"], message + ": kind").toContain(kind);
+  expect(["with", "without"], message + ": permission").toContain(permission);
+  expect(["SOURCED", "OWNED_ON_ACCOUNT"], message + ": model").toContain(model);
+  expect(["none", "vehicle"], message + ": link").toContain(link);
+  expect(["single", "multiple", "large", "endCursor"], message + ": condition").toContain(condition);
 }
-async function relationshipPagination(s: Seed, kind: string, condition: string, message: string) {
+async function seedRelationshipCell(tuple: RelationshipCell, message: string) {
+  const [kind, permission, model, link, condition = "single"] = tuple;
+  const f = await seedNavigationCell({ shape: "native", viewVehicles: permission, timestamp: "valid" }, message);
+  await readBackNavigationCell(f, { shape: "native", viewVehicles: permission, timestamp: "valid" }, message);
+  if (kind === "OWNED") await f.s.t.run(ctx => ctx.db.patch(f.s.vehicleId, { sourceType: "STOCK" }));
+  const expected = [{ id: kind === "OWNED" ? f.obligationId : f.s.vehicleId, vehicleId: f.s.vehicleId,
+    label: "2024 Toyota Camry", model, status: "AVAILABLE",
+    href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${f.s.vehicleId}` : null }];
+  if (condition !== "single") {
+    const second = await duplicateRelationship(f.s, kind);
+    expected.push({ ...expected[0]!, id: second.id, vehicleId: second.vehicleId,
+      href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${second.vehicleId}` : null });
+  }
+  return { f, expected };
+}
+async function relationshipCells(cells: readonly RelationshipCell[]) {
+  expect(cells.length, "vehicles/project: relationship caller cells must be non-empty").toBeGreaterThan(0);
+  const audit = beginCallerAssertions(cells, "vehicles/project relationshipCells");
+  for (const tuple of cells) {
+    const [kind, permission, , , condition = "single"] = tuple;
+    const message = `vehicles/project: relationship ${kind}/${permission}/${condition}`;
+    validateRelationshipCell(tuple, message);
+    const { f, expected } = await seedRelationshipCell(tuple, message);
+    const paginationOpts = await relationshipPagination(f.s, kind, condition, message, expected.at(-1)!.vehicleId);
+    const pageSizes = { single: 25, multiple: 25, large: 26, endCursor: 1 };
+    expect(paginationOpts.numItems, message + ": requested page size").toBe(pageSizes[condition]);
+    if (condition === "endCursor") {
+      expect(paginationOpts.endCursor, message + ": endCursor must reach the query").toEqual(expect.any(String));
+      expected.shift();
+    }
+    const result = await f.s.asUser.query(vehicles, { orgId: f.s.orgId, supplierId: f.s.supplierId, kind, paginationOpts });
+    assertCallerResult(result.page.toSorted((a: { vehicleId: string }, b: { vehicleId: string }) => a.vehicleId.localeCompare(b.vehicleId)),
+      expected.toSorted((a, b) => a.vehicleId.localeCompare(b.vehicleId)), audit, tuple, message);
+  }
+  verifyCallerAssertions(audit);
+}
+async function relationshipPagination(s: Seed, kind: RelationshipKind, condition: RelationshipCondition, message: string, newestVehicleId: Seed["vehicleId"]) {
   const paginationOpts: { numItems: number; cursor: string | null; endCursor?: string } = { numItems: condition === "large" ? 26 : 25, cursor: null };
   if (condition === "endCursor") {
     const first = await related(s, kind, { numItems: 1, cursor: null });
     expect(first.page.length, message).toBe(1);
+    expect(first.page[0]?.vehicleId, message + ": endCursor requires newest-first ordering").toBe(newestVehicleId);
     expect(first.isDone, message).toBe(false);
     expect(first.continueCursor.length, message).toBeGreaterThan(0);
     paginationOpts.endCursor = first.continueCursor;
@@ -1132,7 +1190,7 @@ async function relationshipPagination(s: Seed, kind: string, condition: string, 
   return paginationOpts;
 }
 
-async function duplicateRelationship(s: Seed, kind: string) {
+async function duplicateRelationship(s: Seed, kind: RelationshipKind) {
   return s.t.run(async ctx => {
     const row = await ctx.db.get(s.vehicleId);
     if (!row) throw new Error("vehicles/project: missing synthetic vehicle");
@@ -1146,17 +1204,30 @@ async function duplicateRelationship(s: Seed, kind: string) {
   });
 }
 
-async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel, queryName: "outstanding" | "settled" = "outstanding") {
-  const message = `${door}: ${JSON.stringify(cell)} => ${outcome}/${labelKind}`;
-  const f = await seedNavigationCell(cell, message);
-  await readBackNavigationCell(f, cell, message);
-  await readBackNavigationDocumentFields(f, cell, message);
+async function prepareNavigationState(f: NavigationFixture, cell: NavigationCell, queryName: "outstanding" | "settled", message: string) {
+  if (cell.recovery === "partial") await f.s.t.run(ctx => ctx.db.patch(f.obligationId, { amountRecoveredMinor: 10000, status: "PARTIALLY_RECOVERED" }));
   const duplicateId = cell.rowCount === "two" ? await duplicateNavigationObligation(f, message) : null;
   if (queryName === "settled") {
     await settleReadBound(f.s, f.obligationId);
     if (duplicateId) await settleReadBound(f.s, duplicateId);
   }
   if (cell.recovery === "partial") await assertPartialRecovery(f, message);
+}
+
+function assertNavigationAmounts(rows: readonly unknown[], cell: NavigationCell, queryName: "outstanding" | "settled", message: string) {
+  if (cell.recovery === "partial") {
+    if (queryName === "settled") expect(rows, message).toMatchObject([{ status: "PARTIALLY_RECOVERED", dueMinor: 20000, settledMinor: 10000, settlement: "PARTIAL" }]);
+    else expect(rows, message + ": partial recovery remains outstanding").toMatchObject([{ outstandingMinor: 10000 }]);
+  }
+  if (queryName === "settled") expect(rows.map(row => row && typeof row === "object" && "settledMinor" in row ? row.settledMinor : null), message).toStrictEqual(cell.rowCount === "two" ? [10000, 10000] : [10000]);
+}
+
+async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel, queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[]) {
+  const message = `${door}: ${JSON.stringify(cell)} => ${outcome}/${labelKind}`;
+  const f = await seedNavigationCell(cell, message);
+  await readBackNavigationCell(f, cell, message);
+  await readBackNavigationDocumentFields(f, cell, message);
+  await prepareNavigationState(f, cell, queryName, message);
   const result = queryName === "settled"
     ? await f.s.asUser.query(api.supplierStatement.settled, { orgId: f.s.orgId, supplierId: f.s.supplierId })
     : await outstanding(f.s);
@@ -1166,13 +1237,12 @@ async function navigationCell(door: string, cell: NavigationCell, outcome: Navig
   };
   const role = cell.role ?? contexts[f.shape as keyof typeof contexts].role;
   const rows = role === "AP" ? result.payable.rows : result.receivable.rows;
-  if (cell.recovery === "partial") expect(rows, message).toMatchObject([{ status: "PARTIALLY_RECOVERED", dueMinor: 20000, settledMinor: 10000, settlement: "PARTIAL" }]);
-  if (queryName === "settled") expect(rows.map(row => "settledMinor" in row ? row.settledMinor : null), message).toStrictEqual(duplicateId ? [10000, 10000] : [10000]);
+  assertNavigationAmounts(rows, cell, queryName, message);
   const expectedContext = {
     ...contexts[f.shape as keyof typeof contexts], role, ...(cell.role === "AP" && f.sale ? { counterparty: "Original supplier snapshot" } : {}),
     occurredAt: cell.timestamp === "valid" ? NOW : null, ...expectedNavigationOutcome(f, outcome, labelKind),
   };
-  expect(rows.map(row => row.context), message).toStrictEqual(duplicateId ? [expectedContext, expectedContext] : [expectedContext]);
+  assertCallerResult(rows.map(row => row.context), cell.rowCount === "two" ? [expectedContext, expectedContext] : [expectedContext], audit, tuple, message);
 }
 
 async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[], queryName: "outstanding" | "settled" = "outstanding", role?: "AP" | "AR") {
@@ -1185,15 +1255,14 @@ async function navigationCells(door: string, axes: readonly string[], cells: rea
     viewSales: ["with", "without"], viewVehicles: ["with", "without"], manageFinance: ["with", "without"], status: ["POSTED", "PENDING_APPROVAL", "REJECTED", "VOIDED"],
   };
   expect(cells.length, `${door}: caller cells must be non-empty`).toBeGreaterThan(0);
-  const executed: (readonly string[])[] = [];
+  const audit = beginCallerAssertions(cells, door);
   for (const tuple of cells) {
     expect(tuple.length, `${door}: ${JSON.stringify(tuple)}`).toBe(axes.length + 2);
     const cell = Object.fromEntries(axes.map((axis, index) => [axis, tuple[index]!]));
     for (const [axis, value] of Object.entries(cell)) expect(values[axis], `${door}: ${JSON.stringify(cell)}`).toContain(value);
-    await navigationCell(door, role ? { ...cell, role } : cell, tuple[axes.length] as NavigationOutcome, tuple[axes.length + 1] as NavigationLabel, queryName);
-    executed.push(tuple);
+    await navigationCell(door, role ? { ...cell, role } : cell, tuple[axes.length] as NavigationOutcome, tuple[axes.length + 1] as NavigationLabel, queryName, audit, tuple);
   }
-  expect(executed, `${door}: every declared caller cell must finish`).toStrictEqual(cells);
+  verifyCallerAssertions(audit);
 }
 
 test("sale lookup checks local deleted and missing targets across every navigation condition", async () => {
@@ -2173,4 +2242,40 @@ test("relationship multi-row large and endCursor pages preserve both viewer gate
   ["SOURCED","with","SOURCED","vehicle","endCursor"],
   ["OWNED","with","OWNED_ON_ACCOUNT","vehicle","endCursor"],
  ]);
+});
+
+
+test("settled multi-row cross-permission viewers cannot substitute another navigation gate", async () => {
+ await navigationCells("settled cross-permission multi-row caller", ["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"], [
+  ["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],
+  ["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],
+  ["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],
+  ["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],
+  ["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],
+  ["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],
+  ["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],
+  ["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"],
+ ], "settled");
+});
+
+test("outstanding multi-row cross-permission viewers cannot substitute another navigation gate", async () => {
+ await navigationCells("outstanding cross-permission multi-row caller", ["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"], [
+  ["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],
+  ["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],
+  ["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],
+  ["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],
+  ["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],
+  ["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],
+  ["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],
+  ["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"],
+ ], "outstanding");
+});
+
+test("outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates", async () => {
+ await navigationCells("outstanding partial recovery caller", ["shape","role","manageFinance","viewVehicles","status","recovery","timestamp"], [
+  ["opening","AR","without","without","POSTED","partial","valid","opening","opening"],
+  ["opening","AR","with","with","POSTED","partial","valid","opening+link","opening"],
+  ["expense","AR","without","without","POSTED","partial","valid","expense+vehicle","expense"],
+  ["expense","AR","with","with","POSTED","partial","valid","expense+vehicle+link","expense"],
+ ], "outstanding");
 });

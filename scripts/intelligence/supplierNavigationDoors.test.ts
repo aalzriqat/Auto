@@ -2146,9 +2146,305 @@ function assertForwardingFingerprints(): void {
     expect(node && navigationFingerprint(node, source), message).toBe(pin.hash);
   }
 }
+// Complete helper declarations and fixture constants are reviewed tripwires, not correctness proofs.
+const RUNNER_FINGERPRINTS = [
+  {
+    "name": "modules",
+    "hash": "fd49d3761efc39499490aaa5a2a7417efae346c683e592dbcba7b69a0f9edbae"
+  },
+  {
+    "name": "NOW",
+    "hash": "ae6487bd2fc018a526e87de0723ab23b1a3b6b29ed74b7215a83f2c10b642bec"
+  },
+  {
+    "name": "vehicles",
+    "hash": "079e9ff58899e99060e5639b0b62da2ab7cb4d0075aa54f82222fda6c0207771"
+  },
+  {
+    "name": "CallerAudit",
+    "hash": "dd50a8a0c72cb76b207b861f2e0096331d30151fd98fac65921f0de474b78110"
+  },
+  {
+    "name": "callerAudits",
+    "hash": "f6f323808f532e2862a1efa11630e2b7b37718016ca7e0763250b90e8f4099c4"
+  },
+  {
+    "name": "afterEach",
+    "hash": "fd6a563f6ddb4c74e65fa6ab65962623891d557558f6119f8053f678e944ef5d"
+  },
+  {
+    "name": "beginCallerAssertions",
+    "hash": "8cb10404fa5732764c2decf4ddabd577cf52913870d4b1af4843bd91f0cf2bcc"
+  },
+  {
+    "name": "verifyCallerAssertions",
+    "hash": "85c342b129e5562f334011bb86ad81d5ea7b0435847f54a0719dbcff270ee98f"
+  },
+  {
+    "name": "assertCallerResult",
+    "hash": "b6bb6b979d1f4f884a47f68ddfa3a4bfff46b88763ef6bd6e62909ea9c4260ed"
+  },
+  {
+    "name": "seed",
+    "hash": "4aae6a4ddacc3ee94ac3aa45e971d44b101a67ce256d2e2b22cda553d5ebfbc6"
+  },
+  {
+    "name": "Seed",
+    "hash": "9124a7e4f2e36d23cd9a6790a5f3479997367fc1c464bbfe838075aab037dc4a"
+  },
+  {
+    "name": "payable",
+    "hash": "cc86f7c102f970fc3267124ed6be10ac2e8f6bc3ab76d9cbac327d5c5415d25e"
+  },
+  {
+    "name": "outstanding",
+    "hash": "187e607517885707f2f75d82610caa9751eda740851de195c0d38c1598b6cfe7"
+  },
+  {
+    "name": "related",
+    "hash": "36519e0b06a2feffff90db21d0785818f196a9531ae04f731c8ff4e068805331"
+  },
+  {
+    "name": "financedSale",
+    "hash": "b8e67723c77ed07c3552588babf87f8d42cbf0647bbc273c1229423c5f6a7825"
+  },
+  {
+    "name": "TargetPermission",
+    "hash": "ce6233112cdc1fa004a93220793559fd9f9437b9a9a179bf11690c8067313972"
+  },
+  {
+    "name": "HiddenState",
+    "hash": "a1dd027e4be556c48924d2074d6429248e4b66103f9fe2322915b840b8a10a64"
+  },
+  {
+    "name": "seedViewer",
+    "hash": "c614ce5a237a74a0c966fa158e458619784ed0f7f6e39c5bec1b05edc70536e8"
+  },
+  {
+    "name": "hideVehicle",
+    "hash": "f5e1bd15f686078027132fad39100356f5c502aadb108352af6034a0f30eb384"
+  },
+  {
+    "name": "expectNoVehicleLabel",
+    "hash": "3cf43713277ca9dc08b77631ec63ad65b710817d052d716751300c41990c9b99"
+  },
+  {
+    "name": "expectNoVehicle",
+    "hash": "8d18975f65619c1262977e31342dec18d2959596c980763f5b05dce9469b7b9b"
+  },
+  {
+    "name": "expectHiddenSale",
+    "hash": "c5d4209c948ec7bf06c1696a669882c19a777092c7b2cf6412fe3283c7159cf5"
+  },
+  {
+    "name": "openingFixture",
+    "hash": "2c6404c0b0f8436d4e4800ac7d0fb5c6aee5cf3dc74174e57af4ae26c22daebd"
+  },
+  {
+    "name": "expenseVehicleFixture",
+    "hash": "2c25b74f8a56778d9fcd99e84a78088ed5cf583907d380e7676c6a6083a79095"
+  },
+  {
+    "name": "expectHiddenExpenseVehicle",
+    "hash": "1646ba75de0417f25f2cec6ab2513f9a5a236d97f0c1c0397f5f65f8e57c5154"
+  },
+  {
+    "name": "expectHiddenNativeVehicle",
+    "hash": "34dd0a0ffb3f48f12973e29de9c89fa1231cf5ef49c052f2888da4fc309df22d"
+  },
+  {
+    "name": "expectHiddenSaleVehicle",
+    "hash": "7918b5b401f1affb86319e43ad343e677db6b1a3aee658b1168274b568b9e4fe"
+  },
+  {
+    "name": "expectedSaleVehicleCell",
+    "hash": "8ecd929f681ba0f510e088cfe57d86923390a021522909a3e2612505e63f197a"
+  },
+  {
+    "name": "expectedNativeVehicleCell",
+    "hash": "9b666e39c764d5fcb5202977b6026381cc3a0433b5c02d26643a09df77126096"
+  },
+  {
+    "name": "expectVehicleCell",
+    "hash": "22ce7eeb7af53aa41bd3aa1affe815f6693dd5a2cc53cbc09ac936964dc4d339"
+  },
+  {
+    "name": "expectUnpostedOpening",
+    "hash": "9362e5f2b232cfc1bcb0212e661e168dab49ef943987f9c2410728bbea6693d4"
+  },
+  {
+    "name": "measureHandler",
+    "hash": "a1b7062d974e3cfaad06bb0091f708aa9a24389b0e1f319f2108fe3825f01f5d"
+  },
+  {
+    "name": "seedReadBound",
+    "hash": "3caa16e63dd9aedc08a1e368fc22a608d34ef9fceafe545ba8207ddfafd7d71f"
+  },
+  {
+    "name": "settleReadBound",
+    "hash": "9a22ebf391d6b45f8a4fc8f16cb26abc859c50dfcabea1d20eb4b70c43785892"
+  },
+  {
+    "name": "NavigationCell",
+    "hash": "4035f7bf688856cc72df226fc3e6024df22cf186d54cbad8a41e60fde3751e96"
+  },
+  {
+    "name": "NavigationOutcome",
+    "hash": "9a8db53a5f95ef1bd52659971371d15cf1930b5793e231afff178876ee9840a6"
+  },
+  {
+    "name": "NavigationLabel",
+    "hash": "4ec1252e3cc632d80021c5bd9e4ce8f6cf70a9507d50b85597aad62702ed95a5"
+  },
+  {
+    "name": "NavigationTarget",
+    "hash": "13f9b6e310d7d1eeba0e855b7435f03dcd14530e1aa28dbcbf59e886a84f5079"
+  },
+  {
+    "name": "NavigationFixture",
+    "hash": "bfb9637f364fc13eb9708d460523ff2507757e112669c30089a6a2fcfaffe0df"
+  },
+  {
+    "name": "NAVIGATION_DEAL_NUMBERS",
+    "hash": "ca68692ce425ae728f80f13f5528a0159394628de751bbfd079f955cb08b6fe0"
+  },
+  {
+    "name": "NAVIGATION_PERMISSIONS",
+    "hash": "5400cedb24582de79a2b7a751701b9b1c339e5b11579449162413fc39627e7ee"
+  },
+  {
+    "name": "navigationPermissions",
+    "hash": "9b5a4da7d1e9eb8f7d283079ad0cab0cca0e861189455292648957b3e29e1ca8"
+  },
+  {
+    "name": "assertNavigationTarget",
+    "hash": "ed4fb57643969c47d9452ca0d4eb3d3e9aafb74787ffd3296e5aa2f6311ae35e"
+  },
+  {
+    "name": "navigationTargets",
+    "hash": "922f2b5c5bac7f9f6041b6336b8237c30312c35bf8ffeb5eb7754249727b374b"
+  },
+  {
+    "name": "seedNavigationOpening",
+    "hash": "f0bf8ea5c97b5f390c69152cb86cfd2e07a2e57691e1e3a53dbb06c7433ebc20"
+  },
+  {
+    "name": "seedNavigationCell",
+    "hash": "877d4683489fddc0f239dd0af107f146e641548a491dbdbf77b8e66c44dea6a2"
+  },
+  {
+    "name": "readBackNavigationIdentity",
+    "hash": "ff554aa94a13fc5275d645228a6a20fed325f8025726430a09fe776f0dba0757"
+  },
+  {
+    "name": "readBackNavigationCell",
+    "hash": "7c0bec72f56acc054730c7482b29f2066e82063d7669c748acd3422a369743d6"
+  },
+  {
+    "name": "readBackNavigationDocumentFields",
+    "hash": "3b0dfb518ce55ef80d32e7c6da6d42ef8b5935138bd914989030799eae86c392"
+  },
+  {
+    "name": "expectedNavigationOutcome",
+    "hash": "f45ed39722c82df0bb81eab819fb48957397b26f7fa49215cfd216b59be26c5f"
+  },
+  {
+    "name": "duplicateNavigationObligation",
+    "hash": "941dcb7be57905f58e6d1d14a34b86e0bc6ecee338e640ccd6ecda008e1da4c6"
+  },
+  {
+    "name": "duplicateNavigationPayable",
+    "hash": "620a7245f81639a0f08fd5172fd44f4fad61620af083704479f4142013f414b8"
+  },
+  {
+    "name": "duplicateNavigationClaim",
+    "hash": "3a60396484b796a564cc96995f5c51b3864df24a06ae1bd46dbd3d89b964ece2"
+  },
+  {
+    "name": "assertPartialRecovery",
+    "hash": "8777b9616cd01a38f0a0027374f7a08d4e813a4d278d7686f0552c0048aa93e4"
+  },
+  {
+    "name": "RelationshipKind",
+    "hash": "784e8067bbd1abba64107432edba320d57db7ec95a791a3e36d8786ea8c82a43"
+  },
+  {
+    "name": "RelationshipCondition",
+    "hash": "596160cf8eb2cb90e40c78673dee99543961646cddf4f3637ef3650797d75032"
+  },
+  {
+    "name": "RelationshipBase",
+    "hash": "cea72b46e45d60ea9234e89d41abc2a45eb30c6df996cc5d47a7e2473b49cbce"
+  },
+  {
+    "name": "RelationshipCell",
+    "hash": "641b6e01e4492ba8234a44979c234814cd268b84ebed1f86b2c7b7c4f2d68b5a"
+  },
+  {
+    "name": "validateRelationshipCell",
+    "hash": "9d2fce10d0a59b553bac78a694d2c2d503fa4b2a13a314cbde58bd3efa6faae6"
+  },
+  {
+    "name": "seedRelationshipCell",
+    "hash": "0b97342e7843d6a835bff4a50e54ec4ff94f60e4c8dae752c3189004b8f1e9f4"
+  },
+  {
+    "name": "relationshipCells",
+    "hash": "6cddf2c0cc6316d6c6a1a050dc2165b55d9f8aea0637cccf0ce0037dd399f2ca"
+  },
+  {
+    "name": "relationshipPagination",
+    "hash": "62fca8edab91580b04775a066129a3e12a8548133c703bd97d46c15cb7eb29dc"
+  },
+  {
+    "name": "duplicateRelationship",
+    "hash": "6e80d1760e07840292522eeac7c25505d9e04b4d8be5b3dfb909f88b0d4f622e"
+  },
+  {
+    "name": "prepareNavigationState",
+    "hash": "a16b9892167005357236956cb49128a4de34aa1c7888c1fd2b2ad0042473a41d"
+  },
+  {
+    "name": "assertNavigationAmounts",
+    "hash": "1a08ef4b88d4369a35741a477e0d40acd9432d3800c0564b529253fe8089ce2b"
+  },
+  {
+    "name": "navigationCell",
+    "hash": "618a119f7d6b45fec085a503ce9f02f4acce1a456a39b0aa83f9eaff2f50f592"
+  },
+  {
+    "name": "navigationCells",
+    "hash": "905df5edeb03ece579650363785abff8a18e3d3d5ef7a73dfd9cef9ca7f81435"
+  },
+  {
+    "name": "NAVIGATION_PERMISSION_UNIVERSE",
+    "hash": "eb5c666845608358095788cb66694f7ab6a21ec2331db1bd9044bdb230b4cc0e"
+  }
+];
+function runnerStatementName(node: ts.Statement, source: ts.SourceFile): string | undefined {
+  if (ts.isFunctionDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) return node.name?.text;
+  if (ts.isVariableStatement(node)) return node.declarationList.declarations.map(declaration => declaration.name.getText(source)).join(",");
+  if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "afterEach") return "afterEach";
+}
+function assertRunnerFingerprints(source: ts.SourceFile): void {
+  const declarations = source.statements.flatMap(node => {
+    const name = runnerStatementName(node, source);
+    return name ? [{ name, node }] : [];
+  });
+  expect(declarations.map(declaration => declaration.name), "caller runner helpers: declaration set changed; rerun the runner mutants before reviewing these pins")
+    .toStrictEqual(RUNNER_FINGERPRINTS.map(pin => pin.name));
+  for (const pin of RUNNER_FINGERPRINTS) {
+    const node = declarations.find(declaration => declaration.name === pin.name)?.node;
+    expect(node && navigationFingerprint(node, source), `${source.fileName}:${pin.name}: runner fingerprint changed; rerun the runner mutants before reviewing this pin`).toBe(pin.hash);
+  }
+}
+
 interface DeclaredCallerCells { title: string; helper: string; args: readonly unknown[] }
 // Independently declared literal inputs AND outcomes; never populated at test runtime.
 const DECLARED_CALLER_CELLS: readonly DeclaredCallerCells[] = [
+{"title":"settled multi-row cross-permission viewers cannot substitute another navigation gate","helper":"navigationCells","args":["settled cross-permission multi-row caller",["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"],[["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"]],"settled"]},
+{"title":"outstanding multi-row cross-permission viewers cannot substitute another navigation gate","helper":"navigationCells","args":["outstanding cross-permission multi-row caller",["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"],[["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"]],"outstanding"]},
+{"title":"outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates","helper":"navigationCells","args":["outstanding partial recovery caller",["shape","role","manageFinance","viewVehicles","status","recovery","timestamp"],[["opening","AR","without","without","POSTED","partial","valid","opening","opening"],["opening","AR","with","with","POSTED","partial","valid","opening+link","opening"],["expense","AR","without","without","POSTED","partial","valid","expense+vehicle","expense"],["expense","AR","with","with","POSTED","partial","valid","expense+vehicle+link","expense"]],"outstanding"]},
  { title: "settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", helper: "navigationCells", args: ["settled cash sale AP", ["shape","saleTarget","viewSales","timestamp"], [
   ["cash","local","with","valid","sale+link","number+vehicle"],
   ["cash","local","without","valid","sale","number+vehicle"],
@@ -2317,7 +2613,9 @@ function assertDeclaredCallerCells(source: ts.SourceFile): void {
     const actual = call?.arguments.map(node => callerLiteral(node, message));
     expect(actual, message).toStrictEqual(declared.args);
     const cells = declared.args[declared.helper === "navigationCells" ? 2 : 0];
-    expect(Array.isArray(cells) && cells.length > 0, message).toBe(true);
+    expect(Array.isArray(cells), message + ": cells must be an array").toBe(true);
+    if (!Array.isArray(cells)) throw new Error(message);
+    expect(cells.length, message + ": declared cells must be non-empty").toBeGreaterThan(0);
   }
 }
 
@@ -2353,7 +2651,7 @@ const NAVIGATION_CALLERS: readonly (NavigationCaller & { tests: readonly string[
     tests: ["settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", "vehicle link gate checks local targets across every navigation condition"] },
 ];
 
-function permissionExports(source: ts.SourceFile): string[] {
+function callableNavigationExports(source: ts.SourceFile): string[] {
   const checker = identifierChecker(source);
   const moduleSymbol = checker.getSymbolAtLocation(source);
   if (!moduleSymbol) throw new Error(`Cannot enumerate navigation exports. ${updateTable}`);
@@ -2539,7 +2837,7 @@ function callerPin({ file, caller, exportedQuery, callee, arguments: argumentTex
 test("supplier navigation caller census pins every permission scope and binds public query behaviour", () => {
   const syntax = parse("convex/supplierNavigation.scrum869.test.ts");
   assertDeclaredCallerCells(syntax);
-  const names = permissionExports(parse("convex/utils/supplierNavigation.ts"));
+  const names = callableNavigationExports(parse("convex/utils/supplierNavigation.ts"));
   expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
   const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts", "**/_generated/**"]);
   expect(files.length, "The recursive Convex caller sweep must not be empty").toBeGreaterThan(0);
@@ -2558,6 +2856,7 @@ test("supplier navigation caller census pins every permission scope and binds pu
   }
   for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller);
   assertForwardingFingerprints();
+  assertRunnerFingerprints(syntax);
 });
 
 test("navigation export census includes renamed arrays and imported scope types", () => {
@@ -2567,7 +2866,7 @@ test("navigation export census includes renamed arrays and imported scope types"
     export function renamedArray(perms: readonly string[]): void {}
     export function renamedProperty(scope: { grants: string[] }): void {}
   `, ts.ScriptTarget.Latest, true);
-  expect(permissionExports(source), "callable exports cannot disappear through noResolve or a permissions rename")
+  expect(callableNavigationExports(source), "callable exports cannot disappear through noResolve or a permissions rename")
     .toStrictEqual(["importedScope", "renamedArray", "renamedProperty"]);
 });
 

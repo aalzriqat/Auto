@@ -216,3 +216,33 @@ documents endCursor page splitting, and
 keeps caller access on the server. These checks run public queries using
 [convex-test](https://docs.convex.dev/testing/convex-test), a mock backend;
 they do not certify the Convex platform or production.
+
+## SCRUM-943 runner integrity, round 3
+
+Every handed caller tuple must reach its final result assertion exactly once.
+The runners record completion at that assertion, compare the sequence after the
+loop and repeat the comparison during teardown, including after an early return
+or a swallowed failure. Expected row multiplicity comes from the declared cell,
+not from whether the duplicate fixture step happened to execute. Relationship
+tuples have named literal types and runtime allow-lists on every field. The
+endCursor fixture asserts its first page contains the seeded newest vehicle
+before selecting the expected bounded page.
+
+Complete declaration fingerprints of the behavioural helpers and fixture
+constants are a tripwire for the regression "who tests the test helper", requiring
+the runner mutants to run again after edits rather than proving helper correctness.
+These supplement the original 22 navigation and six forwarding fingerprints.
+The literal declaration table also includes four outstanding partial-recovery
+cells and eight cross-permission multi-row cells per statement query. Opening
+and expense recoveries with 20000 due and 10000 recovered remain outstanding.
+They are synthetic state fixtures and do not execute payment writers.
+
+The recursive production census scans .ts and excludes tests and _generated.
+It does not scan .tsx, .mts, .cts, .js or .mjs. A recursive filesystem enumeration
+on 2026-11-11 found zero non-test, non-generated files in those extensions under
+convex/; the two generated .js files are excluded. Computed loaders, code outside
+that tree, imported helper semantics and incorrectly renewed pins remain limits.
+[Vitest assertion state](https://vitest.dev/api/expect.html#expect-getstate)
+supports counting the actual final assertion, rather than loop entries. A
+finite mutant suite measures those injected faults and does not establish
+platform, concurrency or production correctness.
