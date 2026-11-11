@@ -1,6 +1,6 @@
 import type { Id } from "@/convex/_generated/dataModel";
 import { expect, test } from "vitest";
-import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, retainOpeningAllocations } from "./openingAllocationForm";
+import { buildOpeningAllocationPayload, groupOpeningAllocations, openingAllocationTotalsMatch, openingMixedFamilyAccounts, retainOpeningAllocations } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
 const groups: OpeningAllocationGroup[] = [
@@ -196,4 +196,20 @@ test("SCRUM-944: unidentified pools with different purposes on one account block
     rowKey, kind: "UNALLOCATED_LIABILITY", accountId: account, partyId: "", partyLabel: "", amount, title: "Pool", dueDate: "", note: "", purpose });
   expect(openingAllocationTotalsMatch([pool("p1", "4.000", "UNIDENTIFIED_RECEIPT"), pool("p2", "5.000", "UNIDENTIFIED_RECEIPT")], target, "JOD")).toBe(true);
   expect(openingAllocationTotalsMatch([pool("p1", "4.000", "UNIDENTIFIED_RECEIPT"), pool("p2", "5.000", "CUSTOMER_DEPOSIT")], target, "JOD")).toBe(false);
+});
+
+test("SCRUM-944: openingMixedFamilyAccounts names only the accounts the server would refuse, by cause", () => {
+  const account = (id: string) => id as Id<"chartOfAccounts">;
+  const draft = (accountId: string, rowKey: string, kind: OpeningAllocationDraft["kind"], purpose?: OpeningAllocationDraft["purpose"]): OpeningAllocationDraft =>
+    ({ rowKey, kind, accountId: account(accountId), partyId: "", partyLabel: "", amount: "1.000", title: "t", dueDate: "", note: "", purpose }) as OpeningAllocationDraft;
+  const rowsUnderTest = [
+    draft("kinds", "k1", "OTHER_PAYABLE"), draft("kinds", "k2", "SUPPLIER_PAYABLE"),
+    draft("purposes", "p1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("purposes", "p2", "UNALLOCATED_LIABILITY", "UNIDENTIFIED_RECEIPT"),
+    draft("uniform", "u1", "OTHER_PAYABLE"), draft("uniform", "u2", "OTHER_PAYABLE"),
+    draft("single", "s1", "CUSTOMER_RECEIVABLE"), draft("single", "s2", "CUSTOMER_RECEIVABLE"),
+    // A pool row whose purpose is not chosen yet is still being filled in: not reported as a purpose conflict.
+    draft("unchosen", "c1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("unchosen", "c2", "UNALLOCATED_LIABILITY"),
+  ];
+  expect(Object.fromEntries(openingMixedFamilyAccounts(rowsUnderTest))).toEqual({ kinds: "MIXED_KIND", purposes: "MIXED_PURPOSE" });
+  expect(openingMixedFamilyAccounts([]).size).toBe(0);
 });

@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
@@ -306,4 +306,47 @@ test("SCRUM-902: opening stock without cost-price access shows the access note, 
   expect(screen.getByText("OpeningAllocationStockCostAccessNeeded")).toBeTruthy();
   rerender(<OpeningAllocationEditor {...props} canReadOpeningStockCost />);
   expect(screen.queryByText("OpeningAllocationStockCostAccessNeeded")).toBeNull();
+});
+
+describe("SCRUM-944 mixed declared family", () => {
+  const payables: OpeningAllocationGroup = { accountId: "payables-a" as Id<"chartOfAccounts">, kind: "SUPPLIER_PAYABLE",
+    allowedKinds: ["SUPPLIER_PAYABLE", "OTHER_PAYABLE"], journalMinor: 9_000, label: "2000 · Payables" };
+  const payableRow = (rowKey: string, kind: "SUPPLIER_PAYABLE" | "OTHER_PAYABLE"): OpeningAllocationDraft => ({ rowKey, accountId: payables.accountId,
+    kind, partyId: "", partyLabel: "", amount: "4.500", title: "Historical balance", dueDate: "", note: "", counterpartyName: "Counterparty" });
+  const mount = (group: OpeningAllocationGroup, rows: OpeningAllocationDraft[]) => render(
+    <OpeningAllocationEditor orgId={"org-a" as Id<"organizations">} currency="JOD" groups={[group]} rows={rows} onChange={vi.fn()}
+      canSelectCustomers={false} canSelectEmployees={false} canSelectPartners={false} />);
+  const mixedAlerts = () => screen.queryAllByRole("alert").filter((alert) => /^OpeningAllocationMixed/.test(alert.textContent ?? ""));
+
+  test("rows of different kinds on one account show one alert on that account", () => {
+    language.locale = "en";
+    mount(payables, [payableRow("m1", "OTHER_PAYABLE"), payableRow("m2", "SUPPLIER_PAYABLE")]);
+    expect(mixedAlerts().map((alert) => alert.textContent)).toEqual(["OpeningAllocationMixedFamily"]);
+  });
+
+  test("control: rows of one kind on that account show no mixed-family alert", () => {
+    language.locale = "en";
+    mount(payables, [payableRow("m1", "OTHER_PAYABLE"), payableRow("m2", "OTHER_PAYABLE")]);
+    expect(mixedAlerts()).toEqual([]);
+  });
+
+  test("unidentified pools with different purposes show the purpose alert", () => {
+    language.locale = "en";
+    const pool: OpeningAllocationGroup = { accountId: "pool-a" as Id<"chartOfAccounts">, kind: "UNALLOCATED_LIABILITY",
+      allowedKinds: ["UNALLOCATED_LIABILITY"], allowedPurposes: ["CUSTOMER_DEPOSIT", "UNIDENTIFIED_RECEIPT"], journalMinor: 9_000, label: "2300 · Pool" };
+    const poolRow = (rowKey: string, purpose: "CUSTOMER_DEPOSIT" | "UNIDENTIFIED_RECEIPT"): OpeningAllocationDraft => ({ rowKey, accountId: pool.accountId,
+      kind: "UNALLOCATED_LIABILITY", partyId: "", partyLabel: "", amount: "4.500", title: "Pool", dueDate: "", note: "", purpose });
+    mount(pool, [poolRow("q1", "CUSTOMER_DEPOSIT"), poolRow("q2", "UNIDENTIFIED_RECEIPT")]);
+    expect(mixedAlerts().map((alert) => alert.textContent)).toEqual(["OpeningAllocationMixedPurpose"]);
+  });
+});
+test("SCRUM-944 both mixed-family keys have a real Arabic string that differs from the English one", async () => {
+  const { dictionaries } = await import("@/lib/i18n/dictionaries");
+  for (const key of ["OpeningAllocationMixedFamily", "OpeningAllocationMixedPurpose"]) {
+    const en = (dictionaries.en as Record<string, string>)[key];
+    const ar = (dictionaries.ar as Record<string, string>)[key];
+    expect(en).toMatch(/same/);
+    expect(ar).toMatch(/[؀-ۿ]/);
+    expect(ar).not.toBe(en);
+  }
 });

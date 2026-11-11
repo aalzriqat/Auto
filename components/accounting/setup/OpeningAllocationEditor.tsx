@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { parseOpeningMoneyMinor } from "./openingMoneyInput";
 import { formatMinorAsMajor } from "@/lib/financeFeeTemplateForm";
-import { OPENING_PREPAID_EXPENSE_OPTIONS } from "./openingAllocationForm";
+import { OPENING_PREPAID_EXPENSE_OPTIONS, openingMixedFamilyAccounts } from "./openingAllocationForm";
 import type { OpeningAllocationDraft, OpeningAllocationGroup } from "./openingAllocationForm";
 
 let allocationSeq = 0;
@@ -168,6 +168,8 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
     return true;
   }
 
+  const mixedFamilyByAccount = openingMixedFamilyAccounts(rows);
+
   return (
     <section aria-label={t("OpeningAllocationSection")} className="space-y-4">
       <div>
@@ -194,6 +196,9 @@ export function OpeningAllocationEditor({ orgId, currency, groups, rows, onChang
             </div>
             {!maySelect && <p className="text-xs text-amber-700" role="alert">{t("OpeningAllocationPermissionNeeded")}</p>}
             {noEligibleParty && <p className="text-xs text-amber-700" role="status">{t("OpeningAllocationNoEligibleParty")}</p>}
+            {mixedFamilyByAccount.has(group.accountId) && <p className="text-xs text-amber-700" role="alert">
+              {t(mixedFamilyByAccount.get(group.accountId) === "MIXED_PURPOSE" ? "OpeningAllocationMixedPurpose" : "OpeningAllocationMixedFamily")}
+            </p>}
             {groupRows.map((row) => (
               <div key={row.rowKey} className="space-y-3 rounded-md bg-muted/40 p-3">
                 {group.allowedKinds && group.allowedKinds.length > 1 && <div className="space-y-1">
