@@ -197,7 +197,7 @@ async function openingFixture(state: "foreign" | "pending" | "posted", finance: 
 }
 
 async function expenseVehicleFixture(hasVehiclePermission: boolean) {
-  const s = await seedViewer("view:hasVehiclePermission", hasVehiclePermission);
+  const s = await seedViewer("view:vehicles", hasVehiclePermission);
   const expenseId = await s.t.run(async ctx => {
     const id = await ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId, title: "Synthetic vehicle transport", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" });
     await ctx.db.insert("supplierCostRecoveries", { orgId: s.orgId, supplierId: s.supplierId, vehicleId: s.vehicleId, expenseId: id, sourceEventKey: "vehicle-door", sourcedFromName: "Synthetic supplier bearer", amountDueMinor: 20000, amountRecoveredMinor: 0, currency: "JOD", status: "OPEN", receiptSeq: 0, createdBy: s.userId, createdAt: NOW, updatedAt: NOW });
@@ -227,7 +227,7 @@ async function expectHiddenNativeVehicle(state: HiddenState) {
 }
 
 async function expectHiddenSaleVehicle(state: HiddenState, hasVehiclePermission: boolean) {
-  const s = await seed(["view:finance", "view:cost_price", "view:sales", ...(hasVehiclePermission ? ["view:hasVehiclePermission"] : [])]);
+  const s = await seed(["view:finance", "view:cost_price", "view:sales", ...(hasVehiclePermission ? ["view:vehicles"] : [])]);
   const { saleId } = await financedSale(s);
   await s.t.run(ctx => ctx.db.patch(saleId, { applicationId: undefined }));
   await hideVehicle(s, state);

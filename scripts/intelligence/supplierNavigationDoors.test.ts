@@ -2230,7 +2230,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "expenseVehicleFixture",
-    "hash": "618671deb6b9b2f9d86ed8f7c915eb3f3fe964220aabe5cd7f9d48bd9a4bf488"
+    "hash": "1a1b612d1353dfa11e28c6b01577b7d54716a8fe6a6000cd2c18abdd44212dc7"
   },
   {
     "name": "expectHiddenExpenseVehicle",
@@ -2242,7 +2242,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "expectHiddenSaleVehicle",
-    "hash": "73e5c3abe4170baf2c9c9a03e52e8a4b9e8acf44d87e12421e1a5ce3c63cdf9e"
+    "hash": "a1ebfd3ad76092c3aa79fbfc0704da2440dcc68fe81d58094f6c2661b47f70d9"
   },
   {
     "name": "expectedSaleVehicleCell",
