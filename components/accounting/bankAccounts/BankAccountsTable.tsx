@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Star, XCircle } from "lucide-react";
+import { Loader2, Pencil, Star, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -14,6 +14,7 @@ type BankAccountsTableProps = {
   t: Translate;
   onSetReconciliationTarget: (bankAccountId: BankAccountSummary["_id"]) => void;
   onDeactivate: (bankAccountId: BankAccountSummary["_id"]) => void;
+  onEditOpening: (account: BankAccountSummary) => void;
 };
 
 export function BankAccountsTable({
@@ -23,6 +24,7 @@ export function BankAccountsTable({
   t,
   onSetReconciliationTarget,
   onDeactivate,
+  onEditOpening,
 }: Readonly<BankAccountsTableProps>) {
   return (
     <div className="space-y-3">
@@ -79,6 +81,17 @@ export function BankAccountsTable({
                         >
                           {settingTarget && <Loader2 className="h-4 w-4 animate-spin" />}
                           {t("MakeReconciliationTarget" as any)}
+                        </Button>
+                      )}
+                      {canManageFinance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={t("EditBankOpening" as any)}
+                          onClick={() => onEditOpening(account)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                          {t("EditBankOpening" as any)}
                         </Button>
                       )}
                       {canManageFinance && (

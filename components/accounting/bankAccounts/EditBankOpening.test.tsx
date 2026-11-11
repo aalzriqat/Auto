@@ -6,6 +6,17 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { dictionaries } from "@/lib/i18n/dictionaries";
+vi.mock("@/components/providers/LanguageProvider", async () => {
+  const { dictionaries: dicts } = await import("@/lib/i18n/dictionaries");
+  return {
+    useLanguage: () => ({
+      locale: "en",
+      isRtl: false,
+      t: (key: string) => (dicts as Record<string, Record<string, string>>).en[key] ?? key,
+    }),
+  };
+});
+
 import { BankAccountsTable } from "./BankAccountsTable";
 import { EditBankOpeningDialog } from "./EditBankOpeningDialog";
 import { minorToAmountInput, parseSignedOpeningMoneyMinor } from "./editBankOpeningInput";
