@@ -1,0 +1,54 @@
+{
+  "id": "bank-opening-edit-screen-saves-exact-minor-amount-and-date",
+  "fingerprint": "1b16611b955779f45fccc61f87971fbae13cf2e7be4a24e355e16da5b0dbd861",
+  "domain": "screen",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum945-bank-stated-opening",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccountsScreen.editOpening",
+      "input": {
+        "renderer": "jsdom",
+        "amount": "4000.000",
+        "currency": "JOD"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "value": 1,
+      "observable": "update.callCount"
+    },
+    {
+      "value": 4000000,
+      "observable": "update.openingBalanceMinor"
+    },
+    {
+      "value": true,
+      "observable": "update.args.exactlyFourFields"
+    },
+    {
+      "value": true,
+      "observable": "dialog.closed"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#c22465",
+      "digest": "689dad8b9d6c5ccb59e1cf37e13e0439e09ad0712b13facbfd4305bd325c2519"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/BankAccountsTab.editOpening.test.tsx",
+    "testName": "a finance manager saves the dialog and bankAccounts.update gets exactly the org, bank, minor amount and date"
+  }
+}
