@@ -22,15 +22,19 @@
         "forwarding": "AUTH_AND_FORWARDING_FUNCTION_FINGERPRINTS",
         "cells": "DECLARED_LITERAL_CELLS_TOP_LEVEL_AWAIT",
         "dynamic": "REFUSE_LITERAL_IMPORT_REQUIRE_AND_IMPORT_EQUALS",
-        "runnerHelpers": "COMPLETE_DECLARATION_FINGERPRINTS_RERUN_RUNNER_MUTANTS",
+        "runnerHelpers": "CLOSED_FILE_OVERRIDE_REFUSAL_RUNTIME_PINS",
         "excludedExtensions": [
           ".tsx",
           ".mts",
           ".cts",
           ".js",
-          ".mjs"
+          ".mjs",
+          ".cjs",
+          ".jsx"
         ],
-        "nonTestNonGeneratedExcludedExtensionFiles": 0
+        "nonTestNonGeneratedExcludedExtensionFiles": 0,
+        "receipts": "INDEPENDENT_LITERAL_COUNT_PER_BOUND_TITLE_IN_TEARDOWN",
+        "dependencies": "SUPPLIER_CACHE_PINS_AND_EXACT_AUTH_CACHE_CONTRACTS"
       }
     }
   ],
@@ -67,5 +71,5 @@
     "testName": "supplier navigation caller census pins every permission scope and binds public query behaviour"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "77b25e39a00f845a8755d146a85c3140f18be5060fa457330bd32f67ce875f2d"
+  "fingerprint": "f628569a81dcd55143ed3767bafb6b5e36d38268ecc821dc34f2c46ad4f021fe"
 }

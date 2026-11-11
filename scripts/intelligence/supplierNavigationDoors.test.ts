@@ -2161,16 +2161,16 @@ const RUNNER_FINGERPRINTS = [
     "hash": "079e9ff58899e99060e5639b0b62da2ab7cb4d0075aa54f82222fda6c0207771"
   },
   {
-    "name": "CallerAudit",
-    "hash": "dd50a8a0c72cb76b207b861f2e0096331d30151fd98fac65921f0de474b78110"
-  },
-  {
     "name": "callerAudits",
     "hash": "f6f323808f532e2862a1efa11630e2b7b37718016ca7e0763250b90e8f4099c4"
   },
   {
+    "name": "EXPECTED_CALLER_RECEIPTS",
+    "hash": "bed4a0cea0e8d56f6f65aae935110157eabbc398e3c710cd56adcbba20c93c0f"
+  },
+  {
     "name": "afterEach",
-    "hash": "fd6a563f6ddb4c74e65fa6ab65962623891d557558f6119f8053f678e944ef5d"
+    "hash": "25a33069f7072f49c153bdcaceb0d370a3c84af77dd0818edc4d827195033c5d"
   },
   {
     "name": "beginCallerAssertions",
@@ -2182,15 +2182,11 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "assertCallerResult",
-    "hash": "b6bb6b979d1f4f884a47f68ddfa3a4bfff46b88763ef6bd6e62909ea9c4260ed"
+    "hash": "b75a023dca3d468185de49ff0951e462865b26367380dfb059c3b36f49f25e92"
   },
   {
     "name": "seed",
     "hash": "4aae6a4ddacc3ee94ac3aa45e971d44b101a67ce256d2e2b22cda553d5ebfbc6"
-  },
-  {
-    "name": "Seed",
-    "hash": "9124a7e4f2e36d23cd9a6790a5f3479997367fc1c464bbfe838075aab037dc4a"
   },
   {
     "name": "payable",
@@ -2207,14 +2203,6 @@ const RUNNER_FINGERPRINTS = [
   {
     "name": "financedSale",
     "hash": "b8e67723c77ed07c3552588babf87f8d42cbf0647bbc273c1229423c5f6a7825"
-  },
-  {
-    "name": "TargetPermission",
-    "hash": "ce6233112cdc1fa004a93220793559fd9f9437b9a9a179bf11690c8067313972"
-  },
-  {
-    "name": "HiddenState",
-    "hash": "a1dd027e4be556c48924d2074d6429248e4b66103f9fe2322915b840b8a10a64"
   },
   {
     "name": "seedViewer",
@@ -2285,26 +2273,6 @@ const RUNNER_FINGERPRINTS = [
     "hash": "9a22ebf391d6b45f8a4fc8f16cb26abc859c50dfcabea1d20eb4b70c43785892"
   },
   {
-    "name": "NavigationCell",
-    "hash": "4035f7bf688856cc72df226fc3e6024df22cf186d54cbad8a41e60fde3751e96"
-  },
-  {
-    "name": "NavigationOutcome",
-    "hash": "9a8db53a5f95ef1bd52659971371d15cf1930b5793e231afff178876ee9840a6"
-  },
-  {
-    "name": "NavigationLabel",
-    "hash": "4ec1252e3cc632d80021c5bd9e4ce8f6cf70a9507d50b85597aad62702ed95a5"
-  },
-  {
-    "name": "NavigationTarget",
-    "hash": "13f9b6e310d7d1eeba0e855b7435f03dcd14530e1aa28dbcbf59e886a84f5079"
-  },
-  {
-    "name": "NavigationFixture",
-    "hash": "bfb9637f364fc13eb9708d460523ff2507757e112669c30089a6a2fcfaffe0df"
-  },
-  {
     "name": "NAVIGATION_DEAL_NUMBERS",
     "hash": "ca68692ce425ae728f80f13f5528a0159394628de751bbfd079f955cb08b6fe0"
   },
@@ -2330,7 +2298,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "seedNavigationCell",
-    "hash": "877d4683489fddc0f239dd0af107f146e641548a491dbdbf77b8e66c44dea6a2"
+    "hash": "0278e650f9bb6839311e86ffd51d926f2d6736e9e3869178f1cb7fd99e47b256"
   },
   {
     "name": "readBackNavigationIdentity",
@@ -2365,36 +2333,20 @@ const RUNNER_FINGERPRINTS = [
     "hash": "8777b9616cd01a38f0a0027374f7a08d4e813a4d278d7686f0552c0048aa93e4"
   },
   {
-    "name": "RelationshipKind",
-    "hash": "784e8067bbd1abba64107432edba320d57db7ec95a791a3e36d8786ea8c82a43"
-  },
-  {
-    "name": "RelationshipCondition",
-    "hash": "596160cf8eb2cb90e40c78673dee99543961646cddf4f3637ef3650797d75032"
-  },
-  {
-    "name": "RelationshipBase",
-    "hash": "cea72b46e45d60ea9234e89d41abc2a45eb30c6df996cc5d47a7e2473b49cbce"
-  },
-  {
-    "name": "RelationshipCell",
-    "hash": "641b6e01e4492ba8234a44979c234814cd268b84ebed1f86b2c7b7c4f2d68b5a"
-  },
-  {
     "name": "validateRelationshipCell",
-    "hash": "9d2fce10d0a59b553bac78a694d2c2d503fa4b2a13a314cbde58bd3efa6faae6"
+    "hash": "fdd67f8b1f7dbb1d19854b89e3e1b928bd60fb887786fdc3933645e6a09ca238"
   },
   {
     "name": "seedRelationshipCell",
-    "hash": "0b97342e7843d6a835bff4a50e54ec4ff94f60e4c8dae752c3189004b8f1e9f4"
+    "hash": "12b5cc92b6fdbbeef22cb7930f06fde1da5de9858cae46d3dad0f6a9313cc401"
   },
   {
     "name": "relationshipCells",
-    "hash": "6cddf2c0cc6316d6c6a1a050dc2165b55d9f8aea0637cccf0ce0037dd399f2ca"
+    "hash": "ff6dbfd788a7cefbf4f07c3b9d0632e56c499664e792f4b447acc736d270536a"
   },
   {
     "name": "relationshipPagination",
-    "hash": "62fca8edab91580b04775a066129a3e12a8548133c703bd97d46c15cb7eb29dc"
+    "hash": "524ab181cf1f07ffc52c73fecc23cda5f281af066d6cc188c9faba06d732c028"
   },
   {
     "name": "duplicateRelationship",
@@ -2410,34 +2362,258 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "navigationCell",
-    "hash": "618a119f7d6b45fec085a503ce9f02f4acce1a456a39b0aa83f9eaff2f50f592"
+    "hash": "1af8e6e811505701617559492e3e48d0b9f8a36288e4207c2efa2e7ece44d12d"
   },
   {
     "name": "navigationCells",
-    "hash": "905df5edeb03ece579650363785abff8a18e3d3d5ef7a73dfd9cef9ca7f81435"
+    "hash": "52567d423c68d93539669c99591149462a48b562468535dd84c6a0ccfa9b1754"
   },
   {
     "name": "NAVIGATION_PERMISSION_UNIVERSE",
     "hash": "eb5c666845608358095788cb66694f7ab6a21ec2331db1bd9044bdb230b4cc0e"
+  },
+  {
+    "name": "assertAdditionalReceivable",
+    "hash": "fec7b556c8dd1f0fe974d0f0e2e8b925bbc5b6d0b31184853c0a035c6e5069dc"
+  },
+  {
+    "name": "distinctNavigationVehicle",
+    "hash": "481109e3dca74af508f122fb6ff41e6be11bf2564ebc10c639ccea3e3add1fee"
+  },
+  {
+    "name": "mixedExpectedSections",
+    "hash": "21197b8b6685e5edfffac7605653b6b3b7293b67c9d150f11efb7f1de075281e"
+  },
+  {
+    "name": "mixedNavigationCell",
+    "hash": "a342aeedc14316112887b46e18b80a2661171d6a60d22ddd3404a86f6c8c5230"
+  },
+  {
+    "name": "prepareRelationshipVariation",
+    "hash": "191f50a76c800653e71fc6bc7f4c2366d8bce04e00431737ee4c753dc8fb9ff8"
+  },
+  {
+    "name": "crossSectionNavigationCell",
+    "hash": "3991c529cc9f78ea8e1aa54796c5e499b31ed3ce76b6d14cc5be2e7637ded6fc"
   }
 ];
+const RUNNER_IMPORTS = [
+  "b0a008303bd7dd83483384407ff788fe9d9da67029fa2bb37289dd76e3845b21",
+  "29f52adfb5477df879b7daf0ebb54ac1d11b20d3a878ba41748f99929f5cc349",
+  "56d37a548acb0ca09ce17a1fe75979aa6621e08e4765d7c1d5691e8bf2571fce",
+  "1d24588be79419701477735ebf1a15265811f40fbcf64f989fd87bbf3a32428f",
+  "801101403874f89a4fb73e5218cfba4663adebde5809f5f260da52b010aadf8a",
+  "bc79507e1407facfbd1d26c71d764480a4d79f5b562c4c9234d8d64601a16ea7",
+  "2e51ef393b8a135f438084288ba83ebc31b6f0e78e4e06c8726fbe5598635a0e",
+  "9cda4ea18978108f13502324effd434f59c3bae61699907d9c403f0d0c4bb47b",
+  "7bc02c75159560963e6c480d3908f59f28c8f4acd7e9103254113fa66469c4a7",
+  "f041614ce768aa271376dd4353d815be0e7fd58e9f3e68b8f34c3922fb87246a",
+  "c8212891ce9be0db845562d22e4ac6547b511081894b088ba8c43c31bb04a6f2"
+];
+const RUNNER_TYPES = [
+  {
+    "name": "CallerAudit",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "Seed",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "TargetPermission",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "HiddenState",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "NavigationCell",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "NavigationOutcome",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "NavigationLabel",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "NavigationTarget",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "NavigationFixture",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "RelationshipKind",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "RelationshipCondition",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "RelationshipBase",
+    "kind": "TypeAliasDeclaration"
+  },
+  {
+    "name": "RelationshipCell",
+    "kind": "TypeAliasDeclaration"
+  }
+];
+
 function runnerStatementName(node: ts.Statement, source: ts.SourceFile): string | undefined {
   if (ts.isFunctionDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) return node.name?.text;
   if (ts.isVariableStatement(node)) return node.declarationList.declarations.map(declaration => declaration.name.getText(source)).join(",");
   if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "afterEach") return "afterEach";
 }
+
+function runnerRefusal(source: ts.SourceFile, node: ts.Node, reason: string): never {
+  const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+  throw new Error(`${source.fileName}:${line}: ${reason}: ${node.getText(source).slice(0, 160)}; rerun the runner mutants before reviewing this statement`);
+}
+
+function runnerRegistration(node: ts.Statement, source: ts.SourceFile): boolean {
+  if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) return false;
+  const call = node.expression;
+  return ["test", "describe"].includes(call.expression.getText(source)) &&
+    call.arguments.length === 2 && ts.isStringLiteral(call.arguments[0]!) &&
+    (ts.isArrowFunction(call.arguments[1]!) || ts.isFunctionExpression(call.arguments[1]!));
+}
+
+function runnerRoot(node: ts.Node): string | undefined {
+  if (ts.isIdentifier(node)) return node.text;
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return runnerRoot(node.expression);
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) return runnerRoot(node.expression);
+  if (ts.isCallExpression(node)) return runnerRoot(node.expression);
+}
+
+function protectedRunnerTarget(node: ts.Node, protectedNames: ReadonlySet<string>): boolean {
+  const name = runnerRoot(node);
+  if (name) return protectedNames.has(name);
+  // Destructuring writes retain the same prohibition, including nested targets.
+  if (ts.isShorthandPropertyAssignment(node)) return protectedNames.has(node.name.text);
+  if (ts.isPropertyAssignment(node)) return protectedRunnerTarget(node.initializer, protectedNames);
+  if (ts.isSpreadAssignment(node) || ts.isSpreadElement(node)) return protectedRunnerTarget(node.expression, protectedNames);
+  if (ts.isObjectLiteralExpression(node)) return node.properties.some(child => protectedRunnerTarget(child, protectedNames));
+  if (ts.isArrayLiteralExpression(node)) return node.elements.some(child => protectedRunnerTarget(child, protectedNames));
+  return false;
+}
+
+function runnerWriteTarget(node: ts.Node): ts.Node | undefined {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+    node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return node.left;
+  if (ts.isDeleteExpression(node)) return node.expression;
+  if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+    [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)) return node.operand;
+}
+
+function runnerMember(node: ts.Node): string | undefined {
+  if (ts.isIdentifier(node)) return node.text;
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) return node.argumentExpression.text;
+}
+
+function refuseRunnerCall(source: ts.SourceFile, node: ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression,
+  protectedNames: ReadonlySet<string>, teardown: ts.Statement | undefined): void {
+  const callee = ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
+  const member = runnerMember(callee);
+  const rootName = runnerRoot(callee);
+  if (rootName && ["test", "describe"].includes(rootName) && member !== rootName) runnerRefusal(source, node, "modified test registrations are forbidden");
+  if (member === "eval" || member === "Function") runnerRefusal(source, node, "dynamic execution is outside the runner census");
+  const hooks = ["beforeAll", "beforeEach", "afterAll", "afterEach", "onTestFinished", "onTestFailed", "aroundEach", "aroundAll"];
+  if (member && hooks.includes(member) && node.parent !== teardown) runnerRefusal(source, node, "only the pinned top-level afterEach is allowed");
+  if (runnerRoot(callee) === "expect" && ["extend", "addSnapshotSerializer", "addEqualityTesters", "setState"].includes(member ?? "")) {
+    runnerRefusal(source, node, "matcher customization is forbidden");
+  }
+  if (runnerRoot(callee) !== "vi") return;
+  if (["mock", "doMock", "hoisted"].includes(member ?? "")) runnerRefusal(source, node, "runner mocks are forbidden");
+  if (!["spyOn", "stubGlobal"].includes(member ?? "") || ts.isTaggedTemplateExpression(node)) return;
+  const target = node.arguments?.[0];
+  if (target && (protectedRunnerTarget(target, protectedNames) || ts.isStringLiteral(target) && protectedNames.has(target.text))) {
+    runnerRefusal(source, node, "mocking a protected runner binding is forbidden");
+  }
+}
+
+function runnerProtectedNames(source: ts.SourceFile): ReadonlySet<string> {
+  const names = [...RUNNER_FINGERPRINTS.map(pin => pin.name), ...RUNNER_TYPES.map(pin => pin.name)];
+  for (const node of source.statements.filter(ts.isImportDeclaration)) {
+    const clause = node.importClause;
+    if (clause?.name) names.push(clause.name.text);
+    const bindings = clause?.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name.text);
+    if (bindings && ts.isNamedImports(bindings)) names.push(...bindings.elements.map(binding => binding.name.text));
+  }
+  return new Set(names);
+}
+
+function refuseRunnerOverrides(source: ts.SourceFile): void {
+  const protectedNames = runnerProtectedNames(source);
+  const teardown = source.statements.find(node => runnerStatementName(node, source) === "afterEach");
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && ["eval", "Function"].includes(node.text)) runnerRefusal(source, node, "dynamic execution identifier is forbidden");
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) runnerRefusal(source, node, "classes are forbidden in the behavioural test file");
+    const target = runnerWriteTarget(node);
+    if (target && protectedRunnerTarget(target, protectedNames)) runnerRefusal(source, node, "write to a protected top-level runner binding");
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node)) refuseRunnerCall(source, node, protectedNames, teardown);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+}
+
 function assertRunnerFingerprints(source: ts.SourceFile): void {
-  const declarations = source.statements.flatMap(node => {
+  refuseRunnerOverrides(source);
+  const imports = source.statements.filter(ts.isImportDeclaration);
+  expect(imports.map(node => navigationFingerprint(node, source)), "behavioural runner imports changed; review these statements: " + imports.map(node => node.getText(source)).join(" | ")).toStrictEqual(RUNNER_IMPORTS);
+  const declarations: { name: string; node: ts.Statement }[] = [];
+  for (const node of source.statements) {
+    if (ts.isImportDeclaration(node) || runnerRegistration(node, source)) continue;
     const name = runnerStatementName(node, source);
-    return name ? [{ name, node }] : [];
-  });
-  expect(declarations.map(declaration => declaration.name), "caller runner helpers: declaration set changed; rerun the runner mutants before reviewing these pins")
+    if (!name) runnerRefusal(source, node, "unrecognized top-level statement");
+    declarations.push({ name, node });
+  }
+  const types = declarations.filter(({node}) => ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node));
+  expect(types.map(({name, node}) => ({name, kind: ts.SyntaxKind[node.kind]})), "review the type declaration inventory").toStrictEqual(RUNNER_TYPES);
+  const runtime = declarations.filter(({node}) => !ts.isTypeAliasDeclaration(node) && !ts.isInterfaceDeclaration(node));
+  expect(runtime.map(declaration => declaration.name), "caller runner helpers: closed declaration set changed; rerun the runner mutants before reviewing these pins")
     .toStrictEqual(RUNNER_FINGERPRINTS.map(pin => pin.name));
   for (const pin of RUNNER_FINGERPRINTS) {
-    const node = declarations.find(declaration => declaration.name === pin.name)?.node;
+    const node = runtime.find(declaration => declaration.name === pin.name)?.node;
     expect(node && navigationFingerprint(node, source), `${source.fileName}:${pin.name}: runner fingerprint changed; rerun the runner mutants before reviewing this pin`).toBe(pin.hash);
   }
 }
+
+function assertCallerReceiptCounts(source: ts.SourceFile): void {
+  const counts = source.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations[0]?.name.getText(source) === "EXPECTED_CALLER_RECEIPTS");
+  if (!counts || !ts.isVariableStatement(counts)) throw new Error("missing literal EXPECTED_CALLER_RECEIPTS oracle");
+  const initializer = counts.declarationList.declarations[0]?.initializer;
+  if (!initializer || !ts.isObjectLiteralExpression(initializer)) throw new Error("receipt counts must be a literal object");
+  const actual = Object.fromEntries(initializer.properties.map(property => {
+    if (!ts.isPropertyAssignment(property) || !ts.isStringLiteral(property.name) || !ts.isNumericLiteral(property.initializer)) {
+      throw new Error("receipt counts require literal title and integer pairs");
+    }
+    return [property.name.text, Number(property.initializer.text)];
+  }));
+  const expected = Object.fromEntries(DECLARED_CALLER_CELLS.map(declared => {
+    const cells = declared.args[declared.helper === "navigationCells" ? 2 : 0];
+    if (!Array.isArray(cells)) throw new Error(declared.title + ": declared cells unavailable");
+    return [declared.title, cells.length];
+  }));
+  // Old door cells also owe receipts; their literal tuples are checked by the door census.
+  for (const title of Object.keys(actual as Record<string, unknown>)) {
+    if (title in expected) continue;
+    const body = literalTestBody(source, title);
+    const call = body?.statements[0] && awaitedCallerCall(body.statements[0]);
+    const cells = call?.arguments[2];
+    if (!cells || !ts.isArrayLiteralExpression(cells)) throw new Error(title + ": receipt oracle has no literal bound cells");
+    expected[title] = cells.elements.length;
+  }
+  expect(actual, "literal receipt counts must match independent declared cells; never renew the cells and declaration together to silence a failure").toStrictEqual(expected);
+}
+
 
 interface DeclaredCallerCells { title: string; helper: string; args: readonly unknown[] }
 // Independently declared literal inputs AND outcomes; never populated at test runtime.
@@ -2561,6 +2737,17 @@ const DECLARED_CALLER_CELLS: readonly DeclaredCallerCells[] = [
   ["SOURCED","with","SOURCED","vehicle","endCursor"],
   ["OWNED","with","OWNED_ON_ACCOUNT","vehicle","endCursor"],
  ]] },
+{"title":"settled distinct cached vehicle and sale targets preserve every AP and AR context","helper":"navigationCells","args":["settled mixed vehicle/sale",["shape","mixTarget","mixState","validOutcome","validLabel"],[["native","vehicle","deleted","vehicle+link","vehicle","none","none"],["native","vehicle","foreign","vehicle+link","vehicle","none","none"],["cash","saleTarget","deleted","sale+link","number+vehicle","none","none"],["cash","saleTarget","foreign","sale+link","number+vehicle","none","none"]],"settled"]},
+{"title":"settled distinct cached application expense and opening targets preserve every context","helper":"navigationCells","args":["settled mixed application/expense/opening",["shape","mixTarget","mixState","validOutcome","validLabel"],[["financed","applicationTarget","missing","application+link","number+vehicle","sale","number+vehicle"],["financed","applicationTarget","foreign","application+link","number+vehicle","sale","number+vehicle"],["expense","expenseTarget","deleted","expense+vehicle+link","expense","none","none"],["expense","expenseTarget","foreign","expense+vehicle+link","expense","none","none"],["opening","draftTarget","foreign","opening+link","opening","none","none"],["opening","draftTarget","missing","opening+link","opening","none","none"]],"settled"]},
+{"title":"settled renamed roles retain denied and admitted navigation gates","helper":"navigationCells","args":["settled renamed caller",["shape","roleName","viewSales","viewVehicles","manageFinance","timestamp","status"],[["cash","Limited reviewer","without","without","without","valid","POSTED","sale","number+vehicle"],["cash","Limited reviewer","with","without","without","valid","POSTED","sale+link","number+vehicle"],["native","Limited reviewer","without","without","without","valid","POSTED","vehicle","vehicle"],["native","Limited reviewer","without","with","without","valid","POSTED","vehicle+link","vehicle"],["opening","Limited reviewer","without","without","without","valid","POSTED","opening","opening"],["opening","Limited reviewer","without","without","with","valid","POSTED","opening+link","opening"]],"settled"]},
+{"title":"outstanding distinct cached vehicle and sale targets preserve every AP and AR context","helper":"navigationCells","args":["outstanding mixed vehicle/sale",["shape","mixTarget","mixState","validOutcome","validLabel"],[["native","vehicle","deleted","vehicle+link","vehicle","none","none"],["native","vehicle","foreign","vehicle+link","vehicle","none","none"],["cash","saleTarget","deleted","sale+link","number+vehicle","none","none"],["cash","saleTarget","foreign","sale+link","number+vehicle","none","none"]],"outstanding"]},
+{"title":"outstanding distinct cached application expense and opening targets preserve every context","helper":"navigationCells","args":["outstanding mixed application/expense/opening",["shape","mixTarget","mixState","validOutcome","validLabel"],[["financed","applicationTarget","missing","application+link","number+vehicle","sale","number+vehicle"],["financed","applicationTarget","foreign","application+link","number+vehicle","sale","number+vehicle"],["expense","expenseTarget","deleted","expense+vehicle+link","expense","none","none"],["expense","expenseTarget","foreign","expense+vehicle+link","expense","none","none"],["opening","draftTarget","foreign","opening+link","opening","none","none"],["opening","draftTarget","missing","opening+link","opening","none","none"]],"outstanding"]},
+{"title":"outstanding renamed roles retain denied and admitted navigation gates","helper":"navigationCells","args":["outstanding renamed caller",["shape","roleName","viewSales","viewVehicles","manageFinance","timestamp","status"],[["cash","Limited reviewer","without","without","without","valid","POSTED","sale","number+vehicle"],["cash","Limited reviewer","with","without","without","valid","POSTED","sale+link","number+vehicle"],["native","Limited reviewer","without","without","without","valid","POSTED","vehicle","vehicle"],["native","Limited reviewer","without","with","without","valid","POSTED","vehicle+link","vehicle"],["opening","Limited reviewer","without","without","without","valid","POSTED","opening","opening"],["opening","Limited reviewer","without","without","with","valid","POSTED","opening+link","opening"]],"outstanding"]},
+{"title":"relationship renamed roles and SOLD status preserve both viewer gates","helper":"relationshipCells","args":[[["SOURCED","without","SOURCED","none","renamed"],["SOURCED","with","SOURCED","vehicle","renamed"],["OWNED","without","OWNED_ON_ACCOUNT","none","renamed"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","renamed"],["SOURCED","without","SOURCED","none","sold"],["SOURCED","with","SOURCED","vehicle","sold"],["OWNED","without","OWNED_ON_ACCOUNT","none","sold"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","sold"]]]},
+{"title":"relationship other makes and non-null continuation preserve both viewer gates","helper":"relationshipCells","args":[[["SOURCED","without","SOURCED","none","otherMake"],["SOURCED","with","SOURCED","vehicle","otherMake"],["OWNED","without","OWNED_ON_ACCOUNT","none","otherMake"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","otherMake"],["SOURCED","without","SOURCED","none","cursor"],["SOURCED","with","SOURCED","vehicle","cursor"],["OWNED","without","OWNED_ON_ACCOUNT","none","cursor"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","cursor"]]]},
+{"title":"owned relationships refuse distinct deleted and foreign vehicles beside valid stock","helper":"relationshipCells","args":[[["OWNED","without","OWNED_ON_ACCOUNT","none","mixed-deleted"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","mixed-deleted"],["OWNED","without","OWNED_ON_ACCOUNT","none","mixed-foreign"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","mixed-foreign"]]]},
+{"title":"settled mixed AP and AR keep independent denied and admitted gates","helper":"navigationCells","args":["settled mixed sections",["sectionPair","viewSales","viewVehicles","manageFinance","arOutcome","arLabel"],[["vehicle-expense","with","without","with","expense+vehicle","expense","vehicle","vehicle"],["vehicle-expense","with","with","with","expense+vehicle+link","expense","vehicle+link","vehicle"],["sale-opening","without","with","without","opening","opening","sale","number+vehicle"],["sale-opening","with","with","with","opening+link","opening","sale+link","number+vehicle"]],"settled"]},
+{"title":"outstanding mixed AP and AR keep independent denied and admitted gates","helper":"navigationCells","args":["outstanding mixed sections",["sectionPair","viewSales","viewVehicles","manageFinance","arOutcome","arLabel"],[["vehicle-expense","with","without","with","expense+vehicle","expense","vehicle","vehicle"],["vehicle-expense","with","with","with","expense+vehicle+link","expense","vehicle+link","vehicle"],["sale-opening","without","with","without","opening","opening","sale","number+vehicle"],["sale-opening","with","with","with","opening+link","opening","sale+link","number+vehicle"]],"outstanding"]},
 ];
 function callerLiteral(node: ts.Node, message: string): unknown {
   if (ts.isStringLiteral(node)) return node.text;
@@ -2602,10 +2789,10 @@ function isExplicitCallerCell(node: ts.Node, source: ts.SourceFile): boolean {
 }
 
 function assertDeclaredCallerCells(source: ts.SourceFile): void {
-  expect(callerCellRegistrationTitles(source).sort(), "caller cells: actual and independently declared title sets must match in both directions")
+  expect(callerCellRegistrationTitles(source).sort(), "caller cells: actual and independently declared title sets must match in both directions; never renew the cells and declaration together to silence a failure")
     .toStrictEqual(DECLARED_CALLER_CELLS.map(cell => cell.title).toSorted());
   for (const declared of DECLARED_CALLER_CELLS) {
-    const message = `supplier caller / ${declared.title}: executed caller cells must equal the non-empty declared literal cells`;
+    const message = `supplier caller / ${declared.title}: executed caller cells must equal the non-empty declared literal cells; never renew the cells and declaration together to silence a failure`;
     const body = literalTestBody(source, declared.title);
     expect(body?.statements.length, message).toBe(1);
     const call = body?.statements[0] && awaitedCallerCall(body.statements[0]);
@@ -2837,6 +3024,7 @@ function callerPin({ file, caller, exportedQuery, callee, arguments: argumentTex
 test("supplier navigation caller census pins every permission scope and binds public query behaviour", () => {
   const syntax = parse("convex/supplierNavigation.scrum869.test.ts");
   assertDeclaredCallerCells(syntax);
+  assertCallerReceiptCounts(syntax);
   const names = callableNavigationExports(parse("convex/utils/supplierNavigation.ts"));
   expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
   const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts", "**/_generated/**"]);
@@ -2856,6 +3044,7 @@ test("supplier navigation caller census pins every permission scope and binds pu
   }
   for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller);
   assertForwardingFingerprints();
+  assertCacheFingerprints();
   assertRunnerFingerprints(syntax);
 });
 
@@ -2884,3 +3073,71 @@ test("navigation census refuses literal dynamic imports and require loaders", ()
     expect(() => refuseDynamicNavigation(source), `dynamic loader cell: ${form}`).toThrow(/dynamic navigation import\/require/);
   }
 });
+
+test("caller runner census refuses unlisted statements imports and whole-file overrides", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const forms = [
+    'relationshipCells = async () => {};',
+    '{ navigationCells = async () => {}; }',
+    'class RunnerSetup { static { relationshipCells = async () => {}; } }',
+    'test("older body replacement", () => { navigationCells = async () => {}; });',
+    'test("nested replacement", () => { function nested() { verifyCallerAssertions = () => {}; } nested(); });',
+    'assertCallerResult = () => {}; verifyCallerAssertions = () => {};',
+    'test("compound", () => { callerAudits.length += 1; });',
+    'test("update", () => { callerAudits.length++; });',
+    'test("delete", () => { delete callerAudits[0]; });',
+    'test("destructure", () => { ({ navigationCells } = replacement); });',
+    'test("class expression", () => { const setup = class {}; });',
+    'expect.extend({});',
+    'test("spoof title", () => { expect.setState({ currentTestName: "other" }); });',
+    'test("write state", () => { expect.getState().currentTestName = "other"; });',
+    'test("matcher inside", () => { expect["addEqualityTesters"]([]); });',
+    'expect.addSnapshotSerializer({});',
+    'beforeEach(() => expect.extend({}));',
+    'test("nested hook", () => { afterAll(() => {}); });',
+    'describe("older suite", () => { test.' + 'only("selection", () => {}); });',
+    'vi.mock("vitest");',
+    'vi.doMock("./supplierStatement");',
+    'vi.hoisted(() => {});',
+    'vi.spyOn(expect, "getState");',
+    'vi.spyOn(callerAudits, "push");',
+    'vi.spyOn(PERMISSIONS, "VIEW_SALES");',
+    'vi.stubGlobal("expect", replacement);',
+    'test("eval", () => { eval("code"); });',
+    'test("function constructor", () => { new Function("code"); });',
+    'test("tagged function", () => { Function`code`; });',
+    'import "./unreviewed-side-effect";',
+    'void 0;',
+    ';',
+  ];
+  for (const form of forms) {
+    const source = ts.createSourceFile("runner-refusal.ts", original + "\n" + form, ts.ScriptTarget.Latest, true);
+    expect(() => assertRunnerFingerprints(source), form).toThrow();
+  }
+});
+
+test("caller runner census accepts comment-only and whitespace-only controls", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  for (const text of ["// formatting control\n" + original, original.replace("function verifyCallerAssertions(", "function   verifyCallerAssertions( ")]) {
+    const source = ts.createSourceFile("runner-control.ts", text, ts.ScriptTarget.Latest, true);
+    expect(() => assertRunnerFingerprints(source)).not.toThrow();
+  }
+});
+
+const CACHE_FINGERPRINTS = [
+  {
+    "name": "createSupplierReadCache",
+    "hash": "726b88e82ce936b95ac2a97c2de7da0e89c04489724f154a0e19061643fbfa88"
+  },
+  {
+    "name": "readCached",
+    "hash": "9c6e8ba9459ea6cbb07a0021de203bba752846d6496d40ff19e77b8ebe2ceebd"
+  }
+];
+function assertCacheFingerprints(): void {
+  const source = parse("convex/utils/supplierReadCache.ts");
+  for (const pin of CACHE_FINGERPRINTS) {
+    const node = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === pin.name);
+    expect(node && navigationFingerprint(node, source), "supplier read cache / " + pin.name + ": rerun identity and cache mutants before reviewing this supplier-specific pin").toBe(pin.hash);
+  }
+}

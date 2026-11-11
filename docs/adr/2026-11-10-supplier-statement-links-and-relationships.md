@@ -86,16 +86,16 @@ references to the navigation module refuse and require reviewed static callers.
 
 | Forwarding site | Structural pins | Behavioural evidence |
 | --- | --- | --- |
-| `supplierStatement.settled`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 38 settled cells; 16 multi-row source/role cells; four opening/expense partial-recovery gate cells |
-| `supplierStatement.outstanding`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 721 cells; 16 multi-row source/role cells |
-| `supplierRelationships.vehicles`, SOURCED | Complete query declaration and tenancy import; exact `project(vehicle, "SOURCED", role.permissions)` arguments | Original denied/admitted cells; denied/admitted two-row, numItems 26 and endCursor cells |
-| `supplierRelationships.vehicles`, OWNED | Same declaration/import; exact `project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id)` arguments | Same conditions for owned stock |
+| `supplierStatement.settled`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 38 settled cells; 16 multi-row source/role cells; eight cross-permission cells; four opening/expense partial-recovery gate cells; 20 round-4 distinct-target, mixed-section and renamed-role cells |
+| `supplierStatement.outstanding`, AP and AR | Complete query declaration and tenancy import; exact scope initializer and both helper argument lists | Original 721 cells; 16 multi-row source/role cells; eight cross-permission cells; four outstanding partial-recovery cells; 20 round-4 distinct-target, mixed-section and renamed-role cells |
+| `supplierRelationships.vehicles`, SOURCED | Complete query declaration and tenancy import; exact `project(vehicle, "SOURCED", role.permissions)` arguments | Original denied/admitted cells; denied/admitted two-row, numItems 26 and endCursor cells; renamed-role, SOLD, BMW and non-null cursor cells |
+| `supplierRelationships.vehicles`, OWNED | Same declaration/import; exact `project(vehicle, "OWNED_ON_ACCOUNT", role.permissions, payable._id)` arguments | Same conditions for owned stock, plus distinct valid/deleted and valid/foreign vehicle pages |
 | `supplierRelationships.project` | Complete function declaration and exact `supplierVehicleHref` arguments | Both public relationship branches |
 | `supplierNavigation.vehicleSource` | Original statement fingerprint and exact `supplierVehicleHref` arguments | Outstanding vehicle cells and settled native AP cells |
 
 Enclosing-statement fingerprints cover auth destructuring, role provenance inside
 the handler, all later writes to role or scope permissions, conditions and both
-public forwarding branches. They do not follow imported helper implementations.
+public forwarding branches. They do not follow imported helper implementations. Supplier-specific cache pins and dependency contracts extend the declared boundary as described below.
 Every changed fingerprint requires re-deriving the affected cells and rerunning
 mutants before reviewing a new pin.
 
@@ -123,8 +123,9 @@ under every possible input. The fingerprint review and behavioural tests are
 complementary evidence, and neither is a security boundary.
 A missing document needs no separate ownership row: `readCached` returns null with
 or without `owned`, so a removed ownership check cannot separate the outcomes.
-Existing financed-application missing rows remain listed. openingBalanceDrafts has
-no isDeleted field, so no soft-deleted opening-draft behaviour is claimed.
+Existing financed-application missing rows remain listed. openingBalanceDrafts and financeApplications have
+no isDeleted field, so their supported hidden variants are foreign and missing,
+not soft-deleted documents.
 
 Route census scope: recursive page.tsx enumeration under
 app/(dashboard)/[orgId]/expenses returned only expenses/page.tsx. This is why
@@ -238,11 +239,96 @@ and expense recoveries with 20000 due and 10000 recovered remain outstanding.
 They are synthetic state fixtures and do not execute payment writers.
 
 The recursive production census scans .ts and excludes tests and _generated.
-It does not scan .tsx, .mts, .cts, .js or .mjs. A recursive filesystem enumeration
+It does not scan .tsx, .mts, .cts, .js, .mjs, .cjs or .jsx. A recursive filesystem enumeration
 on 2026-11-11 found zero non-test, non-generated files in those extensions under
 convex/; the two generated .js files are excluded. Computed loaders, code outside
 that tree, imported helper semantics and incorrectly renewed pins remain limits.
 [Vitest assertion state](https://vitest.dev/api/expect.html#expect-getstate)
-supports counting the actual final assertion, rather than loop entries. A
+in installed Vitest 4.1.9 counts `expect()` calls in `assertionCalls`, not matcher
+executions. That counter detects an omitted expect call, not a bare expect or
+a weakened comparison. The direct helper contract checks that a mismatch throws,
+a match adds exactly one receipt and a missing receipt fails verification.
+The strict/partial matcher canaries and helper pins complement this check. A
 finite mutant suite measures those injected faults and does not establish
 platform, concurrency or production correctness.
+
+
+## SCRUM-943 closed test file and dependency contracts, round 4
+
+A bound title owes a literal number of asserted cells in the file's pinned
+afterEach, whether or not its runner opened an audit. The census compares this
+literal title/count table with DECLARED_CALLER_CELLS and the older door cells.
+Teardown requires one audit and the declared receipt count, then verifies the
+ordered receipts. A no-op runner, entry return or parameter truncation therefore
+fails behaviourally. These checks cover 891 caller cells: 86 settled,
+769 outstanding and 36 relationship cells. The original 831 outcomes are retained.
+Settlement fixtures still write synthetic state directly, without payment writers.
+
+The behavioural file has a closed top-level inventory. Imports are pinned as a
+complete list, including bindings and type imports. Runtime declarations and the
+single afterEach are fingerprinted. Type declaration names and kinds remain
+listed, but their 13 content hashes were dropped because types do not execute.
+The remaining allowed statements are literal test/describe registrations. Any
+other top-level statement refuses and names its source and location. Across the
+whole file, including old tests and nested functions, the census refuses writes,
+compound writes, deletes and updates rooted at a top-level name; classes;
+matcher extensions/equality testers/serializers; mock/doMock/hoisted; spyOn and
+stubGlobal targeting expect or a protected name; extra lifecycle hooks; and
+eval/Function identifiers. It also refuses matcher-state writes and modified
+test registrations, including an older nested test.only that could suppress the
+bound registrations. The existing call-through db.get spy is allowed.
+Pins on runtime declarations still protect method-based mutations inside helpers.
+The declaration diagnostic explicitly forbids renewing cells and their declaration
+together merely to silence a failure.
+
+[Vitest hooks](https://vitest.dev/api/hooks.html) run afterEach after each test,
+with after hooks reversed in the default stack sequence. The repository setup
+hook registers before this file; this file's teardown runs first. An installed
+4.1.9 probe checks the hook order and currentTestName at teardown. The 45 bound
+registrations are top-level literal titles, so currentTestName matches the table
+key directly. Nested suite titles use a ` > ` separator and would need an explicit full-name key and census
+support before becoming bound registrations.
+
+vitest.config.ts loads vitest.setup.ts. Read in this round, that file registers
+lazy React DOM cleanup only and has no matcher override. It executes before the
+test module and is outside this PR's closed inventory; it could be edited to
+override matchers. Configuration, setup files, Vitest and imported test helper
+implementations are outside this PR and are not fingerprinted. The canary detects
+the tested always-pass overrides, not arbitrary targeted framework manipulation.
+
+Distinct-target cells cover valid plus deleted/foreign vehicles, sales and
+expenses, and valid plus foreign/missing applications and opening drafts, through
+both statement queries. Each compares every returned context in both sections.
+Other cells combine native AP with expense AR and sale AP with opening AR under
+denied/admitted gates. Older AP cash and financed outstanding cells now assert
+their seeded AR row. Relationship cells cover distinct valid/hidden OWNED
+vehicles, renamed roles, SOLD, BMW and a non-null cursor from an earlier call of
+the same query. These are base-choice interactions, not a full cross product.
+
+The declared production boundary is the three handlers (settled, outstanding,
+vehicles), project, the navigation module (original fingerprints and cells),
+readCached/createSupplierReadCache (supplier-specific pins plus exact-document
+contracts), and requireTenantAuth (permission preservation contract only).
+The cache contract writes three distinct literal documents plus a deleted id in
+each of its five table families, then checks misses and hits against independently
+written full snapshots, including literal creation times and seeded ids. Missing
+results stay null. Auth contracts compare returned and persisted role permissions
+with independent literal snapshots across names, cardinalities and system owner
+roles. No tenancy.ts declaration is fingerprinted: shared auth must remain free
+to evolve for unrelated backend lanes.
+
+A finite table cannot refute an arbitrary predicate over values that a navigation
+permission decision does not evaluate, such as a role display name, make or future
+time. Whole-body pins close unreviewed predicates inside their declared statements;
+contracts give finite behavioural evidence at imported boundaries. Neither proves
+arbitrary predicates further down the import graph. Out of scope are money and due
+reader internals (supplierObligationDue, supplierObligationFacts, supplierSettledRows,
+supplierSettlement, money, supplierDueDates), transactionReadHeadroom, subscriptions,
+requireAuth/impersonation internals, permissions, and other transitive imports.
+
+The syntax scan does not evaluate computed property names, arbitrary aliases,
+reflection, prototype/constructor lookup, generated code, computed loaders or code
+inside imported modules. For example, indirect reflective writes or a constructed
+global property name are outside its proof. Literal forbidden forms and rooted
+assignment syntax are refused, not sandboxed. A coordinated wrong renewal of pins,
+counts and cells remains a review risk. This is a tripwire, not a security boundary.

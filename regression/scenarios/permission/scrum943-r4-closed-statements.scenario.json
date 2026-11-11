@@ -1,0 +1,45 @@
+{
+  "id": "scrum943-r4-closed-statements",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "contract": "UNLISTED_STATEMENTS_AND_OVERRIDES_REFUSED"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "UNLISTED_STATEMENTS_AND_OVERRIDES_REFUSED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller runner census refuses unlisted statements imports and whole-file overrides"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "f861a99cc100ea1268e50b5e444e3c1a87da652d1cddbf2872faf19d15001549"
+}

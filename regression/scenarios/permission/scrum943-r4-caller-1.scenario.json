@@ -1,0 +1,92 @@
+{
+  "id": "scrum943-r4-caller-1",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.verifySupplierNavigationBoundary",
+      "input": {
+        "helper": "navigationCells",
+        "axes": [
+          "shape",
+          "mixTarget",
+          "mixState",
+          "validOutcome",
+          "validLabel"
+        ],
+        "cells": [
+          [
+            "native",
+            "vehicle",
+            "deleted",
+            "vehicle+link",
+            "vehicle",
+            "none",
+            "none"
+          ],
+          [
+            "native",
+            "vehicle",
+            "foreign",
+            "vehicle+link",
+            "vehicle",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "saleTarget",
+            "deleted",
+            "sale+link",
+            "number+vehicle",
+            "none",
+            "none"
+          ],
+          [
+            "cash",
+            "saleTarget",
+            "foreign",
+            "sale+link",
+            "number+vehicle",
+            "none",
+            "none"
+          ]
+        ],
+        "query": "settled",
+        "fixture": "SYNTHETIC_QUERY_STATE_NOT_PAYMENT_WRITERS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "supplierNavigationContract",
+      "value": "EVERY_LITERAL_CONTEXT_AND_DECLARED_RECEIPT"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled distinct cached vehicle and sale targets preserve every AP and AR context"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "51d14c92f370f19b9a874c57499910457d7bd241fcee3160a3854c4d95da9fcb"
+}

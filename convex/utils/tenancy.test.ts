@@ -299,3 +299,36 @@ describe("Tenancy Utilities", () => {
     });
   });
 });
+
+it("tenant auth preserves literal stored permissions across names cardinalities and system owner", async () => {
+  const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+  const { orgId, userId } = await t.run(async ctx => ({
+    orgId: await ctx.db.insert("organizations", { name: "Permission snapshot contract", createdAt: 1 }),
+    userId: await ctx.db.insert("users", { clerkId: "permission-snapshot", email: "permission-snapshot@example.test" }),
+  }));
+  const cases = [
+    { name: "Custom", owner: false, stored: [], expected: [] },
+    { name: "Limited reviewer", owner: false, stored: [], expected: [] },
+    { name: "Custom", owner: false, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { name: "Limited reviewer", owner: false, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { name: "Custom", owner: false, stored: ["view:finance", "view:cost_price", "view:vehicles", "view:expenses", "view:customers"], expected: ["view:finance", "view:cost_price", "view:vehicles", "view:expenses", "view:customers"] },
+    { name: "Limited reviewer", owner: false, stored: ["view:finance", "view:cost_price", "view:vehicles", "view:expenses", "view:customers"], expected: ["view:finance", "view:cost_price", "view:vehicles", "view:expenses", "view:customers"] },
+    { name: "Custom", owner: false, stored: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"], expected: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"] },
+    { name: "Limited reviewer", owner: false, stored: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"], expected: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"] },
+    { name: "OWNER", owner: true, stored: [], expected: [] },
+    { name: "OWNER", owner: true, stored: ["view:finance"], expected: ["view:finance"] },
+  ];
+  for (const cell of cases) {
+    const membershipId = await t.run(async ctx => {
+      const roleId = await ctx.db.insert("roles", { orgId, name: cell.name, permissions: cell.stored, isSystemOwnerRole: cell.owner });
+      return ctx.db.insert("memberships", { orgId, userId, roleId });
+    });
+    try {
+      const required: Parameters<typeof requireTenantAuth>[2] = cell.owner || cell.stored.length > 0 ? ["view:finance", "view:cost_price"] : [];
+      const { role } = await t.withIdentity({ subject: "permission-snapshot" }).run(ctx => requireTenantAuth(ctx, orgId, required));
+      expect(role.permissions, cell.name + "/" + cell.stored.length + "/owner=" + cell.owner).toStrictEqual(cell.expected);
+      const stored = await t.run(ctx => ctx.db.get(role._id));
+      expect(stored?.permissions, "auth must not persist a widened role").toStrictEqual(cell.expected);
+    } finally { await t.run(ctx => ctx.db.delete(membershipId)); }
+  }
+});

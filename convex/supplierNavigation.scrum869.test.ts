@@ -19,9 +19,64 @@ const NOW = Date.parse("2026-11-10T09:00:00Z");
 const vehicles = makeFunctionReference<"query">("supplierRelationships:vehicles");
 type CallerAudit = { expected: readonly (readonly string[])[]; asserted: (readonly string[])[]; message: string };
 const callerAudits: CallerAudit[] = [];
+// Literal oracle independent of runner entry; census checks these against declared cells.
+const EXPECTED_CALLER_RECEIPTS: Readonly<Record<string, number>> = {
+  "settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales": 4,
+  "settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales": 4,
+  "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales": 6,
+  "settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales": 6,
+  "settled opening AP preserves the viewer gate and refuses foreign or missing drafts": 4,
+  "settled opening AR preserves the viewer gate and refuses foreign or missing drafts": 4,
+  "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles": 4,
+  "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources": 6,
+  "relationship query preserves the viewer vehicle permission for sourced and owned rows": 4,
+  "sale lookup checks local deleted and missing targets across every navigation condition": 62,
+  "sale lookup checks local deleted and missing targets for financed sales across every navigation condition": 58,
+  "sale lookup checks deleted and missing financed sales across every navigation condition": 100,
+  "sale lookup refuses foreign targets across every navigation condition": 68,
+  "sales link gate checks local targets across every navigation condition": 80,
+  "application lookup checks local deleted and missing targets across every navigation condition": 40,
+  "application lookup refuses foreign targets across every navigation condition": 16,
+  "opening lookup checks local deleted and missing targets across every navigation condition": 22,
+  "opening lookup refuses foreign targets across every navigation condition": 8,
+  "opening status gate checks local targets across every navigation condition": 14,
+  "opening link gate checks local targets across every navigation condition": 8,
+  "expense lookup checks local deleted and missing targets across every navigation condition": 30,
+  "expense lookup refuses foreign targets across every navigation condition": 8,
+  "expense vehicle lookup checks local deleted and missing targets across every navigation condition": 12,
+  "expense vehicle lookup refuses foreign targets across every navigation condition": 2,
+  "native or sale vehicle lookup checks local deleted and missing targets across every navigation condition": 141,
+  "native or sale vehicle lookup refuses foreign targets across every navigation condition": 36,
+  "vehicle link gate checks local targets across every navigation condition": 16,
+  "settled multi-row AP and AR preserve denied and allowed source links": 16,
+  "outstanding multi-row AP and AR preserve denied and allowed source links": 16,
+  "settled partially recovered opening and expense rows preserve denied and allowed viewer gates": 4,
+  "relationship multi-row large and endCursor pages preserve both viewer gates": 12,
+  "settled multi-row cross-permission viewers cannot substitute another navigation gate": 8,
+  "outstanding multi-row cross-permission viewers cannot substitute another navigation gate": 8,
+  "outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates": 4,
+  "settled distinct cached vehicle and sale targets preserve every AP and AR context": 4,
+  "settled distinct cached application expense and opening targets preserve every context": 6,
+  "settled renamed roles retain denied and admitted navigation gates": 6,
+  "outstanding distinct cached vehicle and sale targets preserve every AP and AR context": 4,
+  "outstanding distinct cached application expense and opening targets preserve every context": 6,
+  "outstanding renamed roles retain denied and admitted navigation gates": 6,
+  "relationship renamed roles and SOLD status preserve both viewer gates": 8,
+  "relationship other makes and non-null continuation preserve both viewer gates": 8,
+  "owned relationships refuse distinct deleted and foreign vehicles beside valid stock": 4,
+  "settled mixed AP and AR keep independent denied and admitted gates": 4,
+  "outstanding mixed AP and AR keep independent denied and admitted gates": 4
+};
 afterEach(() => {
-  try { for (const audit of callerAudits) verifyCallerAssertions(audit); }
-  finally { callerAudits.length = 0; vi.useRealTimers(); }
+  try {
+    const title = expect.getState().currentTestName;
+    const expected = title === undefined ? undefined : EXPECTED_CALLER_RECEIPTS[title];
+    if (expected !== undefined) {
+      expect(callerAudits.length, title + ": bound registration must open exactly one audit").toBe(1);
+      expect(callerAudits.flatMap(audit => audit.asserted).length, title + ": literal declared receipt count").toBe(expected);
+    }
+    for (const audit of callerAudits) verifyCallerAssertions(audit);
+  } finally { callerAudits.splice(0); vi.useRealTimers(); }
 });
 
 function beginCallerAssertions(cells: readonly (readonly string[])[], message: string): CallerAudit {
@@ -35,8 +90,8 @@ function verifyCallerAssertions(audit: CallerAudit) {
 function assertCallerResult(actual: unknown, expected: unknown, audit: CallerAudit, tuple: readonly string[], message: string) {
   const before = expect.getState().assertionCalls;
   expect(actual, message).toStrictEqual(expected);
-  const assertions = expect.getState().assertionCalls - before;
-  expect(assertions, message + ": result assertion must execute once").toBe(1);
+  const expectCalls = expect.getState().assertionCalls - before;
+  expect(expectCalls, message + ": result expect call must execute once").toBe(1);
   audit.asserted.push(tuple);
 }
 
@@ -973,8 +1028,9 @@ async function seedNavigationOpening(s: Seed, draftId: Doc<"openingBalanceDrafts
     : s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { ...common, amountDue: 10, status: "DUE_ON_SALE", openingKind: "SUPPLIER_PAYABLE" as const }));
 }
 
-async function seedNavigationCell(cell: NavigationCell, message: string): Promise<NavigationFixture> {
-  const s = await seed(navigationPermissions(cell));
+async function seedNavigationCell(cell: NavigationCell, message: string, existing?: Seed): Promise<NavigationFixture> {
+  const s = existing ?? await seed(navigationPermissions(cell));
+  if (cell.roleName) await s.t.run(ctx => ctx.db.patch(s.roleId, { name: cell.roleName }));
   const shape = cell.shape!;
   let sale: NavigationFixture["sale"] = null;
   let expenseId: NavigationFixture["expenseId"] = null;
@@ -997,7 +1053,7 @@ async function seedNavigationCell(cell: NavigationCell, message: string): Promis
     sale = await financedSale(s);
     await s.t.run(ctx => ctx.db.patch(sale!.saleId, { dealNumber: NAVIGATION_DEAL_NUMBERS[cell.dealNumber ?? "with"],
       ...(shape === "cash" ? { applicationId: undefined } : {}), status: (cell.saleStatus ?? "COMPLETED") as Doc<"sales">["status"] }));
-    const rows = await s.t.run(ctx => ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(2));
+    const rows = await s.t.run(async ctx => (await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(10)).filter(row => row.saleId === sale!.saleId));
     expect(rows.length, message).toBe(1);
     obligationId = cell.role === "AP" ? await payable(s, { saleId: sale.saleId }) : rows[0]!._id;
   }
@@ -1127,7 +1183,7 @@ async function assertPartialRecovery(f: NavigationFixture, message: string) {
 }
 
 type RelationshipKind = "SOURCED" | "OWNED";
-type RelationshipCondition = "single" | "multiple" | "large" | "endCursor";
+type RelationshipCondition = "single" | "multiple" | "large" | "endCursor" | "cursor" | "renamed" | "sold" | "otherMake" | "mixed-deleted" | "mixed-foreign";
 type RelationshipBase = readonly [kind: RelationshipKind, permission: "with" | "without", model: "SOURCED" | "OWNED_ON_ACCOUNT", link: "none" | "vehicle"];
 type RelationshipCell = RelationshipBase | readonly [...RelationshipBase, condition: RelationshipCondition];
 function validateRelationshipCell(tuple: RelationshipCell, message: string) {
@@ -1138,18 +1194,23 @@ function validateRelationshipCell(tuple: RelationshipCell, message: string) {
   expect(["with", "without"], message + ": permission").toContain(permission);
   expect(["SOURCED", "OWNED_ON_ACCOUNT"], message + ": model").toContain(model);
   expect(["none", "vehicle"], message + ": link").toContain(link);
-  expect(["single", "multiple", "large", "endCursor"], message + ": condition").toContain(condition);
+  expect(["single", "multiple", "large", "endCursor", "cursor", "renamed", "sold", "otherMake", "mixed-deleted", "mixed-foreign"], message + ": condition").toContain(condition);
 }
 async function seedRelationshipCell(tuple: RelationshipCell, message: string) {
   const [kind, permission, model, link, condition = "single"] = tuple;
   const f = await seedNavigationCell({ shape: "native", viewVehicles: permission, timestamp: "valid" }, message);
   await readBackNavigationCell(f, { shape: "native", viewVehicles: permission, timestamp: "valid" }, message);
   if (kind === "OWNED") await f.s.t.run(ctx => ctx.db.patch(f.s.vehicleId, { sourceType: "STOCK" }));
+  await prepareRelationshipVariation(f.s, condition);
   const expected = [{ id: kind === "OWNED" ? f.obligationId : f.s.vehicleId, vehicleId: f.s.vehicleId,
-    label: "2024 Toyota Camry", model, status: "AVAILABLE",
+    label: condition === "otherMake" ? "2024 BMW Camry" : "2024 Toyota Camry", model, status: condition === "sold" ? "SOLD" : "AVAILABLE",
     href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${f.s.vehicleId}` : null }];
-  if (condition !== "single") {
+  if (["multiple", "large", "endCursor", "cursor", "mixed-deleted", "mixed-foreign"].includes(condition)) {
     const second = await duplicateRelationship(f.s, kind);
+    if (condition.startsWith("mixed-")) {
+      await f.s.t.run(ctx => ctx.db.patch(second.vehicleId, condition === "mixed-deleted" ? { isDeleted: true } : { orgId: f.s.foreignOrg, make: "BMW" }));
+      return { f, expected };
+    }
     expected.push({ ...expected[0]!, id: second.id, vehicleId: second.vehicleId,
       href: link === "vehicle" ? `/${f.s.orgId}/vehicles?supplierVehicleId=${second.vehicleId}` : null });
   }
@@ -1164,11 +1225,15 @@ async function relationshipCells(cells: readonly RelationshipCell[]) {
     validateRelationshipCell(tuple, message);
     const { f, expected } = await seedRelationshipCell(tuple, message);
     const paginationOpts = await relationshipPagination(f.s, kind, condition, message, expected.at(-1)!.vehicleId);
-    const pageSizes = { single: 25, multiple: 25, large: 26, endCursor: 1 };
+    const pageSizes = { single: 25, multiple: 25, large: 26, endCursor: 1, cursor: 1, renamed: 25, sold: 25, otherMake: 25, "mixed-deleted": 25, "mixed-foreign": 25 };
     expect(paginationOpts.numItems, message + ": requested page size").toBe(pageSizes[condition]);
     if (condition === "endCursor") {
       expect(paginationOpts.endCursor, message + ": endCursor must reach the query").toEqual(expect.any(String));
       expected.shift();
+    }
+    if (condition === "cursor") {
+      expect(paginationOpts.cursor, message + ": non-null continuation").toEqual(expect.any(String));
+      expected.pop();
     }
     const result = await f.s.asUser.query(vehicles, { orgId: f.s.orgId, supplierId: f.s.supplierId, kind, paginationOpts });
     assertCallerResult(result.page.toSorted((a: { vehicleId: string }, b: { vehicleId: string }) => a.vehicleId.localeCompare(b.vehicleId)),
@@ -1178,13 +1243,14 @@ async function relationshipCells(cells: readonly RelationshipCell[]) {
 }
 async function relationshipPagination(s: Seed, kind: RelationshipKind, condition: RelationshipCondition, message: string, newestVehicleId: Seed["vehicleId"]) {
   const paginationOpts: { numItems: number; cursor: string | null; endCursor?: string } = { numItems: condition === "large" ? 26 : 25, cursor: null };
-  if (condition === "endCursor") {
+  if (condition === "endCursor" || condition === "cursor") {
     const first = await related(s, kind, { numItems: 1, cursor: null });
     expect(first.page.length, message).toBe(1);
     expect(first.page[0]?.vehicleId, message + ": endCursor requires newest-first ordering").toBe(newestVehicleId);
     expect(first.isDone, message).toBe(false);
     expect(first.continueCursor.length, message).toBeGreaterThan(0);
-    paginationOpts.endCursor = first.continueCursor;
+    if (condition === "cursor") paginationOpts.cursor = first.continueCursor;
+    else paginationOpts.endCursor = first.continueCursor;
     paginationOpts.numItems = 1;
   }
   return paginationOpts;
@@ -1224,6 +1290,8 @@ function assertNavigationAmounts(rows: readonly unknown[], cell: NavigationCell,
 
 async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel, queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[]) {
   const message = `${door}: ${JSON.stringify(cell)} => ${outcome}/${labelKind}`;
+  if (cell.sectionPair) return crossSectionNavigationCell(cell, outcome, labelKind, queryName, audit, tuple, message);
+  if (cell.mixTarget) return mixedNavigationCell(cell, outcome, labelKind, queryName, audit, tuple, message);
   const f = await seedNavigationCell(cell, message);
   await readBackNavigationCell(f, cell, message);
   await readBackNavigationDocumentFields(f, cell, message);
@@ -1238,6 +1306,7 @@ async function navigationCell(door: string, cell: NavigationCell, outcome: Navig
   const role = cell.role ?? contexts[f.shape as keyof typeof contexts].role;
   const rows = role === "AP" ? result.payable.rows : result.receivable.rows;
   assertNavigationAmounts(rows, cell, queryName, message);
+  await assertAdditionalReceivable(f, cell, outcome, labelKind, queryName, result.receivable.rows, message);
   const expectedContext = {
     ...contexts[f.shape as keyof typeof contexts], role, ...(cell.role === "AP" && f.sale ? { counterparty: "Original supplier snapshot" } : {}),
     occurredAt: cell.timestamp === "valid" ? NOW : null, ...expectedNavigationOutcome(f, outcome, labelKind),
@@ -1247,6 +1316,10 @@ async function navigationCell(door: string, cell: NavigationCell, outcome: Navig
 
 async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[], queryName: "outstanding" | "settled" = "outstanding", role?: "AP" | "AR") {
   const values: Readonly<Record<string, readonly string[]>> = {
+    sectionPair: ["vehicle-expense", "sale-opening"], arOutcome: ["opening", "opening+link", "expense+vehicle", "expense+vehicle+link"], arLabel: ["opening", "expense"],
+    roleName: ["Custom", "Limited reviewer"], mixTarget: ["vehicle", "saleTarget", "applicationTarget", "expenseTarget", "draftTarget"],
+    mixState: ["deleted", "foreign", "missing"], validOutcome: ["vehicle+link", "sale+link", "application+link", "expense+vehicle+link", "opening+link"],
+    validLabel: ["vehicle", "number+vehicle", "expense", "opening"],
     role: ["AP", "AR"], rowCount: ["two"], recovery: ["partial"],
     shape: ["native", "cash", "financed", "expense", "opening"], saleTarget: ["local", "foreign", "deleted", "missing"],
     applicationTarget: ["local", "foreign", "missing"], expenseTarget: ["local", "foreign", "deleted", "missing"],
@@ -2278,4 +2351,141 @@ test("outstanding partially recovered opening and expense rows preserve denied a
   ["expense","AR","without","without","POSTED","partial","valid","expense+vehicle","expense"],
   ["expense","AR","with","with","POSTED","partial","valid","expense+vehicle+link","expense"],
  ], "outstanding");
+});
+
+test("caller assertion helpers reject mismatches and require exactly one real receipt", () => {
+  const tuple = ["contract-cell"];
+  const audit: CallerAudit = { expected: [["contract-cell"]], asserted: [], message: "assertion helper contract" };
+  expect(() => assertCallerResult({ value: 1, extra: undefined }, { value: 1 }, audit, tuple, "strict mismatch")).toThrow();
+  expect(audit.asserted).toStrictEqual([]);
+  expect(() => verifyCallerAssertions(audit), "missing receipt must fail").toThrow();
+  assertCallerResult({ value: 1 }, { value: 1 }, audit, tuple, "matching result");
+  expect(audit.asserted).toStrictEqual([["contract-cell"]]);
+  expect(() => verifyCallerAssertions(audit)).not.toThrow();
+});
+
+test("caller matcher canaries refuse known false strict and partial comparisons", () => {
+  expect(() => expect({ value: 1 }).toStrictEqual({ value: 2 }), "toStrictEqual must reject a known false value").toThrow();
+  expect(() => expect({ value: 1 }).toMatchObject({ value: 2 }), "toMatchObject must reject a known false value").toThrow();
+});
+
+
+async function assertAdditionalReceivable(f: NavigationFixture, cell: NavigationCell, outcome: NavigationOutcome, label: NavigationLabel,
+  queryName: "outstanding" | "settled", rows: readonly { context: unknown }[], message: string) {
+  if (cell.role !== "AP" || !f.sale || queryName !== "outstanding") return;
+  expect(rows.map(row => row.context), message + ": seeded extra AR must retain its own gate").toStrictEqual([{
+    role: "AR", occurredAt: cell.timestamp === "valid" ? NOW : null, counterparty: "Synthetic supplier payer",
+    ...expectedNavigationOutcome(f, outcome, label),
+  }]);
+}
+
+async function distinctNavigationVehicle(s: Seed): Promise<Seed> {
+  const vehicleId = await s.t.run(async ctx => {
+    const vehicle = await ctx.db.get(s.vehicleId);
+    if (!vehicle) throw new Error("distinct navigation fixture needs its known vehicle");
+    const { _id, _creationTime, ...fields } = vehicle;
+    return ctx.db.insert("vehicles", fields);
+  });
+  return { ...s, vehicleId };
+}
+
+function mixedExpectedSections(f: NavigationFixture, outcome: NavigationOutcome, label: NavigationLabel) {
+  const source = expectedNavigationOutcome(f, outcome, label);
+  const context = (role: "AP" | "AR", counterparty: string) => ({ role, occurredAt: NOW, counterparty, ...source });
+  const payable = {
+    native: [context("AP", "Original supplier snapshot")], cash: [context("AP", "Original supplier snapshot")],
+    financed: [context("AP", "Original supplier snapshot")], opening: [context("AP", "Synthetic opening supplier")], expense: [],
+  };
+  const receivable = {
+    native: [], cash: [context("AR", "Synthetic supplier payer")], financed: [context("AR", "Synthetic supplier payer")],
+    opening: [], expense: [context("AR", "Synthetic supplier bearer")],
+  };
+  return { payable: payable[f.shape as keyof typeof payable], receivable: receivable[f.shape as keyof typeof receivable] };
+}
+
+async function mixedNavigationCell(cell: NavigationCell, hiddenOutcome: NavigationOutcome, hiddenLabel: NavigationLabel,
+  queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[], message: string) {
+  const base = { shape: cell.shape!, role: "AP", viewSales: "with", viewVehicles: "with", manageFinance: "with", timestamp: "valid", status: "POSTED" };
+  const valid = await seedNavigationCell(base, message);
+  const hiddenCell = { ...base, [cell.mixTarget!]: cell.mixState! };
+  const hidden = await seedNavigationCell(hiddenCell, message, await distinctNavigationVehicle(valid.s));
+  if (cell.mixTarget === "vehicle" && cell.mixState === "foreign") await hidden.s.t.run(ctx => ctx.db.patch(hidden.s.vehicleId, { make: "BMW" }));
+  await readBackNavigationCell(valid, base, message);
+  await readBackNavigationCell(hidden, hiddenCell, message);
+  if (queryName === "settled") await settleReadBound(valid.s);
+  const result = queryName === "settled"
+    ? await valid.s.asUser.query(api.supplierStatement.settled, { orgId: valid.s.orgId, supplierId: valid.s.supplierId })
+    : await outstanding(valid.s);
+  const expectedValid = mixedExpectedSections(valid, cell.validOutcome as NavigationOutcome, cell.validLabel as NavigationLabel);
+  const expectedHidden = mixedExpectedSections(hidden, hiddenOutcome, hiddenLabel);
+  const sort = (contexts: readonly unknown[]) => contexts.toSorted((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  assertCallerResult({ payable: sort(result.payable.rows.map(row => row.context)), receivable: sort(result.receivable.rows.map(row => row.context)) },
+    { payable: sort([...expectedValid.payable, ...expectedHidden.payable]), receivable: sort([...expectedValid.receivable, ...expectedHidden.receivable]) }, audit, tuple, message);
+}
+
+async function prepareRelationshipVariation(s: Seed, condition: RelationshipCondition) {
+  if (condition === "renamed") await s.t.run(ctx => ctx.db.patch(s.roleId, { name: "Limited reviewer" }));
+  if (condition === "sold") await s.t.run(ctx => ctx.db.patch(s.vehicleId, { status: "SOLD" }));
+  if (condition === "otherMake") await s.t.run(ctx => ctx.db.patch(s.vehicleId, { make: "BMW" }));
+}
+
+test("settled distinct cached vehicle and sale targets preserve every AP and AR context", async () => {
+ await navigationCells("settled mixed vehicle/sale", ["shape","mixTarget","mixState","validOutcome","validLabel"], [["native","vehicle","deleted","vehicle+link","vehicle","none","none"],["native","vehicle","foreign","vehicle+link","vehicle","none","none"],["cash","saleTarget","deleted","sale+link","number+vehicle","none","none"],["cash","saleTarget","foreign","sale+link","number+vehicle","none","none"]], "settled");
+});
+
+test("settled distinct cached application expense and opening targets preserve every context", async () => {
+ await navigationCells("settled mixed application/expense/opening", ["shape","mixTarget","mixState","validOutcome","validLabel"], [["financed","applicationTarget","missing","application+link","number+vehicle","sale","number+vehicle"],["financed","applicationTarget","foreign","application+link","number+vehicle","sale","number+vehicle"],["expense","expenseTarget","deleted","expense+vehicle+link","expense","none","none"],["expense","expenseTarget","foreign","expense+vehicle+link","expense","none","none"],["opening","draftTarget","foreign","opening+link","opening","none","none"],["opening","draftTarget","missing","opening+link","opening","none","none"]], "settled");
+});
+
+test("settled renamed roles retain denied and admitted navigation gates", async () => {
+ await navigationCells("settled renamed caller", ["shape","roleName","viewSales","viewVehicles","manageFinance","timestamp","status"], [["cash","Limited reviewer","without","without","without","valid","POSTED","sale","number+vehicle"],["cash","Limited reviewer","with","without","without","valid","POSTED","sale+link","number+vehicle"],["native","Limited reviewer","without","without","without","valid","POSTED","vehicle","vehicle"],["native","Limited reviewer","without","with","without","valid","POSTED","vehicle+link","vehicle"],["opening","Limited reviewer","without","without","without","valid","POSTED","opening","opening"],["opening","Limited reviewer","without","without","with","valid","POSTED","opening+link","opening"]], "settled");
+});
+
+test("outstanding distinct cached vehicle and sale targets preserve every AP and AR context", async () => {
+ await navigationCells("outstanding mixed vehicle/sale", ["shape","mixTarget","mixState","validOutcome","validLabel"], [["native","vehicle","deleted","vehicle+link","vehicle","none","none"],["native","vehicle","foreign","vehicle+link","vehicle","none","none"],["cash","saleTarget","deleted","sale+link","number+vehicle","none","none"],["cash","saleTarget","foreign","sale+link","number+vehicle","none","none"]], "outstanding");
+});
+
+test("outstanding distinct cached application expense and opening targets preserve every context", async () => {
+ await navigationCells("outstanding mixed application/expense/opening", ["shape","mixTarget","mixState","validOutcome","validLabel"], [["financed","applicationTarget","missing","application+link","number+vehicle","sale","number+vehicle"],["financed","applicationTarget","foreign","application+link","number+vehicle","sale","number+vehicle"],["expense","expenseTarget","deleted","expense+vehicle+link","expense","none","none"],["expense","expenseTarget","foreign","expense+vehicle+link","expense","none","none"],["opening","draftTarget","foreign","opening+link","opening","none","none"],["opening","draftTarget","missing","opening+link","opening","none","none"]], "outstanding");
+});
+
+test("outstanding renamed roles retain denied and admitted navigation gates", async () => {
+ await navigationCells("outstanding renamed caller", ["shape","roleName","viewSales","viewVehicles","manageFinance","timestamp","status"], [["cash","Limited reviewer","without","without","without","valid","POSTED","sale","number+vehicle"],["cash","Limited reviewer","with","without","without","valid","POSTED","sale+link","number+vehicle"],["native","Limited reviewer","without","without","without","valid","POSTED","vehicle","vehicle"],["native","Limited reviewer","without","with","without","valid","POSTED","vehicle+link","vehicle"],["opening","Limited reviewer","without","without","without","valid","POSTED","opening","opening"],["opening","Limited reviewer","without","without","with","valid","POSTED","opening+link","opening"]], "outstanding");
+});
+
+test("relationship renamed roles and SOLD status preserve both viewer gates", async () => {
+ await relationshipCells([["SOURCED","without","SOURCED","none","renamed"],["SOURCED","with","SOURCED","vehicle","renamed"],["OWNED","without","OWNED_ON_ACCOUNT","none","renamed"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","renamed"],["SOURCED","without","SOURCED","none","sold"],["SOURCED","with","SOURCED","vehicle","sold"],["OWNED","without","OWNED_ON_ACCOUNT","none","sold"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","sold"]]);
+});
+
+test("relationship other makes and non-null continuation preserve both viewer gates", async () => {
+ await relationshipCells([["SOURCED","without","SOURCED","none","otherMake"],["SOURCED","with","SOURCED","vehicle","otherMake"],["OWNED","without","OWNED_ON_ACCOUNT","none","otherMake"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","otherMake"],["SOURCED","without","SOURCED","none","cursor"],["SOURCED","with","SOURCED","vehicle","cursor"],["OWNED","without","OWNED_ON_ACCOUNT","none","cursor"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","cursor"]]);
+});
+
+test("owned relationships refuse distinct deleted and foreign vehicles beside valid stock", async () => {
+ await relationshipCells([["OWNED","without","OWNED_ON_ACCOUNT","none","mixed-deleted"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","mixed-deleted"],["OWNED","without","OWNED_ON_ACCOUNT","none","mixed-foreign"],["OWNED","with","OWNED_ON_ACCOUNT","vehicle","mixed-foreign"]]);
+});
+
+async function crossSectionNavigationCell(cell: NavigationCell, apOutcome: NavigationOutcome, apLabel: NavigationLabel,
+  queryName: "outstanding" | "settled", audit: CallerAudit, tuple: readonly string[], message: string) {
+  const pair = cell.sectionPair === "vehicle-expense";
+  const base = { ...cell, role: "AP", timestamp: "valid", status: "POSTED" };
+  const ap = await seedNavigationCell({ ...base, shape: pair ? "native" : "cash" }, message);
+  const ar = await seedNavigationCell({ ...base, role: "AR", shape: pair ? "expense" : "opening" }, message, await distinctNavigationVehicle(ap.s));
+  if (queryName === "settled") await settleReadBound(ap.s);
+  const result = queryName === "settled"
+    ? await ap.s.asUser.query(api.supplierStatement.settled, { orgId: ap.s.orgId, supplierId: ap.s.supplierId }) : await outstanding(ap.s);
+  const expectedAP = mixedExpectedSections(ap, apOutcome, apLabel);
+  const arContext = { role: "AR", occurredAt: NOW, counterparty: pair ? "Synthetic supplier bearer" : "Synthetic opening supplier",
+    ...expectedNavigationOutcome(ar, cell.arOutcome as NavigationOutcome, cell.arLabel as NavigationLabel) };
+  const sort = (rows: readonly unknown[]) => rows.toSorted((a,b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  assertCallerResult({ payable: sort(result.payable.rows.map(row => row.context)), receivable: sort(result.receivable.rows.map(row => row.context)) },
+    { payable: sort(expectedAP.payable), receivable: sort([...expectedAP.receivable, arContext]) }, audit, tuple, message);
+}
+
+test("settled mixed AP and AR keep independent denied and admitted gates", async () => {
+ await navigationCells("settled mixed sections", ["sectionPair","viewSales","viewVehicles","manageFinance","arOutcome","arLabel"], [["vehicle-expense","with","without","with","expense+vehicle","expense","vehicle","vehicle"],["vehicle-expense","with","with","with","expense+vehicle+link","expense","vehicle+link","vehicle"],["sale-opening","without","with","without","opening","opening","sale","number+vehicle"],["sale-opening","with","with","with","opening+link","opening","sale+link","number+vehicle"]], "settled");
+});
+
+test("outstanding mixed AP and AR keep independent denied and admitted gates", async () => {
+ await navigationCells("outstanding mixed sections", ["sectionPair","viewSales","viewVehicles","manageFinance","arOutcome","arLabel"], [["vehicle-expense","with","without","with","expense+vehicle","expense","vehicle","vehicle"],["vehicle-expense","with","with","with","expense+vehicle+link","expense","vehicle+link","vehicle"],["sale-opening","without","with","without","opening","opening","sale","number+vehicle"],["sale-opening","with","with","with","opening+link","opening","sale+link","number+vehicle"]], "outstanding");
 });
