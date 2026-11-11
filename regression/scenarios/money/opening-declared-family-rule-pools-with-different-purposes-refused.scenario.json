@@ -1,0 +1,41 @@
+{
+  "id": "opening-declared-family-rule-pools-with-different-purposes-refused",
+  "fingerprint": "f7cd446f0c2ec12923cf43e136e8ef828c5748f2cfcaa8855879f7365cbffb84",
+  "domain": "money",
+  "level": "backend",
+  "matrixRow": "OB-C9",
+  "kind": "rule",
+  "subject": "openingDeclaredFamilyConflict",
+  "inputs": {
+    "kinds": [
+      "UNALLOCATED_LIABILITY",
+      "UNALLOCATED_LIABILITY"
+    ],
+    "purposes": [
+      "CUSTOMER_DEPOSIT",
+      "UNIDENTIFIED_RECEIPT"
+    ]
+  },
+  "expected": [
+    {
+      "observable": "conflict",
+      "value": "MIXED_PURPOSE"
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/openingDeclaredFamily.test.ts",
+    "testName": "unidentified pools with different purposes, or one purpose missing, are refused with the pool text"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

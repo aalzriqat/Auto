@@ -1,0 +1,53 @@
+{
+  "id": "opening-editor-pools-with-different-purposes-show-purpose-alert",
+  "fingerprint": "23123435813050b20ae25bccad548fa76b03146ff9d4b07a46fc7b50ebf8e8ea",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "convex/utils/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingAllocationEditor.render",
+      "input": {
+        "locale": "en",
+        "account": "pool",
+        "rows": 2,
+        "purposes": [
+          "UNIDENTIFIED_RECEIPT",
+          "CUSTOMER_DEPOSIT"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "alert.message",
+      "value": "OpeningAllocationMixedPurpose"
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/OpeningAllocationEditor.test.tsx",
+    "testName": "unidentified pools with different purposes show the purpose alert"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "id": "opening-form-mixed-family-accounts-named-by-cause",
+  "fingerprint": "80afc215d32054f28b34617e968e55e3b6ae78909b0f91b92ae5a82c3c8a3cf1",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "convex/utils/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingAllocationForm.mixedFamilyAccounts",
+      "input": {
+        "accounts": 6,
+        "unchosenPurposeRow": true,
+        "outsideKinds": true
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "mixedKindAccounts",
+      "value": 1
+    },
+    {
+      "observable": "mixedPurposeAccounts",
+      "value": 1
+    },
+    {
+      "observable": "otherAccountsReported",
+      "value": 0
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/openingAllocationForm.test.ts",
+    "testName": "SCRUM-944: openingMixedFamilyAccounts names only the accounts the server would refuse, by cause"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

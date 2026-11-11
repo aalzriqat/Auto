@@ -1,0 +1,58 @@
+{
+  "id": "opening-mixed-family-alert-strings-exist-in-english-and-arabic",
+  "fingerprint": "6190aace764fdc21843ac7055fae677963d115919b408ec9b57bb200a63aae36",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "convex/utils/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "i18n.dictionaries",
+      "input": {
+        "keys": [
+          "OpeningAllocationMixedFamily",
+          "OpeningAllocationMixedPurpose"
+        ],
+        "locales": [
+          "en",
+          "ar"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "arabicPresent",
+      "value": true
+    },
+    {
+      "observable": "arabicDiffersFromEnglish",
+      "value": true
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/OpeningAllocationEditor.test.tsx",
+    "testName": "SCRUM-944 both mixed-family keys have a real Arabic string that differs from the English one"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

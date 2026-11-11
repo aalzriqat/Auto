@@ -1,0 +1,56 @@
+{
+  "id": "opening-card-one-kind-enables-submit-en-ar",
+  "fingerprint": "422049afed92ab29ace17e701dc58e5211a4158fb0e7db3c6d5f90ef49f80dd4",
+  "domain": "screen",
+  "level": "backend",
+  "sourceGlobs": [
+    "components/accounting/setup/OpeningAllocationEditor.tsx",
+    "components/accounting/setup/OpeningBalanceCard.tsx",
+    "components/accounting/setup/openingAllocationForm.ts",
+    "convex/utils/openingDeclaredFamily.ts",
+    "lib/i18n/domains/common.ts"
+  ],
+  "steps": [
+    {
+      "actor": {
+        "role": "OWNER",
+        "org": "A"
+      },
+      "action": "openingBalanceCard.render",
+      "input": {
+        "locale": [
+          "en",
+          "ar"
+        ],
+        "account": "payables",
+        "rows": 2,
+        "kinds": [
+          "OTHER_PAYABLE",
+          "OTHER_PAYABLE"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "submitButtonDisabled",
+      "value": false
+    }
+  ],
+  "impl": {
+    "file": "components/accounting/setup/OpeningBalanceCard.mixedFamily.scrum944.test.tsx",
+    "testName": "control: the same two rows with one kind enable the submit button in English and Arabic"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}

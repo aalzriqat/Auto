@@ -1,0 +1,41 @@
+{
+  "id": "opening-declared-family-rule-uniform-family-accepted",
+  "fingerprint": "3d9b180210a92a03eaecef1ff68bbf1af547e765b6cd393d7f8d89075d2c3130",
+  "domain": "money",
+  "level": "backend",
+  "matrixRow": "OB-C9",
+  "kind": "rule",
+  "subject": "openingDeclaredFamilyConflict",
+  "inputs": {
+    "kinds": [
+      "OTHER_PAYABLE",
+      "OTHER_PAYABLE"
+    ],
+    "purposes": [
+      "CUSTOMER_DEPOSIT",
+      "UNIDENTIFIED_RECEIPT"
+    ]
+  },
+  "expected": [
+    {
+      "observable": "conflict",
+      "value": null
+    }
+  ],
+  "impl": {
+    "file": "convex/utils/openingDeclaredFamily.test.ts",
+    "testName": "uniform families are accepted, and purpose only matters for unidentified pools"
+  },
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum944-opening-refusal-clarity",
+    "firstSeen": "2026-11-12"
+  },
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ]
+}
