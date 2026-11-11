@@ -277,6 +277,15 @@ stubGlobal targeting expect or a protected name; extra lifecycle hooks; and
 eval/Function identifiers. It also refuses matcher-state writes and modified
 test registrations, including an older nested test.only that could suppress the
 bound registrations. The existing call-through db.get spy is allowed.
+Iteration targets in for/in, for/of and for/await/of are writes too, including
+nested destructuring and property targets. The guard unwraps parentheses,
+non-null assertions, both type-assertion spellings and satisfies expressions
+before checking the root. This follows the [ECMAScript iteration assignment
+semantics](https://tc39.es/ecma262/2026/multipage/ecmascript-language-statements-and-declarations.html#sec-for-in-and-for-of-statements)
+[TypeScript assertion erasure](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#type-assertions),
+and [satisfies checking](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-9.html#the-satisfies-operator).
+These static forms cannot be treated as opaque dynamic code: a replacement that
+forges receipts otherwise passes the per-title count without executing cells.
 Pins on runtime declarations still protect method-based mutations inside helpers.
 The whole-file guard checks API references before they escape into aliases,
 destructuring or arguments. Hook values cannot leave the single pinned afterEach.

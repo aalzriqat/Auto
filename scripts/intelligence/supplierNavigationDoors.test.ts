@@ -2487,7 +2487,8 @@ function runnerRegistration(node: ts.Statement, source: ts.SourceFile): boolean 
 function runnerRoot(node: ts.Node): string | undefined {
   if (ts.isIdentifier(node)) return node.text;
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return runnerRoot(node.expression);
-  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) return runnerRoot(node.expression);
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) return runnerRoot(node.expression);
   if (ts.isCallExpression(node)) return runnerRoot(node.expression);
 }
 
@@ -2504,6 +2505,8 @@ function protectedRunnerTarget(node: ts.Node, protectedNames: ReadonlySet<string
 }
 
 function runnerWriteTarget(node: ts.Node): ts.Node | undefined {
+  if ((ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+    !ts.isVariableDeclarationList(node.initializer)) return node.initializer;
   if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
     node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return node.left;
   if (ts.isDeleteExpression(node)) return node.expression;
@@ -3231,5 +3234,29 @@ test("supplier cache fingerprints refuse unreviewed changes to both cache functi
     expect(source.text.includes(before), name + ": source fixture must exist").toBe(true);
     const changed = ts.createSourceFile(source.fileName, source.text.replace(before, after), ts.ScriptTarget.Latest, true);
     expect(() => assertCacheFingerprints(changed), name).toThrow(new RegExp(name));
+  }
+});
+
+test("caller runner census refuses iteration writes to protected targets", () => {
+  const forms = [
+    "test(\"for of write\", () => { for (relationshipCells of []) {} });",
+    "test(\"for in property write\", () => { for (callerAudits[0] in {}) {} });",
+    "test(\"for of destructure write\", () => { for ({ relationshipCells } of []) {} });",
+    "test(\"for await write\", async () => { for await (relationshipCells of []) {} });"
+  ];
+  for (const form of forms) {
+    const source = ts.createSourceFile("static-write.ts", form, ts.ScriptTarget.Latest, true);
+    expect(() => refuseRunnerOverrides(source), form).toThrow(/write to a protected top-level runner binding/);
+  }
+});
+
+test("caller runner census unwraps erased types before checking protected writes", () => {
+  const forms = [
+    "test(\"prefix assertion write\", () => { (<typeof relationshipCells>relationshipCells) = replacement; });",
+    "test(\"satisfies write\", () => { (relationshipCells satisfies typeof relationshipCells) = replacement; });"
+  ];
+  for (const form of forms) {
+    const source = ts.createSourceFile("static-write.ts", form, ts.ScriptTarget.Latest, true);
+    expect(() => refuseRunnerOverrides(source), form).toThrow(/write to a protected top-level runner binding/);
   }
 });
