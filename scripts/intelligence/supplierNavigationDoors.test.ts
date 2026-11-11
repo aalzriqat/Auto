@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { expect, test } from "vitest";
 import { listActiveTestRegistrations } from "../autoflowInvariantCatalog";
@@ -10,8 +10,9 @@ import { listActiveTestRegistrations } from "../autoflowInvariantCatalog";
  * Compiler printer/SyntaxKind: https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API.
  * Allowlist/default refusal: https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html
  * and https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html#deny-by-default.
- * Closed-world scan boundary: convex/utils/supplierNavigation.ts only. Imported
+ * The helper-body scan covers convex/utils/supplierNavigation.ts. Imported
  * helper bodies are outside it; the complete import list and bindings are pinned.
+ * A separate recursive non-test Convex caller census pins permission scope text.
  * Syntax-only allowlists deliberately refuse aliases, renamed shapes and new forms
  * until they are reviewed and listed. A reused name cannot bypass the site counts.
  * Every runtime callable, property read and branching form is scanned, including
@@ -156,106 +157,106 @@ export const SUPPLIER_NAVIGATION_DOORS: readonly Door[] = [
   {"tuple":["financed","local","missing","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
   {"tuple":["financed","local","missing","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
   {"tuple":["financed","local","missing","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","with","local","valid","CANCELLED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","with","local","valid","CANCELLED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","local","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","foreign","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","deleted","missing","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","with","local","valid","CANCELLED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","with","local","valid","CANCELLED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","local","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","foreign","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","with","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","without","local","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
-  {"tuple":["financed","missing","missing","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks local deleted and missing targets for financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","with","local","valid","CANCELLED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","with","local","valid","CANCELLED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","local","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","foreign","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","deleted","missing","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","with","local","valid","CANCELLED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","with","local","valid","CANCELLED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","local","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","foreign","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","with","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","with","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","with","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","with","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","with","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","without","local","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","without","foreign","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","without","deleted","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
+  {"tuple":["financed","missing","missing","without","without","missing","valid","COMPLETED"],"title":"sale lookup checks deleted and missing financed sales across every navigation condition"},
   {"tuple":["cash","foreign","local","with","with","local","valid","COMPLETED"],"title":"sale lookup refuses foreign targets across every navigation condition"},
   {"tuple":["cash","foreign","local","with","with","local","valid","CANCELLED"],"title":"sale lookup refuses foreign targets across every navigation condition"},
   {"tuple":["cash","foreign","local","with","with","foreign","valid","COMPLETED"],"title":"sale lookup refuses foreign targets across every navigation condition"},
@@ -2100,4 +2101,215 @@ function assertNavigationFingerprints(source: ts.SourceFile) {
 }
 test("supplier navigation statement fingerprints require a reviewed door table for every token change", () => {
   assertNavigationFingerprints(parse("convex/utils/supplierNavigation.ts"));
+});
+// SCRUM-943: pin the caller, not just the helper. getText deliberately includes
+// the scope's exact initializer so permission re-sourcing needs explicit review.
+interface NavigationCaller {
+  file: string; caller: string; exportedQuery: string | null; callee: string; arguments: string; scope: string;
+}
+const NAVIGATION_CALLERS: readonly (NavigationCaller & { tests: readonly string[] })[] = [
+  { file: "convex/supplierStatement.ts", caller: "settled", exportedQuery: "settled", callee: "addSupplierRowContext",
+    arguments: "ctx, scope, result.payable", scope: "{ ...args, permissions: role.permissions, cache: createSupplierReadCache() }",
+    tests: ["settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", "settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AP preserves the viewer gate and refuses foreign or missing drafts", "settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles"] },
+  { file: "convex/supplierStatement.ts", caller: "settled", exportedQuery: "settled", callee: "addSupplierRowContext",
+    arguments: "ctx, scope, result.receivable", scope: "{ ...args, permissions: role.permissions, cache: createSupplierReadCache() }",
+    tests: ["settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales", "settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales", "settled opening AR preserves the viewer gate and refuses foreign or missing drafts", "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources"] },
+  { file: "convex/supplierStatement.ts", caller: "outstanding", exportedQuery: "outstanding", callee: "addSupplierRowContext",
+    arguments: "ctx, scope, result.payable", scope: "{ ...args, permissions: role.permissions, cache }",
+    tests: ["opening link gate checks local targets across every navigation condition", "vehicle link gate checks local targets across every navigation condition"] },
+  { file: "convex/supplierStatement.ts", caller: "outstanding", exportedQuery: "outstanding", callee: "addSupplierRowContext",
+    arguments: "ctx, scope, result.receivable", scope: "{ ...args, permissions: role.permissions, cache }",
+    tests: ["sales link gate checks local targets across every navigation condition", "application lookup checks local deleted and missing targets across every navigation condition"] },
+  { file: "convex/supplierRelationships.ts", caller: "project", exportedQuery: null, callee: "supplierVehicleHref",
+    arguments: "vehicle.orgId, vehicle._id, permissions", scope: "permissions: readonly string[]",
+    tests: ["relationship query preserves the viewer vehicle permission for sourced and owned rows"] },
+  { file: "convex/utils/supplierNavigation.ts", caller: "vehicleSource", exportedQuery: null, callee: "supplierVehicleHref",
+    arguments: "args.orgId, vehicle._id, args.permissions", scope: "args: NavigationArgs",
+    tests: ["settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", "vehicle link gate checks local targets across every navigation condition"] },
+];
+
+function permissionExports(source: ts.SourceFile): string[] {
+  const checker = identifierChecker(source);
+  const moduleSymbol = checker.getSymbolAtLocation(source);
+  if (!moduleSymbol) throw new Error(`Cannot enumerate navigation exports. ${updateTable}`);
+  return checker.getExportsOfModule(moduleSymbol).filter(symbol =>
+    checker.getTypeOfSymbolAtLocation(symbol, source).getCallSignatures().some(signature => signature.parameters.some(parameter =>
+      parameter.name === "permissions" || checker.getTypeOfSymbolAtLocation(parameter, source).getProperty("permissions"))))
+    .map(symbol => symbol.name).sort();
+}
+
+function isNavigationModule(source: ts.SourceFile, specifier: ts.Expression): boolean {
+  if (!ts.isStringLiteral(specifier)) return false;
+  const target = ts.resolveModuleName(specifier.text, join(root, source.fileName), CALLER_COMPILER_OPTIONS, ts.sys).resolvedModule?.resolvedFileName;
+  return target !== undefined && resolve(target) === resolve(root, "convex/utils/supplierNavigation.ts");
+}
+
+function callerCompilerOptions(): ts.CompilerOptions {
+  const config = ts.readConfigFile(join(root, "tsconfig.json"), ts.sys.readFile);
+  if (config.error) throw new Error(`Cannot read caller module-resolution options. ${updateTable}`);
+  const converted = ts.convertCompilerOptionsFromJson(config.config.compilerOptions, root);
+  if (converted.errors.length) throw new Error(`Cannot parse caller module-resolution options. ${updateTable}`);
+  return converted.options;
+}
+const CALLER_COMPILER_OPTIONS = callerCompilerOptions();
+
+function navigationImportBindings(source: ts.SourceFile, statement: ts.ImportDeclaration, names: readonly string[]): [string, string][] {
+  if (!isNavigationModule(source, statement.moduleSpecifier)) return [];
+  const imported = statement.importClause?.namedBindings;
+  if (!imported) throw new Error(`${source.fileName}: default helper import is unsupported. ${updateTable}`);
+  if (ts.isNamespaceImport(imported)) return names.map(name => [`${imported.name.text}.${name}`, name]);
+  return imported.elements.flatMap(element => {
+    const name = (element.propertyName ?? element.name).text;
+    return names.includes(name) ? [[element.name.text, name]] : [];
+  });
+}
+
+function navigationBindings(source: ts.SourceFile, names: readonly string[]): Map<string, string> {
+  for (const statement of source.statements.filter(ts.isExportDeclaration)) {
+    if (statement.moduleSpecifier && isNavigationModule(source, statement.moduleSpecifier)) {
+      throw new Error(`${source.fileName}:${source.getLineAndCharacterOfPosition(statement.getStart(source)).line + 1}: review navigation re-export callers and bind their behaviour. ${updateTable}`);
+    }
+  }
+  const own: [string, string][] = source.fileName === "convex/utils/supplierNavigation.ts" ? names.map(name => [name, name]) : [];
+  return new Map([...own, ...source.statements.filter(ts.isImportDeclaration).flatMap(statement => navigationImportBindings(source, statement, names))]);
+}
+
+function enclosingCaller(node: ts.Node): { caller: string; exportedQuery: string | null } {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (ts.isFunctionDeclaration(parent)) return { caller: parent.name?.text ?? "anonymous", exportedQuery: null };
+    if (ts.isVariableDeclaration(parent) && parent.initializer && ts.isCallExpression(parent.initializer) &&
+      parent.initializer.expression.getText() === "query") {
+      return { caller: parent.name.getText(), exportedQuery: parent.name.getText() };
+    }
+  }
+  throw new Error(`Unbound navigation caller at ${node.getSourceFile().fileName}. ${updateTable}`);
+}
+
+function scopeDeclaration(source: ts.SourceFile, node: ts.Expression, checker: ts.TypeChecker): string {
+  const base = ts.isPropertyAccessExpression(node) ? node.expression : node;
+  const declarations = checker.getSymbolAtLocation(base)?.declarations ?? [];
+  const declaration = declarations[0];
+  if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) return declaration.initializer.getText(source);
+  if (declaration && ts.isParameter(declaration)) return declaration.getText(source);
+  return node.getText(source); // Inline scopes are pinned too; an unreviewed shape differs from the literal table.
+}
+
+function navigationReference(source: ts.SourceFile, node: ts.Node): string {
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) {
+    return `${node.expression.getText(source)}.${node.argumentExpression.text}`;
+  }
+  return node.getText(source);
+}
+
+function sourceNavigationCallers(source: ts.SourceFile, names: readonly string[]): (NavigationCaller & { line: number })[] {
+  const bindings = navigationBindings(source, names);
+  if (!bindings.size) return [];
+  const checker = identifierChecker(source);
+  const found: (NavigationCaller & { line: number })[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeNode(node)) return; // Type queries in generated declarations do not invoke a helper.
+    const callee = ts.isCallExpression(node) ? bindings.get(navigationReference(source, node.expression)) : undefined;
+    if (callee && ts.isCallExpression(node)) {
+      const scope = node.arguments[callee === "addSupplierRowContext" ? 1 : 2];
+      if (!scope) throw new Error(`${source.fileName}: missing navigation scope. ${updateTable}`);
+      found.push({ file: source.fileName, ...enclosingCaller(node), callee,
+        arguments: node.arguments.map(argument => argument.getText(source)).join(", "), scope: scopeDeclaration(source, scope, checker),
+        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1 });
+    }
+    refuseBareNavigationNamespace(source, node, bindings);
+    refuseNavigationAlias(source, node, bindings);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+
+function refuseBareNavigationNamespace(source: ts.SourceFile, node: ts.Node, bindings: Map<string, string>): void {
+  if (!ts.isIdentifier(node)) return;
+  if (![...bindings.keys()].some(name => name.startsWith(`${node.text}.`))) return;
+  const parent = node.parent;
+  if (ts.isNamespaceImport(parent)) return;
+  if (ts.isPropertyAccessExpression(parent) && parent.expression === node) return;
+  if (ts.isElementAccessExpression(parent) && parent.expression === node && ts.isStringLiteral(parent.argumentExpression)) return;
+  throw new Error(`${source.fileName}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: review computed or aliased navigation namespace ${node.text}. ${updateTable}`);
+}
+
+function refuseNavigationAlias(source: ts.SourceFile, node: ts.Node, bindings: Map<string, string>): void {
+  if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return;
+  if (!bindings.has(navigationReference(source, node))) return;
+  const parent = node.parent;
+  if (ts.isImportSpecifier(parent) || ts.isFunctionDeclaration(parent) || ts.isNamespaceImport(parent)) return;
+  if (ts.isCallExpression(parent) && parent.expression === node) return;
+  throw new Error(`${source.fileName}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}: non-call navigation reference ${node.getText(source)}; review aliases and bind its public-query behaviour. ${updateTable}`);
+}
+
+function callerLocation(caller: NavigationCaller): string {
+  const source = parse(caller.file);
+  const declaration = source.statements.find(statement => {
+    if (ts.isFunctionDeclaration(statement)) return statement.name?.text === caller.caller;
+    return ts.isVariableStatement(statement) && statement.declarationList.declarations.some(declaration => declaration.name.getText(source) === caller.caller);
+  });
+  return `${caller.file}:${source.getLineAndCharacterOfPosition(declaration?.getStart(source) ?? source.end).line + 1}`;
+}
+
+function boundCallerCell(node: ts.Node, caller: NavigationCaller): boolean {
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return false;
+  if (caller.caller === "project") return node.expression.text === "related";
+  if (node.expression.text !== "navigationCells") return false;
+  if (caller.caller === "vehicleSource") return node.arguments[1]?.getText().includes('"viewVehicles"') === true;
+  const mode = node.arguments[3];
+  const query = mode && ts.isStringLiteral(mode) ? mode.text : "outstanding";
+  const role = node.arguments[4];
+  return query === caller.exportedQuery && (!role || role.getText() === (caller.arguments.endsWith("result.payable") ? '"AP"' : '"AR"'));
+}
+
+function testHasCallerCells(source: ts.SourceFile, title: string, caller: NavigationCaller): boolean {
+  let found = false;
+  const visit = (node: ts.Node, within = false): void => {
+    if (ts.isCallExpression(node) && node.expression.getText(source) === "test" &&
+      node.arguments[0] && ts.isStringLiteral(node.arguments[0])) within = node.arguments[0].text === title;
+    if (within && boundCallerCell(node, caller)) found = true;
+    ts.forEachChild(node, child => visit(child, within));
+  };
+  visit(source);
+  return found;
+}
+
+function assertCallerTests(caller: typeof NAVIGATION_CALLERS[number]): void {
+  const file = "convex/supplierNavigation.scrum869.test.ts";
+  const source = readFileSync(join(root, file), "utf8");
+  const active = listActiveTestRegistrations(source).filter(test => !test.parameterized);
+  const syntax = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  const location = callerLocation(caller);
+  expect(caller.tests.length, `${location}: ${caller.caller} needs behavioural cells. ${updateTable}`).toBeGreaterThan(0);
+  for (const title of caller.tests) {
+    const message = `${location}: ${caller.caller} / ${caller.arguments} needs active literal behavioural test ${title}. ${updateTable}`;
+    expect(active.filter(test => test.title === title).length, message).toBe(1);
+    expect(testHasCallerCells(syntax, title, caller), message).toBe(true);
+  }
+}
+
+function callerPin({ file, caller, exportedQuery, callee, arguments: argumentText, scope }: NavigationCaller): NavigationCaller {
+  return { file, caller, exportedQuery, callee, arguments: argumentText, scope };
+}
+
+test("supplier navigation caller census pins every permission scope and binds public query behaviour", () => {
+  const names = permissionExports(parse("convex/utils/supplierNavigation.ts"));
+  expect(names, `Review every permission-taking export and list its callers. ${updateTable}`).toStrictEqual(["addSupplierRowContext", "supplierVehicleHref"]);
+  const files = ts.sys.readDirectory(join(root, "convex"), [".ts"], ["**/*.test.ts", "**/*.spec.ts"]);
+  expect(files.length, "The recursive Convex caller sweep must not be empty").toBeGreaterThan(0);
+  const found = files.flatMap(file => {
+    const text = readFileSync(file, "utf8");
+    if (!text.includes("supplierNavigation") && !names.some(name => text.includes(name))) return [];
+    const source = ts.createSourceFile(relative(root, file).replaceAll("\\", "/"), text, ts.ScriptTarget.Latest, true);
+    return sourceNavigationCallers(source, names);
+  });
+  for (const current of found) expect(NAVIGATION_CALLERS.map(callerPin),
+    `${current.file}:${current.line}: added caller or changed scope ${current.caller} / ${current.arguments}. ${updateTable}; add literal cells and a scenario before updating NAVIGATION_CALLERS`)
+    .toContainEqual(callerPin(current));
+  for (const pin of NAVIGATION_CALLERS.map(callerPin)) {
+    expect(found.filter(caller => JSON.stringify(callerPin(caller)) === JSON.stringify(pin)).length,
+      `${callerLocation(pin)}: removed or changed caller ${pin.caller} / ${pin.arguments}. ${updateTable}; review its behavioural binding`).toBe(1);
+  }
+  for (const caller of NAVIGATION_CALLERS) assertCallerTests(caller);
 });

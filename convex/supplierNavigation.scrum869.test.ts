@@ -244,21 +244,114 @@ async function seedReadBound(s: Seed, unique: boolean) {
   });
 }
 
-async function settleReadBound(s: Seed) {
+async function settleReadBound(s: Seed, obligationId?: NavigationFixture["obligationId"]) {
   await s.t.run(async ctx => {
     const accountId = await ctx.db.insert("chartOfAccounts", { orgId: s.orgId, code: "1240", name: "Synthetic control", type: "ASSET", normalBalance: "DEBIT", isControlAccount: true, allowManualPosting: false, active: true, systemKey: SYSTEM_KEYS.RECEIVABLE_FROM_SUPPLIERS, createdAt: NOW, updatedAt: NOW });
     const payables = await ctx.db.query("vehicleSupplierPayables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
-    for (const row of payables) await ctx.db.patch(row._id, { status: "PAID", amountPaid: 10 });
+    for (const row of payables.filter(row => !obligationId || row._id === obligationId)) await ctx.db.patch(row._id, { status: "PAID", amountPaid: 10 });
     const recoveries = await ctx.db.query("supplierCostRecoveries").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
-    for (const row of recoveries) await ctx.db.patch(row._id, { status: "RECOVERED", amountRecoveredMinor: 10000 });
+    for (const row of recoveries.filter(row => !obligationId || row._id === obligationId)) await ctx.db.patch(row._id, { status: "RECOVERED", amountRecoveredMinor: 10000 });
     const claims = await ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(100);
-    for (const row of claims) {
+    for (const row of claims.filter(row => !obligationId || row._id === obligationId)) {
       await ctx.db.patch(row._id, { status: "PAID", amountReceived: 10, receiptSeq: 1 });
       const journalEntryId = await ctx.db.insert("journalEntries", { orgId: s.orgId, journalNumber: `read-${row._id}`, accountingDate: NOW, sourceType: "vehicleSupplierReceivables", sourceId: row._id, category: "SYSTEM", memo: "Synthetic receipt", status: "POSTED", currency: "JOD", postedBy: s.userId, postedAt: NOW, createdAt: NOW });
       await ctx.db.insert("journalLines", { orgId: s.orgId, journalEntryId, accountId, lineNumber: 1, debitMinor: 0, creditMinor: 10000, currency: "JOD", scale: 3, accountingDate: NOW });
     }
   });
 }
+
+// SCRUM-943: one base per reachable source and role, then vary its gate or target.
+// Applications and opening drafts have no isDeleted field. Missing targets exercise
+// their absent-document outcome; no deleted-document coverage is claimed for them.
+// Native no-sale vehicles occur in AP only; expense recoveries occur in AR only.
+test("settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales", async () => {
+ await navigationCells("settled cash sale AP", ["shape","saleTarget","viewSales","timestamp"], [
+  ["cash","local","with","valid","sale+link","number+vehicle"],
+  ["cash","local","without","valid","sale","number+vehicle"],
+  ["cash","foreign","with","valid","none","none"],
+  ["cash","deleted","with","valid","none","none"],
+ ], "settled", "AP");
+});
+test("settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales", async () => {
+ await navigationCells("settled cash sale AR", ["shape","saleTarget","viewSales","timestamp"], [
+  ["cash","local","with","valid","sale+link","number+vehicle"],
+  ["cash","local","without","valid","sale","number+vehicle"],
+  ["cash","foreign","with","valid","none","none"],
+  ["cash","deleted","with","valid","none","none"],
+ ], "settled", "AR");
+});
+test("settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales", async () => {
+ await navigationCells("settled application AP", ["shape","saleTarget","applicationTarget","viewSales","timestamp"], [
+  ["financed","local","local","with","valid","application+link","number+vehicle"],
+  ["financed","local","local","without","valid","application","number+vehicle"],
+  ["financed","local","foreign","with","valid","sale","number+vehicle"],
+  ["financed","local","missing","with","valid","sale","number+vehicle"],
+  ["financed","foreign","local","with","valid","none","none"],
+  ["financed","deleted","local","with","valid","none","none"],
+ ], "settled", "AP");
+});
+test("settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales", async () => {
+ await navigationCells("settled application AR", ["shape","saleTarget","applicationTarget","viewSales","timestamp"], [
+  ["financed","local","local","with","valid","application+link","number+vehicle"],
+  ["financed","local","local","without","valid","application","number+vehicle"],
+  ["financed","local","foreign","with","valid","sale","number+vehicle"],
+  ["financed","local","missing","with","valid","sale","number+vehicle"],
+  ["financed","foreign","local","with","valid","none","none"],
+  ["financed","deleted","local","with","valid","none","none"],
+ ], "settled", "AR");
+});
+test("settled opening AP preserves the viewer gate and refuses foreign or missing drafts", async () => {
+ await navigationCells("settled opening AP", ["shape","draftTarget","status","manageFinance","timestamp"], [
+  ["opening","local","POSTED","with","valid","opening+link","opening"],
+  ["opening","local","POSTED","without","valid","opening","opening"],
+  ["opening","foreign","POSTED","with","valid","none","none"],
+  ["opening","missing","POSTED","with","valid","none","none"],
+ ], "settled", "AP");
+});
+test("settled opening AR preserves the viewer gate and refuses foreign or missing drafts", async () => {
+ await navigationCells("settled opening AR", ["shape","draftTarget","status","manageFinance","timestamp"], [
+  ["opening","local","POSTED","with","valid","opening+link","opening"],
+  ["opening","local","POSTED","without","valid","opening","opening"],
+  ["opening","foreign","POSTED","with","valid","none","none"],
+  ["opening","missing","POSTED","with","valid","none","none"],
+ ], "settled", "AR");
+});
+test("settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles", async () => {
+ await navigationCells("settled native vehicle AP", ["shape","vehicle","viewVehicles","timestamp"], [
+  ["native","local","with","valid","vehicle+link","vehicle"],
+  ["native","local","without","valid","vehicle","vehicle"],
+  ["native","foreign","with","valid","none","none"],
+  ["native","deleted","with","valid","none","none"],
+ ], "settled", "AP");
+});
+test("settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources", async () => {
+ await navigationCells("settled expense vehicle AR", ["shape","expenseTarget","vehicle","viewVehicles","timestamp"], [
+  ["expense","local","local","with","valid","expense+vehicle+link","expense"],
+  ["expense","local","local","without","valid","expense+vehicle","expense"],
+  ["expense","foreign","local","with","valid","none","none"],
+  ["expense","deleted","local","with","valid","none","none"],
+  ["expense","local","foreign","with","valid","expense","expense"],
+  ["expense","local","deleted","with","valid","expense","expense"],
+ ], "settled", "AR");
+});
+
+test("relationship query preserves the viewer vehicle permission for sourced and owned rows", async () => {
+  for (const [kind, permission, model, link] of [
+    ["SOURCED", "without", "SOURCED", "none"],
+    ["SOURCED", "with", "SOURCED", "vehicle"],
+    ["OWNED", "without", "OWNED_ON_ACCOUNT", "none"],
+    ["OWNED", "with", "OWNED_ON_ACCOUNT", "vehicle"],
+  ]) {
+    const message = `relationship ${kind}/${permission}`;
+    const f = await seedNavigationCell({ shape: "native", viewVehicles: permission!, timestamp: "valid" }, message);
+    if (kind === "OWNED") await f.s.t.run(ctx => ctx.db.patch(f.s.vehicleId, { sourceType: "STOCK" }));
+    const hrefs = { none: null, vehicle: `/${f.s.orgId}/vehicles?supplierVehicleId=${f.s.vehicleId}` };
+    expect((await related(f.s, kind)).page, message).toStrictEqual([{
+      id: kind === "OWNED" ? f.obligationId : f.s.vehicleId, vehicleId: f.s.vehicleId,
+      label: "2024 Toyota Camry", model, status: "AVAILABLE", href: hrefs[link as keyof typeof hrefs],
+    }]);
+  }
+});
 
 describe("supplier navigation by canonical id", () => {
   test("100 rows per family with distinct targets use at most 803 actual gets per outstanding handler", async () => {
@@ -858,6 +951,15 @@ function navigationTargets(f: NavigationFixture) {
     expenseTarget: f.expenseId, draftTarget: f.draftId, vehicle: f.shape === "opening" ? null : f.s.vehicleId };
 }
 
+async function seedNavigationOpening(s: Seed, draftId: Doc<"openingBalanceDrafts">["_id"], role?: string) {
+  const common = { orgId: s.orgId, supplierId: s.supplierId, sourcedFromName: "Synthetic opening supplier",
+    currency: "JOD", createdBy: s.userId, createdAt: NOW, updatedAt: NOW, origin: "OPENING" as const,
+    openingBalanceDraftId: draftId, openingRowKey: "AP1", title: "Synthetic local opening invoice" };
+  return role === "AR"
+    ? s.t.run(ctx => ctx.db.insert("supplierCostRecoveries", { ...common, amountDueMinor: 20000, amountRecoveredMinor: 0, status: "OPEN", receiptSeq: 0, purpose: "CLAIM" as const }))
+    : s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { ...common, amountDue: 10, status: "DUE_ON_SALE", openingKind: "SUPPLIER_PAYABLE" as const }));
+}
+
 async function seedNavigationCell(cell: NavigationCell, message: string): Promise<NavigationFixture> {
   const s = await seed(navigationPermissions(cell));
   const shape = cell.shape!;
@@ -868,10 +970,7 @@ async function seedNavigationCell(cell: NavigationCell, message: string): Promis
   if (shape === "opening") {
     draftId = await s.t.run(ctx => ctx.db.insert("openingBalanceDrafts", { orgId: s.orgId,
       status: cell.status as Doc<"openingBalanceDrafts">["status"], lines: [], asOfDate: NOW, createdBy: s.userId, createdAt: NOW }));
-    obligationId = await s.t.run(ctx => ctx.db.insert("vehicleSupplierPayables", { orgId: s.orgId, supplierId: s.supplierId,
-      sourcedFromName: "Synthetic opening supplier", amountDue: 10, currency: "JOD", status: "DUE_ON_SALE", createdBy: s.userId,
-      createdAt: NOW, updatedAt: NOW, origin: "OPENING", openingBalanceDraftId: draftId!, openingRowKey: "AP1",
-      openingKind: "SUPPLIER_PAYABLE", title: "Synthetic local opening invoice" }));
+    obligationId = await seedNavigationOpening(s, draftId, cell.role);
   } else if (shape === "expense") {
     expenseId = await s.t.run(ctx => ctx.db.insert("expenses", { orgId: s.orgId, vehicleId: s.vehicleId,
       title: "Synthetic vehicle transport", amount: 20, date: NOW, category: "TRANSPORT", status: "PAID" }));
@@ -887,7 +986,7 @@ async function seedNavigationCell(cell: NavigationCell, message: string): Promis
       ...(shape === "cash" ? { applicationId: undefined } : {}), status: (cell.saleStatus ?? "COMPLETED") as Doc<"sales">["status"] }));
     const rows = await s.t.run(ctx => ctx.db.query("vehicleSupplierReceivables").withIndex("by_org", q => q.eq("orgId", s.orgId)).take(2));
     expect(rows.length, message).toBe(1);
-    obligationId = rows[0]!._id;
+    obligationId = cell.role === "AP" ? await payable(s, { saleId: sale.saleId }) : rows[0]!._id;
   }
   const timestamps: Readonly<Record<string, number>> = { valid: NOW, fractional: 1.5, "positive-overflow": 8640000000000001, "negative-overflow": -8640000000000001 };
   await s.t.run(ctx => ctx.db.patch(obligationId, { createdAt: timestamps[cell.timestamp ?? "valid"]! }));
@@ -973,23 +1072,29 @@ function expectedNavigationOutcome(f: NavigationFixture, outcome: NavigationOutc
   return outcomes[outcome];
 }
 
-async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel) {
+async function navigationCell(door: string, cell: NavigationCell, outcome: NavigationOutcome, labelKind: NavigationLabel, queryName: "outstanding" | "settled" = "outstanding") {
   const message = `${door}: ${JSON.stringify(cell)} => ${outcome}/${labelKind}`;
   const f = await seedNavigationCell(cell, message);
   await readBackNavigationCell(f, cell, message);
   await readBackNavigationDocumentFields(f, cell, message);
-  const result = await outstanding(f.s);
+  if (queryName === "settled") await settleReadBound(f.s, f.obligationId);
+  const result = queryName === "settled"
+    ? await f.s.asUser.query(api.supplierStatement.settled, { orgId: f.s.orgId, supplierId: f.s.supplierId })
+    : await outstanding(f.s);
   const contexts = {
     opening: {role: "AP", counterparty: "Synthetic opening supplier"}, native: {role: "AP", counterparty: "Original supplier snapshot"},
     expense: {role: "AR", counterparty: "Synthetic supplier bearer"}, cash: {role: "AR", counterparty: "Synthetic supplier payer"}, financed: {role: "AR", counterparty: "Synthetic supplier payer"},
   };
-  const rows = f.shape === "opening" || f.shape === "native" ? result.payable.rows : result.receivable.rows;
+  const role = cell.role ?? contexts[f.shape as keyof typeof contexts].role;
+  const rows = role === "AP" ? result.payable.rows : result.receivable.rows;
+  if (queryName === "settled") expect(rows.map(row => "settledMinor" in row ? row.settledMinor : null), message).toStrictEqual([10000]);
   expect(rows.map(row => row.context), message).toStrictEqual([{
-    ...contexts[f.shape as keyof typeof contexts], occurredAt: cell.timestamp === "valid" ? NOW : null, ...expectedNavigationOutcome(f, outcome, labelKind),
+    ...contexts[f.shape as keyof typeof contexts], role, ...(cell.role === "AP" && f.sale ? { counterparty: "Original supplier snapshot" } : {}),
+    occurredAt: cell.timestamp === "valid" ? NOW : null, ...expectedNavigationOutcome(f, outcome, labelKind),
   }]);
 }
 
-async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[]) {
+async function navigationCells(door: string, axes: readonly string[], cells: readonly (readonly string[])[], queryName: "outstanding" | "settled" = "outstanding", role?: "AP" | "AR") {
   const values: Readonly<Record<string, readonly string[]>> = {
     shape: ["native", "cash", "financed", "expense", "opening"], saleTarget: ["local", "foreign", "deleted", "missing"],
     applicationTarget: ["local", "foreign", "missing"], expenseTarget: ["local", "foreign", "deleted", "missing"],
@@ -1001,7 +1106,7 @@ async function navigationCells(door: string, axes: readonly string[], cells: rea
     expect(tuple.length, `${door}: ${JSON.stringify(tuple)}`).toBe(axes.length + 2);
     const cell = Object.fromEntries(axes.map((axis, index) => [axis, tuple[index]!]));
     for (const [axis, value] of Object.entries(cell)) expect(values[axis], `${door}: ${JSON.stringify(cell)}`).toContain(value);
-    await navigationCell(door, cell, tuple[axes.length] as NavigationOutcome, tuple[axes.length + 1] as NavigationLabel);
+    await navigationCell(door, role ? { ...cell, role } : cell, tuple[axes.length] as NavigationOutcome, tuple[axes.length + 1] as NavigationLabel, queryName);
   }
 }
 
@@ -1132,6 +1237,11 @@ test("sale lookup checks local deleted and missing targets for financed sales ac
   ["financed","local","missing","without","without","foreign","valid","COMPLETED","sale","id"],
   ["financed","local","missing","without","without","deleted","valid","COMPLETED","sale","id"],
   ["financed","local","missing","without","without","missing","valid","COMPLETED","sale","id"],
+ ]);
+});
+
+test("sale lookup checks deleted and missing financed sales across every navigation condition", async () => {
+ await navigationCells("sale lookup", ["shape","saleTarget","applicationTarget","viewSales","dealNumber","vehicle","timestamp","saleStatus"], [
   ["financed","deleted","local","with","with","local","valid","COMPLETED","none","none"],
   ["financed","deleted","local","with","with","local","valid","CANCELLED","none","none"],
   ["financed","deleted","local","with","with","foreign","valid","COMPLETED","none","none"],

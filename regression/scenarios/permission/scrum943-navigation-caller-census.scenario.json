@@ -1,0 +1,54 @@
+{
+  "id": "scrum943-navigation-caller-census",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.scanSupplierNavigationCallers",
+      "input": {
+        "files": "CONVEX_TYPESCRIPT_RECURSIVE",
+        "exclude": "TESTS_AND_GENERATED",
+        "exports": [
+          "addSupplierRowContext",
+          "supplierVehicleHref"
+        ]
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "callerArgumentsAndScopes",
+      "value": "EXACT_LITERAL_TABLE"
+    },
+    {
+      "observable": "callerBehaviourBindings",
+      "value": "ACTIVE_LITERAL_TESTS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "supplier navigation caller census pins every permission scope and binds public query behaviour"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "4df96708970b7e478a4f60d2e9827f1fb6d4d61bf25013bfa081543172619726"
+}

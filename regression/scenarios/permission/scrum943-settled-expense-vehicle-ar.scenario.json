@@ -1,0 +1,147 @@
+{
+  "id": "scrum943-settled-expense-vehicle-ar",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.seedSupplierNavigationDoor",
+      "input": {
+        "axes": [
+          "shape",
+          "expenseTarget",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "tuples": [
+          [
+            "expense",
+            "local",
+            "local",
+            "with",
+            "valid"
+          ],
+          [
+            "expense",
+            "local",
+            "local",
+            "without",
+            "valid"
+          ],
+          [
+            "expense",
+            "foreign",
+            "local",
+            "with",
+            "valid"
+          ],
+          [
+            "expense",
+            "deleted",
+            "local",
+            "with",
+            "valid"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "valid"
+          ],
+          [
+            "expense",
+            "local",
+            "deleted",
+            "with",
+            "valid"
+          ]
+        ],
+        "role": "AR",
+        "targets": "REAL_SYNTHETIC_DOCUMENTS"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.settleSupplierNavigationObligation",
+      "input": {
+        "receipt": "POSTED_CONTROL_CREDIT",
+        "settledMinor": 10000
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.settled",
+      "input": {
+        "section": "AR"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "contexts.outcomeAndLabel",
+      "value": [
+        [
+          "expense+vehicle+link",
+          "expense"
+        ],
+        [
+          "expense+vehicle",
+          "expense"
+        ],
+        [
+          "none",
+          "none"
+        ],
+        [
+          "none",
+          "none"
+        ],
+        [
+          "expense",
+          "expense"
+        ],
+        [
+          "expense",
+          "expense"
+        ]
+      ]
+    },
+    {
+      "observable": "rows.settledMinor",
+      "value": 10000
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "37f3d615e9605db4ec752a9104e49b99e2110ccfb9e6ed0e2e2e7649423b16c8"
+}
