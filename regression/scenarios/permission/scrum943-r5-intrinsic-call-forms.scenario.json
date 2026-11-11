@@ -1,0 +1,57 @@
+{
+  "id": "scrum943-r5-intrinsic-call-forms",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "STATIC_INTRINSIC_MEMBERS_AND_WRAPPERS_REQUIRE_LOCAL_DIRECT_CALL",
+        "forms": [
+          "BRACKET_LITERAL",
+          "PARENTHESIZED_MEMBER",
+          "PARENTHESIZED_OWNER",
+          "METHOD_ALIAS",
+          "CALL_CHAIN"
+        ],
+        "control": "DIRECT_LOCAL_INTRINSIC_TARGET"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "globalIntrinsicOrEscapedMutator",
+      "value": "REFUSED"
+    },
+    {
+      "observable": "directLocalTarget",
+      "value": "ADMITTED"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller intrinsic admissions resolve literal members wrappers and method escapes"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "6f0e2f0bc328fd89145131f8477fb9ed6495702e6ac2264323a4f8a0b6d2916f"
+}

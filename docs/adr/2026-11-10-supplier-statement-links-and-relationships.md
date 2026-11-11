@@ -330,6 +330,11 @@ delete and iteration writes require a binding declared in this file. The listed
 Object/Reflect mutation APIs require their first argument's binding to be declared
 inside the enclosing function. There are no existing Object/Reflect mutation API
 sites in the behavioural file that require exceptions. Dynamic import() refuses.
+Literal bracket members and erased wrappers resolve to the same intrinsic API as
+dot access. A mutator method cannot escape into an alias, bind/call chain or other
+value position. This follows [ECMAScript property-access evaluation](https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-property-accessors)
+and uses the TypeScript AST rather than callee-text matching. The new regression
+first failed when literal bracket and parenthesized calls were admitted.
 The ordinary call-through db.get spy remains within its pinned helper. No census
 exists for supplierReadCache.test.ts or tenancy.test.ts today, so these rules are
 not extended to those dependency contracts.

@@ -3536,9 +3536,36 @@ function refuseNonlocalRunnerWrite(source: ts.SourceFile, checker: ts.TypeChecke
 
 const RUNNER_INTRINSIC_MUTATORS = ["Object.defineProperty", "Object.defineProperties", "Object.assign", "Object.setPrototypeOf",
   "Reflect.set", "Reflect.defineProperty", "Reflect.setPrototypeOf"];
+
+function runnerErasedWrapper(node: ts.Node): node is ts.ParenthesizedExpression | ts.AsExpression | ts.NonNullExpression | ts.TypeAssertion | ts.SatisfiesExpression {
+  return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node);
+}
+
+function runnerIntrinsicName(node: ts.Node): string | undefined {
+  if (runnerErasedWrapper(node)) return runnerIntrinsicName(node.expression);
+  if (!ts.isPropertyAccessExpression(node) && !ts.isElementAccessExpression(node)) return;
+  const owner = runnerRoot(node.expression);
+  const member = runnerMember(node);
+  const name = `${owner}.${member}`;
+  return RUNNER_INTRINSIC_MUTATORS.includes(name) ? name : undefined;
+}
+
+function runnerInvocation(node: ts.Node): ts.CallExpression | undefined {
+  const parent = node.parent;
+  if (runnerErasedWrapper(parent) && parent.expression === node) return runnerInvocation(parent);
+  return ts.isCallExpression(parent) && parent.expression === node ? parent : undefined;
+}
+
+function refuseRunnerIntrinsicReference(source: ts.SourceFile, node: ts.Node): void {
+  if (runnerIntrinsicName(node) && !runnerInvocation(node)) {
+    runnerRefusal(source, node, "intrinsic mutator reference must remain a direct call with a reviewed local target");
+  }
+}
+
 function refuseRunnerIntrinsic(source: ts.SourceFile, checker: ts.TypeChecker, node: ts.CallExpression): void {
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword) runnerRefusal(source, node, "ADMITTED_RUNNER_REFERENCES refuses dynamic import()");
-  if (!RUNNER_INTRINSIC_MUTATORS.includes(node.expression.getText(source))) return;
+  if (!runnerIntrinsicName(node.expression)) return;
   const target = node.arguments[0];
   const enclosing = ts.findAncestor(node, ts.isFunctionLike);
   if (!target || !enclosing || !runnerLocalSymbol(checker, runnerRootNode(target), enclosing)) {
@@ -3559,6 +3586,7 @@ function assertAdmittedRunnerReferences(source: ts.SourceFile): void {
   const counts = new Map<string, number>();
   const checker = runnerChecker(source);
   const visit = (node: ts.Node): void => {
+    refuseRunnerIntrinsicReference(source, node);
     if (ts.isIdentifier(node) && protectedNames.has(node.text)) {
       if (runnerBindingIdentifier(node)) {
         if (!pinned.has(node)) runnerRefusal(source, node, `ADMITTED_RUNNER_REFERENCES refuses second binding ${node.text}`);
@@ -4319,5 +4347,27 @@ test("caller admitted reference table protects receipt values and global intrins
   }
   const local = original.replace(title, title + '\n const local = {}; Object.assign(local, { value: 1 }); Object.defineProperty(local, "other", {value: 2});');
   expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-local-control.ts", local, ts.ScriptTarget.Latest, true)))
+    .not.toThrow();
+});
+
+test("caller intrinsic admissions resolve literal members wrappers and method escapes", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  for (const form of [
+    'Object["defineProperty"](Array.prototype, "reviewSlot", { value: 1 });',
+    '(Object.defineProperty)(Array.prototype, "reviewSlot", { value: 1 });',
+    '(Object).defineProperty(Array.prototype, "reviewSlot", { value: 1 });',
+    'Reflect["set"](Array.prototype, "reviewSlot", 1);',
+    'Object["defineProperties"](Array.prototype, {});',
+    '(Reflect.setPrototypeOf)(Array.prototype, {});',
+    'const mutate = Object.defineProperty; mutate(Array.prototype, "reviewSlot", { value: 1 });',
+    'Object.defineProperty.call(null, Array.prototype, "reviewSlot", { value: 1 });',
+  ]) {
+    const text = original.replace(title, title + "\n" + form);
+    const source = ts.createSourceFile("runner-intrinsic-admission.ts", text, ts.ScriptTarget.Latest, true);
+    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES/);
+  }
+  const local = original.replace(title, title + '\n const local = {}; (Object["assign"])(local, { value: 1 }); Reflect["set"](local, "other", 2);');
+  expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-local-intrinsic.ts", local, ts.ScriptTarget.Latest, true)))
     .not.toThrow();
 });
