@@ -1,0 +1,58 @@
+{
+  "id": "bank-stated-opening-edit-leaves-book-balance-unchanged",
+  "fingerprint": "487c5bb35d35c1f08efe2904cb0be93b6b65f11ffd55604e6037f8ed7003385c",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum945-bank-stated-opening",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {}
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.update",
+      "input": {
+        "openingBalanceMinor": "changed",
+        "openingBalanceDate": "changed"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.getBookBalance",
+      "input": {}
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bookBalance.beforeEqualsAfter",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/bankAccounts.scrum945.test.ts",
+    "testName": "invariant: getBookBalance is identical before and after an edit"
+  },
+  "matrixRow": "SCRUM945-bank-stated-opening"
+}

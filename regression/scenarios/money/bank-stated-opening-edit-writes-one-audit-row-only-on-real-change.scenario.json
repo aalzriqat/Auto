@@ -1,0 +1,65 @@
+{
+  "id": "bank-stated-opening-edit-writes-one-audit-row-only-on-real-change",
+  "fingerprint": "8bc93ab2333b729c2714045fc7a3786d74e596137acc7659905da9faa10491a3",
+  "domain": "money",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum945-bank-stated-opening",
+    "firstSeen": "2026-11-12"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.update",
+      "input": {
+        "openingBalanceMinor": "changed"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.update",
+      "input": {
+        "openingBalanceMinor": "unchanged"
+      }
+    },
+    {
+      "actor": {
+        "role": "finance-manager",
+        "org": "A"
+      },
+      "action": "bankAccounts.update",
+      "input": {
+        "name": "changed"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "financialAudit.UPDATE_BANK_OPENING_REFERENCE.count",
+      "value": 1
+    },
+    {
+      "observable": "financialAudit.row.hasBeforeAfterAndActor",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-858#c23884",
+      "digest": "9059cd797e6988004a40e71e4fad981195a23b61bbcb97bb049cbe295786491d"
+    }
+  ],
+  "impl": {
+    "file": "convex/bankAccounts.scrum945.test.ts",
+    "testName": "writes exactly one audit row with before/after and actor; identical resave and name-only patch write none"
+  },
+  "matrixRow": "SCRUM945-bank-stated-opening"
+}
