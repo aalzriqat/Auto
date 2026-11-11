@@ -67,6 +67,20 @@ the existing detail dialog opens. This avoids the existing highlight hook's
 | Opening obligation | /[orgId]/accounting?section=settings | view:finance, view:cost_price and manage:finance; existing opening readback is in Settings |
 | Expense-origin recovery | Expense label, plus the vehicle route above | No individual expense screen exists; preserve its document id/title and link the recorded vehicle with view:vehicles |
 
+A financed sale whose application is foreign or deleted falls back to kind
+SALE with a null link, including for viewers without view:sales. A foreign sale,
+expense or opening draft, or a soft-deleted sale or expense, yields no source.
+The covered public-query test rows are declared in
+`scripts/intelligence/supplierNavigationDoors.test.ts`. Its census test binds
+those rows to literal test titles, requires the full cross product of each declared
+door's axes or an explicit reasoned exemption, and counts ownership lookups and
+permission gates. This census is a tripwire: it does not see a new door that reads
+with `readCached` or `ctx.db.get` directly.
+A missing document needs no separate ownership row: `readCached` returns null with
+or without `owned`, so a removed ownership check cannot separate the outcomes.
+Existing financed-application missing rows remain listed. openingBalanceDrafts has
+no isDeleted field, so no soft-deleted opening-draft behaviour is claimed.
+
 Route census scope: recursive page.tsx enumeration under
 app/(dashboard)/[orgId]/expenses returned only expenses/page.tsx. This is why
 an expense keeps a plain source label rather than an invented detail route.

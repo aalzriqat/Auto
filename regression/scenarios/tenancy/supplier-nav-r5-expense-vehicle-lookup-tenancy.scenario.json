@@ -1,0 +1,91 @@
+{
+  "id": "supplier-nav-r5-expense-vehicle-lookup-tenancy",
+  "domain": "tenancy",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum941-round7b-local",
+    "firstSeen": "2026-11-10"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.navigationCells",
+      "input": {
+        "door": "expense-vehicle-lookup",
+        "axes": [
+          "shape",
+          "expenseTarget",
+          "vehicle",
+          "viewVehicles",
+          "timestamp"
+        ],
+        "cells": [
+          [
+            "expense",
+            "local",
+            "foreign",
+            "with",
+            "valid",
+            "expense",
+            "expense"
+          ],
+          [
+            "expense",
+            "local",
+            "foreign",
+            "without",
+            "valid",
+            "expense",
+            "expense"
+          ]
+        ],
+        "permissionProfiles": "complement-deny-minimal-admit"
+      }
+    },
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "supplierStatement.outstanding",
+      "input": {
+        "supplier": "linked"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "navigationContextMatchesLiteralOutcome",
+      "value": true
+    },
+    {
+      "observable": "seededDocumentAxesAndExactPermissionsReadBack",
+      "value": true
+    },
+    {
+      "observable": "occurredAtMatchesSeededTimestampWithoutChangingSourceOrLink",
+      "value": true
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "expense vehicle lookup refuses foreign targets across every navigation condition"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "a8153e074a7c6ce5ac74be943b6b39be79b95925da058a181a3b66812a7078ab"
+}
