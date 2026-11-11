@@ -89,11 +89,11 @@ export function BankAccountsTable({
                           <Button
                             size="sm"
                             variant="outline"
-                            aria-label={t("EditBankOpening" as any)}
+                            aria-label={t("EditBankOpening")}
                             onClick={() => onEditOpening(account)}
                           >
                             <Pencil className="h-4 w-4" />
-                            {t("EditBankOpening" as any)}
+                            {t("EditBankOpening")}
                           </Button>
                         )}
                         {canManageFinance && (

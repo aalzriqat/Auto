@@ -104,7 +104,7 @@ export function BankAccountsTab() {
         });
         setEditingOpening(null);
       },
-      t("BankOpeningUpdated" as any)
+      t("BankOpeningUpdated")
     );
   }
 
