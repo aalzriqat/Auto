@@ -207,6 +207,8 @@ test("SCRUM-944: openingMixedFamilyAccounts names only the accounts the server w
     draft("purposes", "p1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("purposes", "p2", "UNALLOCATED_LIABILITY", "UNIDENTIFIED_RECEIPT"),
     draft("uniform", "u1", "OTHER_PAYABLE"), draft("uniform", "u2", "OTHER_PAYABLE"),
     draft("single", "s1", "CUSTOMER_RECEIVABLE"), draft("single", "s2", "CUSTOMER_RECEIVABLE"),
+    // Families the server does not apply the declared-family rule to are never reported, even when they differ.
+    draft("outside", "o1", "CUSTOMER_RECEIVABLE"), draft("outside", "o2", "PREPAID_EXPENSE"),
     // A pool row whose purpose is not chosen yet is still being filled in: not reported as a purpose conflict.
     draft("unchosen", "c1", "UNALLOCATED_LIABILITY", "CUSTOMER_DEPOSIT"), draft("unchosen", "c2", "UNALLOCATED_LIABILITY"),
   ];
