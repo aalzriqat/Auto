@@ -1,0 +1,88 @@
+{
+  "id": "scrum943-r5-settled-denied-distinct-vehicles",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "query": "settled",
+        "axes": [
+          "shape",
+          "mixTarget",
+          "mixState",
+          "viewVehicles",
+          "validOutcome",
+          "validLabel"
+        ],
+        "cells": [
+          [
+            "native",
+            "vehicle",
+            "local",
+            "without",
+            "vehicle",
+            "vehicle",
+            "vehicle",
+            "vehicle"
+          ],
+          [
+            "native",
+            "vehicle",
+            "deleted",
+            "without",
+            "vehicle",
+            "vehicle",
+            "none",
+            "none"
+          ],
+          [
+            "native",
+            "vehicle",
+            "foreign",
+            "without",
+            "vehicle",
+            "vehicle",
+            "none",
+            "none"
+          ]
+        ],
+        "distinctVehicleIds": 2,
+        "viewer": "WITHOUT_VIEW_VEHICLES",
+        "settlementFixture": "DIRECT_SYNTHETIC_STATE_WITHOUT_PAYMENT_WRITERS"
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "bothReturnedVehicleContextsAndLinks",
+      "value": "LITERAL_OUTCOMES_WITH_SEEDED_IDS"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "convex/supplierNavigation.scrum869.test.ts",
+    "testName": "settled distinct cached vehicles preserve the denied viewer gate"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "287af44d161e8680b431935058cf2de0ea28f6c456e78e19e1a5c261a0993bf9"
+}

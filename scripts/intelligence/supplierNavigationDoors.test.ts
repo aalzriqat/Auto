@@ -865,77 +865,77 @@ export const SUPPLIER_NAVIGATION_DOORS: readonly Door[] = [
   {"tuple":["financed","local","local","local","with","without","second","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
   {"tuple":["financed","local","local","local","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
   {"tuple":["financed","local","local","local","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","with","with","fractional"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","with","with","positive-overflow"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","with","with","negative-overflow"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","with","second","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","local","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","foreign","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
-  {"tuple":["financed","local","missing","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","with","with","fractional"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","with","with","positive-overflow"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","with","with","negative-overflow"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","with","second","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","local","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","foreign","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","local","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","deleted","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","with","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","with","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","with","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","with","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","without","with","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","without","with","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","without","without","with","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
+  {"tuple":["financed","local","missing","missing","without","without","without","valid"],"title":"native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition"},
   {"tuple":["native","local","local","foreign","with","with","without","valid"],"title":"native or sale vehicle lookup refuses foreign targets across every navigation condition"},
   {"tuple":["native","local","local","foreign","with","without","without","valid"],"title":"native or sale vehicle lookup refuses foreign targets across every navigation condition"},
   {"tuple":["native","local","local","foreign","without","with","without","valid"],"title":"native or sale vehicle lookup refuses foreign targets across every navigation condition"},
@@ -2166,11 +2166,11 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "EXPECTED_CALLER_RECEIPTS",
-    "hash": "bed4a0cea0e8d56f6f65aae935110157eabbc398e3c710cd56adcbba20c93c0f"
+    "hash": "697f3033d40be2c81209929ae7c111bdc02ba538af8bf3c19592237fe37efde5"
   },
   {
     "name": "afterEach",
-    "hash": "25a33069f7072f49c153bdcaceb0d370a3c84af77dd0818edc4d827195033c5d"
+    "hash": "3c058576479bcf77e7240d4a593a145fa895513122666e2ad2fead0065f5c90e"
   },
   {
     "name": "beginCallerAssertions",
@@ -2230,11 +2230,11 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "expenseVehicleFixture",
-    "hash": "2c25b74f8a56778d9fcd99e84a78088ed5cf583907d380e7676c6a6083a79095"
+    "hash": "618671deb6b9b2f9d86ed8f7c915eb3f3fe964220aabe5cd7f9d48bd9a4bf488"
   },
   {
     "name": "expectHiddenExpenseVehicle",
-    "hash": "1646ba75de0417f25f2cec6ab2513f9a5a236d97f0c1c0397f5f65f8e57c5154"
+    "hash": "13d0c81483a62167e78591d22dd0899d3aa26c6da8a305d259802384eb7134c8"
   },
   {
     "name": "expectHiddenNativeVehicle",
@@ -2242,7 +2242,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "expectHiddenSaleVehicle",
-    "hash": "7918b5b401f1affb86319e43ad343e677db6b1a3aee658b1168274b568b9e4fe"
+    "hash": "73e5c3abe4170baf2c9c9a03e52e8a4b9e8acf44d87e12421e1a5ce3c63cdf9e"
   },
   {
     "name": "expectedSaleVehicleCell",
@@ -2366,7 +2366,7 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "navigationCells",
-    "hash": "52567d423c68d93539669c99591149462a48b562468535dd84c6a0ccfa9b1754"
+    "hash": "051c5eb140381f49e0a0d8d59c231bd2ca7c60df4a25ec0ee26bf9bc9b79edf0"
   },
   {
     "name": "NAVIGATION_PERMISSION_UNIVERSE",
@@ -2382,11 +2382,11 @@ const RUNNER_FINGERPRINTS = [
   },
   {
     "name": "mixedExpectedSections",
-    "hash": "21197b8b6685e5edfffac7605653b6b3b7293b67c9d150f11efb7f1de075281e"
+    "hash": "9880d9c5902b6cd93b047fa4ce4b4a8987202e09bc4931f9f11e10729f8b8213"
   },
   {
     "name": "mixedNavigationCell",
-    "hash": "a342aeedc14316112887b46e18b80a2661171d6a60d22ddd3404a86f6c8c5230"
+    "hash": "9801499d8553c1379a1b0c794f7ad8fa0e99bce444b5cb5fd38f0f187759435b"
   },
   {
     "name": "prepareRelationshipVariation",
@@ -2473,7 +2473,7 @@ function runnerStatementName(node: ts.Statement, source: ts.SourceFile): string 
 
 function runnerRefusal(source: ts.SourceFile, node: ts.Node, reason: string): never {
   const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-  throw new Error(`${source.fileName}:${line}: ${reason}: ${node.getText(source).slice(0, 160)}; rerun the runner mutants before reviewing this statement`);
+  throw new Error(`${source.fileName}:${line}: ADMITTED_RUNNER_REFERENCES: ${reason}: ${node.getText(source).slice(0, 160)}; rerun the runner mutants before reviewing this statement`);
 }
 
 function runnerRegistration(node: ts.Statement, source: ts.SourceFile): boolean {
@@ -2602,6 +2602,979 @@ function runnerProtectedNames(source: ts.SourceFile): ReadonlySet<string> {
   return new Set(names);
 }
 
+// Literal per-name admissions below are reviewed with the runner pins. Never infer
+// allowed references from the file being measured or renew them to silence a mutant.
+const ADMITTED_RUNNER_REFERENCES: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  "modules": {
+    "declaration:seed/value": 1
+  },
+  "NOW": {
+    "declaration:seed/value": 5,
+    "declaration:payable/value": 2,
+    "declaration:outstanding/value": 1,
+    "declaration:financedSale/value": 6,
+    "declaration:expectHiddenSale/value": 1,
+    "declaration:openingFixture/value": 4,
+    "declaration:expenseVehicleFixture/value": 3,
+    "declaration:expectHiddenExpenseVehicle/value": 1,
+    "declaration:seedReadBound/value": 7,
+    "declaration:settleReadBound/value": 6,
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/value": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/value": 1,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/value": 4,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/value": 1,
+    "registration:settled rows keep their source context and the actual minor-unit amount/value": 2,
+    "registration:P5 opening payable and recovery navigate to the posted opening rather than a vehicle/value": 6,
+    "registration:sale and expense sources use existing record screens and supplier economic role/value": 6,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/value": 1,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/value": 1,
+    "registration:foreign expense enrichment discloses no source, expense id or title/value": 4,
+    "registration:deleted expense enrichment discloses no source, expense id or title/value": 4,
+    "registration:foreign opening draft enrichment discloses no source or draft id/value": 5,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/value": 1,
+    "declaration:seedNavigationOpening/value": 2,
+    "declaration:seedNavigationCell/value": 6,
+    "declaration:readBackNavigationCell/value": 1,
+    "declaration:duplicateRelationship/value": 2,
+    "declaration:navigationCell/value": 1,
+    "declaration:assertAdditionalReceivable/value": 1,
+    "declaration:mixedExpectedSections/value": 1,
+    "declaration:crossSectionNavigationCell/value": 1
+  },
+  "vehicles": {
+    "declaration:related/value": 1,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/value": 2,
+    "registration:a distant endCursor cannot widen the relationship read bound/value": 1,
+    "declaration:relationshipCells/value": 1
+  },
+  "callerAudits": {
+    "declaration:afterEach/member:length": 2,
+    "declaration:afterEach/member:flatMap": 1,
+    "declaration:afterEach/value": 1,
+    "declaration:afterEach/member:splice": 1,
+    "declaration:beginCallerAssertions/member:push": 1
+  },
+  "EXPECTED_CALLER_RECEIPTS": {
+    "declaration:afterEach/value": 1
+  },
+  "afterEach": {
+    "declaration:afterEach/call": 1
+  },
+  "beginCallerAssertions": {
+    "declaration:relationshipCells/call": 1,
+    "declaration:navigationCells/call": 1
+  },
+  "verifyCallerAssertions": {
+    "declaration:afterEach/call": 1,
+    "declaration:relationshipCells/call": 1,
+    "declaration:navigationCells/call": 1,
+    "registration:caller assertion helpers reject mismatches and require exactly one real receipt/call": 2
+  },
+  "assertCallerResult": {
+    "declaration:relationshipCells/call": 1,
+    "declaration:navigationCell/call": 1,
+    "registration:caller assertion helpers reject mismatches and require exactly one real receipt/call": 2,
+    "declaration:mixedNavigationCell/call": 1,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "seed": {
+    "declaration:Seed/value": 1,
+    "declaration:seedViewer/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1,
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1,
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1,
+    "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 1,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/call": 1,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/call": 1,
+    "registration:settled rows keep their source context and the actual minor-unit amount/call": 1,
+    "registration:P5 opening payable and recovery navigate to the posted opening rather than a vehicle/call": 1,
+    "registration:sale and expense sources use existing record screens and supplier economic role/call": 1,
+    "registration:financed supplier sale links to its same-organization application for a sales viewer/call": 1,
+    "registration:financed supplier sale preserves its application label without a link for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:foreign expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:deleted expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:foreign opening draft enrichment discloses no source or draft id/call": 1,
+    "registration:missing target permissions preserve labels without links and foreign or deleted targets disclose no label/call": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
+    "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 1,
+    "registration:relationship bound returns an incomplete page and continuation reaches the remaining vehicle/call": 1,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/call": 1,
+    "registration:a distant endCursor cannot widen the relationship read bound/call": 1,
+    "registration:invalid stored money keeps the money reader error contract/call": 1,
+    "declaration:seedNavigationCell/call": 1
+  },
+  "payable": {
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1,
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1,
+    "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 2,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/call": 1,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/call": 3,
+    "registration:settled rows keep their source context and the actual minor-unit amount/call": 1,
+    "registration:missing target permissions preserve labels without links and foreign or deleted targets disclose no label/call": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
+    "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 1,
+    "registration:invalid stored money keeps the money reader error contract/call": 1,
+    "declaration:seedNavigationCell/call": 2,
+    "declaration:mixedExpectedSections/value": 1
+  },
+  "outstanding": {
+    "declaration:expectNoVehicleLabel/value": 1,
+    "declaration:expectNoVehicle/value": 1,
+    "declaration:expectHiddenSale/call": 1,
+    "declaration:expectHiddenExpenseVehicle/call": 1,
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1,
+    "declaration:expectUnpostedOpening/call": 1,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/call": 2,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/call": 1,
+    "registration:P5 opening payable and recovery navigate to the posted opening rather than a vehicle/call": 1,
+    "registration:sale and expense sources use existing record screens and supplier economic role/call": 1,
+    "registration:financed supplier sale links to its same-organization application for a sales viewer/call": 1,
+    "registration:financed supplier sale preserves its application label without a link for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:foreign expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:deleted expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:foreign opening draft enrichment discloses no source or draft id/call": 1,
+    "registration:missing target permissions preserve labels without links and foreign or deleted targets disclose no label/call": 3,
+    "registration:cash supplier sale keeps its label without a link for a viewer without sales/call": 1,
+    "registration:foreign opening draft discloses no source for a viewer without finance management/call": 1,
+    "registration:pending opening draft yields no source even for a finance manager/call": 1,
+    "registration:posted opening keeps its label without a link for a viewer without finance management/call": 1,
+    "registration:expense vehicle keeps its label without a link for a viewer without vehicles/call": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
+    "registration:invalid stored money keeps the money reader error contract/call": 1,
+    "declaration:navigationCell/call": 1,
+    "declaration:mixedNavigationCell/call": 1,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "related": {
+    "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 2,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
+    "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 3,
+    "registration:relationship bound returns an incomplete page and continuation reaches the remaining vehicle/call": 2,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/call": 1,
+    "registration:a distant endCursor cannot widen the relationship read bound/call": 2,
+    "declaration:relationshipPagination/call": 1
+  },
+  "financedSale": {
+    "declaration:expectHiddenSale/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectedSaleVehicleCell/value": 1,
+    "declaration:expectVehicleCell/call": 1,
+    "registration:financed supplier sale links to its same-organization application for a sales viewer/call": 1,
+    "registration:financed supplier sale preserves its application label without a link for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:cash supplier sale keeps its label without a link for a viewer without sales/call": 1,
+    "declaration:NavigationFixture/value": 1,
+    "declaration:seedNavigationCell/call": 1
+  },
+  "seedViewer": {
+    "declaration:expectHiddenSale/call": 1,
+    "declaration:openingFixture/call": 1,
+    "declaration:expenseVehicleFixture/call": 1,
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "registration:cash supplier sale keeps its label without a link for a viewer without sales/call": 1
+  },
+  "hideVehicle": {
+    "declaration:expectHiddenExpenseVehicle/call": 1,
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1
+  },
+  "expectNoVehicleLabel": {
+    "declaration:expectNoVehicle/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1
+  },
+  "expectNoVehicle": {
+    "declaration:expectHiddenExpenseVehicle/call": 1,
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 1
+  },
+  "expectHiddenSale": {
+    "registration:foreign cash sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:deleted cash sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:foreign financed sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:foreign financed sale enrichment discloses no source for a viewer with sales/call": 1,
+    "registration:deleted financed sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:deleted financed sale enrichment discloses no source for a viewer with sales/call": 1
+  },
+  "openingFixture": {
+    "declaration:expectUnpostedOpening/call": 1,
+    "registration:foreign opening draft discloses no source for a viewer without finance management/call": 1,
+    "registration:pending opening draft yields no source even for a finance manager/call": 1,
+    "registration:posted opening keeps its label without a link for a viewer without finance management/call": 1
+  },
+  "expenseVehicleFixture": {
+    "declaration:expectHiddenExpenseVehicle/call": 1,
+    "registration:expense vehicle keeps its label without a link for a viewer without vehicles/call": 1
+  },
+  "expectHiddenExpenseVehicle": {
+    "registration:expense keeps its source but hides a foreign vehicle for a viewer without vehicles/call": 1,
+    "registration:expense keeps its source but hides a foreign vehicle for a viewer with vehicles/call": 1,
+    "registration:expense keeps its source but hides a deleted vehicle for a viewer without vehicles/call": 1,
+    "registration:expense keeps its source but hides a deleted vehicle for a viewer with vehicles/call": 1
+  },
+  "expectHiddenNativeVehicle": {
+    "registration:foreign native vehicle yields no source for a vehicle viewer/call": 1,
+    "registration:deleted native vehicle yields no source for a vehicle viewer/call": 1
+  },
+  "expectHiddenSaleVehicle": {
+    "registration:local sale label hides its foreign vehicle for a viewer without vehicles/call": 1,
+    "registration:local sale label hides its foreign vehicle for a viewer with vehicles/call": 1,
+    "registration:local sale label hides its deleted vehicle for a viewer without vehicles/call": 1,
+    "registration:local sale label hides its deleted vehicle for a viewer with vehicles/call": 1
+  },
+  "expectedSaleVehicleCell": {
+    "declaration:expectVehicleCell/call": 1
+  },
+  "expectedNativeVehicleCell": {
+    "declaration:expectVehicleCell/call": 1
+  },
+  "expectVehicleCell": {
+    "registration:local native vehicle keeps its label with sales and without vehicles/call": 1,
+    "registration:local native vehicle keeps its label without sales and with vehicles/call": 1,
+    "registration:foreign native vehicle discloses no source with sales and with vehicles/call": 1,
+    "registration:foreign native vehicle discloses no source with sales and without vehicles/call": 1,
+    "registration:deleted native vehicle discloses no source with sales and with vehicles/call": 1,
+    "registration:deleted native vehicle discloses no source with sales and without vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label with sales and with vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label with sales and without vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its foreign vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its foreign vehicle label without sales and without vehicles/call": 1,
+    "registration:cash sale hides its deleted vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its deleted vehicle label without sales and without vehicles/call": 1,
+    "registration:financed sale keeps its local vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale keeps its local vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label with sales and without vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label without sales and without vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label with sales and without vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label without sales and without vehicles/call": 1
+  },
+  "expectUnpostedOpening": {
+    "registration:pending approval opening yields no source without finance management/call": 1,
+    "registration:rejected opening yields no source with finance management/call": 1,
+    "registration:rejected opening yields no source without finance management/call": 1,
+    "registration:voided opening yields no source with finance management/call": 1,
+    "registration:voided opening yields no source without finance management/call": 1
+  },
+  "measureHandler": {
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1,
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1
+  },
+  "seedReadBound": {
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1
+  },
+  "settleReadBound": {
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1,
+    "declaration:prepareNavigationState/call": 2,
+    "declaration:mixedNavigationCell/call": 1,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "NAVIGATION_DEAL_NUMBERS": {
+    "declaration:seedNavigationCell/value": 1,
+    "declaration:readBackNavigationIdentity/value": 1,
+    "declaration:readBackNavigationDocumentFields/value": 1
+  },
+  "NAVIGATION_PERMISSIONS": {
+    "declaration:navigationPermissions/value": 1
+  },
+  "navigationPermissions": {
+    "declaration:seedNavigationCell/call": 1,
+    "declaration:readBackNavigationCell/call": 2
+  },
+  "assertNavigationTarget": {
+    "declaration:readBackNavigationCell/call": 1
+  },
+  "navigationTargets": {
+    "declaration:seedNavigationCell/call": 1,
+    "declaration:readBackNavigationCell/call": 1
+  },
+  "seedNavigationOpening": {
+    "declaration:seedNavigationCell/call": 1
+  },
+  "seedNavigationCell": {
+    "declaration:seedRelationshipCell/call": 1,
+    "declaration:navigationCell/call": 1,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/call": 1,
+    "declaration:mixedNavigationCell/call": 2,
+    "declaration:crossSectionNavigationCell/call": 2
+  },
+  "readBackNavigationIdentity": {
+    "declaration:seedNavigationCell/call": 1
+  },
+  "readBackNavigationCell": {
+    "declaration:seedRelationshipCell/call": 1,
+    "declaration:navigationCell/call": 1,
+    "declaration:mixedNavigationCell/call": 2
+  },
+  "readBackNavigationDocumentFields": {
+    "declaration:navigationCell/call": 1
+  },
+  "expectedNavigationOutcome": {
+    "declaration:navigationCell/call": 1,
+    "declaration:assertAdditionalReceivable/call": 1,
+    "declaration:mixedExpectedSections/call": 1,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "duplicateNavigationObligation": {
+    "declaration:prepareNavigationState/call": 1
+  },
+  "duplicateNavigationPayable": {
+    "declaration:duplicateNavigationObligation/call": 1
+  },
+  "duplicateNavigationClaim": {
+    "declaration:duplicateNavigationObligation/call": 1
+  },
+  "assertPartialRecovery": {
+    "declaration:prepareNavigationState/call": 1
+  },
+  "validateRelationshipCell": {
+    "declaration:relationshipCells/call": 1
+  },
+  "seedRelationshipCell": {
+    "declaration:relationshipCells/call": 1
+  },
+  "relationshipCells": {
+    "registration:relationship query preserves the viewer vehicle permission for sourced and owned rows/call": 1,
+    "registration:relationship multi-row large and endCursor pages preserve both viewer gates/call": 1,
+    "registration:relationship renamed roles and SOLD status preserve both viewer gates/call": 1,
+    "registration:relationship other makes and non-null continuation preserve both viewer gates/call": 1,
+    "registration:owned relationships refuse distinct deleted and foreign vehicles beside valid stock/call": 1
+  },
+  "relationshipPagination": {
+    "declaration:relationshipCells/call": 1
+  },
+  "duplicateRelationship": {
+    "declaration:seedRelationshipCell/call": 1
+  },
+  "prepareNavigationState": {
+    "declaration:navigationCell/call": 1
+  },
+  "assertNavigationAmounts": {
+    "declaration:navigationCell/call": 1
+  },
+  "navigationCell": {
+    "declaration:navigationCells/call": 1
+  },
+  "navigationCells": {
+    "registration:settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales/call": 1,
+    "registration:settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales/call": 1,
+    "registration:settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales/call": 1,
+    "registration:settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales/call": 1,
+    "registration:settled opening AP preserves the viewer gate and refuses foreign or missing drafts/call": 1,
+    "registration:settled opening AR preserves the viewer gate and refuses foreign or missing drafts/call": 1,
+    "registration:settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles/call": 1,
+    "registration:settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources/call": 1,
+    "registration:sale lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:sale lookup checks local deleted and missing targets for financed sales across every navigation condition/call": 1,
+    "registration:sale lookup checks deleted and missing financed sales across every navigation condition/call": 1,
+    "registration:sale lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:sales link gate checks local targets across every navigation condition/call": 1,
+    "registration:application lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:application lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:opening lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:opening lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:opening status gate checks local targets across every navigation condition/call": 1,
+    "registration:opening link gate checks local targets across every navigation condition/call": 1,
+    "registration:expense lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:expense lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:expense vehicle lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:expense vehicle lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:vehicle link gate checks local targets across every navigation condition/call": 1,
+    "registration:settled multi-row AP and AR preserve denied and allowed source links/call": 1,
+    "registration:outstanding multi-row AP and AR preserve denied and allowed source links/call": 1,
+    "registration:settled partially recovered opening and expense rows preserve denied and allowed viewer gates/call": 1,
+    "registration:settled multi-row cross-permission viewers cannot substitute another navigation gate/call": 1,
+    "registration:outstanding multi-row cross-permission viewers cannot substitute another navigation gate/call": 1,
+    "registration:outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates/call": 1,
+    "registration:settled distinct cached vehicle and sale targets preserve every AP and AR context/call": 1,
+    "registration:settled distinct cached application expense and opening targets preserve every context/call": 1,
+    "registration:settled renamed roles retain denied and admitted navigation gates/call": 1,
+    "registration:outstanding distinct cached vehicle and sale targets preserve every AP and AR context/call": 1,
+    "registration:outstanding distinct cached application expense and opening targets preserve every context/call": 1,
+    "registration:outstanding renamed roles retain denied and admitted navigation gates/call": 1,
+    "registration:settled mixed AP and AR keep independent denied and admitted gates/call": 1,
+    "registration:outstanding mixed AP and AR keep independent denied and admitted gates/call": 1,
+    "registration:settled distinct cached vehicles preserve the denied viewer gate/call": 1,
+    "registration:outstanding distinct cached vehicles preserve the denied viewer gate/call": 1
+  },
+  "NAVIGATION_PERMISSION_UNIVERSE": {
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/value": 1,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/member:filter": 4
+  },
+  "assertAdditionalReceivable": {
+    "declaration:navigationCell/call": 1
+  },
+  "distinctNavigationVehicle": {
+    "declaration:mixedNavigationCell/call": 1,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "mixedExpectedSections": {
+    "declaration:mixedNavigationCell/call": 2,
+    "declaration:crossSectionNavigationCell/call": 1
+  },
+  "mixedNavigationCell": {
+    "declaration:navigationCell/call": 1
+  },
+  "prepareRelationshipVariation": {
+    "declaration:seedRelationshipCell/call": 1
+  },
+  "crossSectionNavigationCell": {
+    "declaration:navigationCell/call": 1
+  },
+  "CallerAudit": {
+    "declaration:callerAudits/value": 1,
+    "declaration:beginCallerAssertions/value": 2,
+    "declaration:verifyCallerAssertions/value": 1,
+    "declaration:assertCallerResult/value": 1,
+    "declaration:navigationCell/value": 1,
+    "registration:caller assertion helpers reject mismatches and require exactly one real receipt/value": 1,
+    "declaration:mixedNavigationCell/value": 1,
+    "declaration:crossSectionNavigationCell/value": 1
+  },
+  "Seed": {
+    "declaration:payable/value": 1,
+    "declaration:outstanding/value": 1,
+    "declaration:related/value": 1,
+    "declaration:financedSale/value": 1,
+    "declaration:hideVehicle/value": 1,
+    "declaration:expectNoVehicle/value": 1,
+    "declaration:expectedSaleVehicleCell/value": 1,
+    "declaration:expectedNativeVehicleCell/value": 1,
+    "declaration:measureHandler/value": 1,
+    "declaration:seedReadBound/value": 1,
+    "declaration:settleReadBound/value": 1,
+    "declaration:NavigationFixture/value": 1,
+    "declaration:assertNavigationTarget/value": 1,
+    "declaration:seedNavigationOpening/value": 1,
+    "declaration:seedNavigationCell/value": 1,
+    "declaration:relationshipPagination/value": 2,
+    "declaration:duplicateRelationship/value": 1,
+    "declaration:distinctNavigationVehicle/value": 2,
+    "declaration:prepareRelationshipVariation/value": 1
+  },
+  "TargetPermission": {
+    "declaration:seedViewer/value": 1
+  },
+  "HiddenState": {
+    "declaration:hideVehicle/value": 1,
+    "declaration:expectHiddenSale/value": 1,
+    "declaration:expectHiddenExpenseVehicle/value": 1,
+    "declaration:expectHiddenNativeVehicle/value": 1,
+    "declaration:expectHiddenSaleVehicle/value": 1
+  },
+  "NavigationCell": {
+    "declaration:navigationPermissions/value": 1,
+    "declaration:seedNavigationCell/value": 1,
+    "declaration:readBackNavigationIdentity/value": 1,
+    "declaration:readBackNavigationCell/value": 1,
+    "declaration:readBackNavigationDocumentFields/value": 1,
+    "declaration:prepareNavigationState/value": 1,
+    "declaration:assertNavigationAmounts/value": 1,
+    "declaration:navigationCell/value": 1,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/value": 1,
+    "declaration:assertAdditionalReceivable/value": 1,
+    "declaration:mixedNavigationCell/value": 1,
+    "declaration:crossSectionNavigationCell/value": 1
+  },
+  "NavigationOutcome": {
+    "declaration:expectedNavigationOutcome/value": 1,
+    "declaration:navigationCell/value": 1,
+    "declaration:navigationCells/value": 1,
+    "declaration:assertAdditionalReceivable/value": 1,
+    "declaration:mixedExpectedSections/value": 1,
+    "declaration:mixedNavigationCell/value": 2,
+    "declaration:crossSectionNavigationCell/value": 2
+  },
+  "NavigationLabel": {
+    "declaration:expectedNavigationOutcome/value": 1,
+    "declaration:navigationCell/value": 1,
+    "declaration:navigationCells/value": 1,
+    "declaration:assertAdditionalReceivable/value": 1,
+    "declaration:mixedExpectedSections/value": 1,
+    "declaration:mixedNavigationCell/value": 2,
+    "declaration:crossSectionNavigationCell/value": 2
+  },
+  "NavigationTarget": {
+    "declaration:assertNavigationTarget/value": 1
+  },
+  "NavigationFixture": {
+    "declaration:settleReadBound/value": 1,
+    "declaration:navigationTargets/value": 1,
+    "declaration:seedNavigationCell/value": 5,
+    "declaration:readBackNavigationIdentity/value": 1,
+    "declaration:readBackNavigationCell/value": 1,
+    "declaration:readBackNavigationDocumentFields/value": 1,
+    "declaration:expectedNavigationOutcome/value": 1,
+    "declaration:duplicateNavigationObligation/value": 1,
+    "declaration:duplicateNavigationPayable/value": 1,
+    "declaration:duplicateNavigationClaim/value": 1,
+    "declaration:assertPartialRecovery/value": 1,
+    "declaration:prepareNavigationState/value": 1,
+    "declaration:assertAdditionalReceivable/value": 1,
+    "declaration:mixedExpectedSections/value": 1
+  },
+  "RelationshipKind": {
+    "declaration:RelationshipBase/value": 1,
+    "declaration:relationshipPagination/value": 1,
+    "declaration:duplicateRelationship/value": 1
+  },
+  "RelationshipCondition": {
+    "declaration:RelationshipCell/value": 1,
+    "declaration:relationshipPagination/value": 1,
+    "declaration:prepareRelationshipVariation/value": 1
+  },
+  "RelationshipBase": {
+    "declaration:RelationshipCell/value": 2
+  },
+  "RelationshipCell": {
+    "declaration:validateRelationshipCell/value": 1,
+    "declaration:seedRelationshipCell/value": 1,
+    "declaration:relationshipCells/value": 1
+  },
+  "describe": {
+    "registration:supplier navigation by canonical id/call": 1
+  },
+  "expect": {
+    "declaration:afterEach/member:getState": 1,
+    "declaration:afterEach/call": 3,
+    "declaration:verifyCallerAssertions/call": 1,
+    "declaration:assertCallerResult/member:getState": 2,
+    "declaration:assertCallerResult/call": 2,
+    "declaration:expectNoVehicleLabel/call": 3,
+    "declaration:expectNoVehicle/call": 1,
+    "declaration:expectHiddenSale/call": 3,
+    "declaration:expectHiddenExpenseVehicle/call": 1,
+    "declaration:expectHiddenNativeVehicle/call": 1,
+    "declaration:expectHiddenSaleVehicle/call": 1,
+    "declaration:expectVehicleCell/call": 2,
+    "declaration:expectUnpostedOpening/call": 2,
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 2,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/call": 2,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 2,
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 2,
+    "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 4,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/call": 6,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/call": 2,
+    "registration:settled rows keep their source context and the actual minor-unit amount/call": 1,
+    "registration:P5 opening payable and recovery navigate to the posted opening rather than a vehicle/call": 2,
+    "registration:sale and expense sources use existing record screens and supplier economic role/call": 1,
+    "registration:sale and expense sources use existing record screens and supplier economic role/member:arrayContaining": 1,
+    "registration:sale and expense sources use existing record screens and supplier economic role/member:objectContaining": 7,
+    "registration:financed supplier sale links to its same-organization application for a sales viewer/call": 1,
+    "registration:financed supplier sale preserves its application label without a link for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale without a link/call": 2,
+    "registration:financed supplier sale with a deleted application exposes only the local sale without a link/call": 2,
+    "registration:financed supplier sale with a foreign application exposes only the local sale for a viewer without sales/call": 2,
+    "registration:financed supplier sale with a deleted application exposes only the local sale for a viewer without sales/call": 2,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/call": 3,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/call": 3,
+    "registration:foreign expense enrichment discloses no source, expense id or title/call": 3,
+    "registration:deleted expense enrichment discloses no source, expense id or title/call": 3,
+    "registration:foreign opening draft enrichment discloses no source or draft id/call": 2,
+    "registration:missing target permissions preserve labels without links and foreign or deleted targets disclose no label/call": 4,
+    "registration:cash supplier sale keeps its label without a link for a viewer without sales/call": 1,
+    "registration:foreign opening draft discloses no source for a viewer without finance management/call": 2,
+    "registration:pending opening draft yields no source even for a finance manager/call": 2,
+    "registration:posted opening keeps its label without a link for a viewer without finance management/call": 1,
+    "registration:expense vehicle keeps its label without a link for a viewer without vehicles/call": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 3,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/member:any": 1,
+    "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 3,
+    "registration:relationship bound returns an incomplete page and continuation reaches the remaining vehicle/call": 5,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/call": 4,
+    "registration:a distant endCursor cannot widen the relationship read bound/call": 4,
+    "registration:a distant endCursor cannot widen the relationship read bound/member:any": 1,
+    "registration:invalid stored money keeps the money reader error contract/call": 2,
+    "declaration:assertNavigationTarget/call": 4,
+    "declaration:seedNavigationCell/call": 1,
+    "declaration:readBackNavigationIdentity/call": 5,
+    "declaration:readBackNavigationCell/call": 8,
+    "declaration:readBackNavigationDocumentFields/call": 4,
+    "declaration:assertPartialRecovery/call": 1,
+    "declaration:validateRelationshipCell/call": 7,
+    "declaration:relationshipCells/call": 4,
+    "declaration:relationshipCells/member:any": 2,
+    "declaration:relationshipPagination/call": 4,
+    "declaration:assertNavigationAmounts/call": 3,
+    "declaration:navigationCells/call": 3,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/call": 2,
+    "registration:caller assertion helpers reject mismatches and require exactly one real receipt/call": 5,
+    "registration:caller matcher canaries refuse known false strict and partial comparisons/call": 4,
+    "declaration:assertAdditionalReceivable/call": 1
+  },
+  "test": {
+    "registration:settled cash sale AP preserves the viewer gate and refuses foreign or deleted sales/call": 1,
+    "registration:settled cash sale AR preserves the viewer gate and refuses foreign or deleted sales/call": 1,
+    "registration:settled application AP preserves the viewer gate and refuses foreign or missing applications and hidden sales/call": 1,
+    "registration:settled application AR preserves the viewer gate and refuses foreign or missing applications and hidden sales/call": 1,
+    "registration:settled opening AP preserves the viewer gate and refuses foreign or missing drafts/call": 1,
+    "registration:settled opening AR preserves the viewer gate and refuses foreign or missing drafts/call": 1,
+    "registration:settled native vehicle AP preserves the viewer gate and refuses foreign or deleted vehicles/call": 1,
+    "registration:settled expense vehicle AR preserves the viewer gate and refuses foreign or deleted sources/call": 1,
+    "registration:relationship query preserves the viewer vehicle permission for sourced and owned rows/call": 1,
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/call": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/call": 1,
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/call": 1,
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/call": 1,
+    "registration:two purchase obligations for one vehicle retain distinct stable relationship ids across pages/call": 1,
+    "registration:decoration exhaustion preserves every computed payable row and complete money totals/call": 1,
+    "registration:statement rows carry authoritative source, role, timestamp and payee without attaching same-name or legacy rows/call": 1,
+    "registration:settled rows keep their source context and the actual minor-unit amount/call": 1,
+    "registration:P5 opening payable and recovery navigate to the posted opening rather than a vehicle/call": 1,
+    "registration:sale and expense sources use existing record screens and supplier economic role/call": 1,
+    "registration:financed supplier sale links to its same-organization application for a sales viewer/call": 1,
+    "registration:financed supplier sale preserves its application label without a link for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale without a link/call": 1,
+    "registration:financed supplier sale with a foreign application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:financed supplier sale with a deleted application exposes only the local sale for a viewer without sales/call": 1,
+    "registration:foreign sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:deleted sale enrichment discloses no source, sale id or deal number/call": 1,
+    "registration:foreign expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:deleted expense enrichment discloses no source, expense id or title/call": 1,
+    "registration:foreign opening draft enrichment discloses no source or draft id/call": 1,
+    "registration:missing target permissions preserve labels without links and foreign or deleted targets disclose no label/call": 1,
+    "registration:foreign cash sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:deleted cash sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:foreign financed sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:foreign financed sale enrichment discloses no source for a viewer with sales/call": 1,
+    "registration:deleted financed sale enrichment discloses no source for a viewer without sales/call": 1,
+    "registration:deleted financed sale enrichment discloses no source for a viewer with sales/call": 1,
+    "registration:cash supplier sale keeps its label without a link for a viewer without sales/call": 1,
+    "registration:foreign opening draft discloses no source for a viewer without finance management/call": 1,
+    "registration:pending opening draft yields no source even for a finance manager/call": 1,
+    "registration:posted opening keeps its label without a link for a viewer without finance management/call": 1,
+    "registration:expense keeps its source but hides a foreign vehicle for a viewer without vehicles/call": 1,
+    "registration:expense keeps its source but hides a foreign vehicle for a viewer with vehicles/call": 1,
+    "registration:expense keeps its source but hides a deleted vehicle for a viewer without vehicles/call": 1,
+    "registration:expense keeps its source but hides a deleted vehicle for a viewer with vehicles/call": 1,
+    "registration:foreign native vehicle yields no source for a vehicle viewer/call": 1,
+    "registration:local sale label hides its foreign vehicle for a viewer without vehicles/call": 1,
+    "registration:local sale label hides its foreign vehicle for a viewer with vehicles/call": 1,
+    "registration:deleted native vehicle yields no source for a vehicle viewer/call": 1,
+    "registration:local sale label hides its deleted vehicle for a viewer without vehicles/call": 1,
+    "registration:local sale label hides its deleted vehicle for a viewer with vehicles/call": 1,
+    "registration:expense vehicle keeps its label without a link for a viewer without vehicles/call": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/call": 1,
+    "registration:relationship pages include only linked sourced or owned on-account vehicles, including sold stock/call": 1,
+    "registration:relationship bound returns an incomplete page and continuation reaches the remaining vehicle/call": 1,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/call": 1,
+    "registration:a distant endCursor cannot widen the relationship read bound/call": 1,
+    "registration:invalid stored money keeps the money reader error contract/call": 1,
+    "registration:local native vehicle keeps its label with sales and without vehicles/call": 1,
+    "registration:local native vehicle keeps its label without sales and with vehicles/call": 1,
+    "registration:foreign native vehicle discloses no source with sales and with vehicles/call": 1,
+    "registration:foreign native vehicle discloses no source with sales and without vehicles/call": 1,
+    "registration:deleted native vehicle discloses no source with sales and with vehicles/call": 1,
+    "registration:deleted native vehicle discloses no source with sales and without vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label with sales and with vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label with sales and without vehicles/call": 1,
+    "registration:cash sale keeps its local vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its foreign vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its foreign vehicle label without sales and without vehicles/call": 1,
+    "registration:cash sale hides its deleted vehicle label without sales and with vehicles/call": 1,
+    "registration:cash sale hides its deleted vehicle label without sales and without vehicles/call": 1,
+    "registration:financed sale keeps its local vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale keeps its local vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label with sales and without vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its foreign vehicle label without sales and without vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label with sales and with vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label with sales and without vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label without sales and with vehicles/call": 1,
+    "registration:financed sale hides its deleted vehicle label without sales and without vehicles/call": 1,
+    "registration:pending approval opening yields no source without finance management/call": 1,
+    "registration:rejected opening yields no source with finance management/call": 1,
+    "registration:rejected opening yields no source without finance management/call": 1,
+    "registration:voided opening yields no source with finance management/call": 1,
+    "registration:voided opening yields no source without finance management/call": 1,
+    "registration:sale lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:sale lookup checks local deleted and missing targets for financed sales across every navigation condition/call": 1,
+    "registration:sale lookup checks deleted and missing financed sales across every navigation condition/call": 1,
+    "registration:sale lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:sales link gate checks local targets across every navigation condition/call": 1,
+    "registration:application lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:application lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:opening lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:opening lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:opening status gate checks local targets across every navigation condition/call": 1,
+    "registration:opening link gate checks local targets across every navigation condition/call": 1,
+    "registration:expense lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:expense lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:expense vehicle lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:expense vehicle lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup checks local deleted and missing targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup checks remaining local deleted and missing targets across every navigation condition/call": 1,
+    "registration:native or sale vehicle lookup refuses foreign targets across every navigation condition/call": 1,
+    "registration:vehicle link gate checks local targets across every navigation condition/call": 1,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/call": 1,
+    "registration:settled multi-row AP and AR preserve denied and allowed source links/call": 1,
+    "registration:outstanding multi-row AP and AR preserve denied and allowed source links/call": 1,
+    "registration:settled partially recovered opening and expense rows preserve denied and allowed viewer gates/call": 1,
+    "registration:relationship multi-row large and endCursor pages preserve both viewer gates/call": 1,
+    "registration:settled multi-row cross-permission viewers cannot substitute another navigation gate/call": 1,
+    "registration:outstanding multi-row cross-permission viewers cannot substitute another navigation gate/call": 1,
+    "registration:outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates/call": 1,
+    "registration:caller assertion helpers reject mismatches and require exactly one real receipt/call": 1,
+    "registration:caller matcher canaries refuse known false strict and partial comparisons/call": 1,
+    "registration:settled distinct cached vehicle and sale targets preserve every AP and AR context/call": 1,
+    "registration:settled distinct cached application expense and opening targets preserve every context/call": 1,
+    "registration:settled renamed roles retain denied and admitted navigation gates/call": 1,
+    "registration:outstanding distinct cached vehicle and sale targets preserve every AP and AR context/call": 1,
+    "registration:outstanding distinct cached application expense and opening targets preserve every context/call": 1,
+    "registration:outstanding renamed roles retain denied and admitted navigation gates/call": 1,
+    "registration:relationship renamed roles and SOLD status preserve both viewer gates/call": 1,
+    "registration:relationship other makes and non-null continuation preserve both viewer gates/call": 1,
+    "registration:owned relationships refuse distinct deleted and foreign vehicles beside valid stock/call": 1,
+    "registration:settled mixed AP and AR keep independent denied and admitted gates/call": 1,
+    "registration:outstanding mixed AP and AR keep independent denied and admitted gates/call": 1,
+    "registration:settled distinct cached vehicles preserve the denied viewer gate/call": 1,
+    "registration:outstanding distinct cached vehicles preserve the denied viewer gate/call": 1
+  },
+  "vi": {
+    "declaration:afterEach/member:useRealTimers": 1,
+    "declaration:seed/member:useFakeTimers": 1,
+    "declaration:seed/member:setSystemTime": 1,
+    "declaration:measureHandler/member:spyOn": 1
+  },
+  "makeFunctionReference": {
+    "declaration:vehicles/call": 1
+  },
+  "convexTestWithComponents": {
+    "declaration:seed/call": 1
+  },
+  "seedSupplier": {
+    "declaration:seed/call": 3
+  },
+  "schema": {
+    "declaration:seed/value": 1
+  },
+  "api": {
+    "declaration:outstanding/member:supplierStatement": 1,
+    "registration:settled rows keep their source context and the actual minor-unit amount/member:supplierStatement": 1,
+    "registration:finance without cost gets exactly stock metadata and cannot read statement costs/member:supplierStatement": 1,
+    "registration:public readers refuse foreign suppliers, foreign organizations and callers without finance/member:supplierStatement": 1,
+    "registration:invalid stored money keeps the money reader error contract/member:supplierStatement": 1,
+    "declaration:navigationCell/member:supplierStatement": 1,
+    "declaration:mixedNavigationCell/member:supplierStatement": 1,
+    "declaration:crossSectionNavigationCell/member:supplierStatement": 1
+  },
+  "Doc": {
+    "declaration:payable/value": 1,
+    "declaration:expectUnpostedOpening/value": 1,
+    "declaration:NavigationTarget/value": 1,
+    "declaration:NavigationFixture/value": 5,
+    "declaration:seedNavigationOpening/value": 1,
+    "declaration:seedNavigationCell/value": 2
+  },
+  "outstandingRegistration": {
+    "registration:100 rows per family with distinct targets use at most 803 actual gets per outstanding handler/value": 1,
+    "registration:100 rows per family sharing targets read each source once across money and decoration/value": 1
+  },
+  "settledRegistration": {
+    "registration:100 settled rows per family with distinct targets use at most 803 actual gets per handler/value": 1
+  },
+  "relationshipRegistration": {
+    "registration:owned relationships sharing a vehicle spend one vehicle get per call/value": 1
+  },
+  "PERMISSIONS": {
+    "declaration:NAVIGATION_PERMISSIONS/member:VIEW_SALES": 1,
+    "declaration:NAVIGATION_PERMISSIONS/member:VIEW_VEHICLES": 1,
+    "declaration:NAVIGATION_PERMISSIONS/member:MANAGE_FINANCE": 1,
+    "declaration:navigationPermissions/value": 1,
+    "declaration:navigationPermissions/member:VIEW_FINANCE": 1,
+    "declaration:navigationPermissions/member:VIEW_COST_PRICE": 1,
+    "registration:supplier navigation denied and admitted fixtures pin the full permission complement for every link gate/value": 1
+  },
+  "SYSTEM_KEYS": {
+    "declaration:settleReadBound/member:RECEIVABLE_FROM_SUPPLIERS": 2
+  }
+};
+
+function runnerBindingIdentifier(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  const namedBinding = ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) ||
+    ts.isFunctionDeclaration(parent) || ts.isFunctionExpression(parent) || ts.isClassDeclaration(parent) || ts.isClassExpression(parent);
+  const namedType = ts.isTypeAliasDeclaration(parent) || ts.isInterfaceDeclaration(parent) || ts.isTypeParameterDeclaration(parent);
+  const namedImport = ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isImportEqualsDeclaration(parent);
+  return (namedBinding || namedType || namedImport || ts.isEnumDeclaration(parent) || ts.isModuleDeclaration(parent)) && parent.name === node;
+}
+
+function runnerPropertyName(node: ts.Identifier): boolean {
+  const parent = node.parent;
+  if (ts.isPropertyAccessExpression(parent)) return parent.name === node;
+  if (ts.isQualifiedName(parent)) return parent.right === node;
+  if (ts.isImportSpecifier(parent)) return parent.propertyName === node;
+  if (ts.isLabeledStatement(parent) || ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) return true;
+  if (ts.isShorthandPropertyAssignment(parent) || ts.isExportSpecifier(parent)) return false;
+  return (ts.isPropertyAssignment(parent) || ts.isPropertySignature(parent) || ts.isMethodDeclaration(parent) ||
+    ts.isMethodSignature(parent) || ts.isPropertyDeclaration(parent) || ts.isEnumMember(parent)) && parent.name === node;
+}
+
+function runnerStatementBindings(statement: ts.Statement): ts.Identifier[] {
+  if (ts.isFunctionDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement)) return statement.name ? [statement.name] : [];
+  if (ts.isVariableStatement(statement)) return statement.declarationList.declarations.flatMap(declaration => ts.isIdentifier(declaration.name) ? [declaration.name] : []);
+  if (!ts.isImportDeclaration(statement)) return [];
+  const bindings: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && runnerBindingIdentifier(node)) bindings.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(statement);
+  return bindings;
+}
+
+function runnerPinnedBindings(source: ts.SourceFile): ReadonlySet<ts.Identifier> {
+  const bindings = source.statements.flatMap(runnerStatementBindings);
+  const first = new Map<string, ts.Identifier>();
+  for (const binding of bindings) if (!first.has(binding.text)) first.set(binding.text, binding);
+  return new Set(first.values());
+}
+
+function runnerReferenceSite(source: ts.SourceFile, node: ts.Node): string {
+  const statement = ts.findAncestor(node, candidate => ts.isStatement(candidate) && ts.isSourceFile(candidate.parent));
+  if (statement && ts.isStatement(statement)) {
+    const name = runnerStatementName(statement, source);
+    if (name) return "declaration:" + name;
+  }
+  const registration = ts.findAncestor(node, candidate => ts.isCallExpression(candidate) &&
+    ["test", "describe", "it"].includes(candidate.expression.getText(source)));
+  if (registration && ts.isCallExpression(registration) && ts.isStringLiteral(registration.arguments[0]!)) {
+    return "registration:" + registration.arguments[0]!.text;
+  }
+  return "unreviewed";
+}
+
+function runnerReferenceForm(node: ts.Identifier): string {
+  if (runnerDirectCall(node)) return "call";
+  if (ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node) return "member:" + node.parent.name.text;
+  return "value";
+}
+
+function assertRunnerReference(source: ts.SourceFile, node: ts.Identifier, counts: Map<string, number>): void {
+  const site = runnerReferenceSite(source, node) + "/" + runnerReferenceForm(node);
+  if (ADMITTED_RUNNER_REFERENCES[node.text]?.[site] === undefined) {
+    runnerRefusal(source, node, `ADMITTED_RUNNER_REFERENCES refuses reference ${node.text} at ${site}`);
+  }
+  if (["navigationCells", "relationshipCells"].includes(node.text) &&
+    (!site.startsWith("registration:") || !runnerDirectCall(node))) {
+    runnerRefusal(source, node, `ADMITTED_RUNNER_REFERENCES requires pinned runner ${node.text} as direct registration callee`);
+  }
+  const key = node.text + "@" + site;
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function assertRunnerCallback(source: ts.SourceFile, node: ts.CallExpression): void {
+  if (!["test", "describe", "it"].includes(node.expression.getText(source))) return;
+  const callback = node.arguments[1];
+  if (!callback || !(ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) || callback.parameters.length !== 0) {
+    runnerRefusal(source, node, "ADMITTED_RUNNER_REFERENCES requires a zero-parameter test/describe/it callback; no context exceptions exist");
+  }
+}
+
+function runnerLocalSymbol(checker: ts.TypeChecker, root: ts.Node, enclosing?: ts.Node): boolean {
+  if (!ts.isIdentifier(root)) return false;
+  const symbol = ts.isShorthandPropertyAssignment(root.parent)
+    ? checker.getShorthandAssignmentValueSymbol(root.parent) : checker.getSymbolAtLocation(root);
+  const declarations = symbol?.declarations ?? [];
+  return declarations.some(declaration => declaration.getSourceFile() === root.getSourceFile() &&
+    (!enclosing || ts.findAncestor(declaration, candidate => candidate === enclosing) !== undefined));
+}
+
+function runnerRootNode(node: ts.Node): ts.Node {
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) || ts.isNonNullExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)) return runnerRootNode(node.expression);
+  return node;
+}
+
+function refuseNonlocalRunnerWrite(source: ts.SourceFile, checker: ts.TypeChecker, target: ts.Node): void {
+  if (ts.isObjectLiteralExpression(target) || ts.isArrayLiteralExpression(target)) {
+    ts.forEachChild(target, child => refuseNonlocalRunnerWrite(source, checker, child));
+    return;
+  }
+  if (ts.isPropertyAssignment(target)) return refuseNonlocalRunnerWrite(source, checker, target.initializer);
+  if (ts.isSpreadAssignment(target) || ts.isSpreadElement(target)) return refuseNonlocalRunnerWrite(source, checker, target.expression);
+  const root = ts.isShorthandPropertyAssignment(target) ? target.name : runnerRootNode(target);
+  if (!runnerLocalSymbol(checker, root)) runnerRefusal(source, target, "ADMITTED_RUNNER_REFERENCES refuses mutation of a root not declared in this file");
+}
+
+const RUNNER_INTRINSIC_MUTATORS = ["Object.defineProperty", "Object.defineProperties", "Object.assign", "Object.setPrototypeOf",
+  "Reflect.set", "Reflect.defineProperty", "Reflect.setPrototypeOf"];
+function refuseRunnerIntrinsic(source: ts.SourceFile, checker: ts.TypeChecker, node: ts.CallExpression): void {
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) runnerRefusal(source, node, "ADMITTED_RUNNER_REFERENCES refuses dynamic import()");
+  if (!RUNNER_INTRINSIC_MUTATORS.includes(node.expression.getText(source))) return;
+  const target = node.arguments[0];
+  const enclosing = ts.findAncestor(node, ts.isFunctionLike);
+  if (!target || !enclosing || !runnerLocalSymbol(checker, runnerRootNode(target), enclosing)) {
+    runnerRefusal(source, node, "ADMITTED_RUNNER_REFERENCES requires an intrinsic mutator target declared inside its enclosing function");
+  }
+}
+
+function runnerChecker(source: ts.SourceFile): ts.TypeChecker {
+  const options: ts.CompilerOptions = { noResolve: true, noLib: true, target: ts.ScriptTarget.Latest };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = file => file === source.fileName ? source : undefined;
+  return ts.createProgram([source.fileName], options, host).getTypeChecker();
+}
+
+function assertAdmittedRunnerReferences(source: ts.SourceFile): void {
+  const protectedNames = runnerProtectedNames(source);
+  const pinned = runnerPinnedBindings(source);
+  const counts = new Map<string, number>();
+  const checker = runnerChecker(source);
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && protectedNames.has(node.text)) {
+      if (runnerBindingIdentifier(node)) {
+        if (!pinned.has(node)) runnerRefusal(source, node, `ADMITTED_RUNNER_REFERENCES refuses second binding ${node.text}`);
+      } else if (!runnerPropertyName(node)) assertRunnerReference(source, node, counts);
+    }
+    const target = runnerWriteTarget(node);
+    if (target) refuseNonlocalRunnerWrite(source, checker, target);
+    if (ts.isCallExpression(node)) { assertRunnerCallback(source, node); refuseRunnerIntrinsic(source, checker, node); }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  for (const [name, sites] of Object.entries(ADMITTED_RUNNER_REFERENCES)) for (const [site, expected] of Object.entries(sites)) {
+    expect(counts.get(name + "@" + site) ?? 0, `ADMITTED_RUNNER_REFERENCES ${name} at ${site}: exact reviewed reference count`).toBe(expected);
+  }
+}
+
 function refuseRunnerOverrides(source: ts.SourceFile): void {
   const protectedNames = runnerProtectedNames(source);
   const teardown = source.statements.find(node => runnerStatementName(node, source) === "afterEach");
@@ -2619,6 +3592,7 @@ function refuseRunnerOverrides(source: ts.SourceFile): void {
 
 function assertRunnerFingerprints(source: ts.SourceFile): void {
   refuseRunnerOverrides(source);
+  assertAdmittedRunnerReferences(source);
   const imports = source.statements.filter(ts.isImportDeclaration);
   expect(imports.map(node => navigationFingerprint(node, source)), "behavioural runner imports changed; review these statements: " + imports.map(node => node.getText(source)).join(" | ")).toStrictEqual(RUNNER_IMPORTS);
   const declarations: { name: string; node: ts.Statement }[] = [];
@@ -2671,6 +3645,8 @@ function assertCallerReceiptCounts(source: ts.SourceFile): void {
 interface DeclaredCallerCells { title: string; helper: string; args: readonly unknown[] }
 // Independently declared literal inputs AND outcomes; never populated at test runtime.
 const DECLARED_CALLER_CELLS: readonly DeclaredCallerCells[] = [
+  {"title":"outstanding distinct cached vehicles preserve the denied viewer gate","helper":"navigationCells","args":["outstanding denied distinct vehicles",["shape","mixTarget","mixState","viewVehicles","validOutcome","validLabel"],[["native","vehicle","local","without","vehicle","vehicle","vehicle","vehicle"],["native","vehicle","deleted","without","vehicle","vehicle","none","none"],["native","vehicle","foreign","without","vehicle","vehicle","none","none"]],"outstanding"]},
+  {"title":"settled distinct cached vehicles preserve the denied viewer gate","helper":"navigationCells","args":["settled denied distinct vehicles",["shape","mixTarget","mixState","viewVehicles","validOutcome","validLabel"],[["native","vehicle","local","without","vehicle","vehicle","vehicle","vehicle"],["native","vehicle","deleted","without","vehicle","vehicle","none","none"],["native","vehicle","foreign","without","vehicle","vehicle","none","none"]],"settled"]},
 {"title":"settled multi-row cross-permission viewers cannot substitute another navigation gate","helper":"navigationCells","args":["settled cross-permission multi-row caller",["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"],[["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"]],"settled"]},
 {"title":"outstanding multi-row cross-permission viewers cannot substitute another navigation gate","helper":"navigationCells","args":["outstanding cross-permission multi-row caller",["shape","role","viewSales","viewVehicles","manageFinance","rowCount","timestamp","status"],[["cash","AP","without","with","with","two","valid","POSTED","sale","number+vehicle"],["cash","AR","without","with","with","two","valid","POSTED","sale","number+vehicle"],["financed","AP","without","with","with","two","valid","POSTED","application","number+vehicle"],["financed","AR","without","with","with","two","valid","POSTED","application","number+vehicle"],["native","AP","with","without","with","two","valid","POSTED","vehicle","vehicle"],["opening","AP","with","with","without","two","valid","POSTED","opening","opening"],["opening","AR","with","with","without","two","valid","POSTED","opening","opening"],["expense","AR","with","without","with","two","valid","POSTED","expense+vehicle","expense"]],"outstanding"]},
 {"title":"outstanding partially recovered opening and expense rows preserve denied and allowed viewer gates","helper":"navigationCells","args":["outstanding partial recovery caller",["shape","role","manageFinance","viewVehicles","status","recovery","timestamp"],[["opening","AR","without","without","POSTED","partial","valid","opening","opening"],["opening","AR","with","with","POSTED","partial","valid","opening+link","opening"],["expense","AR","without","without","POSTED","partial","valid","expense+vehicle","expense"],["expense","AR","with","with","POSTED","partial","valid","expense+vehicle+link","expense"]],"outstanding"]},
@@ -3259,4 +4235,88 @@ test("caller runner census unwraps erased types before checking protected writes
     const source = ts.createSourceFile("static-write.ts", form, ts.ScriptTarget.Latest, true);
     expect(() => refuseRunnerOverrides(source), form).toThrow(/write to a protected top-level runner binding/);
   }
+});
+
+test("caller admitted reference table refuses second bindings across callback and declaration forms", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  const forms = [
+    'const relationshipCells = async () => {};',
+    'let callerAudits = [];',
+    'var EXPECTED_CALLER_RECEIPTS = {};',
+    'const { relationshipCells } = replacement;',
+    'const { nested: { callerAudits } } = replacement;',
+    'function nested(expect: unknown) {}',
+    'function nested({ role: callerAudits }: unknown) {}',
+    'function relationshipCells() {}',
+    'const nested = function assertCallerResult() {};',
+    'class verifyCallerAssertions {}',
+    'try {} catch (callerAudits) {}',
+  ];
+  for (const form of forms) {
+    const text = original.replace(title, title + "\n" + form);
+    expect(text, "binding mutation must change the real fixture").not.toBe(original);
+    const source = ts.createSourceFile("runner-binding.ts", text, ts.ScriptTarget.Latest, true);
+    expect(() => assertAdmittedRunnerReferences(source), form).toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding/);
+  }
+  const importedShadow = original + '\nimport { value as relationshipCells } from "./unreviewed";';
+  expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-import-binding.ts", importedShadow, ts.ScriptTarget.Latest, true)))
+    .toThrow(/ADMITTED_RUNNER_REFERENCES refuses second binding relationshipCells/);
+});
+
+test("caller admitted reference table closes every registration callback envelope", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const title = 'test("relationship query preserves the viewer vehicle permission for sourced and owned rows", async () => {';
+  for (const callback of [
+    'async (_ctx, relationshipCells = async cells => { callerAudits.push({ expected: cells, asserted: [...cells], message: "forged" }); }) => {',
+    'async (_ctx, noOp = () => {}) => {',
+    'async function (context) {',
+  ]) {
+    const text = original.replace(title, title.replace("async () => {", callback));
+    expect(text, "callback mutation must change the real fixture").not.toBe(original);
+    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-envelope.ts", text, ts.ScriptTarget.Latest, true)), callback)
+      .toThrow(/ADMITTED_RUNNER_REFERENCES requires a zero-parameter/);
+  }
+  for (const form of ['test("nested", (context) => {});', 'describe("nested", function (context) {});', 'it("nested", (context) => {});']) {
+    const source = ts.createSourceFile("envelope.ts", form, ts.ScriptTarget.Latest, true);
+    const statement = source.statements[0];
+    if (!statement || !ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) throw new Error("literal callback fixture unavailable");
+    expect(() => assertRunnerCallback(source, statement.expression), form)
+      .toThrow(/zero-parameter/);
+  }
+});
+
+test("caller admitted reference table protects receipt values and global intrinsics by default", () => {
+  const original = readFileSync(join(root, "convex/supplierNavigation.scrum869.test.ts"), "utf8");
+  const title = 'test("caller matcher canaries refuse known false strict and partial comparisons", () => {';
+  const forms = [
+    'callerAudits.push({ expected: [], asserted: [], message: "forged" });',
+    'const auditAlias = callerAudits;',
+    'const countAlias = EXPECTED_CALLER_RECEIPTS;',
+    'void typeof callerAudits;',
+    'const copy = [...callerAudits];',
+    'Object.assign(EXPECTED_CALLER_RECEIPTS, {});',
+    'Object.defineProperty(EXPECTED_CALLER_RECEIPTS, "title", { value: 0 });',
+    'callerAudits.push = () => 0;',
+    'Array.prototype.toSorted = () => [];',
+    'Object.is = () => true;',
+    'globalThis.reviewFlag++;',
+    'delete Array.prototype.toSorted;',
+    '({ Array } = replacement);',
+    'Object.defineProperties(Array.prototype, {});',
+    'Object.setPrototypeOf(Object, {});',
+    'Reflect.set(Array.prototype, "toSorted", () => []);',
+    'Reflect.defineProperty(Object, "is", { value: () => true });',
+    'Reflect.setPrototypeOf(Object, {});',
+    'void import("./utils/supplierNavigation");',
+  ];
+  for (const form of forms) {
+    const text = original.replace(title, title + "\n" + form);
+    expect(text, "reference mutation must change the real fixture").not.toBe(original);
+    expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-reference.ts", text, ts.ScriptTarget.Latest, true)), form)
+      .toThrow(/ADMITTED_RUNNER_REFERENCES/);
+  }
+  const local = original.replace(title, title + '\n const local = {}; Object.assign(local, { value: 1 }); Object.defineProperty(local, "other", {value: 2});');
+  expect(() => assertAdmittedRunnerReferences(ts.createSourceFile("runner-local-control.ts", local, ts.ScriptTarget.Latest, true)))
+    .not.toThrow();
 });

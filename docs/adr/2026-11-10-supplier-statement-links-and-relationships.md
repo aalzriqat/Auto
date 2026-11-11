@@ -260,8 +260,10 @@ afterEach, whether or not its runner opened an audit. The census compares this
 literal title/count table with DECLARED_CALLER_CELLS and the older door cells.
 Teardown requires one audit and the declared receipt count, then verifies the
 ordered receipts. A no-op runner, entry return or parameter truncation therefore
-fails behaviourally. These checks cover 891 caller cells: 86 settled,
-769 outstanding and 36 relationship cells. The original 831 outcomes are retained.
+fails behaviourally. Round four declared 891 caller cells. This was an inventory,
+not evidence that a registration resolves to its intended runner. Round five adds
+six denied-viewer cells, giving literal inventories of 89 settled, 772 outstanding
+and 36 relationship cells. The original 831 outcomes are retained.
 Settlement fixtures still write synthetic state directly, without payment writers.
 
 The behavioural file has a closed top-level inventory. Imports are pinned as a
@@ -299,10 +301,43 @@ complete real behavioural file.
 The declaration diagnostic explicitly forbids renewing cells and their declaration
 together merely to silence a failure.
 
+Round five replaces the premise that enumerating prohibited write syntax is
+sufficient. `ADMITTED_RUNNER_REFERENCES` is a literal per-name table of reviewed
+declaration or registration sites, reference forms and exact counts. The inventory
+covers every pinned top-level declaration and import binding, including types and
+Vitest APIs. A second binding with a protected name refuses anywhere in the file:
+parameters, defaults, destructuring, local variables, named functions/classes,
+catch bindings and import aliases. Labels and noncomputed property keys are not
+bindings or value references. Four existing helper-local shadows were renamed to
+satisfy this rule; only their runner fingerprints were renewed.
+
+Each protected reference must match that table. `navigationCells` and
+`relationshipCells` are admitted only as direct callees in literal registration
+bodies. Receipt state is admitted only within its fingerprinted declarations and
+teardown. `callerAudits` has five references: four in teardown and one in
+`beginCallerAssertions`. `EXPECTED_CALLER_RECEIPTS` has one reference, in teardown.
+The assertion helpers also have exact-count admissions in the existing direct
+helper contract. An alias, argument, spread, property/method reference, reflection
+argument, typeof or export outside these sites refuses. Every test/describe/it
+callback, including nested ones, must be an arrow or function expression with zero
+parameters. No current callback requires a context exception. Unbound titles must
+leave zero receipts, independently checked by teardown.
+
+Given these admissions and the runner pins, bound cells run and assert through the
+pinned runner. The table is a tripwire, not a proof of arbitrary JavaScript.
+TypeScript compiler symbols resolve mutation roots: assignment, compound update,
+delete and iteration writes require a binding declared in this file. The listed
+Object/Reflect mutation APIs require their first argument's binding to be declared
+inside the enclosing function. There are no existing Object/Reflect mutation API
+sites in the behavioural file that require exceptions. Dynamic import() refuses.
+The ordinary call-through db.get spy remains within its pinned helper. No census
+exists for supplierReadCache.test.ts or tenancy.test.ts today, so these rules are
+not extended to those dependency contracts.
+
 [Vitest hooks](https://vitest.dev/api/hooks.html) run afterEach after each test,
 with after hooks reversed in the default stack sequence. The repository setup
 hook registers before this file; this file's teardown runs first. An installed
-4.1.9 probe checks the hook order and currentTestName at teardown. The 45 bound
+4.1.9 probe checks the hook order and currentTestName at teardown. The 48 bound
 registrations are top-level literal titles, so currentTestName matches the table
 key directly. Nested suite titles use a ` > ` separator and would need an explicit full-name key and census
 support before becoming bound registrations.
@@ -331,11 +366,20 @@ The cache contract writes three distinct literal documents plus a deleted id in
 each of its five table families, then checks misses and hits against independently
 written full snapshots, including literal creation times and seeded ids. Missing
 results stay null. Auth contracts compare returned and persisted role permissions
-with independent literal snapshots across names, cardinalities and system owner
-roles. No tenancy.ts declaration is fingerprinted: shared auth must remain free
+with independent literal snapshots across names, cardinalities, deleted roles,
+explicit and legacy system-owner states, and live impersonation grants in query
+and mutation contexts. OWNER-named roles have both false and absent flags, each
+with full and short sets; a same-length set missing a frozen permission varies
+the fallback membership check. Missing, revoked, expired and exact-expiry grants,
+disabled users, suspended organizations and offboarding memberships refuse before
+returning a role. Grant fixtures use the actor, target, membership and expiry
+fields written by adminImpersonation. Current production admits a deleted role
+whose stored permissions satisfy the request; this contract pins that behavior
+and leaves the product decision to the owner. No tenancy.ts declaration is
+fingerprinted: shared auth must remain free
 to evolve for unrelated backend lanes.
 Each cache registration requires nine expect calls outside its helper, and the
-auth snapshot registration requires twenty, so an empty helper/loop fails. These
+auth snapshot registration requires forty-eight, so an empty helper/loop fails. These
 are call counts, not matcher-execution proof. Separate negative contracts exercise
 the receipt-count checker and each cache fingerprint with a deliberately wrong
 input, independently of their normal positive callers.
@@ -347,12 +391,15 @@ contracts give finite behavioural evidence at imported boundaries. Neither prove
 arbitrary predicates further down the import graph. Out of scope are money and due
 reader internals (supplierObligationDue, supplierObligationFacts, supplierSettledRows,
 supplierSettlement, money, supplierDueDates), transactionReadHeadroom, subscriptions,
-requireAuth/impersonation internals, permissions, and other transitive imports.
+requireAuth/impersonation implementations beyond the declared return/refusal
+contract, permissions beyond the owner-class contract, and other transitive imports.
 
-The syntax scan does not evaluate general computed property names, aliases
-constructed without a direct test-API reference,
-reflection, prototype/constructor lookup, generated code, computed loaders or code
-inside imported modules. For example, indirect reflective writes or a constructed
-global property name are outside its proof. Literal forbidden forms and rooted
-assignment syntax are refused, not sandboxed. A coordinated wrong renewal of pins,
-counts and cells remains a review risk. This is a tripwire, not a security boundary.
+The syntax scan still cannot evaluate general computed member names, reflection
+through a value obtained outside the file, prototype/constructor indirection,
+generated code, computed loaders or code inside imported modules. The setup file,
+test framework and runner/census implementation itself remain trusted inputs;
+neither an admitted reference nor a fingerprint proves their arbitrary semantics.
+Direct intrinsic/global mutation syntax and dynamic imports in the behavioural
+file refuse. A local alias of an external value can still hide reflective effects.
+A coordinated wrong renewal of pins, reference admissions, counts and cells
+remains a review risk. This is a tripwire, not a security boundary.

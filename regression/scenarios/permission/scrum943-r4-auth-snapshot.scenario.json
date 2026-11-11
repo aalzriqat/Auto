@@ -16,7 +16,23 @@
       },
       "action": "harness.verifySupplierNavigationBoundary",
       "input": {
-        "contract": "EXACT_STORED_PERMISSIONS_UNCHANGED"
+        "contract": "EXACT_STORED_PERMISSIONS_UNCHANGED",
+        "r5Conditions": [
+          "isDeleted=true",
+          "isDeleted=false",
+          "OWNER=false/full",
+          "OWNER=false/short",
+          "OWNER=missing/full",
+          "OWNER=missing/short",
+          "OTHER=missing/full",
+          "OTHER=true",
+          "OWNER=duplicate-missing-member",
+          "live-grant-read-empty",
+          "live-grant-read-permissions",
+          "live-grant-write-empty",
+          "live-grant-write-permissions"
+        ],
+        "literalRows": 24
       }
     }
   ],
@@ -41,5 +57,5 @@
     "testName": "tenant auth preserves literal stored permissions across names cardinalities and system owner"
   },
   "matrixRow": "SCRUM869-navigation-permissions",
-  "fingerprint": "fab7b9879b8649bcd8f4d0b8faf04d36eb346bf096a397cd91e051c93ec87e30"
+  "fingerprint": "6c25d39f9e54658c611e28e1e8362730bb9b53b92a446e71ddd7b0b27fee4819"
 }

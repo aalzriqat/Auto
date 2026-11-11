@@ -3,6 +3,8 @@ import { convexTestWithComponents } from "../../test-utils/convexTest";
 import schema from "../schema";
 import { requireTenantAuth, requireAuth, requireSuperAdmin, requireSupportAgent } from "./tenancy";
 import * as envModule from "./env";
+import type { Doc } from "../_generated/dataModel";
+import type { QueryCtx } from "../_generated/server";
 
 // getValidatedEnv reads process.env at call time inside a module transformed
 // separately from this test file, and mutating process.env directly here
@@ -301,13 +303,55 @@ describe("Tenancy Utilities", () => {
 });
 
 it("tenant auth preserves literal stored permissions across names cardinalities and system owner", async () => {
-  expect.assertions(20);
+  expect.assertions(48);
   const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
   const { orgId, userId } = await t.run(async ctx => ({
     orgId: await ctx.db.insert("organizations", { name: "Permission snapshot contract", createdAt: 1 }),
     userId: await ctx.db.insert("users", { clerkId: "permission-snapshot", email: "permission-snapshot@example.test" }),
   }));
-  const cases = [
+  // Independent literal snapshots of the legacy owner set. Neither is imported
+  // from production or computed from the permissions returned by the guard.
+  const fullStored = [
+    "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
+    "view:vehicles", "create:vehicles", "create:vehicles:request", "edit:vehicles", "edit:vehicles:request",
+    "delete:vehicles", "view:vehicle_info", "view:vehicle_leads", "view:vehicle_expenses", "view:vehicle_tasks",
+    "view:vehicle_test_drives", "view:vehicle_work_orders", "view:vehicle_valuations", "edit:vehicle_valuations",
+    "view:customers", "create:customers", "create:customers:request", "edit:customers", "edit:customers:request",
+    "delete:customers", "view:leads", "create:leads", "create:leads:request", "edit:leads", "edit:leads:request",
+    "delete:leads", "view:sales", "create:sales", "create:sales:request", "edit:sales", "edit:sales:request",
+    "delete:sales", "view:expenses", "create:expenses", "create:expenses:request", "edit:expenses",
+    "edit:expenses:request", "delete:expenses", "view:tasks", "create:tasks", "edit:tasks", "delete:tasks",
+    "view:reports", "view:settings", "manage:settings", "website.view", "website.manage", "website.publish",
+    "website.domain.manage", "website.leads.manage", "website.analytics.view", "view:finance", "manage:finance",
+    "reopen:accounting_periods", "view:cost_price", "view:commissions", "manage:commissions", "view:payroll",
+    "manage:payroll", "approve:requests", "view:finance_applications", "create:finance_application",
+    "review:finance_application", "approve:finance_application", "finalize:financed_deal",
+    "confirm:finance_disbursement", "verify:finance_documents", "register:vehicle_handover",
+    "register:expected_payment", "marketplace:settings", "marketplace:respond", "marketplace:analytics",
+  ];
+  const fullExpected = [
+    "view:org", "edit:org", "view:users", "manage:users", "manage:roles",
+    "view:vehicles", "create:vehicles", "create:vehicles:request", "edit:vehicles", "edit:vehicles:request",
+    "delete:vehicles", "view:vehicle_info", "view:vehicle_leads", "view:vehicle_expenses", "view:vehicle_tasks",
+    "view:vehicle_test_drives", "view:vehicle_work_orders", "view:vehicle_valuations", "edit:vehicle_valuations",
+    "view:customers", "create:customers", "create:customers:request", "edit:customers", "edit:customers:request",
+    "delete:customers", "view:leads", "create:leads", "create:leads:request", "edit:leads", "edit:leads:request",
+    "delete:leads", "view:sales", "create:sales", "create:sales:request", "edit:sales", "edit:sales:request",
+    "delete:sales", "view:expenses", "create:expenses", "create:expenses:request", "edit:expenses",
+    "edit:expenses:request", "delete:expenses", "view:tasks", "create:tasks", "edit:tasks", "delete:tasks",
+    "view:reports", "view:settings", "manage:settings", "website.view", "website.manage", "website.publish",
+    "website.domain.manage", "website.leads.manage", "website.analytics.view", "view:finance", "manage:finance",
+    "reopen:accounting_periods", "view:cost_price", "view:commissions", "manage:commissions", "view:payroll",
+    "manage:payroll", "approve:requests", "view:finance_applications", "create:finance_application",
+    "review:finance_application", "approve:finance_application", "finalize:financed_deal",
+    "confirm:finance_disbursement", "verify:finance_documents", "register:vehicle_handover",
+    "register:expected_payment", "marketplace:settings", "marketplace:respond", "marketplace:analytics",
+  ];
+  type AuthCell = {
+    label: string; name: string; owner?: boolean; deleted?: boolean; stored: string[]; expected: string[];
+    grant?: "read" | "write"; required?: Parameters<typeof requireTenantAuth>[2];
+  };
+  const cases: readonly (Omit<AuthCell, "label"> & { label?: string })[] = [
     { name: "Custom", owner: false, stored: [], expected: [] },
     { name: "Limited reviewer", owner: false, stored: [], expected: [] },
     { name: "Custom", owner: false, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
@@ -318,18 +362,88 @@ it("tenant auth preserves literal stored permissions across names cardinalities 
     { name: "Limited reviewer", owner: false, stored: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"], expected: ["view:finance", "view:cost_price", "view:vehicles", "view:sales", "view:expenses", "view:customers"] },
     { name: "OWNER", owner: true, stored: [], expected: [] },
     { name: "OWNER", owner: true, stored: ["view:finance"], expected: ["view:finance"] },
+    { label: "deleted-custom", name: "Custom", owner: false, deleted: true, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { label: "deleted-owner", name: "OWNER", owner: true, deleted: true, stored: [], expected: [], required: [] },
+    { label: "owner-false-full", name: "OWNER", owner: false, stored: fullStored, expected: fullExpected },
+    { label: "owner-false-short", name: "OWNER", owner: false, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { label: "owner-missing-full", name: "OWNER", stored: fullStored, expected: fullExpected },
+    { label: "owner-missing-short", name: "OWNER", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { label: "non-owner-missing-full", name: "Limited reviewer", stored: fullStored, expected: fullExpected },
+    { label: "renamed-flagged-owner", name: "Limited reviewer", owner: true, stored: [], expected: [] },
+    { label: "explicit-live-role", name: "Custom", owner: false, deleted: false, stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { label: "owner-duplicate-missing-member", name: "OWNER", stored: ["view:org", ...fullStored.slice(0, -1)], expected: ["view:org", ...fullExpected.slice(0, -1)] },
+    { label: "live-grant-write-empty", name: "Limited reviewer", owner: false, grant: "write", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"], required: [] },
+    { label: "live-grant-write-permissions", name: "Limited reviewer", owner: false, grant: "write", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
+    { label: "live-grant-read-empty", name: "Limited reviewer", owner: false, grant: "read", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"], required: [] },
+    { label: "live-grant-read-permissions", name: "Limited reviewer", owner: false, grant: "read", stored: ["view:finance", "view:cost_price"], expected: ["view:finance", "view:cost_price"] },
   ];
   for (const cell of cases) {
     const membershipId = await t.run(async ctx => {
-      const roleId = await ctx.db.insert("roles", { orgId, name: cell.name, permissions: cell.stored, isSystemOwnerRole: cell.owner });
-      return ctx.db.insert("memberships", { orgId, userId, roleId });
+      const roleId = await ctx.db.insert("roles", { orgId, name: cell.name, permissions: cell.stored, isSystemOwnerRole: cell.owner, isDeleted: cell.deleted });
+      const id = await ctx.db.insert("memberships", { orgId, userId, roleId });
+      if (cell.grant) {
+        const targetUserId = await ctx.db.insert("users", { clerkId: "target-" + cell.label, email: "target@example.test" });
+        await ctx.db.insert("memberships", { orgId, userId: targetUserId, roleId });
+        const grantId = await ctx.db.insert("impersonationGrants", { orgId, membershipId: id, actorUserId: userId, targetUserId,
+          reason: "Synthetic permission contract", grantedAt: Date.now(), expiresAt: Date.now() + 60_000 });
+        await ctx.db.patch(id, { impersonationGrantId: grantId });
+      }
+      return id;
     });
     try {
-      const required: Parameters<typeof requireTenantAuth>[2] = cell.owner || cell.stored.length > 0 ? ["view:finance", "view:cost_price"] : [];
-      const { role } = await t.withIdentity({ subject: "permission-snapshot" }).run(ctx => requireTenantAuth(ctx, orgId, required));
-      expect(role.permissions, cell.name + "/" + cell.stored.length + "/owner=" + cell.owner).toStrictEqual(cell.expected);
+      const required: Parameters<typeof requireTenantAuth>[2] = cell.required ?? (cell.owner || cell.stored.length > 0 ? ["view:finance", "view:cost_price"] : []);
+      const { role } = await t.withIdentity({ subject: "permission-snapshot" }).run(ctx => {
+        const readContext: QueryCtx = { ...ctx, db: { get: ctx.db.get, query: ctx.db.query, normalizeId: ctx.db.normalizeId, system: ctx.db.system } };
+        return requireTenantAuth(cell.grant === "read" ? readContext : ctx, orgId, required);
+      });
+      expect(role.permissions, cell.label ?? cell.name + "/" + cell.stored.length + "/owner=" + cell.owner).toStrictEqual(cell.expected);
       const stored = await t.run(ctx => ctx.db.get(role._id));
       expect(stored?.permissions, "auth must not persist a widened role").toStrictEqual(cell.expected);
     } finally { await t.run(ctx => ctx.db.delete(membershipId)); }
   }
+});
+
+type AuthRefusalState = "disabled-user" | "suspended-org" | "offboarded-member" | "missing-grant" | "revoked-grant" | "expired-grant" | "expiry-boundary";
+async function seedAuthRefusal(state: AuthRefusalState) {
+  const t = convexTestWithComponents(schema, import.meta.glob("./../**/*.*s"));
+  const orgId = await t.run(async ctx => {
+    const orgId = await ctx.db.insert("organizations", { name: "Synthetic auth refusal", createdAt: 1, suspended: state === "suspended-org" });
+    const userId = await ctx.db.insert("users", { clerkId: "auth-refusal", email: "auth-refusal@example.test", disabled: state === "disabled-user" });
+    const roleId = await ctx.db.insert("roles", { orgId, name: "Limited reviewer", permissions: ["view:finance"], isSystemOwnerRole: false });
+    const membership: Omit<Doc<"memberships">, "_id" | "_creationTime"> = { orgId, userId, roleId };
+    if (state === "offboarded-member") membership.offboardingStatus = "PENDING_EXTERNAL_REMOVAL";
+    const membershipId = await ctx.db.insert("memberships", membership);
+    const targetUserId = await ctx.db.insert("users", { clerkId: "auth-refusal-target", email: "target@example.test" });
+    await ctx.db.insert("memberships", { orgId, userId: targetUserId, roleId });
+    const grantId = await ctx.db.insert("impersonationGrants", {
+      orgId, membershipId, actorUserId: userId, targetUserId, reason: "Synthetic refusal contract", grantedAt: 1,
+      expiresAt: state === "expiry-boundary" ? 1000 : state === "expired-grant" ? 999 : 2000,
+      revokedAt: state === "revoked-grant" ? 900 : undefined,
+    });
+    await ctx.db.patch(membershipId, { impersonationGrantId: grantId });
+    if (state === "missing-grant") await ctx.db.delete(grantId);
+    return orgId;
+  });
+  return { t, orgId };
+}
+
+it("tenant auth refuses inactive callers memberships and ended impersonation grants before returning a role", async () => {
+  expect.assertions(7);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(1000);
+  try {
+    const cases: readonly { state: AuthRefusalState; error: RegExp }[] = [
+      { state: "disabled-user", error: /account has been disabled/ },
+      { state: "suspended-org", error: /organization has been suspended/ },
+      { state: "offboarded-member", error: /membership is no longer active/ },
+      { state: "missing-grant", error: /impersonation session has ended/ },
+      { state: "revoked-grant", error: /impersonation session has ended/ },
+      { state: "expired-grant", error: /impersonation session has ended/ },
+      { state: "expiry-boundary", error: /impersonation session has ended/ },
+    ];
+    for (const cell of cases) {
+      const { t, orgId } = await seedAuthRefusal(cell.state);
+      await expect(t.withIdentity({ subject: "auth-refusal" }).run(ctx => requireTenantAuth(ctx, orgId, ["view:finance"])), cell.state).rejects.toThrow(cell.error);
+    }
+  } finally { vi.useRealTimers(); }
 });
