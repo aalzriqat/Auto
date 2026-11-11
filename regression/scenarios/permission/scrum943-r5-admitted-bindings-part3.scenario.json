@@ -1,0 +1,49 @@
+{
+  "id": "scrum943-r5-admitted-bindings-part3",
+  "domain": "permission",
+  "level": "backend",
+  "status": "active",
+  "source": {
+    "hunter": "scripted",
+    "runId": "scrum943-r5-local",
+    "firstSeen": "2026-11-11"
+  },
+  "steps": [
+    {
+      "actor": {
+        "role": "CUSTOM_FINANCE",
+        "org": "A"
+      },
+      "action": "harness.supplierPermissionContract",
+      "input": {
+        "policy": "SECOND_BINDING_DEFAULT_REFUSAL",
+        "source": "FULL_BEHAVIOURAL_FILE_MUTATIONS",
+        "control": "UNCHANGED_AND_LOCAL_INTRINSIC_TARGET",
+        "probePartition": "PART_3",
+        "probeCount": 3
+      }
+    }
+  ],
+  "expected": [
+    {
+      "observable": "unreviewedBindingOrReference",
+      "value": "REFUSED_WITH_ADMITTED_TABLE_DIAGNOSTIC"
+    }
+  ],
+  "rulings": [
+    {
+      "id": "SCRUM-760#description",
+      "digest": "786d64fe9796257a35704c5dbe0ae31f8b802f238e6906c2fee2a65b348f6f69"
+    },
+    {
+      "id": "SCRUM-902#c24475",
+      "digest": "b2809b05f5fe0098068675e7c35cf3f2c4d06d528b39e5262cbaddf39b8cac11"
+    }
+  ],
+  "impl": {
+    "file": "scripts/intelligence/supplierNavigationDoors.test.ts",
+    "testName": "caller admitted reference table refuses function second bindings"
+  },
+  "matrixRow": "SCRUM869-navigation-permissions",
+  "fingerprint": "d6b291c2872f760fac69e8ee8fc6d4c7c12ab661d018d9d1f2a26d3477a9fd81"
+}
