@@ -49,6 +49,17 @@ out-of-range values show an inline error and disable Save. The existing parser i
 D4. Permission is unchanged: `MANAGE_FINANCE` to edit, and the control is shown only to holders of it.
 The server still decides.
 
+D5. Refusals. A refused value is an expected domain outcome, so `update` and `create` throw
+`ConvexError` with a fixed domain message, the channel Convex documents for expected application
+errors (the client reads it from `error.data`). That is why `update` has no try/catch with a generic
+message: unexpected errors already reach the client as Convex's generic message, and a wrapper would
+hide the refusal reason from the dialog.
+
+D6. Door classification. `docs/pilot/blocked-server-side-doors.inventory.json` lists
+`bankAccounts.update` and `bankAccounts.create` as UNCLASSIFIED, "owner ruling needed". This change
+adds a screen entry to `update` and does not reclassify either door. Classification stays an owner
+ruling; the inventory is untouched.
+
 ## Alternatives rejected
 
 - Write to `adminAuditLog` via `writeAuditLog`: that is the platform-admin trail, not the
@@ -85,6 +96,9 @@ Opened and read for this change:
   supports all IEEE-754 doubles including NaN; the page does not state how Infinity is treated, so
   the repository test (`convex/bankAccounts.scrum945.test.ts`) is the evidence for rejection.
   `v.int64()` (bigint) exists but is not used here.
+- [Convex application errors](https://docs.convex.dev/functions/error-handling/application-errors):
+  `ConvexError` carries expected failures to the client in its `data` property; unexpected errors
+  fall through to a generic message.
 
 Not opened: ECMA-262 itself. The MDN pages above are the secondary source for its time-value limit.
 These sources support the design; the repository tests establish the behavior.
